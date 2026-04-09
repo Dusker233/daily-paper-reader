@@ -63,6 +63,51 @@ window.SubscriptionsSmartQuery = (function () {
   ].join('\n');
 
   const normalizeText = (v) => String(v || '').trim();
+  const llmConfigUtils =
+    window && window.DPRLLMConfigUtils && typeof window.DPRLLMConfigUtils === 'object'
+      ? window.DPRLLMConfigUtils
+      : {};
+  const normalizeBaseUrlForStorage =
+    typeof llmConfigUtils.normalizeBaseUrlForStorage === 'function'
+      ? llmConfigUtils.normalizeBaseUrlForStorage
+      : (value) => {
+          let text = normalizeText(value).replace(/\/+$/g, '');
+          if (!text) return '';
+          text = text.replace(/\/chat\/completions$/i, '');
+          return text.replace(/\/+$/g, '');
+        };
+  const buildChatCompletionsEndpoint =
+    typeof llmConfigUtils.buildChatCompletionsEndpoint === 'function'
+      ? llmConfigUtils.buildChatCompletionsEndpoint
+      : (value) => {
+          const raw = normalizeText(value).replace(/\/+$/g, '');
+          if (!raw) return '';
+          if (/\/chat\/completions$/i.test(raw)) return raw;
+          const normalized = normalizeBaseUrlForStorage(raw);
+          if (!normalized) return '';
+          if (/\/v\d+$/i.test(normalized)) {
+            return `${normalized}/chat/completions`;
+          }
+          return `${normalized}/v1/chat/completions`;
+        };
+  const shouldUseXApiKeyAuthHeader = (baseUrl, model) => {
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    return (
+      /^minimax-/i.test(normalizedModel)
+      || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
+    );
+  };
+  const resolveLlmConfigEntry = (entry) => {
+    const safeEntry = entry && typeof entry === 'object' ? entry : {};
+    const baseUrl = normalizeBaseUrlForStorage(safeEntry.baseUrl || '');
+    const apiKey = normalizeText(safeEntry.apiKey || '');
+    const model = normalizeText(safeEntry.model || '');
+    if (baseUrl && apiKey && model) {
+      return { baseUrl, apiKey, model };
+    }
+    return null;
+  };
   const PAPER_SOURCE_ORDER = [
     'arxiv',
     'biorxiv',
@@ -465,20 +510,19 @@ window.SubscriptionsSmartQuery = (function () {
 
   const loadLlmConfig = () => {
     const secret = window.decoded_secret_private || {};
-    const summarized = secret.summarizedLLM || {};
-    const baseUrl = normalizeText(summarized.baseUrl || '');
-    const apiKey = normalizeText(summarized.apiKey || '');
-    const model = normalizeText(summarized.model || '');
-    if (baseUrl && apiKey && model) return { baseUrl, apiKey, model };
+    const summarized = resolveLlmConfigEntry(secret.summarizedLLM);
+    if (summarized) return summarized;
+    const workflow = resolveLlmConfigEntry(secret.workflowLLM);
+    if (workflow) return workflow;
 
     const chatLLMs = Array.isArray(secret.chatLLMs) ? secret.chatLLMs : [];
     if (chatLLMs.length > 0) {
       const first = chatLLMs[0] || {};
-      const cBase = normalizeText(first.baseUrl || '');
-      const cKey = normalizeText(first.apiKey || '');
-      const models = Array.isArray(first.models) ? first.models : [];
-      const cModel = normalizeText(models[0] || '');
-      if (cBase && cKey && cModel) return { baseUrl: cBase, apiKey: cKey, model: cModel };
+      return resolveLlmConfigEntry({
+        baseUrl: first.baseUrl,
+        apiKey: first.apiKey,
+        model: Array.isArray(first.models) ? first.models[0] : '',
+      });
     }
     return null;
   };
@@ -787,34 +831,20 @@ window.SubscriptionsSmartQuery = (function () {
     const prompt = buildPromptFromTemplate(tag, desc, template);
     const buildEndpoints = () => {
       const out = [];
-      const pushUnique = (u) => {
-        if (u && !out.includes(u)) out.push(u);
+      const pushUnique = (value) => {
+        const endpoint = normalizeText(value);
+        if (endpoint && !out.includes(endpoint)) out.push(endpoint);
       };
-      const expandEndpoint = (base) => {
-        const src = normalizeText(base).replace(/\/+$/, '');
-        if (!src) return;
-        if (src.includes('/chat/completions')) {
-          pushUnique(src);
-          pushUnique(src.replace(/\/chat\/completions$/, '/v1/chat/completions'));
-          return;
+      const rawBaseUrl = normalizeText(llm.baseUrl);
+      const normalizedBaseUrl = normalizeBaseUrlForStorage(rawBaseUrl);
+      pushUnique(buildChatCompletionsEndpoint(rawBaseUrl));
+      if (normalizedBaseUrl && !/\/chat\/completions$/i.test(normalizedBaseUrl)) {
+        if (/\/v\d+$/i.test(normalizedBaseUrl)) {
+          pushUnique(`${normalizedBaseUrl.replace(/\/v\d+$/i, '')}/chat/completions`);
+        } else {
+          pushUnique(`${normalizedBaseUrl}/chat/completions`);
         }
-        if (/\/v\d+$/i.test(src)) {
-          pushUnique(`${src}/chat/completions`);
-          pushUnique(`${src}/v1/chat/completions`);
-          return;
-        }
-        pushUnique(`${src}/v1/chat/completions`);
-        pushUnique(`${src}/chat/completions`);
-      };
-
-      expandEndpoint('https://hk-api.gptbest.vip');
-      expandEndpoint('https://api.bltcy.ai');
-
-      const raw = normalizeText(llm.baseUrl);
-      if (!raw) {
-        return out;
       }
-      expandEndpoint(raw);
       return out;
     };
     const endpoints = buildEndpoints();
@@ -861,8 +891,12 @@ window.SubscriptionsSmartQuery = (function () {
       const headers = {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        Authorization: `Bearer ${llm.apiKey}`,
       };
+      if (shouldUseXApiKeyAuthHeader(llm.baseUrl, llm.model)) {
+        headers['x-api-key'] = llm.apiKey;
+      } else {
+        headers.Authorization = `Bearer ${llm.apiKey}`;
+      }
       return fetch(endpoint, {
         method: 'POST',
         headers,
@@ -891,6 +925,9 @@ window.SubscriptionsSmartQuery = (function () {
                 useResponseFormat: false,
                 includeTools: true,
               });
+              if (current && !current.ok) {
+                txt = await current.text().catch(() => '');
+              }
             }
             if (current && !current.ok && current.status === 400 && /tool_choice|tools/i.test(txt)) {
               current = await doFetch(endpoint, {
@@ -904,7 +941,7 @@ window.SubscriptionsSmartQuery = (function () {
             if (current.status === 400 || current.status === 401 || current.status === 403) {
               throw new Error(`HTTP ${current.status} ${txt || current.statusText}`);
             }
-            if (current.status === 429 || current.status >= 500) {
+            if (current.status === 404 || current.status === 429 || current.status >= 500) {
               errorText = txt;
               continue;
             }
@@ -2488,5 +2525,9 @@ window.SubscriptionsSmartQuery = (function () {
     attach,
     render,
     clearPendingDeletedProfileIds,
+    __test: {
+      loadLlmConfig,
+      requestCandidatesByDesc,
+    },
   };
 })();
