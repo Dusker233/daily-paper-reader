@@ -14,6 +14,11 @@ except Exception:  # pragma: no cover - 兼容 package 导入路径
     from src.source_config import get_source_backend, load_config_with_source_migration
 
 try:
+    from llm import resolve_rerank_llm_config, resolve_workflow_llm_config
+except Exception:  # pragma: no cover - 兼容 package 导入路径
+    from src.llm import resolve_rerank_llm_config, resolve_workflow_llm_config
+
+try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
     yaml = None
@@ -25,7 +30,6 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 LONG_RANGE_DAYS_THRESHOLD = 10
 MAIN_DEFAULT_DAYS = 9
 SKIMS_FETCH_DAYS_THRESHOLD = 11
-BLT_PROVIDER_BASE_KEYWORDS = ("bltcy.ai", "gptbest.vip", "blt", "gptbest")
 
 
 def run_step(label: str, args: list[str], env: dict[str, str] | None = None) -> None:
@@ -188,23 +192,11 @@ def _read_env_text(*names: str) -> str:
     return ""
 
 
-def _looks_like_blt_base(base_url: str) -> bool:
-    lowered = str(base_url or "").strip().lower()
-    return any(keyword in lowered for keyword in BLT_PROVIDER_BASE_KEYWORDS)
-
-
 def should_skip_rerank() -> tuple[bool, str]:
-    primary_base = _read_env_text(
-        "LLM_PRIMARY_BASE_URL",
-        "BLT_PRIMARY_BASE_URL",
-        "GPTBEST_BASE_URL",
-        "BLT_API_BASE",
-    )
-    if not primary_base:
-        return False, ""
-    if _looks_like_blt_base(primary_base):
-        return False, primary_base
-    return True, primary_base
+    rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
+    if rerank_cfg["enabled"]:
+        return False, rerank_cfg["base_url"]
+    return True, rerank_cfg["reason"]
 
 
 def score_to_stars(score: float) -> int:
@@ -301,18 +293,45 @@ def prepare_rerank_fallback(input_path: str, output_path: str) -> bool:
 
 def resolve_summary_step_env() -> dict[str, str]:
     env = os.environ.copy()
-    summary_api_key = _read_env_text("SUMMARY_API_KEY", "BLT_SUMMARY_API_KEY")
-    summary_base_url = _read_env_text("SUMMARY_BASE_URL", "BLT_SUMMARY_BASE_URL")
-    summary_model = _read_env_text("SUMMARY_MODEL", "BLT_SUMMARY_MODEL")
+    workflow_cfg = resolve_workflow_llm_config()
+    rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
 
-    if summary_api_key:
-        env["BLT_API_KEY"] = summary_api_key
-    if summary_base_url:
-        env["LLM_PRIMARY_BASE_URL"] = summary_base_url
-        env["BLT_PRIMARY_BASE_URL"] = summary_base_url
-        env["BLT_API_BASE"] = summary_base_url
-    if summary_model:
-        env["BLT_SUMMARY_MODEL"] = summary_model
+    if workflow_cfg.get("source") == "workflow":
+        if not workflow_cfg["api_key"]:
+            raise ValueError("缺少 workflow LLM API Key")
+        if not workflow_cfg["base_url"]:
+            raise ValueError("缺少 workflow LLM base_url")
+
+    workflow_api_key = workflow_cfg["api_key"]
+    workflow_base_url = workflow_cfg["base_url"]
+    workflow_model = workflow_cfg["model"]
+
+    if workflow_api_key:
+        env["WORKFLOW_LLM_API_KEY"] = workflow_api_key
+        env["SUMMARY_API_KEY"] = workflow_api_key
+        env["BLT_API_KEY"] = workflow_api_key
+    if workflow_base_url:
+        env["WORKFLOW_LLM_BASE_URL"] = workflow_base_url
+        env["SUMMARY_BASE_URL"] = workflow_base_url
+        env["LLM_PRIMARY_BASE_URL"] = workflow_base_url
+        env["BLT_PRIMARY_BASE_URL"] = workflow_base_url
+        env["BLT_API_BASE"] = workflow_base_url
+    if workflow_model:
+        env["WORKFLOW_LLM_MODEL"] = workflow_model
+        env["SUMMARY_MODEL"] = workflow_model
+        env["BLT_SUMMARY_MODEL"] = workflow_model
+
+    if rerank_cfg["api_key"]:
+        env["RERANK_API_KEY"] = rerank_cfg["api_key"]
+        env["Reranker_LLM_API_KEY"] = rerank_cfg["api_key"]
+    if rerank_cfg["base_url"]:
+        env["RERANK_BASE_URL"] = rerank_cfg["base_url"]
+        env["Reranker_LLM_BASE_URL"] = rerank_cfg["base_url"]
+    if rerank_cfg["model"]:
+        env["RERANK_MODEL"] = rerank_cfg["model"]
+        env["Reranker_LLM_MODEL"] = rerank_cfg["model"]
+        env["BLT_RERANK_MODEL"] = rerank_cfg["model"]
+    env["RERANK_ENABLED"] = "true" if rerank_cfg["enabled"] else "false"
     return env
 
 
@@ -614,6 +633,8 @@ def main() -> None:
     if trace_ids:
         print(f"[TRACE] 启用论文追踪: {', '.join(trace_ids)}", flush=True)
 
+    step_env = resolve_summary_step_env()
+
     archive_dir = os.path.join(ROOT_DIR, "archive", run_date_token)
     raw_path = os.path.join(archive_dir, "raw", f"arxiv_papers_{run_date_token}.json")
     bm25_path = os.path.join(
@@ -693,11 +714,11 @@ def main() -> None:
     )
     if trace_ids:
         print_trace_retrieval("RRF", rrf_path, trace_ids)
-    skip_rerank, rerank_base = should_skip_rerank()
+    step_env = resolve_summary_step_env()
+    skip_rerank, rerank_reason = should_skip_rerank()
     if skip_rerank:
         print(
-            f"[INFO] Step 3 - Rerank 已跳过：当前主 LLM base 不属于柏拉图/BLT，"
-            f"缺少稳定 /rerank 能力。base={rerank_base}",
+            f"[INFO] Step 3 - Rerank 已跳过：{rerank_reason}",
             flush=True,
         )
         prepare_rerank_fallback(rrf_path, rerank_path)
@@ -705,12 +726,14 @@ def main() -> None:
         run_step(
             "Step 3 - Rerank",
             [python, os.path.join(SRC_DIR, "3.rank_papers.py")],
+            env=step_env,
         )
     if trace_ids:
         print_trace_retrieval("RERANK", rerank_path, trace_ids)
     run_step(
         "Step 4 - LLM refine",
         [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")],
+        env=step_env,
     )
     if trace_ids:
         print_trace_llm("LLM", llm_path, trace_ids)
@@ -736,7 +759,7 @@ def main() -> None:
                 else []
             ),
         ],
-        env=resolve_summary_step_env(),
+        env=step_env,
     )
 
 

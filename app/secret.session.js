@@ -168,16 +168,68 @@
     });
     return out;
   };
+  const isAllowedLLMBaseUrl = (value) => {
+    const utils = getLLMUtils();
+    if (typeof utils.isAllowedLLMBaseUrl === 'function') {
+      return utils.isAllowedLLMBaseUrl(value);
+    }
+    const normalized = normalizeBaseUrlForStorage(value).toLowerCase();
+    if (!normalized) return false;
+    if (normalized.startsWith('https://')) return true;
+    return /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:$|\/)/i.test(normalized);
+  };
+  const resolveWorkflowLLM = (secret) => {
+    const utils = getLLMUtils();
+    if (typeof utils.resolveWorkflowLLM === 'function') {
+      return utils.resolveWorkflowLLM(secret);
+    }
+    const safeSecret = secret && typeof secret === 'object' ? secret : {};
+    const workflow = safeSecret.workflowLLM || {};
+    const workflowBaseUrl = normalizeBaseUrlForStorage(workflow.baseUrl || '');
+    const workflowApiKey = normalizeText(workflow.apiKey || '');
+    const workflowModel = normalizeText(workflow.model || '');
+    if (workflowBaseUrl && workflowApiKey && workflowModel) {
+      return { baseUrl: workflowBaseUrl, apiKey: workflowApiKey, model: workflowModel };
+    }
+    const summarized = safeSecret.summarizedLLM || {};
+    const summarizedBaseUrl = normalizeBaseUrlForStorage(summarized.baseUrl || '');
+    const summarizedApiKey = normalizeText(summarized.apiKey || '');
+    const summarizedModel = normalizeText(summarized.model || '');
+    if (summarizedBaseUrl && summarizedApiKey && summarizedModel) {
+      return {
+        baseUrl: summarizedBaseUrl,
+        apiKey: summarizedApiKey,
+        model: summarizedModel,
+      };
+    }
+    const chatList = Array.isArray(safeSecret.chatLLMs) ? safeSecret.chatLLMs : [];
+    const firstChat = chatList[0] || {};
+    const chatBaseUrl = normalizeBaseUrlForStorage(firstChat.baseUrl || '');
+    const chatApiKey = normalizeText(firstChat.apiKey || '');
+    const chatModels = sanitizeModelList(firstChat.models || [], 1);
+    if (chatBaseUrl && chatApiKey && chatModels.length) {
+      return { baseUrl: chatBaseUrl, apiKey: chatApiKey, model: chatModels[0] };
+    }
+    return null;
+  };
   const resolveSummaryLLM = (secret) => {
     const utils = getLLMUtils();
     if (typeof utils.resolveSummaryLLM === 'function') {
       return utils.resolveSummaryLLM(secret);
     }
+    return resolveWorkflowLLM(secret);
+  };
+  const resolveRerankerLLM = (secret) => {
+    const utils = getLLMUtils();
+    if (typeof utils.resolveRerankerLLM === 'function') {
+      return utils.resolveRerankerLLM(secret);
+    }
     const safeSecret = secret && typeof secret === 'object' ? secret : {};
-    const summarized = safeSecret.summarizedLLM || {};
-    const baseUrl = normalizeBaseUrlForStorage(summarized.baseUrl || '');
-    const apiKey = normalizeText(summarized.apiKey || '');
-    const model = normalizeText(summarized.model || '');
+    const reranker = safeSecret.rerankerLLM || {};
+    if (reranker && reranker.enabled === false) return null;
+    const baseUrl = normalizeBaseUrlForStorage(reranker.baseUrl || '');
+    const apiKey = normalizeText(reranker.apiKey || '');
+    const model = normalizeText(reranker.model || '');
     if (baseUrl && apiKey && model) {
       return { baseUrl, apiKey, model };
     }
@@ -188,9 +240,9 @@
     if (typeof utils.inferProviderType === 'function') {
       return utils.inferProviderType(secret);
     }
-    const summary = resolveSummaryLLM(secret);
-    if (!summary) return 'plato';
-    return /bltcy\.ai|gptbest\.vip/i.test(summary.baseUrl) ? 'plato' : 'openai-compatible';
+    const workflow = resolveWorkflowLLM(secret);
+    if (!workflow) return 'plato';
+    return /bltcy\.ai|gptbest\.vip/i.test(workflow.baseUrl) ? 'plato' : 'openai-compatible';
   };
   const getDefaultPlatoBaseUrl = () => {
     const utils = getLLMUtils();
@@ -236,6 +288,21 @@
       max_tokens: 256,
     };
   };
+  const shouldUseXApiKeyHeader = (baseUrl, model) => {
+    const utils = getLLMUtils();
+    if (typeof utils.shouldUseXApiKeyHeader === 'function') {
+      return utils.shouldUseXApiKeyHeader({ baseUrl, model });
+    }
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    if (
+      /^minimax-/i.test(normalizedModel)
+      || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
+    ) {
+      return false;
+    }
+    return true;
+  };
   const extractChatResponseText = (data) => {
     const normalizeContentPart = (part) => {
       if (typeof part === 'string') return normalizeText(part);
@@ -267,39 +334,124 @@
     return '';
   };
 
+  const dedupePingEntries = (entries) => {
+    const seen = new Set();
+    return (Array.isArray(entries) ? entries : []).filter((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const apiKey = normalizeText(entry.apiKey || '');
+      const baseUrl = normalizeBaseUrlForStorage(entry.baseUrl || '');
+      const model = normalizeText(entry.model || entry.name || '');
+      if (!apiKey || !baseUrl || !model) return false;
+      const key = `${apiKey}\u0000${baseUrl}\u0000${model}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const buildPingEntriesFromProviderDraft = (providerDraft) => {
+    const draft = providerDraft && typeof providerDraft === 'object' ? providerDraft : {};
+    if (draft.providerType === 'plato') {
+      return dedupePingEntries([
+        {
+          apiKey: draft.workflowApiKey,
+          baseUrl: draft.workflowBaseUrl,
+          model: draft.workflowModel,
+        },
+      ]);
+    }
+
+    const chatEntries = (Array.isArray(draft.chatModels) ? draft.chatModels : []).map((model) => ({
+      apiKey: draft.chatApiKey,
+      baseUrl: draft.chatBaseUrl,
+      model,
+    }));
+    const rerankEntry = draft.reranker
+      ? {
+          apiKey: draft.reranker.apiKey,
+          baseUrl: draft.reranker.baseUrl,
+          model: draft.reranker.model,
+        }
+      : null;
+    return dedupePingEntries([
+      ...chatEntries,
+      ...(rerankEntry ? [rerankEntry] : []),
+    ]);
+  };
+
+  const resolveRerankSyncState = ({ skipRerank, rerankerApiKey, rerankerBaseUrl, rerankerModel }) => {
+    const hasCompleteRerankConfig = !!(
+      rerankerApiKey
+      && rerankerBaseUrl
+      && rerankerModel
+    );
+    const rerankEnabled = !skipRerank && hasCompleteRerankConfig;
+    return {
+      hasCompleteRerankConfig,
+      rerankEnabled,
+      shouldClearRerank: !rerankEnabled,
+      normalizedSkipRerank: !rerankEnabled,
+    };
+  };
+
+  const buildSecretSyncOperations = ({ baseSecrets, skipRerank, rerankerApiKey, rerankerBaseUrl, rerankerModel, rerankSecretNames }) => {
+    const safeBaseSecrets = Array.isArray(baseSecrets) ? baseSecrets : [];
+    const safeRerankSecretNames = Array.isArray(rerankSecretNames) ? rerankSecretNames : [];
+    const { shouldClearRerank } = resolveRerankSyncState({
+      skipRerank,
+      rerankerApiKey,
+      rerankerBaseUrl,
+      rerankerModel,
+    });
+    return [
+      ...safeBaseSecrets.map((item) => ({
+        type: 'put',
+        name: item.name,
+        value: item.value,
+      })),
+      ...(shouldClearRerank
+        ? safeRerankSecretNames.map((name) => ({ type: 'delete', name }))
+        : []),
+    ];
+  };
+
   async function pingChatModels(modelEntries, statusEl) {
     const entries = Array.isArray(modelEntries) ? modelEntries : [];
     if (!entries.length) {
       throw new Error('请先填写完整的模型配置。');
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
     const results = [];
 
-    try {
-      for (let i = 0; i < entries.length; i += 1) {
-        const entry = entries[i] || {};
-        const model = normalizeText(entry.model || entry.name || '');
-        const apiKey = normalizeText(entry.apiKey || '');
-        const baseUrl = normalizeBaseUrlForStorage(entry.baseUrl || '');
-        const endpoint = buildChatCompletionsEndpoint(baseUrl);
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i] || {};
+      const model = normalizeText(entry.model || entry.name || '');
+      const apiKey = normalizeText(entry.apiKey || '');
+      const baseUrl = normalizeBaseUrlForStorage(entry.baseUrl || '');
+      const endpoint = buildChatCompletionsEndpoint(baseUrl);
 
-        if (!model || !apiKey || !endpoint) {
-          throw new Error('模型配置缺少 apiKey、baseUrl 或 model。');
-        }
-        if (statusEl) {
-          statusEl.textContent = `正在测试模型 ${i + 1}/${entries.length}：${model} ...`;
-          statusEl.style.color = '#666';
-        }
+      if (!model || !apiKey || !endpoint) {
+        throw new Error('模型配置缺少 apiKey、baseUrl 或 model。');
+      }
+      if (statusEl) {
+        statusEl.textContent = `正在测试模型 ${i + 1}/${entries.length}：${model} ...`;
+        statusEl.style.color = '#666';
+      }
 
-        const payload = buildConnectivityTestPayload(baseUrl, model);
+      const payload = buildConnectivityTestPayload(baseUrl, model);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
 
+      try {
         const headers = {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          Authorization: `Bearer ${apiKey}`,
         };
+        if (shouldUseXApiKeyHeader(baseUrl, model)) {
+          headers.Authorization = `Bearer ${apiKey}`;
+        } else {
+          headers['x-api-key'] = apiKey;
+        }
 
         const doFetch = (requestPayload) => fetch(endpoint, {
           method: 'POST',
@@ -330,9 +482,9 @@
           throw new Error(`${model} 返回为空，请检查模型兼容性。`);
         }
         results.push(model);
+      } finally {
+        clearTimeout(timeout);
       }
-    } finally {
-      clearTimeout(timeout);
     }
 
     return results;
@@ -462,26 +614,35 @@
 
       const safeOptions = options && typeof options === 'object' ? options : {};
       const providerType = normalizeText(safeOptions.providerType || '').toLowerCase() || 'plato';
-      const summarizedApiKey = normalizeText(safeOptions.summarizedApiKey || '');
-      const summarizedBaseUrl = normalizeBaseUrlForStorage(safeOptions.summarizedBaseUrl || '');
-      const summarizedModel = normalizeText(safeOptions.summarizedModel || '');
-      const filterModel = normalizeText(safeOptions.filterModel || summarizedModel);
-      const rewriteModel = normalizeText(safeOptions.rewriteModel || summarizedModel);
+      const workflowApiKey = normalizeText(safeOptions.workflowApiKey || safeOptions.summarizedApiKey || '');
+      const workflowBaseUrl = normalizeBaseUrlForStorage(safeOptions.workflowBaseUrl || safeOptions.summarizedBaseUrl || '');
+      const workflowModel = normalizeText(safeOptions.workflowModel || safeOptions.summarizedModel || '');
+      const filterModel = normalizeText(safeOptions.filterModel || workflowModel);
+      const rewriteModel = normalizeText(safeOptions.rewriteModel || workflowModel);
       const skipRerank = !!safeOptions.skipRerank;
       const rerankerApiKey = normalizeText(safeOptions.rerankerApiKey || '');
       const rerankerBaseUrl = normalizeBaseUrlForStorage(safeOptions.rerankerBaseUrl || '');
       const rerankerModel = normalizeText(safeOptions.rerankerModel || '');
 
-      if (!summarizedApiKey || !summarizedBaseUrl || !summarizedModel) {
-        throw new Error('总结模型配置不完整，无法写入 GitHub Secrets。');
+      if (!workflowApiKey || !workflowBaseUrl || !workflowModel) {
+        throw new Error('工作流模型配置不完整，无法写入 GitHub Secrets。');
       }
 
+      const rerankSyncState = resolveRerankSyncState({
+        skipRerank,
+        rerankerApiKey,
+        rerankerBaseUrl,
+        rerankerModel,
+      });
       const secretNameSummKey = 'Summarized_LLM_API_KEY';
       const secretNameSummUrl = 'Summarized_LLM_BASE_URL';
       const secretNameSummModel = 'Summarized_LLM_MODEL';
       const secretNameSummaryApiKey = 'SUMMARY_API_KEY';
       const secretNameSummaryBaseUrl = 'SUMMARY_BASE_URL';
       const secretNameSummaryModel = 'SUMMARY_MODEL';
+      const secretNameWorkflowApiKey = 'WORKFLOW_LLM_API_KEY';
+      const secretNameWorkflowBaseUrl = 'WORKFLOW_LLM_BASE_URL';
+      const secretNameWorkflowModel = 'WORKFLOW_LLM_MODEL';
       const secretNameBltKey = 'BLT_API_KEY';
       const secretNameBltBase = 'BLT_PRIMARY_BASE_URL';
       const secretNameLlmPrimaryBase = 'LLM_PRIMARY_BASE_URL';
@@ -489,9 +650,21 @@
       const secretNameBltFilterModel = 'BLT_FILTER_MODEL';
       const secretNameBltRewriteModel = 'BLT_REWRITE_MODEL';
       const secretNameSkipRerank = 'DPR_SKIP_RERANK';
+      const secretNameRerankEnabled = 'RERANK_ENABLED';
+      const secretNameRerankApiKey = 'RERANK_API_KEY';
+      const secretNameRerankBaseUrl = 'RERANK_BASE_URL';
+      const secretNameRerankModelNeutral = 'RERANK_MODEL';
       const secretNameRerankKey = 'Reranker_LLM_API_KEY';
       const secretNameRerankUrl = 'Reranker_LLM_BASE_URL';
       const secretNameRerankModel = 'Reranker_LLM_MODEL';
+      const rerankSecretNames = [
+        secretNameRerankApiKey,
+        secretNameRerankBaseUrl,
+        secretNameRerankModelNeutral,
+        secretNameRerankKey,
+        secretNameRerankUrl,
+        secretNameRerankModel,
+      ];
 
       const putSecret = async (name, encrypted) => {
         const body = {
@@ -520,40 +693,84 @@
         }
       };
 
+      const clearSecret = async (name) => {
+        const res = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/actions/secrets/${encodeURIComponent(
+            name,
+          )}`,
+          {
+            method: 'DELETE',
+            headers: {
+              Authorization: `token ${token}`,
+              Accept: 'application/vnd.github.v3+json',
+            },
+          },
+        );
+        if (res.status === 404) {
+          return;
+        }
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          throw new Error(
+            `清理 GitHub Secret ${name} 失败：HTTP ${res.status} ${res.statusText} - ${txt}`,
+          );
+        }
+      };
+
       const secrets = [
-        { name: secretNameSummKey, value: summarizedApiKey },
-        { name: secretNameSummUrl, value: summarizedBaseUrl },
-        { name: secretNameSummModel, value: summarizedModel },
-        { name: secretNameSummaryApiKey, value: summarizedApiKey },
-        { name: secretNameSummaryBaseUrl, value: summarizedBaseUrl },
-        { name: secretNameSummaryModel, value: summarizedModel },
-        { name: secretNameBltKey, value: summarizedApiKey },
-        { name: secretNameBltBase, value: summarizedBaseUrl },
-        { name: secretNameLlmPrimaryBase, value: summarizedBaseUrl },
-        { name: secretNameBltSummaryModel, value: summarizedModel },
-        { name: secretNameBltFilterModel, value: filterModel || summarizedModel },
-        { name: secretNameBltRewriteModel, value: rewriteModel || summarizedModel },
-        { name: secretNameSkipRerank, value: skipRerank ? 'true' : 'false' },
+        { name: secretNameSummKey, value: workflowApiKey },
+        { name: secretNameSummUrl, value: workflowBaseUrl },
+        { name: secretNameSummModel, value: workflowModel },
+        { name: secretNameSummaryApiKey, value: workflowApiKey },
+        { name: secretNameSummaryBaseUrl, value: workflowBaseUrl },
+        { name: secretNameSummaryModel, value: workflowModel },
+        { name: secretNameWorkflowApiKey, value: workflowApiKey },
+        { name: secretNameWorkflowBaseUrl, value: workflowBaseUrl },
+        { name: secretNameWorkflowModel, value: workflowModel },
+        { name: secretNameBltKey, value: workflowApiKey },
+        { name: secretNameBltBase, value: workflowBaseUrl },
+        { name: secretNameLlmPrimaryBase, value: workflowBaseUrl },
+        { name: secretNameBltSummaryModel, value: workflowModel },
+        { name: secretNameBltFilterModel, value: filterModel || workflowModel },
+        { name: secretNameBltRewriteModel, value: rewriteModel || workflowModel },
+        { name: secretNameSkipRerank, value: rerankSyncState.normalizedSkipRerank ? 'true' : 'false' },
+        { name: secretNameRerankEnabled, value: rerankSyncState.rerankEnabled ? 'true' : 'false' },
       ];
 
-      if (!skipRerank && rerankerApiKey && rerankerBaseUrl && rerankerModel) {
+      if (rerankSyncState.rerankEnabled) {
         secrets.push(
+          { name: secretNameRerankApiKey, value: rerankerApiKey },
+          { name: secretNameRerankBaseUrl, value: rerankerBaseUrl },
+          { name: secretNameRerankModelNeutral, value: rerankerModel },
           { name: secretNameRerankKey, value: rerankerApiKey },
           { name: secretNameRerankUrl, value: rerankerBaseUrl },
           { name: secretNameRerankModel, value: rerankerModel },
         );
       }
 
-      for (let i = 0; i < secrets.length; i += 1) {
-        const item = secrets[i];
+      const operations = buildSecretSyncOperations({
+        baseSecrets: secrets,
+        skipRerank: rerankSyncState.normalizedSkipRerank,
+        rerankerApiKey,
+        rerankerBaseUrl,
+        rerankerModel,
+        rerankSecretNames,
+      });
+
+      for (let i = 0; i < operations.length; i += 1) {
+        const item = operations[i];
         if (typeof progress === 'function') {
           try {
-            progress(i + 1, secrets.length, item.name);
+            progress(i + 1, operations.length, item.name);
           } catch {
             // 忽略进度回调中的异常
           }
         }
-        await putSecret(item.name, encryptValue(item.value));
+        if (item.type === 'put') {
+          await putSecret(item.name, encryptValue(item.value));
+        } else {
+          await clearSecret(item.name);
+        }
       }
 
       return true;
@@ -892,7 +1109,8 @@
           ? window.decoded_secret_private
           : {};
       const currentProviderType = inferProviderType(currentSecret);
-      const currentSummaryLLM = resolveSummaryLLM(currentSecret) || {};
+      const currentWorkflowLLM = resolveWorkflowLLM(currentSecret) || {};
+      const currentRerankerLLM = resolveRerankerLLM(currentSecret);
       const currentChatEntry =
         Array.isArray(currentSecret.chatLLMs) && currentSecret.chatLLMs.length
           ? currentSecret.chatLLMs[0] || {}
@@ -920,18 +1138,36 @@
       const initialGithubToken = normalizeText(
         currentSecret.github && currentSecret.github.token,
       );
-      const initialApiKey = normalizeText(currentSummaryLLM.apiKey || '');
-      const initialCustomApiKey = normalizeText(currentChatEntry.apiKey || '');
-      const initialCustomBaseUrl = normalizeBaseUrlForStorage(
-        currentChatEntry.baseUrl || '',
-      );
+      const initialApiKey = normalizeText(currentWorkflowLLM.apiKey || '');
+      const initialCustomApiKey =
+        currentProviderType === 'openai-compatible'
+          ? normalizeText(currentWorkflowLLM.apiKey || currentChatEntry.apiKey || '')
+          : '';
+      const initialCustomBaseUrl =
+        currentProviderType === 'openai-compatible'
+          ? normalizeBaseUrlForStorage(
+              currentWorkflowLLM.baseUrl || currentChatEntry.baseUrl || '',
+            )
+          : '';
       const initialPlatoModel =
-        normalizeText(currentSummaryLLM.model || '') || 'gpt-5-chat';
+        normalizeText(currentWorkflowLLM.model || '') || 'gpt-5-chat';
       const initialCustomModels = sanitizeModelList(
         currentProviderType === 'openai-compatible'
-          ? (currentChatEntry.models || [])
+          ? [
+              currentWorkflowLLM.model || '',
+              ...((Array.isArray(currentChatEntry.models) && currentChatEntry.models) || []),
+            ]
           : [],
         3,
+      );
+      const initialCustomRerankApiKey = normalizeText(
+        (currentRerankerLLM && currentRerankerLLM.apiKey) || '',
+      );
+      const initialCustomRerankBaseUrl = normalizeBaseUrlForStorage(
+        (currentRerankerLLM && currentRerankerLLM.baseUrl) || '',
+      );
+      const initialCustomRerankModel = normalizeText(
+        (currentRerankerLLM && currentRerankerLLM.model) || '',
       );
 
       modal.innerHTML = `
@@ -961,9 +1197,9 @@
             </div>
 
             <div id="secret-setup-plato-section" class="secret-setup-step2-block">
-              <div class="secret-setup-step2-title">工作流 / Reranker 专用 BLT（必填）</div>
+              <div class="secret-setup-step2-title">工作流模型配置</div>
               <p class="secret-setup-step2-note">
-                BLT 用于 query enrich、LLM refine、总结与 reranker，是工作流硬依赖。
+                工作流模型用于 query enrich、LLM refine 与总结；可继续使用 BLT，也可切换为任意 OpenAI-compatible 平台。
               </p>
               <div class="secret-setup-input-row multi-actions">
                 <input
@@ -1009,24 +1245,24 @@
 
           <div class="secret-setup-step2-col">
             <div class="secret-setup-step2-block">
-              <div class="secret-setup-step2-title">聊天模型来源</div>
+              <div class="secret-setup-step2-title">平台模式</div>
               <p class="secret-setup-step2-note">
-                BLT 是工作流必填项；OpenAI-compatible 入口已重新开放，但仍属于实验性能力，仅作为聊天区模型来源。
+                可选择继续使用 BLT 默认链路，或切换到自定义 OpenAI-compatible workflow / chat 平台；rerank 可独立配置。
               </p>
               <label class="secret-setup-provider-choice">
                 <input type="radio" name="secret-setup-provider" value="plato" />
-                <span><strong>聊天区也使用 BLT</strong>工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
+                <span><strong>继续使用 BLT 默认链路</strong>工作流、reranker 与聊天区默认共用柏拉图（BLTCY）配置。</span>
               </label>
               <label class="secret-setup-provider-choice">
                 <input type="radio" name="secret-setup-provider" value="openai-compatible" />
-                <span><strong>聊天区使用 OpenAI-compatible（实验性）</strong>工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
+                <span><strong>使用 OpenAI-compatible 平台</strong>工作流与聊天区改为自定义第三方平台；rerank 可单独填写，也可留空后走 fallback。</span>
               </label>
             </div>
 
             <div id="secret-setup-custom-section" class="secret-setup-step2-block">
-              <div class="secret-setup-step2-title">OpenAI-compatible 聊天配置</div>
+              <div class="secret-setup-step2-title">OpenAI-compatible Workflow / 聊天配置</div>
               <p class="secret-setup-step2-note">
-                预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。这里的模型仅供聊天区使用。
+                预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。默认第一个模型同时用于 workflow 与聊天区。
               </p>
               <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
                 <button id="secret-setup-preset-deepseek" type="button" class="secret-gate-btn secondary">
@@ -1049,21 +1285,21 @@
                 id="secret-setup-custom-api-key"
                 type="password"
                 autocomplete="off"
-                placeholder="聊天 API Key"
+                placeholder="Workflow / 聊天 API Key"
                 style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
               />
               <input
                 id="secret-setup-custom-base-url"
                 type="text"
                 autocomplete="off"
-                placeholder="聊天 Base URL，例如 https://api.openai.com/v1"
+                placeholder="Workflow / 聊天 Base URL，例如 https://api.openai.com/v1"
                 style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
               />
               <input
                 id="secret-setup-custom-model-1"
                 type="text"
                 autocomplete="off"
-                placeholder="聊天模型 1（默认）"
+                placeholder="Workflow / 聊天模型 1（默认）"
                 style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
               />
               <input
@@ -1080,11 +1316,33 @@
                 placeholder="聊天模型 3（可选）"
                 style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
               />
+              <div style="font-weight:500; margin:8px 0 4px;">独立 Rerank 配置（可选）</div>
+              <input
+                id="secret-setup-custom-rerank-api-key"
+                type="password"
+                autocomplete="off"
+                placeholder="Rerank API Key（可选）"
+                style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
+              />
+              <input
+                id="secret-setup-custom-rerank-base-url"
+                type="text"
+                autocomplete="off"
+                placeholder="Rerank Base URL，例如 https://api.example.com/v1"
+                style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
+              />
+              <input
+                id="secret-setup-custom-rerank-model"
+                type="text"
+                autocomplete="off"
+                placeholder="Rerank 模型，例如 qwen3-reranker-4b"
+                style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
+              />
               <button id="secret-setup-custom-test" type="button" class="secret-gate-btn secondary secret-setup-step2-actions">
                 测试当前配置
               </button>
               <div id="secret-setup-custom-status" style="min-height:18px; font-size:12px; color:#999; margin-top:6px;">
-                将依次用已填写聊天模型发送 <code>hello world</code>，检查接口与模型是否可用。
+                将依次用已填写 workflow / 聊天模型发送 <code>hello world</code>，检查接口与模型是否可用；独立 rerank 留空则保存为 fallback 模式。
               </div>
             </div>
           </div>
@@ -1124,6 +1382,9 @@
       const customModel1Input = document.getElementById('secret-setup-custom-model-1');
       const customModel2Input = document.getElementById('secret-setup-custom-model-2');
       const customModel3Input = document.getElementById('secret-setup-custom-model-3');
+      const customRerankApiKeyInput = document.getElementById('secret-setup-custom-rerank-api-key');
+      const customRerankBaseUrlInput = document.getElementById('secret-setup-custom-rerank-base-url');
+      const customRerankModelInput = document.getElementById('secret-setup-custom-rerank-model');
       const platoModelSelect = document.getElementById('secret-setup-plato-model-select');
       const deepseekPresetBtn = document.getElementById('secret-setup-preset-deepseek');
       const glmPresetBtn = document.getElementById('secret-setup-preset-glm');
@@ -1155,6 +1416,9 @@
         !customModel1Input ||
         !customModel2Input ||
         !customModel3Input ||
+        !customRerankApiKeyInput ||
+        !customRerankBaseUrlInput ||
+        !customRerankModelInput ||
         !deepseekPresetBtn ||
         !glmPresetBtn ||
         !minimaxPresetBtn ||
@@ -1178,13 +1442,19 @@
       platoInput.value = initialApiKey;
       customApiKeyInput.value =
         currentProviderType === 'openai-compatible'
-        ? normalizeText(currentChatEntry.apiKey || '')
-        : '';
+          ? normalizeText(currentWorkflowLLM.apiKey || currentChatEntry.apiKey || '')
+          : '';
       customBaseUrlInput.value =
         currentProviderType === 'openai-compatible' ? initialCustomBaseUrl : '';
       customModel1Input.value = initialCustomModels[0] || '';
       customModel2Input.value = initialCustomModels[1] || '';
       customModel3Input.value = initialCustomModels[2] || '';
+      customRerankApiKeyInput.value =
+        currentProviderType === 'openai-compatible' ? initialCustomRerankApiKey : '';
+      customRerankBaseUrlInput.value =
+        currentProviderType === 'openai-compatible' ? initialCustomRerankBaseUrl : '';
+      customRerankModelInput.value =
+        currentProviderType === 'openai-compatible' ? initialCustomRerankModel : '';
 
       providerInputs.forEach((input) => {
         input.checked = input.value === currentProviderType;
@@ -1219,7 +1489,7 @@
 
       const syncProviderSections = () => {
         const provider = selectedProvider();
-        platoSection.style.display = 'block';
+        platoSection.style.display = provider === 'plato' ? 'block' : 'none';
         customSection.style.display =
           provider === 'openai-compatible' ? 'block' : 'none';
       };
@@ -1240,7 +1510,7 @@
       const resetCustomStatus = () => {
         customOk = false;
         customStatusEl.innerHTML =
-          '将依次用已填写模型发送 <code>hello world</code>，检查接口与模型是否可用。';
+          '将依次用已填写 workflow / 聊天模型发送 <code>hello world</code>，检查接口与模型是否可用；独立 rerank 留空则保存为 fallback 模式。';
         customStatusEl.style.color = '#999';
       };
 
@@ -1256,6 +1526,9 @@
         customModel1Input.value = preset.models[0] || '';
         customModel2Input.value = preset.models[1] || '';
         customModel3Input.value = preset.models[2] || '';
+        customRerankApiKeyInput.value = '';
+        customRerankBaseUrlInput.value = '';
+        customRerankModelInput.value = '';
         resetCustomStatus();
         customApiKeyInput.focus();
         setErrorText(
@@ -1275,6 +1548,10 @@
           ],
           3,
         );
+        const rerankApiKey = normalizeText(customRerankApiKeyInput.value);
+        const rerankBaseUrl = normalizeBaseUrlForStorage(customRerankBaseUrlInput.value);
+        const rerankModel = normalizeText(customRerankModelInput.value);
+        const hasAnyRerankField = !!(rerankApiKey || rerankBaseUrl || rerankModel);
 
         if (!apiKey) {
           throw new Error('请先输入 OpenAI-compatible API Key。');
@@ -1282,36 +1559,49 @@
         if (!baseUrl) {
           throw new Error('请先输入 OpenAI-compatible Base URL。');
         }
-        if (!/^https?:\/\//i.test(baseUrl)) {
-          throw new Error('Base URL 需要以 http:// 或 https:// 开头。');
+        if (!isAllowedLLMBaseUrl(baseUrl)) {
+          throw new Error('Base URL 必须使用 https://，本地调试仅允许 http://localhost。');
         }
         if (!models.length) {
           throw new Error('请至少填写 1 个模型名称。');
+        }
+        if (hasAnyRerankField) {
+          if (!rerankApiKey || !rerankBaseUrl || !rerankModel) {
+            throw new Error('独立 rerank 配置需要同时填写 API Key、Base URL 和模型名称，或全部留空。');
+          }
+          if (!isAllowedLLMBaseUrl(rerankBaseUrl)) {
+            throw new Error('Rerank Base URL 必须使用 https://，本地调试仅允许 http://localhost。');
+          }
         }
         return {
           apiKey,
           baseUrl,
           models,
+          rerankApiKey,
+          rerankBaseUrl,
+          rerankModel,
         };
       };
 
       const collectProviderDraft = () => {
         const provider = selectedProvider();
-        const apiKey = normalizeText(platoInput.value);
-        const model = selectedPlatoModel();
-        if (!apiKey) {
-          throw new Error('请先输入 BLT API Key。');
-        }
-        if (!model) {
-          throw new Error('请选择用于工作流总结的大模型。');
-        }
         if (provider === 'plato') {
+          const apiKey = normalizeText(platoInput.value);
+          const model = selectedPlatoModel();
+          if (!apiKey) {
+            throw new Error('请先输入 BLT API Key。');
+          }
+          if (!model) {
+            throw new Error('请选择用于工作流总结的大模型。');
+          }
           return {
             providerType: 'plato',
-            summaryApiKey: apiKey,
-            summaryBaseUrl: getDefaultPlatoBaseUrl(),
-            summaryModel: model,
+            workflowApiKey: apiKey,
+            workflowBaseUrl: getDefaultPlatoBaseUrl(),
+            workflowModel: model,
             chatModels: defaultPlatoModels,
+            chatApiKey: apiKey,
+            chatBaseUrl: getDefaultPlatoBaseUrl(),
             rewriteModel: 'gemini-3-flash-preview',
             filterModel: 'gemini-3-flash-preview-nothinking',
             skipRerank: false,
@@ -1324,48 +1614,36 @@
         }
 
         const customDraft = validateCustomDraft();
+        const workflowModel = customDraft.models[0] || '';
+        if (!workflowModel) {
+          throw new Error('请至少填写 1 个 OpenAI-compatible 模型名称。');
+        }
+        const reranker =
+          customDraft.rerankApiKey && customDraft.rerankBaseUrl && customDraft.rerankModel
+            ? {
+                apiKey: customDraft.rerankApiKey,
+                baseUrl: customDraft.rerankBaseUrl,
+                model: customDraft.rerankModel,
+              }
+            : null;
         return {
           providerType: 'openai-compatible',
-          summaryApiKey: apiKey,
-          summaryBaseUrl: getDefaultPlatoBaseUrl(),
-          summaryModel: model,
+          workflowApiKey: customDraft.apiKey,
+          workflowBaseUrl: customDraft.baseUrl,
+          workflowModel,
           chatModels: customDraft.models,
           chatApiKey: customDraft.apiKey,
           chatBaseUrl: customDraft.baseUrl,
-          rewriteModel: 'gemini-3-flash-preview',
-          filterModel: 'gemini-3-flash-preview-nothinking',
-          skipRerank: false,
-          reranker: {
-            apiKey,
-            baseUrl: getDefaultPlatoBaseUrl(),
-            model: 'qwen3-reranker-4b',
-          },
+          rewriteModel: workflowModel,
+          filterModel: workflowModel,
+          skipRerank: !reranker,
+          reranker,
         };
       };
 
       const buildPingEntries = () => {
-        const provider = selectedProvider();
-        if (provider === 'plato') {
-          const apiKey = normalizeText(platoInput.value);
-          const model = selectedPlatoModel();
-          if (!apiKey || !model) {
-            throw new Error('请先填写柏拉图 API Key 并选择总结模型。');
-          }
-          return [
-            {
-              apiKey,
-              baseUrl: getDefaultPlatoBaseUrl(),
-              model,
-            },
-          ];
-        }
-
-        const customDraft = validateCustomDraft();
-        return customDraft.models.map((model) => ({
-          apiKey: customDraft.apiKey,
-          baseUrl: customDraft.baseUrl,
-          model,
-        }));
+        const providerDraft = collectProviderDraft();
+        return buildPingEntriesFromProviderDraft(providerDraft);
       };
 
       const bindResetOnInput = (elements, resetFn) => {
@@ -1385,7 +1663,9 @@
         platoStatusEl.style.color = '#666';
       }
       if (currentProviderType === 'openai-compatible' && initialCustomApiKey && initialCustomBaseUrl) {
-        customStatusEl.textContent = '已载入当前加密配置；如更换 Base URL / 模型，建议重新点击测试。';
+        customStatusEl.textContent = initialCustomRerankApiKey && initialCustomRerankBaseUrl && initialCustomRerankModel
+          ? '已载入当前加密配置；workflow / 聊天 / rerank 如有改动，建议重新点击测试后保存。'
+          : '已载入当前加密配置；如更换 Base URL / 模型，建议重新点击测试。未填写 rerank 时将保存为 fallback 模式。';
         customStatusEl.style.color = '#666';
       }
 
@@ -1394,7 +1674,16 @@
       bindResetOnInput([githubInput], resetGithubStatus);
       bindResetOnInput([platoInput, platoModelSelect], resetPlatoStatus);
       bindResetOnInput(
-        [customApiKeyInput, customBaseUrlInput, customModel1Input, customModel2Input, customModel3Input],
+        [
+          customApiKeyInput,
+          customBaseUrlInput,
+          customModel1Input,
+          customModel2Input,
+          customModel3Input,
+          customRerankApiKeyInput,
+          customRerankBaseUrlInput,
+          customRerankModelInput,
+        ],
         resetCustomStatus,
       );
       providerInputs.forEach((input) => {
@@ -1565,12 +1854,8 @@
           setErrorText('请先验证柏拉图 API Key，或点击“测试当前配置”。', '#c00');
           return;
         }
-        if (providerDraft.providerType === 'openai-compatible' && !platoOk) {
-          setErrorText('请先验证 BLT API Key，工作流总结与 reranker 必须使用 BLT。', '#c00');
-          return;
-        }
         if (providerDraft.providerType === 'openai-compatible' && !customOk) {
-          setErrorText('请先点击“测试当前配置”，确认 OpenAI-compatible 配置可用。', '#c00');
+          setErrorText('请先点击“测试当前配置”，确认 OpenAI-compatible workflow / 聊天配置可用。', '#c00');
           return;
         }
 
@@ -1585,10 +1870,15 @@
             type: providerDraft.providerType,
             skipRerank: providerDraft.skipRerank,
           },
+          workflowLLM: {
+            apiKey: providerDraft.workflowApiKey,
+            baseUrl: providerDraft.workflowBaseUrl,
+            model: providerDraft.workflowModel,
+          },
           summarizedLLM: {
-            apiKey: providerDraft.summaryApiKey,
-            baseUrl: providerDraft.summaryBaseUrl,
-            model: providerDraft.summaryModel,
+            apiKey: providerDraft.workflowApiKey,
+            baseUrl: providerDraft.workflowBaseUrl,
+            model: providerDraft.workflowModel,
           },
           rerankerLLM: providerDraft.reranker
             ? {
@@ -1601,12 +1891,8 @@
               },
           chatLLMs: [
             {
-              apiKey: providerDraft.providerType === 'openai-compatible'
-                ? providerDraft.chatApiKey
-                : providerDraft.summaryApiKey,
-              baseUrl: providerDraft.providerType === 'openai-compatible'
-                ? providerDraft.chatBaseUrl
-                : providerDraft.summaryBaseUrl,
+              apiKey: providerDraft.chatApiKey,
+              baseUrl: providerDraft.chatBaseUrl,
               models: providerDraft.chatModels,
             },
           ],
@@ -1620,9 +1906,9 @@
             githubToken,
             {
               providerType: providerDraft.providerType,
-              summarizedApiKey: providerDraft.summaryApiKey,
-              summarizedBaseUrl: providerDraft.summaryBaseUrl,
-              summarizedModel: providerDraft.summaryModel,
+              workflowApiKey: providerDraft.workflowApiKey,
+              workflowBaseUrl: providerDraft.workflowBaseUrl,
+              workflowModel: providerDraft.workflowModel,
               filterModel: providerDraft.filterModel,
               rewriteModel: providerDraft.rewriteModel,
               skipRerank: providerDraft.skipRerank,
@@ -1919,6 +2205,18 @@
       }
     })();
   }
+
+  window.DPRSecretSession = window.DPRSecretSession || {};
+  window.DPRSecretSession.__test = Object.assign(
+    {},
+    window.DPRSecretSession.__test || {},
+    {
+      dedupePingEntries,
+      buildPingEntriesFromProviderDraft,
+      resolveRerankSyncState,
+      buildSecretSyncOperations,
+    },
+  );
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

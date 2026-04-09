@@ -5,7 +5,9 @@ const {
   buildChatCompletionsEndpoint,
   sanitizeModelList,
   resolveChatModels,
+  resolveWorkflowLLM,
   resolveSummaryLLM,
+  resolveRerankerLLM,
   inferProviderType,
   getOpenAICompatiblePreset,
   inferChatApiProfile,
@@ -43,17 +45,22 @@ function testSanitizeModelList() {
   );
 }
 
-function testResolveChatModelsAndSummary() {
+function testResolveChatModelsWorkflowAndSummary() {
   const secret = {
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://api.workflow.example.com/v1/',
+      model: 'gpt-4.1-mini',
+    },
     summarizedLLM: {
       apiKey: 'sk-summary',
-      baseUrl: 'https://api.example.com/v1',
-      model: 'gpt-4.1-mini',
+      baseUrl: 'https://api.summary.example.com/v1',
+      model: 'gpt-4.1',
     },
     chatLLMs: [
       {
         apiKey: 'sk-chat',
-        baseUrl: 'https://api.example.com/v1/',
+        baseUrl: 'https://api.chat.example.com/v1/',
         models: ['gpt-4.1-mini', 'claude-sonnet-4'],
       },
     ],
@@ -66,15 +73,114 @@ function testResolveChatModelsAndSummary() {
     'claude-sonnet-4',
   ]);
 
+  const workflow = resolveWorkflowLLM(secret);
+  assert.deepEqual(workflow, {
+    apiKey: 'sk-workflow',
+    baseUrl: 'https://api.workflow.example.com/v1',
+    model: 'gpt-4.1-mini',
+  });
+
   const summary = resolveSummaryLLM(secret);
-  assert.equal(summary.model, 'gpt-4.1-mini');
-  assert.equal(summary.baseUrl, 'https://api.example.com/v1');
+  assert.deepEqual(summary, workflow);
+}
+
+function testResolveWorkflowFallbacks() {
+  assert.deepEqual(
+    resolveWorkflowLLM({
+      summarizedLLM: {
+        apiKey: 'sk-summary',
+        baseUrl: 'https://api.summary.example.com/v1',
+        model: 'gpt-4.1',
+      },
+    }),
+    {
+      apiKey: 'sk-summary',
+      baseUrl: 'https://api.summary.example.com/v1',
+      model: 'gpt-4.1',
+    },
+  );
+
+  assert.deepEqual(
+    resolveWorkflowLLM({
+      chatLLMs: [
+        {
+          apiKey: 'sk-chat',
+          baseUrl: 'https://api.chat.example.com/v1/',
+          models: ['gpt-4.1-mini', 'claude-sonnet-4'],
+        },
+      ],
+    }),
+    {
+      apiKey: 'sk-chat',
+      baseUrl: 'https://api.chat.example.com/v1',
+      model: 'gpt-4.1-mini',
+    },
+  );
+}
+
+function testResolveRerankerLLM() {
+  assert.deepEqual(
+    resolveRerankerLLM({
+      rerankerLLM: {
+        apiKey: 'sk-rerank',
+        baseUrl: 'https://api.rerank.example.com/v1/',
+        model: 'qwen3-reranker-4b',
+      },
+    }),
+    {
+      apiKey: 'sk-rerank',
+      baseUrl: 'https://api.rerank.example.com/v1',
+      model: 'qwen3-reranker-4b',
+    },
+  );
+
+  assert.equal(
+    resolveRerankerLLM({
+      rerankerLLM: {
+        enabled: false,
+        apiKey: 'sk-rerank',
+        baseUrl: 'https://api.rerank.example.com/v1',
+        model: 'qwen3-reranker-4b',
+      },
+    }),
+    null,
+  );
+
+  assert.equal(
+    resolveRerankerLLM({
+      rerankerLLM: {
+        apiKey: 'sk-rerank',
+        baseUrl: 'https://api.rerank.example.com/v1',
+      },
+    }),
+    null,
+  );
+
+  assert.deepEqual(
+    resolveRerankerLLM({
+      workflowLLM: {
+        apiKey: 'sk-workflow',
+        baseUrl: 'https://api.workflow.example.com/v1',
+        model: 'gpt-4.1-mini',
+      },
+      rerankerLLM: {
+        apiKey: 'sk-rerank',
+        baseUrl: 'https://api.rerank.example.com/v1',
+        model: 'qwen3-reranker-4b',
+      },
+    }),
+    {
+      apiKey: 'sk-rerank',
+      baseUrl: 'https://api.rerank.example.com/v1',
+      model: 'qwen3-reranker-4b',
+    },
+  );
 }
 
 function testInferProviderType() {
   assert.equal(
     inferProviderType({
-      summarizedLLM: {
+      workflowLLM: {
         apiKey: 'sk',
         baseUrl: 'https://api.bltcy.ai/v1',
         model: 'gemini-3-flash-preview-thinking-1000',
@@ -84,13 +190,36 @@ function testInferProviderType() {
   );
   assert.equal(
     inferProviderType({
-      summarizedLLM: {
+      workflowLLM: {
         apiKey: 'sk',
         baseUrl: 'https://api.openai.com/v1',
         model: 'gpt-4.1-mini',
       },
     }),
     'openai-compatible',
+  );
+  assert.equal(
+    inferProviderType({
+      chatLLMs: [
+        {
+          apiKey: 'sk-chat',
+          baseUrl: 'https://api.example.com/v1',
+          models: ['gpt-4.1-mini'],
+        },
+      ],
+    }),
+    'openai-compatible',
+  );
+  assert.equal(
+    inferProviderType({
+      llmProvider: { type: 'plato' },
+      workflowLLM: {
+        apiKey: 'sk',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4.1-mini',
+      },
+    }),
+    'plato',
   );
 }
 
@@ -260,12 +389,31 @@ function testBuildConnectivityTestPayload() {
       max_completion_tokens: 256,
     },
   );
+
+  assert.deepEqual(
+    buildConnectivityTestPayload({
+      baseUrl: 'https://api.minimaxi.com/v1',
+      model: 'MiniMax-M2.5',
+    }),
+    {
+      model: 'MiniMax-M2.5',
+      messages: [
+        { role: 'system', content: 'Reply with exactly: hello world' },
+        { role: 'user', content: 'hello world' },
+      ],
+      temperature: 0,
+      max_tokens: 256,
+      max_completion_tokens: 256,
+    },
+  );
 }
 
 testNormalizeBaseUrlForStorage();
 testBuildChatCompletionsEndpoint();
 testSanitizeModelList();
-testResolveChatModelsAndSummary();
+testResolveChatModelsWorkflowAndSummary();
+testResolveWorkflowFallbacks();
+testResolveRerankerLLM();
 testInferProviderType();
 testGetOpenAICompatiblePreset();
 testInferChatApiProfile();

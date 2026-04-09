@@ -89,6 +89,21 @@ window.PrivateDiscussionChat = (function () {
       stream: true,
     };
   };
+  const shouldUseXApiKeyHeader = (baseUrl, model) => {
+    const utils = window.DPRLLMConfigUtils || {};
+    if (typeof utils.shouldUseXApiKeyHeader === 'function') {
+      return utils.shouldUseXApiKeyHeader({ baseUrl, model });
+    }
+    const normalizedBaseUrl = String(baseUrl || '').trim().toLowerCase();
+    const normalizedModel = String(model || '').trim().toLowerCase();
+    if (
+      /^minimax-/i.test(normalizedModel)
+      || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
+    ) {
+      return false;
+    }
+    return true;
+  };
 
   let chatDbPromise = null;
 
@@ -1172,15 +1187,22 @@ window.PrivateDiscussionChat = (function () {
         stream: true,
       };
 
-      const doChatFetch = async (payload) => fetch(endpoint, {
+      const doChatFetch = async (payload) => {
+        const headers = {
+          'Content-Type': 'application/json',
+        };
+        if (shouldUseXApiKeyHeader(baseUrl, model)) {
+          headers.Authorization = `Bearer ${apiKey}`;
+        } else {
+          headers['x-api-key'] = apiKey;
+        }
+        return fetch(endpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
+          headers,
           signal: controller.signal,
           body: JSON.stringify(payload),
         });
+      };
 
       try {
         resp = await doChatFetch(primaryPayload);

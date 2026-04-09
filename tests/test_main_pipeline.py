@@ -54,7 +54,44 @@ class MainPipelineTest(unittest.TestCase):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return path
 
-    def test_resolve_summary_step_env_uses_summary_overrides(self):
+    def test_resolve_summary_step_env_prefers_workflow_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BLT_API_KEY": "base-key",
+                "SUMMARY_API_KEY": "summary-key",
+                "SUMMARY_BASE_URL": "https://summary.example.com/v1",
+                "SUMMARY_MODEL": "summary-model",
+                "WORKFLOW_LLM_API_KEY": "workflow-key",
+                "WORKFLOW_LLM_BASE_URL": "https://workflow.example.com/v1",
+                "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                "RERANK_ENABLED": "true",
+                "RERANK_API_KEY": "rerank-key",
+                "RERANK_BASE_URL": "https://rerank.example.com/v1",
+                "RERANK_MODEL": "qwen-rerank",
+            },
+            clear=True,
+        ):
+            env = self.mod.resolve_summary_step_env()
+
+        self.assertEqual(env["WORKFLOW_LLM_API_KEY"], "workflow-key")
+        self.assertEqual(env["WORKFLOW_LLM_BASE_URL"], "https://workflow.example.com/v1")
+        self.assertEqual(env["WORKFLOW_LLM_MODEL"], "gpt-4.1-mini")
+        self.assertEqual(env["SUMMARY_API_KEY"], "workflow-key")
+        self.assertEqual(env["SUMMARY_BASE_URL"], "https://workflow.example.com/v1")
+        self.assertEqual(env["SUMMARY_MODEL"], "gpt-4.1-mini")
+        self.assertEqual(env["BLT_API_KEY"], "workflow-key")
+        self.assertEqual(env["BLT_API_BASE"], "https://workflow.example.com/v1")
+        self.assertEqual(env["BLT_SUMMARY_MODEL"], "gpt-4.1-mini")
+        self.assertEqual(env["RERANK_ENABLED"], "true")
+        self.assertEqual(env["RERANK_API_KEY"], "rerank-key")
+        self.assertEqual(env["RERANK_BASE_URL"], "https://rerank.example.com/v1")
+        self.assertEqual(env["RERANK_MODEL"], "qwen-rerank")
+        self.assertEqual(env["Reranker_LLM_API_KEY"], "rerank-key")
+        self.assertEqual(env["Reranker_LLM_BASE_URL"], "https://rerank.example.com/v1")
+        self.assertEqual(env["Reranker_LLM_MODEL"], "qwen-rerank")
+
+    def test_resolve_summary_step_env_uses_summary_fallback(self):
         with patch.dict(
             os.environ,
             {
@@ -68,13 +105,46 @@ class MainPipelineTest(unittest.TestCase):
         ):
             env = self.mod.resolve_summary_step_env()
 
+        self.assertEqual(env["WORKFLOW_LLM_API_KEY"], "summary-key")
+        self.assertEqual(env["WORKFLOW_LLM_BASE_URL"], "https://summary.example.com/v1")
+        self.assertEqual(env["WORKFLOW_LLM_MODEL"], "gpt-4.1-mini")
         self.assertEqual(env["BLT_API_KEY"], "summary-key")
         self.assertEqual(env["BLT_API_BASE"], "https://summary.example.com/v1")
         self.assertEqual(env["BLT_PRIMARY_BASE_URL"], "https://summary.example.com/v1")
         self.assertEqual(env["LLM_PRIMARY_BASE_URL"], "https://summary.example.com/v1")
         self.assertEqual(env["BLT_SUMMARY_MODEL"], "gpt-4.1-mini")
+        self.assertEqual(env["RERANK_ENABLED"], "false")
 
-    def test_main_skips_rerank_for_non_blt_base_and_builds_fallback(self):
+    def test_resolve_summary_step_env_uses_legacy_blt_as_last_workflow_fallback(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BLT_API_KEY": "legacy-key",
+                "BLT_API_BASE": "https://legacy.example.com/v1",
+            },
+            clear=True,
+        ):
+            env = self.mod.resolve_summary_step_env()
+
+        self.assertEqual(env["WORKFLOW_LLM_API_KEY"], "legacy-key")
+        self.assertEqual(env["WORKFLOW_LLM_BASE_URL"], "https://legacy.example.com/v1")
+        self.assertEqual(env["BLT_API_KEY"], "legacy-key")
+        self.assertEqual(env["BLT_API_BASE"], "https://legacy.example.com/v1")
+        self.assertEqual(env["RERANK_ENABLED"], "true")
+
+    def test_resolve_summary_step_env_surfaces_missing_workflow_base_url(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WORKFLOW_LLM_API_KEY": "workflow-key",
+                "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "workflow LLM base_url"):
+                self.mod.resolve_summary_step_env()
+
+    def test_main_skips_rerank_without_explicit_rerank_config_and_builds_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             src_dir = root / "src"
@@ -100,7 +170,11 @@ class MainPipelineTest(unittest.TestCase):
                 sys, "argv", ["main.py"]
             ), patch.dict(
                 os.environ,
-                {"LLM_PRIMARY_BASE_URL": "https://api.openai.com/v1"},
+                {
+                    "WORKFLOW_LLM_API_KEY": "workflow-key",
+                    "WORKFLOW_LLM_BASE_URL": "https://api.openai.com/v1",
+                    "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                },
                 clear=True,
             ):
                 self.mod.main()
@@ -108,6 +182,8 @@ class MainPipelineTest(unittest.TestCase):
             labels = [item[0] for item in calls]
             self.assertNotIn("Step 3 - Rerank", labels)
             self.assertIn("Step 4 - LLM refine", labels)
+            step4_call = next(item for item in calls if item[0] == "Step 4 - LLM refine")
+            self.assertEqual(step4_call[2]["WORKFLOW_LLM_BASE_URL"], "https://api.openai.com/v1")
 
             rerank_path = root / "archive" / token / "rank" / f"arxiv_papers_{token}.json"
             self.assertTrue(rerank_path.exists())
@@ -117,7 +193,7 @@ class MainPipelineTest(unittest.TestCase):
             self.assertEqual(ranked[0]["star_rating"], 5)
             self.assertGreaterEqual(ranked[1]["star_rating"], ranked[2]["star_rating"])
 
-    def test_main_keeps_rerank_in_blt_mode(self):
+    def test_main_keeps_rerank_with_independent_rerank_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             src_dir = root / "src"
@@ -143,7 +219,56 @@ class MainPipelineTest(unittest.TestCase):
                 sys, "argv", ["main.py"]
             ), patch.dict(
                 os.environ,
-                {"LLM_PRIMARY_BASE_URL": "https://api.bltcy.ai/v1"},
+                {
+                    "WORKFLOW_LLM_API_KEY": "workflow-key",
+                    "WORKFLOW_LLM_BASE_URL": "https://api.openai.com/v1",
+                    "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                    "RERANK_ENABLED": "true",
+                    "RERANK_API_KEY": "rerank-key",
+                    "RERANK_BASE_URL": "https://rerank.example.com/v1",
+                    "RERANK_MODEL": "qwen3-reranker-4b",
+                },
+                clear=True,
+            ):
+                self.mod.main()
+
+            labels = [item[0] for item in calls]
+            self.assertIn("Step 3 - Rerank", labels)
+            step3_call = next(item for item in calls if item[0] == "Step 3 - Rerank")
+            self.assertEqual(step3_call[2]["RERANK_API_KEY"], "rerank-key")
+            self.assertEqual(step3_call[2]["RERANK_BASE_URL"], "https://rerank.example.com/v1")
+            self.assertEqual(step3_call[2]["RERANK_MODEL"], "qwen3-reranker-4b")
+
+    def test_main_keeps_rerank_in_legacy_blt_mode(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src_dir = root / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            token = "20260310"
+            self._write_rrf_input(root, token)
+            calls = []
+
+            def fake_run_step(label, args, env=None):
+                calls.append((label, args, env))
+
+            with patch.object(self.mod, "ROOT_DIR", str(root)), patch.object(
+                self.mod, "SRC_DIR", str(src_dir)
+            ), patch.object(
+                self.mod, "resolve_run_date_token", return_value=token
+            ), patch.object(
+                self.mod, "resolve_sidebar_date_label", return_value=None
+            ), patch.object(
+                self.mod, "parse_trace_ids", return_value=[]
+            ), patch.object(
+                self.mod, "run_step", side_effect=fake_run_step
+            ), patch.object(
+                sys, "argv", ["main.py"]
+            ), patch.dict(
+                os.environ,
+                {
+                    "BLT_API_KEY": "legacy-key",
+                    "BLT_API_BASE": "https://api.bltcy.ai/v1",
+                },
                 clear=True,
             ):
                 self.mod.main()

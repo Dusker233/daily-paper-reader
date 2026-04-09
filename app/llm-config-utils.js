@@ -68,6 +68,13 @@
     return `${normalized}/v1/chat/completions`;
   };
 
+  const isAllowedLLMBaseUrl = (value) => {
+    const normalized = normalizeBaseUrlForStorage(value).toLowerCase();
+    if (!normalized) return false;
+    if (normalized.startsWith('https://')) return true;
+    return /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:$|\/)/i.test(normalized);
+  };
+
   const sanitizeModelList = (values, maxCount = 3) => {
     const rawList = Array.isArray(values) ? values : [values];
     const out = [];
@@ -115,14 +122,22 @@
     return models;
   };
 
-  const resolveSummaryLLM = (secret) => {
+  const resolveWorkflowLLM = (secret) => {
     const safeSecret = secret && typeof secret === 'object' ? secret : {};
+    const workflow = safeSecret.workflowLLM || {};
+    const workflowBaseUrl = normalizeBaseUrlForStorage(workflow.baseUrl || '');
+    const workflowApiKey = normalizeText(workflow.apiKey || '');
+    const workflowModel = normalizeText(workflow.model || '');
+    if (workflowBaseUrl && workflowApiKey && workflowModel) {
+      return { baseUrl: workflowBaseUrl, apiKey: workflowApiKey, model: workflowModel };
+    }
+
     const summarized = safeSecret.summarizedLLM || {};
-    const baseUrl = normalizeBaseUrlForStorage(summarized.baseUrl || '');
-    const apiKey = normalizeText(summarized.apiKey || '');
-    const model = normalizeText(summarized.model || '');
-    if (baseUrl && apiKey && model) {
-      return { baseUrl, apiKey, model };
+    const summarizedBaseUrl = normalizeBaseUrlForStorage(summarized.baseUrl || '');
+    const summarizedApiKey = normalizeText(summarized.apiKey || '');
+    const summarizedModel = normalizeText(summarized.model || '');
+    if (summarizedBaseUrl && summarizedApiKey && summarizedModel) {
+      return { baseUrl: summarizedBaseUrl, apiKey: summarizedApiKey, model: summarizedModel };
     }
 
     const chatModels = resolveChatModels(safeSecret);
@@ -134,6 +149,21 @@
     };
   };
 
+  const resolveSummaryLLM = (secret) => resolveWorkflowLLM(secret);
+
+  const resolveRerankerLLM = (secret) => {
+    const safeSecret = secret && typeof secret === 'object' ? secret : {};
+    const reranker = safeSecret.rerankerLLM || {};
+    if (reranker && reranker.enabled === false) return null;
+    const baseUrl = normalizeBaseUrlForStorage(reranker.baseUrl || '');
+    const apiKey = normalizeText(reranker.apiKey || '');
+    const model = normalizeText(reranker.model || '');
+    if (baseUrl && apiKey && model) {
+      return { baseUrl, apiKey, model };
+    }
+    return null;
+  };
+
   const inferProviderType = (secret) => {
     const safeSecret = secret && typeof secret === 'object' ? secret : {};
     const llmProvider = safeSecret.llmProvider || {};
@@ -141,12 +171,11 @@
     if (explicit === 'plato' || explicit === 'openai-compatible') {
       return explicit;
     }
-    const summary = resolveSummaryLLM(safeSecret);
-    if (!summary) return 'plato';
-    if (/bltcy\.ai|gptbest\.vip/i.test(summary.baseUrl)) {
-      return 'plato';
+    const workflow = resolveWorkflowLLM(safeSecret);
+    if (workflow) {
+      return /bltcy\.ai|gptbest\.vip/i.test(workflow.baseUrl) ? 'plato' : 'openai-compatible';
     }
-    return 'openai-compatible';
+    return resolveChatModels(safeSecret).length ? 'openai-compatible' : 'plato';
   };
 
   const getOpenAICompatiblePreset = (key) => {
@@ -246,9 +275,12 @@
     normalizeText,
     normalizeBaseUrlForStorage,
     buildChatCompletionsEndpoint,
+    isAllowedLLMBaseUrl,
     sanitizeModelList,
     resolveChatModels,
+    resolveWorkflowLLM,
     resolveSummaryLLM,
+    resolveRerankerLLM,
     inferProviderType,
     getOpenAICompatiblePreset,
     inferChatApiProfile,

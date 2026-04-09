@@ -8,7 +8,7 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from llm import BltClient
+from llm import BltClient, ClientFactory
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -388,7 +388,7 @@ def process_file(
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-    description="步骤 3：使用 BLT Rerank API 对候选论文做重排序（简化版）。",
+    description="步骤 3：使用独立 rerank 平台对候选论文做重排序（简化版）。",
   )
   parser.add_argument(
     "--input",
@@ -411,8 +411,8 @@ def main() -> None:
   parser.add_argument(
     "--rerank-model",
     type=str,
-    default=os.getenv("BLT_RERANK_MODEL") or os.getenv("RERANK_MODEL") or "qwen3-reranker-4b",
-    help="BLT Rerank 模型名称（默认 qwen3-reranker-4b）。",
+    default=os.getenv("RERANK_MODEL") or os.getenv("Reranker_LLM_MODEL") or os.getenv("BLT_RERANK_MODEL") or "qwen3-reranker-4b",
+    help="Rerank 模型名称（默认 qwen3-reranker-4b）。",
   )
 
   args = parser.parse_args()
@@ -429,11 +429,9 @@ def main() -> None:
     log(f"[WARN] 输入文件不存在（今天可能没有新论文）：{input_path}，将跳过 Step 3。")
     return
 
-  api_key = os.getenv("BLT_API_KEY")
-  if not api_key:
-    raise RuntimeError("缺少 BLT_API_KEY 环境变量，无法调用 BLT Rerank API。")
-
-  reranker = BltClient(api_key=api_key, model=args.rerank_model)
+  reranker = ClientFactory.from_env(scope="rerank", model_override=args.rerank_model, default_model=args.rerank_model)
+  if not isinstance(reranker, BltClient):
+    raise RuntimeError("当前 rerank 客户端不支持 /v1/rerank 接口。")
   process_file(
     reranker=reranker,
     input_path=input_path,

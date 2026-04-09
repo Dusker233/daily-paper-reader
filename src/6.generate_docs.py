@@ -8,6 +8,7 @@ import math
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 import re
 import tempfile
 import time
@@ -18,7 +19,7 @@ from typing import Any, Dict, List, Tuple
 
 import fitz  # PyMuPDF
 import requests
-from llm import BltClient
+from llm import ClientFactory, LLMClient
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -34,54 +35,75 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
 RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
 
-# LLM 配置（使用 llm.py 内的 BLT 客户端）
-BLT_API_KEY = os.getenv("BLT_API_KEY")
-BLT_MODEL = os.getenv("BLT_SUMMARY_MODEL", "gemini-3-flash-preview")
+# LLM 配置（统一 workflow LLM 入口）
+WORKFLOW_MODEL = (
+    os.getenv("WORKFLOW_LLM_MODEL")
+    or os.getenv("SUMMARY_MODEL")
+    or os.getenv("BLT_SUMMARY_MODEL")
+    or "gemini-3-flash-preview"
+)
 LLM_CLIENT = None
-if BLT_API_KEY:
-    LLM_CLIENT = BltClient(api_key=BLT_API_KEY, model=BLT_MODEL)
+LLM_CLIENT_ERROR = ""
+LLM_CLIENT_LOCK = Lock()
+try:
+    LLM_CLIENT = ClientFactory.from_env(
+        scope="workflow",
+        model_override=WORKFLOW_MODEL,
+        default_model=WORKFLOW_MODEL,
+    )
+except Exception as exc:
+    LLM_CLIENT = None
+    LLM_CLIENT_ERROR = str(exc)
 
 DEFAULT_DOCS_CONCURRENCY = 4
 
 
 def call_blt_text(
-    client: BltClient,
+    client: LLMClient,
     messages: List[Dict[str, str]],
     temperature: float,
     max_tokens: int,
     response_format: Dict[str, Any] | None = None,
 ) -> str:
-    client.kwargs.update(
-        {
+    with LLM_CLIENT_LOCK:
+        previous_kwargs = dict(getattr(client, "kwargs", {}) or {})
+        client.kwargs = {
+            **previous_kwargs,
             "temperature": float(temperature),
             "max_tokens": int(max_tokens),
         }
-    )
-    resp = client.chat(messages=messages, response_format=response_format)
+        try:
+            resp = client.chat(messages=messages, response_format=response_format)
+        finally:
+            client.kwargs = previous_kwargs
     return (resp.get("content") or "").strip()
 
 
 def call_blt_structured_json(
-    client: BltClient,
+    client: LLMClient,
     messages: List[Dict[str, str]],
     schema_name: str,
     schema: Dict[str, Any],
     temperature: float,
     max_tokens: int,
 ) -> Dict[str, Any] | None:
-    client.kwargs.update(
-        {
+    with LLM_CLIENT_LOCK:
+        previous_kwargs = dict(getattr(client, "kwargs", {}) or {})
+        client.kwargs = {
+            **previous_kwargs,
             "temperature": float(temperature),
             "max_tokens": int(max_tokens),
         }
-    )
-    resp = client.chat_structured(
-        messages=messages,
-        schema_name=schema_name,
-        schema=schema,
-        strict=True,
-        allow_json_object_fallback=True,
-    )
+        try:
+            resp = client.chat_structured(
+                messages=messages,
+                schema_name=schema_name,
+                schema=schema,
+                strict=True,
+                allow_json_object_fallback=True,
+            )
+        finally:
+            client.kwargs = previous_kwargs
     if resp.get("refusal"):
         log(f"[WARN] Structured output refusal: {resp.get('refusal')}")
         return None
@@ -279,6 +301,8 @@ def fetch_arxiv_paper_meta(arxiv_id: str) -> Dict[str, Any]:
 
 def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, str]:
     if LLM_CLIENT is None:
+        if LLM_CLIENT_ERROR:
+            log(f"[WARN] 未配置 workflow LLM，跳过中译。原因：{LLM_CLIENT_ERROR}")
         return "", ""
     title = title.strip() if title else ""
     abstract = abstract.strip() if abstract else ""
@@ -518,7 +542,10 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
 
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
     if LLM_CLIENT is None:
-        log("[WARN] 未配置 BLT_API_KEY，跳过精读总结。")
+        message = "[WARN] 未配置 workflow LLM，跳过精读总结。"
+        if LLM_CLIENT_ERROR:
+            message = f"{message} 原因：{LLM_CLIENT_ERROR}"
+        log(message)
         return None
     if not os.path.exists(md_file_path):
         return None
@@ -592,7 +619,10 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
     使用 JSON 结构化输出，确保返回完整的五个字段。
     """
     if LLM_CLIENT is None:
-        log("[WARN] 未配置 LLM_CLIENT，跳过速览生成。")
+        message = "[WARN] 未配置 LLM_CLIENT，跳过速览生成。"
+        if LLM_CLIENT_ERROR:
+            message = f"{message} 原因：{LLM_CLIENT_ERROR}"
+        log(message)
         return None
 
     system_prompt = "你是论文速览助手，请用中文简洁地总结论文的关键信息。"
@@ -931,6 +961,8 @@ def build_daily_brief_summary(
     )
 
     if LLM_CLIENT is None:
+        if LLM_CLIENT_ERROR:
+            log(f"[WARN] 未配置 workflow LLM，日报概览回退到模板文案。原因：{LLM_CLIENT_ERROR}")
         return fallback
 
     system_prompt = (

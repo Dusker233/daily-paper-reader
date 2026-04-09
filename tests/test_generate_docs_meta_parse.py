@@ -4,11 +4,22 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class GenerateDocsMetaParseTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._env_patch = patch.dict(
+            "os.environ",
+            {
+                "WORKFLOW_LLM_API_KEY": "workflow-key",
+                "WORKFLOW_LLM_BASE_URL": "https://workflow.example.com/v1",
+                "WORKFLOW_LLM_MODEL": "workflow-model",
+            },
+            clear=True,
+        )
+        cls._env_patch.start()
         root = Path(__file__).resolve().parents[1]
         if "fitz" not in sys.modules:
             import types
@@ -21,18 +32,46 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
 
             llm_stub = types.ModuleType("llm")
 
-            class DummyBltClient:
+            class DummyLLMClient:
                 def __init__(self, *args, **kwargs):
-                    pass
+                    self.kwargs = {}
 
-            llm_stub.BltClient = DummyBltClient
+                def chat(self, *args, **kwargs):
+                    return {"content": ""}
+
+                def chat_structured(self, *args, **kwargs):
+                    return {}
+
+            class DummyClientFactory:
+                @staticmethod
+                def from_env(*args, **kwargs):
+                    return DummyLLMClient()
+
+            llm_stub.LLMClient = DummyLLMClient
+            llm_stub.ClientFactory = DummyClientFactory
             sys.modules["llm"] = llm_stub
 
-        src_path = root / "src" / "6.generate_docs.py"
+        src_dir = root / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        if "paper_figures" not in sys.modules:
+            import types
+
+            paper_figures_stub = types.ModuleType("paper_figures")
+            paper_figures_stub.ensure_paper_figures = lambda **kwargs: []
+            sys.modules["paper_figures"] = paper_figures_stub
+
+        src_path = src_dir / "6.generate_docs.py"
         spec = importlib.util.spec_from_file_location("gen6_mod", src_path)
         cls.mod = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(cls.mod)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._env_patch is not None:
+            cls._env_patch.stop()
+            cls._env_patch = None
 
     def test_parse_meta_from_front_matter(self):
         md_path = Path("docs/201706/12/1706.03762v1-attention-is-all-you-need.md")
@@ -164,6 +203,26 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
 
         self.assertEqual(len(figures), 1)
         self.assertEqual(calls[0]["source_key"], "biorxiv")
+
+    def test_import_surfaces_workflow_init_error_in_global_state(self):
+        root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        src_path = src_dir / "6.generate_docs.py"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        llm_module = sys.modules["llm"]
+        with patch.object(
+            llm_module.ClientFactory,
+            "from_env",
+            side_effect=ValueError("缺少 workflow LLM base_url"),
+        ):
+            spec = importlib.util.spec_from_file_location("gen6_mod_missing_base", src_path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec and spec.loader
+            spec.loader.exec_module(module)
+
+        self.assertIsNone(module.LLM_CLIENT)
+        self.assertIn("workflow LLM base_url", module.LLM_CLIENT_ERROR)
 
 
 if __name__ == "__main__":

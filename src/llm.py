@@ -25,6 +25,233 @@ GLOBAL_TIME_SECONDS: float = 0.0
 
 PRIMARY_LLM_BASE_URL = "https://api.gptbest.vip/v1"
 DEFAULT_BLT_BASE_URL = "https://api.bltcy.ai/v1"
+BLT_PROVIDER_BASE_KEYWORDS = ("bltcy.ai", "gptbest.vip", "blt", "gptbest")
+LOCALHOST_BASE_URL_RE = re.compile(r"^http://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:$|/)", re.IGNORECASE)
+
+
+def _read_env_text(*names: str) -> str:
+    for name in names:
+        value = str(os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _read_env_bool(*names: str) -> Optional[bool]:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        value = str(raw).strip().lower()
+        if not value:
+            continue
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _read_env_config(field_names: Dict[str, Tuple[str, ...]]) -> Dict[str, str]:
+    return {
+        field: _read_env_text(*names)
+        for field, names in field_names.items()
+    }
+
+
+def _has_any_config_values(config: Dict[str, str]) -> bool:
+    return any(str(value or "").strip() for value in config.values())
+
+
+def _merge_config_layers(*layers: Dict[str, str]) -> Dict[str, str]:
+    merged = {"api_key": "", "base_url": "", "model": ""}
+    for layer in layers:
+        for field in merged:
+            value = str((layer or {}).get(field) or "").strip()
+            if value and not merged[field]:
+                merged[field] = value
+    return merged
+
+
+def _looks_like_blt_base(base_url: str | None) -> bool:
+    lowered = str(base_url or "").strip().lower()
+    return any(keyword in lowered for keyword in BLT_PROVIDER_BASE_KEYWORDS)
+
+
+def _should_use_authorization_header(base_url: str | None, model: str | None) -> bool:
+    normalized_base_url = str(base_url or "").strip().lower()
+    normalized_model = str(model or "").strip().lower()
+    if normalized_model.startswith("minimax-"):
+        return False
+    if re.search(r"(^|//)api\.minimax(?:i)?\.(?:io|com)(?:$|/)", normalized_base_url, re.IGNORECASE):
+        return False
+    return True
+
+
+def _validate_secure_base_url(base_url: str | None) -> str:
+    normalized = str(base_url or "").strip()
+    if not normalized:
+        raise ValueError("缺少可用的 LLM base_url")
+    lowered = normalized.lower()
+    if lowered.startswith("https://"):
+        return normalized
+    if LOCALHOST_BASE_URL_RE.match(normalized):
+        return normalized
+    raise ValueError("LLM base_url 必须使用 https://，仅本地调试允许 http://localhost")
+
+
+def resolve_workflow_llm_config(
+    model_override: str | None = None,
+    default_model: str | None = None,
+) -> Dict[str, Any]:
+    workflow_config = _read_env_config(
+        {
+            "api_key": ("WORKFLOW_LLM_API_KEY",),
+            "base_url": ("WORKFLOW_LLM_BASE_URL",),
+            "model": ("WORKFLOW_LLM_MODEL",),
+        }
+    )
+    summary_config = _read_env_config(
+        {
+            "api_key": ("SUMMARY_API_KEY", "BLT_SUMMARY_API_KEY"),
+            "base_url": (
+                "SUMMARY_BASE_URL",
+                "BLT_SUMMARY_BASE_URL",
+                "LLM_PRIMARY_BASE_URL",
+            ),
+            "model": ("SUMMARY_MODEL", "BLT_SUMMARY_MODEL"),
+        }
+    )
+    summary_compat_config = _read_env_config(
+        {
+            "api_key": ("BLT_API_KEY",),
+            "base_url": (
+                "BLT_PRIMARY_BASE_URL",
+                "GPTBEST_BASE_URL",
+                "BLT_API_BASE",
+            ),
+            "model": (),
+        }
+    )
+    legacy_blt_config = dict(summary_compat_config)
+
+    has_workflow_fields = _has_any_config_values(workflow_config)
+    has_summary_fields = _has_any_config_values(summary_config)
+    has_legacy_fields = _has_any_config_values(legacy_blt_config)
+
+    if has_workflow_fields:
+        cfg = dict(workflow_config)
+        source = "workflow"
+    elif has_summary_fields:
+        cfg = _merge_config_layers(summary_config, summary_compat_config)
+        source = "summary"
+    else:
+        cfg = dict(legacy_blt_config)
+        source = "legacy_blt" if has_legacy_fields else "none"
+
+    if model_override:
+        cfg["model"] = str(model_override).strip()
+    if not cfg["model"] and default_model:
+        cfg["model"] = str(default_model).strip()
+    if source == "legacy_blt" and cfg["api_key"] and not cfg["base_url"]:
+        cfg["base_url"] = DEFAULT_BLT_BASE_URL
+
+    return {
+        **cfg,
+        "source": source,
+        "has_workflow_fields": has_workflow_fields,
+        "has_summary_fields": has_summary_fields,
+        "use_legacy_config": source == "legacy_blt" and has_legacy_fields,
+    }
+
+
+def resolve_rerank_llm_config(
+    model_override: str | None = None,
+    default_model: str | None = None,
+) -> Dict[str, Any]:
+    enabled_flag = _read_env_bool("RERANK_ENABLED")
+    dedicated_config = _read_env_config(
+        {
+            "api_key": ("RERANK_API_KEY", "Reranker_LLM_API_KEY"),
+            "base_url": ("RERANK_BASE_URL", "Reranker_LLM_BASE_URL"),
+            "model": ("RERANK_MODEL", "Reranker_LLM_MODEL"),
+        }
+    )
+    legacy_config = _read_env_config(
+        {
+            "api_key": ("BLT_API_KEY",),
+            "base_url": (
+                "BLT_API_BASE",
+                "BLT_PRIMARY_BASE_URL",
+                "LLM_PRIMARY_BASE_URL",
+                "GPTBEST_BASE_URL",
+            ),
+            "model": ("BLT_RERANK_MODEL",),
+        }
+    )
+    workflow_config = _read_env_config(
+        {
+            "api_key": ("WORKFLOW_LLM_API_KEY",),
+            "base_url": ("WORKFLOW_LLM_BASE_URL",),
+            "model": ("WORKFLOW_LLM_MODEL",),
+        }
+    )
+    summary_config = _read_env_config(
+        {
+            "api_key": ("SUMMARY_API_KEY",),
+            "base_url": ("SUMMARY_BASE_URL",),
+            "model": ("SUMMARY_MODEL",),
+        }
+    )
+
+    has_dedicated_fields = _has_any_config_values(dedicated_config)
+    has_workflow_fields = _has_any_config_values(workflow_config)
+    has_summary_fields = _has_any_config_values(summary_config)
+    use_legacy_config = bool(
+        not has_dedicated_fields
+        and _has_any_config_values(legacy_config)
+        and not has_workflow_fields
+        and not has_summary_fields
+    )
+
+    cfg = _merge_config_layers(dedicated_config, legacy_config if use_legacy_config else {})
+    if model_override:
+        cfg["model"] = str(model_override).strip()
+    if not cfg["model"] and default_model:
+        cfg["model"] = str(default_model).strip()
+    if use_legacy_config and not cfg["base_url"]:
+        cfg["base_url"] = DEFAULT_BLT_BASE_URL
+
+    missing: List[str] = []
+    if not cfg["api_key"]:
+        missing.append("api_key")
+    if not cfg["base_url"]:
+        missing.append("base_url")
+    if not cfg["model"]:
+        missing.append("model")
+
+    if enabled_flag is False:
+        enabled = False
+        reason = "RERANK_ENABLED=false"
+    elif missing:
+        enabled = False
+        reason = f"缺少 rerank 配置: {', '.join(missing)}"
+    elif has_dedicated_fields or use_legacy_config or enabled_flag is True:
+        enabled = True
+        reason = ""
+    else:
+        enabled = False
+        reason = "未显式配置 rerank 平台"
+
+    return {
+        "enabled": enabled,
+        "reason": reason,
+        "api_key": cfg["api_key"],
+        "base_url": cfg["base_url"],
+        "model": cfg["model"],
+        "has_dedicated_fields": has_dedicated_fields,
+        "use_legacy_config": use_legacy_config,
+    }
 
 
 def reset_global_tokens():
@@ -69,8 +296,8 @@ class LLMClient:
         """
         self.api_key = api_key
         self.model = model
-        self.base_url = base_url
-        self._base_urls = self._normalize_base_urls([base_url])
+        self.base_url = _validate_secure_base_url(base_url)
+        self._base_urls = self._normalize_base_urls([self.base_url])
         # 实例级别的累计统计（无需显式 reset；通常每个实验构造一个 client）
         self._call_index = 0
         self._cum_tokens = {
@@ -321,6 +548,16 @@ class LLMClient:
             return True
         return False
 
+    def _build_auth_headers(self, *, base_url: str | None = None, model: str | None = None) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if _should_use_authorization_header(base_url or self.base_url, model or self.model):
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        else:
+            headers["x-api-key"] = self.api_key
+        return headers
+
     def chat(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None) -> dict:
         """
         统一 Chat Completions 请求。
@@ -328,10 +565,6 @@ class LLMClient:
         :param messages: OpenAI 格式的消息列表
         :param response_format: 可选，结构化输出配置（柏拉图支持）
         """
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
         model_name = self.model
         if 'qwen3' in model_name.lower():
             if '/think' in model_name:
@@ -371,6 +604,7 @@ class LLMClient:
         last_error: Exception | None = None
         for attempt_idx, req_base in enumerate(request_bases, start=1):
             request_url = self._build_chat_completions_url(req_base)
+            headers = self._build_auth_headers(base_url=req_base, model=model_name)
             try:
                 response = requests.post(request_url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -570,8 +804,8 @@ class LLMClient:
         top_n: Optional[int] = None,
         model: Optional[str] = None,
     ) -> dict:
-        """重排序接口（默认不支持，只有 BLT 提供）。"""
-        raise NotImplementedError("rerank 仅支持 BltClient，请使用 BltClient 调用。")
+        """OpenAI-compatible /v1/rerank 接口（默认不支持）。"""
+        raise NotImplementedError("rerank 接口默认不可用，请使用支持 /v1/rerank 的客户端调用。")
 
 
 class DeepSeekClient(LLMClient):
@@ -606,13 +840,16 @@ class OllamaClient(LLMClient):
 class BltClient(LLMClient):
     """BLT（柏拉图）网关，OpenAI Chat Completions 兼容接口。"""
     def __init__(self, api_key: str, model: str, base_url: str = None):
-        legacy_base = base_url or os.getenv('BLT_API_BASE', DEFAULT_BLT_BASE_URL)
-        primary_base = (
-            os.getenv("LLM_PRIMARY_BASE_URL")
-            or os.getenv("BLT_PRIMARY_BASE_URL")
-            or os.getenv("GPTBEST_BASE_URL")
-            or PRIMARY_LLM_BASE_URL
-        ).strip() or PRIMARY_LLM_BASE_URL
+        explicit_base = str(base_url or "").strip()
+        primary_base = explicit_base or _read_env_text(
+            "WORKFLOW_LLM_BASE_URL",
+            "SUMMARY_BASE_URL",
+            "BLT_SUMMARY_BASE_URL",
+            "LLM_PRIMARY_BASE_URL",
+            "BLT_PRIMARY_BASE_URL",
+            "GPTBEST_BASE_URL",
+        ) or PRIMARY_LLM_BASE_URL
+        legacy_base = explicit_base or _read_env_text("BLT_API_BASE") or primary_base or DEFAULT_BLT_BASE_URL
         super().__init__(api_key=api_key, model=model, base_url=primary_base)
         self._base_urls = self._normalize_base_urls([primary_base, legacy_base])
 
@@ -636,10 +873,6 @@ class BltClient(LLMClient):
         if not documents:
             raise ValueError("rerank: documents 不能为空")
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
         payload: Dict[str, Any] = {
             "model": model or self.model,
             "query": query,
@@ -652,6 +885,7 @@ class BltClient(LLMClient):
         last_error: Exception | None = None
         for attempt_idx, req_base in enumerate(request_bases, start=1):
             request_url = f"{req_base.rstrip('/')}/rerank"
+            headers = self._build_auth_headers(base_url=req_base, model=payload["model"])
             try:
                 response = requests.post(request_url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -723,18 +957,45 @@ def parse_provider_model(model_str: str) -> Tuple[str, str]:
 
 class ClientFactory:
     @staticmethod
-    def from_env():
+    def from_env(scope: str = "default", model_override: str | None = None, default_model: str | None = None):
         """
         基于环境变量创建具体客户端。
 
-        必填：
-        - LLM_MODEL：形如 'provider/model'。
-        选填：
-        - LLM_API_KEY：通用 API key（优先级高于各 provider 专用 key）
-        - LLM_BASE_URL：通用 base_url（优先级高于默认 base_url）
+        scope:
+        - default: 兼容旧 LLM_MODEL=provider/model 入口
+        - workflow: 新工作流平台配置入口
+        - rerank: 独立 rerank 平台配置入口
         """
+        scope_name = str(scope or "default").strip().lower()
+        if scope_name == "workflow":
+            cfg = resolve_workflow_llm_config(model_override=model_override, default_model=default_model)
+            if not cfg["api_key"]:
+                raise ValueError("缺少 workflow LLM API Key")
+            if not cfg["model"]:
+                raise ValueError("缺少 workflow LLM model")
+            if not cfg["base_url"]:
+                raise ValueError("缺少 workflow LLM base_url")
+            base_url = cfg["base_url"]
+            if _looks_like_blt_base(base_url):
+                return BltClient(api_key=cfg["api_key"], model=cfg["model"], base_url=base_url)
+            return LLMClient(api_key=cfg["api_key"], model=cfg["model"], base_url=base_url)
+
+        if scope_name == "rerank":
+            cfg = resolve_rerank_llm_config(model_override=model_override, default_model=default_model)
+            if not cfg["enabled"]:
+                raise ValueError(cfg["reason"] or "rerank 未启用")
+            return BltClient(api_key=cfg["api_key"], model=cfg["model"], base_url=cfg["base_url"])
+
         model_env = (os.getenv('LLM_MODEL') or '').strip()
         if not model_env:
+            workflow_cfg = resolve_workflow_llm_config(model_override=model_override, default_model=default_model)
+            if workflow_cfg["api_key"] and workflow_cfg["model"]:
+                if not workflow_cfg["base_url"]:
+                    raise ValueError("缺少 workflow LLM base_url")
+                base_url = workflow_cfg["base_url"]
+                if _looks_like_blt_base(base_url):
+                    return BltClient(api_key=workflow_cfg["api_key"], model=workflow_cfg["model"], base_url=base_url)
+                return LLMClient(api_key=workflow_cfg["api_key"], model=workflow_cfg["model"], base_url=base_url)
             raise ValueError("缺少必要环境变量: LLM_MODEL（格式为 'provider/model'）")
 
         provider, model = parse_provider_model(model_env)
@@ -754,6 +1015,8 @@ class ClientFactory:
             return BltClient(api_key=api_key or os.getenv('BLT_API_KEY', ''), model=model, base_url=base_url or os.getenv('BLT_API_BASE', 'https://api.bltcy.ai/v1'))
         if provider in ('cstcloud', 'cst', 'cst-cloud', 'keji', 'keji-yun'):
             return CSTCloudClient(api_key=api_key or os.getenv('CSTCLOUD_API_KEY', ''), model=model, base_url=base_url or 'https://uni-api.cstcloud.cn/v1')
+        if api_key:
+            return LLMClient(api_key=api_key, model=model, base_url=base_url or PRIMARY_LLM_BASE_URL)
         raise ValueError(f"不支持的提供商: {provider}，请使用 'deepseek'、'siliconflow'、'blt'、'cstcloud' 或 'ollama'")
 
     @staticmethod
