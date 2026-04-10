@@ -20,6 +20,12 @@ window.SubscriptionsSmartQuery = (function () {
   let modalOverlay = null;
   let modalPanel = null;
   let modalState = null;
+  const isActiveModalState = (state, type) => (
+    !!state &&
+    state === modalState &&
+    state.closing !== true &&
+    (!type || state.type === type)
+  );
 
   const defaultPromptTemplate = [
     'You are a retrieval planning assistant.',
@@ -276,10 +282,43 @@ window.SubscriptionsSmartQuery = (function () {
       .trim();
     return slug || 'item';
   };
-  const getProfileKey = (profileOrTag) => {
+  const getProfileTagKey = (profileOrTag) => {
     if (!profileOrTag) return '';
     if (typeof profileOrTag === 'string') return toStableId(profileOrTag);
     return toStableId(profileOrTag.tag) || '';
+  };
+  const getProfileKey = (profileOrTag) => {
+    if (!profileOrTag) return '';
+    if (typeof profileOrTag === 'string') return toStableId(profileOrTag);
+    const existingId = normalizeText(profileOrTag.id || '');
+    if (existingId) return toStableId(existingId);
+    return getProfileTagKey(profileOrTag);
+  };
+
+  const getDraftProfiles = () => {
+    const cfg = window.SubscriptionsManager.getDraftConfig ? window.SubscriptionsManager.getDraftConfig() : {};
+    const subs = cfg && cfg.subscriptions && typeof cfg.subscriptions === 'object' ? cfg.subscriptions : {};
+    return Array.isArray(subs.intent_profiles) ? subs.intent_profiles : [];
+  };
+
+  const buildUniqueProfileTag = (preferredTag, options = {}) => {
+    const baseTag = sanitizeAutoTag(preferredTag) || 'SR';
+    const excludeTagKey = getProfileTagKey(options.excludeTag || '');
+    const existingTagKeys = new Set(
+      getDraftProfiles()
+        .map((profile) => getProfileTagKey(profile))
+        .filter((tagKey) => tagKey && tagKey !== excludeTagKey),
+    );
+    const baseKey = getProfileTagKey(baseTag);
+    if (!baseKey || !existingTagKeys.has(baseKey)) return baseTag;
+    for (let suffix = 2; suffix < 1000; suffix += 1) {
+      const candidate = `${baseTag}-${suffix}`;
+      const candidateKey = getProfileTagKey(candidate);
+      if (candidateKey && !existingTagKeys.has(candidateKey)) {
+        return candidate;
+      }
+    }
+    return `${baseTag}-${Date.now().toString(36)}`;
   };
 
   const filterVisiblePaperSources = (values) => {
@@ -416,7 +455,9 @@ window.SubscriptionsSmartQuery = (function () {
             '',
         );
         const keywordCn = normalizeText(item.keyword_cn || item.keyword_zh || item.zh || '');
+        const currentId = normalizeText(item.id || '');
         return {
+          ...(currentId ? { id: currentId } : {}),
           keyword,
           keyword_cn: keywordCn,
           query: query || keyword,
@@ -448,7 +489,9 @@ window.SubscriptionsSmartQuery = (function () {
         const query = sanitizeNoYear(item.query || item.text || item.keyword || item.expr || '');
         if (!query) return null;
         const queryCn = sanitizeNoYear(item.query_cn || item.query_zh || item.zh || item.note || '');
+        const currentId = normalizeText(item.id || '');
         return {
+          ...(currentId ? { id: currentId } : {}),
           query,
           query_cn: queryCn,
           enabled: item.enabled !== false,
@@ -462,7 +505,7 @@ window.SubscriptionsSmartQuery = (function () {
       })
       .filter((item) => {
         if (!item) return false;
-        const key = normalizeText(item.query).toLowerCase();
+        const key = normalizeText(item.id || item.query).toLowerCase();
         if (!key || seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -512,7 +555,8 @@ window.SubscriptionsSmartQuery = (function () {
 
   const ensureProfile = (profiles, tag, description) => {
     const t = normalizeText(tag);
-    let profile = profiles.find((p) => getProfileKey(p) === getProfileKey(t));
+    const tagKey = getProfileTagKey(t);
+    let profile = profiles.find((p) => getProfileTagKey(p) === tagKey);
     if (profile) {
       if (normalizeText(description) && !normalizeText(profile.description)) {
         profile.description = normalizeText(description);
@@ -1175,6 +1219,7 @@ window.SubscriptionsSmartQuery = (function () {
           selectedKeywords.length > 0
             ? selectedKeywords
                 .map((item, idx) => ({
+                  ...(normalizeText(item.id) ? { id: normalizeText(item.id) } : {}),
                   keyword: normalizeText(item.keyword || item.text || item.expr || ''),
                   keyword_cn: normalizeText(item.keyword_cn || item.keyword_zh || item.zh || ''),
                   query: normalizeText(item.query || item.text || item.keyword || ''),
@@ -1187,6 +1232,7 @@ window.SubscriptionsSmartQuery = (function () {
             : normalizeProfileKeywords(existedProfile),
         intent_queries: intentQueries
           .map((queryObj) => ({
+            ...(normalizeText(queryObj.id) ? { id: normalizeText(queryObj.id) } : {}),
             query: normalizeText(queryObj && queryObj.query),
             query_cn: normalizeText(queryObj.query_cn || queryObj.query_zh || queryObj.zh || ''),
             enabled: queryObj.enabled !== false,
@@ -1597,6 +1643,7 @@ window.SubscriptionsSmartQuery = (function () {
   const toProfileSelectableCandidates = (profile) => {
     const rawKeywords = normalizeKeywordEntries(profile && profile.keywords);
     const keywords = rawKeywords.map((k) => ({
+      ...(normalizeText(k.id) ? { id: normalizeText(k.id) } : {}),
       keyword: normalizeText(k.keyword || ''),
       query: normalizeText(k.query || k.keyword || ''),
       keyword_cn: normalizeText(k.keyword_cn || ''),
@@ -1717,11 +1764,17 @@ window.SubscriptionsSmartQuery = (function () {
 
   const closeModal = () => {
     if (!modalOverlay) return;
+    const closingState = modalState;
+    if (closingState && typeof closingState === 'object') {
+      closingState.closing = true;
+    }
     modalOverlay.classList.remove('show');
     setTimeout(() => {
       modalOverlay.style.display = 'none';
       if (modalPanel) modalPanel.innerHTML = '';
-      modalState = null;
+      if (!closingState || modalState === closingState) {
+        modalState = null;
+      }
     }, 160);
   };
 
@@ -1771,8 +1824,8 @@ window.SubscriptionsSmartQuery = (function () {
 
   const openAddModal = (tag, description, candidates) => {
     const normalizedCandidates = parseCandidatesForState(candidates);
-    const suggestedTag = sanitizeAutoTag(
-      normalizeText(candidates && candidates.tag) || normalizeText(tag),
+    const suggestedTag = buildUniqueProfileTag(
+      normalizeText(candidates && candidates.tag) || normalizeText(tag) || 'SR',
     );
     const suggestedDesc = normalizeText(candidates && candidates.description) || normalizeText(description);
     modalState = {
@@ -1798,6 +1851,8 @@ window.SubscriptionsSmartQuery = (function () {
     modalState = {
       type: 'chat',
       editProfileId: options.editProfileId || '',
+      requestToken: 0,
+      closing: false,
       keywords: ensureDraftSlot(
         normalizedCandidates.map((item) => ({ ...item, _selected: item._selected !== false })),
         'keyword',
@@ -1892,7 +1947,12 @@ window.SubscriptionsSmartQuery = (function () {
       return;
     }
 
-    modalState.tag = nextTag;
+    const isEditMode = !!(modalState && modalState.editProfileId);
+    const requestedTag = nextTag;
+    const finalTag = isEditMode ? requestedTag : buildUniqueProfileTag(requestedTag);
+    const tagAdjusted = !isEditMode && normalizeText(finalTag) !== normalizeText(requestedTag);
+
+    modalState.tag = finalTag;
     modalState.description = nextDesc;
     const nextPaperSources = normalizePaperSources(modalState.paper_sources, { fallbackToArxiv: false });
     if (!nextPaperSources.length) {
@@ -1907,7 +1967,6 @@ window.SubscriptionsSmartQuery = (function () {
       setMessage(validationError, '#c00');
       return;
     }
-    const isEditMode = !!(modalState && modalState.editProfileId);
     const ok = isEditMode
       ? replaceProfileFromSelection(
           modalState.editProfileId,
@@ -1932,7 +1991,14 @@ window.SubscriptionsSmartQuery = (function () {
     }
 
     if (typeof reloadAll === 'function') reloadAll();
-    setMessage(isEditMode ? '词条修改已应用，请点击「保存」。' : '新增词条已应用，请点击「保存」。', '#666');
+    setMessage(
+      isEditMode
+        ? '词条修改已应用，请点击「保存」。'
+        : tagAdjusted
+          ? `新增词条已应用，请点击「保存」。标签已自动调整为「${modalState.tag}」。`
+          : '新增词条已应用，请点击「保存」。',
+      '#666',
+    );
     closeModal();
   };
 
@@ -2084,9 +2150,11 @@ window.SubscriptionsSmartQuery = (function () {
       setMessage(validationError, '#c00');
       return;
     }
-    modalState.inputTag = tag;
+    const requestedTag = tag;
+    const profileTag = modalState.editProfileId ? requestedTag : buildUniqueProfileTag(requestedTag);
+    const tagAdjusted = !modalState.editProfileId && normalizeText(profileTag) !== normalizeText(requestedTag);
+    modalState.inputTag = profileTag;
 
-    const profileTag = tag || `SR-${new Date().toISOString().slice(0, 10)}`;
     if (hasItems) {
       const ok = modalState.editProfileId
         ? replaceProfileFromSelection(modalState.editProfileId, profileTag, desc, paperSources, {
@@ -2107,41 +2175,53 @@ window.SubscriptionsSmartQuery = (function () {
       return;
     }
     if (typeof reloadAll === 'function') reloadAll();
-    setMessage(modalState.editProfileId ? '词条修改已应用，请点击「保存」。' : '查询已保存，请点击「保存」。', '#666');
+    setMessage(
+      modalState.editProfileId
+        ? '词条修改已应用，请点击「保存」。'
+        : tagAdjusted
+          ? `查询已保存，请点击「保存」。标签已自动调整为「${profileTag}」。`
+          : '查询已保存，请点击「保存」。',
+      '#666',
+    );
     closeModal();
   };
 
   const askChatOnce = async () => {
-    if (!modalState || modalState.type !== 'chat') return;
+    if (!isActiveModalState(modalState, 'chat')) return;
     if (modalState.pending) return;
+    const state = modalState;
+    const requestToken = Number(state.requestToken || 0) + 1;
+    state.requestToken = requestToken;
     const tag = normalizeText(document.getElementById('dpr-chat-tag-input')?.value || '');
     const desc = normalizeText(document.getElementById('dpr-chat-desc-input')?.value || '');
     const finalDesc = desc;
-    let finalTag = tag || `SR-${new Date().toISOString().slice(0, 10)}`;
+    const existingInputTag = normalizeText(state.inputTag || '');
+    let finalTag = tag || existingInputTag || buildUniqueProfileTag('SR');
 
     if (!finalDesc) {
       setChatStatus('请先填写检索需求。', '#c00');
       return;
     }
 
-    modalState.pending = true;
+    state.pending = true;
     setSendBtnLoading(true);
     setChatStatus('正在生成候选，请稍候...', '#666');
     setMessage('正在生成候选，请稍候...', '#666');
 
     try {
       const candidates = await requestCandidatesByDesc(finalTag, finalDesc);
-      const isFirstRound = !(Array.isArray(modalState.requestHistory) && modalState.requestHistory.length);
+      if (!isActiveModalState(state, 'chat') || Number(state.requestToken || 0) !== requestToken) return;
+      const isFirstRound = !(Array.isArray(state.requestHistory) && state.requestHistory.length);
       const nextCandidates = parseCandidatesForState(candidates, false);
-      const shouldMergeKeywords = !isFirstRound || hasRealCandidates(modalState.keywords);
+      const shouldMergeKeywords = !isFirstRound || hasRealCandidates(state.keywords);
       const shouldMergeIntentQueries =
-        !isFirstRound || hasRealCandidates(modalState.intent_queries);
+        !isFirstRound || hasRealCandidates(state.intent_queries);
       const nextKeywords = shouldMergeKeywords
-        ? mergeCandidatesForNextRound(modalState.keywords, nextCandidates.keywords, 'keyword')
+        ? mergeCandidatesForNextRound(state.keywords, nextCandidates.keywords, 'keyword')
         : nextCandidates.keywords;
       const nextIntentQueries = shouldMergeIntentQueries
         ? mergeCandidatesForNextRound(
-            modalState.intent_queries,
+            state.intent_queries,
             nextCandidates.intent_queries,
             'query',
           )
@@ -2149,19 +2229,19 @@ window.SubscriptionsSmartQuery = (function () {
       const suggestedTag = normalizeText(candidates.tag);
       const suggestedDesc = normalizeText(candidates.description);
       const safeSuggestedTag = sanitizeAutoTag(suggestedTag);
-      if (!tag && safeSuggestedTag) {
-        finalTag = safeSuggestedTag;
+      if (!tag && !existingInputTag && safeSuggestedTag) {
+        finalTag = buildUniqueProfileTag(safeSuggestedTag);
       }
-      if (safeSuggestedTag && !modalState.inputTag) {
-        modalState.inputTag = safeSuggestedTag;
+      if (!existingInputTag) {
+        state.inputTag = buildUniqueProfileTag(safeSuggestedTag || finalTag || 'SR');
       }
       const finalDescForProfile = suggestedDesc || finalDesc;
-      modalState.inputDesc = finalDescForProfile;
+      state.inputDesc = finalDescForProfile;
       if (document.getElementById('dpr-chat-required-desc')) {
         document.getElementById('dpr-chat-required-desc').value = finalDescForProfile;
       }
-      const roundLabel = requestHistoryLength(modalState);
-      const history = Array.isArray(modalState.requestHistory) ? modalState.requestHistory.slice() : [];
+      const roundLabel = requestHistoryLength(state);
+      const history = Array.isArray(state.requestHistory) ? state.requestHistory.slice() : [];
       history.push({
         label: roundLabel,
         desc: finalDesc,
@@ -2169,14 +2249,14 @@ window.SubscriptionsSmartQuery = (function () {
         newIntentQueries: nextCandidates.intent_queries.length,
         createdAt: new Date().toISOString(),
       });
-      modalState.keywords = ensureDraftSlot(nextKeywords, 'keyword');
-      modalState.intent_queries = ensureDraftSlot(nextIntentQueries, 'intent');
-      modalState.chatTag = finalTag;
-      modalState.inputTag = finalTag;
-      modalState.lastTag = finalTag;
-      modalState.lastDesc = finalDesc;
-      modalState.requestHistory = history;
-      modalState.chatStatus = `已生成候选（关键词 ${nextCandidates.keywords.length} 条，意图 ${nextCandidates.intent_queries.length} 条）。`;
+      state.keywords = ensureDraftSlot(nextKeywords, 'keyword');
+      state.intent_queries = ensureDraftSlot(nextIntentQueries, 'intent');
+      state.chatTag = finalTag;
+      state.inputTag = finalTag;
+      state.lastTag = finalTag;
+      state.lastDesc = finalDesc;
+      state.requestHistory = history;
+      state.chatStatus = `已生成候选（关键词 ${nextCandidates.keywords.length} 条，意图 ${nextCandidates.intent_queries.length} 条）。`;
       if (document.getElementById('dpr-chat-desc-input')) {
         document.getElementById('dpr-chat-desc-input').value = '';
       }
@@ -2184,9 +2264,10 @@ window.SubscriptionsSmartQuery = (function () {
         document.getElementById('dpr-chat-tag-input').value = finalTag;
       }
       renderChatModal();
-      setMessage(modalState.chatStatus, '#666');
-      setChatStatus(modalState.chatStatus, '#666');
+      setMessage(state.chatStatus, '#666');
+      setChatStatus(state.chatStatus, '#666');
     } catch (e) {
+      if (!isActiveModalState(state, 'chat') || Number(state.requestToken || 0) !== requestToken) return;
       console.error(e);
       const rawMsg = e && e.message ? String(e.message) : '未知错误';
       const hint =
@@ -2198,7 +2279,8 @@ window.SubscriptionsSmartQuery = (function () {
       setMessage(msg, '#c00');
       setChatStatus(msg, '#c00');
     } finally {
-      modalState.pending = false;
+      if (!isActiveModalState(state, 'chat') || Number(state.requestToken || 0) !== requestToken) return;
+      state.pending = false;
       setSendBtnLoading(false);
     }
   };
@@ -2444,7 +2526,7 @@ window.SubscriptionsSmartQuery = (function () {
   const generateAndOpenAddModal = async () => {
     const tag = normalizeText(tagInputEl?.value || '');
     const desc = normalizeText(descInputEl?.value || '');
-    const finalTag = tag || `SR-${new Date().toISOString().slice(0, 10)}`;
+    const finalTag = buildUniqueProfileTag(tag || 'SR');
     if (!desc) {
       setMessage('请先填写智能 Query 描述。', '#c00');
       return;
@@ -2621,6 +2703,12 @@ window.SubscriptionsSmartQuery = (function () {
     __test: {
       loadLlmConfig,
       requestCandidatesByDesc,
+      buildUniqueProfileTag,
+      applyCandidateToProfile,
+      openChatModal,
+      askChatOnce,
+      closeModal,
+      getModalState: () => modalState,
     },
   };
 })();

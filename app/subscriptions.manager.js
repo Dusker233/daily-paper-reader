@@ -24,6 +24,7 @@ window.SubscriptionsManager = (function () {
   let resetContentMsgEl = null;
 
   let draftConfig = null;
+  let loadedBaseConfig = null;
   let hasUnsavedChanges = false;
   let isSavingDraftConfig = false;
 
@@ -92,6 +93,11 @@ window.SubscriptionsManager = (function () {
       .replace(/^-+|-+$/g, '')
       .trim();
     return slug || 'item';
+  };
+  const buildInternalId = (prefix, currentId, seed, fallback) => {
+    const existing = normalizeText(currentId);
+    if (existing) return toStableId(existing);
+    return `${prefix}-${toStableId(seed || fallback || prefix)}`;
   };
 
   const cloneDeep = (obj) => {
@@ -294,8 +300,10 @@ window.SubscriptionsManager = (function () {
         '',
     );
     const keywordCn = normalizeText(item.keyword_cn || item.keyword_zh || item.zh || '');
+    const currentId = normalizeText(item.id || '');
 
     return {
+      ...(currentId ? { id: currentId } : {}),
       keyword,
       keyword_cn: keywordCn,
       query: query || keyword,
@@ -336,8 +344,10 @@ window.SubscriptionsManager = (function () {
     const query = normalizeText(item.query || item.text || item.keyword || item.expr || '');
     if (!query) return null;
     const queryCn = normalizeText(item.query_cn || item.query_zh || item.zh || item.note || '');
+    const currentId = normalizeText(item.id || '');
 
     return {
+      ...(currentId ? { id: currentId } : {}),
       query,
       query_cn: queryCn,
       enabled: item.enabled !== false,
@@ -534,12 +544,19 @@ window.SubscriptionsManager = (function () {
         }
 
         const result = {
+          id: buildInternalId('profile', p.id, tag, description || `profile-${idx + 1}`),
           tag,
           description,
           enabled,
           paper_sources: paperSources,
-          keywords: normalizedKeywords,
-          intent_queries: normalizedIntentQueries,
+          keywords: normalizedKeywords.map((item, keywordIdx) => ({
+            ...item,
+            id: buildInternalId('kw', item.id, item.keyword, `${tag}-kw-${keywordIdx + 1}`),
+          })),
+          intent_queries: normalizedIntentQueries.map((item, intentIdx) => ({
+            ...item,
+            id: buildInternalId('iq', item.id, item.query, `${tag}-iq-${intentIdx + 1}`),
+          })),
           updated_at: normalizeText(p.updated_at) || new Date().toISOString(),
         };
         if ('paused' in p) {
@@ -643,13 +660,13 @@ window.SubscriptionsManager = (function () {
     return subs;
   };
 
-  const normalizeSubscriptions = (config) => {
+  const normalizeSubscriptions = (config, options = {}) => {
     const next = cloneDeep(config || {});
     if (!next.subscriptions) next.subscriptions = {};
     const subs = next.subscriptions;
 
     migrateLegacyToProfilesIfNeeded(subs);
-      subs.intent_profiles = normalizeProfiles(subs, getAvailablePaperSources(next));
+    subs.intent_profiles = normalizeProfiles(subs, getAvailablePaperSources(next));
 
     if (!subs.schema_migration || typeof subs.schema_migration !== 'object') {
       subs.schema_migration = {};
@@ -667,7 +684,152 @@ window.SubscriptionsManager = (function () {
 
     next.subscriptions = subs;
     ensureSourceBackendsForProfiles(next);
-    return stripIntentProfileIds(next);
+    return options.stripInternalIds === false ? next : stripIntentProfileIds(next);
+  };
+
+  const normalizeDraftConfig = (config) => normalizeSubscriptions(config, { stripInternalIds: false });
+
+  const getProfileMergeKey = (profile, index = 0) => {
+    if (!isPlainObject(profile)) return `__missing__:${index}`;
+    const id = normalizeText(profile.id).toLowerCase();
+    if (id) return `id:${id}`;
+    const tag = normalizeText(profile.tag).toLowerCase();
+    if (tag) return `tag:${tag}`;
+    const description = normalizeText(profile.description).toLowerCase();
+    if (description) return `description:${description}`;
+    return `index:${index}`;
+  };
+
+  const getKeywordMergeKey = (item, index = 0) => {
+    if (typeof item === 'string') {
+      const keyword = normalizeText(item).toLowerCase();
+      return keyword ? `keyword:${keyword}` : `index:${index}`;
+    }
+    if (!isPlainObject(item)) return `index:${index}`;
+    const id = normalizeText(item.id).toLowerCase();
+    if (id) return `id:${id}`;
+    const keyword = normalizeText(item.keyword || item.expr || item.text || '').toLowerCase();
+    return keyword ? `keyword:${keyword}` : `index:${index}`;
+  };
+
+  const getIntentQueryMergeKey = (item, index = 0) => {
+    if (typeof item === 'string') {
+      const query = normalizeText(item).toLowerCase();
+      return query ? `query:${query}` : `index:${index}`;
+    }
+    if (!isPlainObject(item)) return `index:${index}`;
+    const id = normalizeText(item.id).toLowerCase();
+    if (id) return `id:${id}`;
+    const query = normalizeText(item.query || item.text || item.keyword || item.expr || '').toLowerCase();
+    return query ? `query:${query}` : `index:${index}`;
+  };
+
+  const mergeProfileItems = (latestItems, draftItems, baseItems, getKey) => {
+    const latestList = Array.isArray(latestItems) ? latestItems : [];
+    const draftList = Array.isArray(draftItems) ? draftItems : [];
+    const baseList = Array.isArray(baseItems) ? baseItems : [];
+    const latestMap = new Map(latestList.map((item, idx) => [getKey(item, idx), item]));
+    const draftMap = new Map(draftList.map((item, idx) => [getKey(item, idx), item]));
+    const baseMap = new Map(baseList.map((item, idx) => [getKey(item, idx), item]));
+    const deletedKeys = new Set();
+    baseMap.forEach((_item, key) => {
+      if (!draftMap.has(key)) {
+        deletedKeys.add(key);
+      }
+    });
+
+    const mergedItems = draftList.map((item, idx) => {
+      if (!isPlainObject(item)) return item;
+      const latestItem = latestMap.get(getKey(item, idx));
+      if (!isPlainObject(latestItem)) return item;
+      return {
+        ...cloneDeep(latestItem),
+        ...item,
+      };
+    });
+
+    latestList.forEach((item, idx) => {
+      const key = getKey(item, idx);
+      if (draftMap.has(key) || deletedKeys.has(key)) return;
+      mergedItems.push(cloneDeep(item));
+    });
+    return mergedItems;
+  };
+
+  const mergeProfileEntry = (latestProfile, draftProfile, baseProfile) => {
+    const latest = isPlainObject(latestProfile) ? cloneDeep(latestProfile) : {};
+    const draft = isPlainObject(draftProfile) ? cloneDeep(draftProfile) : {};
+    const base = isPlainObject(baseProfile) ? cloneDeep(baseProfile) : {};
+    const merged = {
+      ...latest,
+      ...draft,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(draft, 'keywords')) {
+      merged.keywords = mergeProfileItems(latest.keywords, draft.keywords, base.keywords, getKeywordMergeKey);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(draft, 'intent_queries')) {
+      merged.intent_queries = mergeProfileItems(
+        latest.intent_queries,
+        draft.intent_queries,
+        base.intent_queries,
+        getIntentQueryMergeKey,
+      );
+    }
+
+    return merged;
+  };
+
+  const mergeDraftConfigOntoLatest = (latestConfig, draftConfigValue, baseConfigValue) => {
+    const latest = normalizeDraftConfig(latestConfig || {});
+    const draft = normalizeDraftConfig(draftConfigValue || {});
+    const base = normalizeDraftConfig(baseConfigValue || {});
+
+    const merged = cloneDeep(latest);
+
+    const latestSubs = isPlainObject(latest.subscriptions) ? latest.subscriptions : {};
+    const draftSubs = isPlainObject(draft.subscriptions) ? draft.subscriptions : {};
+    const baseSubs = isPlainObject(base.subscriptions) ? base.subscriptions : {};
+    const mergedSubs = {
+      ...latestSubs,
+    };
+
+    const latestProfiles = Array.isArray(latestSubs.intent_profiles) ? latestSubs.intent_profiles : [];
+    const draftProfiles = Array.isArray(draftSubs.intent_profiles) ? draftSubs.intent_profiles : [];
+    const baseProfiles = Array.isArray(baseSubs.intent_profiles) ? baseSubs.intent_profiles : [];
+
+    const latestMap = new Map(latestProfiles.map((profile, idx) => [getProfileMergeKey(profile, idx), profile]));
+    const baseMap = new Map(baseProfiles.map((profile, idx) => [getProfileMergeKey(profile, idx), profile]));
+    const draftMap = new Map(draftProfiles.map((profile, idx) => [getProfileMergeKey(profile, idx), profile]));
+
+    const deletedKeys = new Set();
+    baseMap.forEach((_profile, key) => {
+      if (!draftMap.has(key)) {
+        deletedKeys.add(key);
+      }
+    });
+
+    const outProfiles = [];
+    draftProfiles.forEach((profile, idx) => {
+      const key = getProfileMergeKey(profile, idx);
+      outProfiles.push(mergeProfileEntry(latestMap.get(key), profile, baseMap.get(key)));
+    });
+    latestProfiles.forEach((profile, idx) => {
+      const key = getProfileMergeKey(profile, idx);
+      if (draftMap.has(key) || deletedKeys.has(key)) return;
+      outProfiles.push(cloneDeep(profile));
+    });
+
+    if (Object.prototype.hasOwnProperty.call(draftSubs, 'schema_migration')) {
+      mergedSubs.schema_migration = cloneDeep(draftSubs.schema_migration);
+    }
+    if (Object.prototype.hasOwnProperty.call(draftSubs, 'keyword_recall_mode')) {
+      mergedSubs.keyword_recall_mode = draftSubs.keyword_recall_mode;
+    }
+    mergedSubs.intent_profiles = outProfiles;
+    merged.subscriptions = mergedSubs;
+    return normalizeDraftConfig(merged);
   };
 
   const setMessage = (text, color) => {
@@ -805,7 +967,9 @@ window.SubscriptionsManager = (function () {
         throw new Error('SubscriptionsGithubToken.loadConfig 不可用');
       }
       const { config } = await window.SubscriptionsGithubToken.loadConfig();
-      draftConfig = normalizeSubscriptions(config || {});
+      const normalizedConfig = normalizeDraftConfig(config || {});
+      loadedBaseConfig = cloneDeep(normalizedConfig);
+      draftConfig = cloneDeep(normalizedConfig);
       hasUnsavedChanges = false;
       refreshQuickRunButtons();
       if (window.SubscriptionsSmartQuery && window.SubscriptionsSmartQuery.clearPendingDeletedProfileIds) {
@@ -824,7 +988,7 @@ window.SubscriptionsManager = (function () {
       setMessage('正在保存中，请稍后...', '#666');
       return;
     }
-    if (!window.SubscriptionsGithubToken || !window.SubscriptionsGithubToken.saveConfig) {
+    if (!window.SubscriptionsGithubToken || typeof window.SubscriptionsGithubToken.updateConfig !== 'function') {
       setMessage('当前无法保存配置，请先完成 GitHub 登录。', '#c00');
       return;
     }
@@ -837,18 +1001,24 @@ window.SubscriptionsManager = (function () {
       if (saveBtn) {
         saveBtn.disabled = true;
       }
-      const toSave = normalizeSubscriptions(draftConfig || {});
+      const toSave = normalizeDraftConfig(draftConfig || {});
       const validationError = validateIntentProfiles(toSave);
       if (validationError) {
         setMessage(validationError, '#c00');
         return;
       }
       setMessage('正在保存配置...', '#666');
-      await window.SubscriptionsGithubToken.saveConfig(
-        toSave,
+      const baseDraft = cloneDeep(loadedBaseConfig || {});
+      let savedConfig = null;
+      await window.SubscriptionsGithubToken.updateConfig(
+        (latestConfig) => {
+          savedConfig = mergeDraftConfigOntoLatest(latestConfig, toSave, baseDraft);
+          return savedConfig;
+        },
         'chore: save smart query config from dashboard',
       );
-      draftConfig = toSave;
+      loadedBaseConfig = cloneDeep(savedConfig || toSave);
+      draftConfig = cloneDeep(savedConfig || toSave);
       hasUnsavedChanges = false;
       refreshQuickRunButtons();
       if (window.SubscriptionsSmartQuery && window.SubscriptionsSmartQuery.clearPendingDeletedProfileIds) {
@@ -883,6 +1053,7 @@ window.SubscriptionsManager = (function () {
         window.SubscriptionsSmartQuery.clearPendingDeletedProfileIds();
       }
       draftConfig = null;
+      loadedBaseConfig = null;
       hasUnsavedChanges = false;
       refreshQuickRunButtons();
     }
@@ -1078,7 +1249,7 @@ window.SubscriptionsManager = (function () {
     updateDraftConfig: (updater) => {
       const base = draftConfig || {};
       const next = typeof updater === 'function' ? updater(cloneDeep(base)) || base : base;
-      draftConfig = normalizeSubscriptions(next);
+      draftConfig = normalizeDraftConfig(next);
       hasUnsavedChanges = true;
       refreshQuickRunButtons();
     },
@@ -1087,9 +1258,13 @@ window.SubscriptionsManager = (function () {
     runProfileQuickFetch: (profileTag, days, runOptions) => runProfileQuickFetch(profileTag, days, runOptions),
     __test: {
       normalizeSubscriptions: (config) => normalizeSubscriptions(config),
+      normalizeDraftConfig: (config) => normalizeDraftConfig(config),
       ensureSourceBackendsForProfiles: (config) => ensureSourceBackendsForProfiles(cloneDeep(config || {})),
       buildDefaultSourceBackend: (sourceKey, config) => buildDefaultSourceBackend(sourceKey, cloneDeep(config || {})),
       normalizePaperSources: (values, options) => normalizePaperSources(values, options),
+      mergeDraftConfigOntoLatest: (latestConfig, draftConfigValue, baseConfigValue) => mergeDraftConfigOntoLatest(latestConfig, draftConfigValue, baseConfigValue),
+      saveDraftConfig: () => saveDraftConfig(),
+      getLoadedBaseConfig: () => cloneDeep(loadedBaseConfig || {}),
     },
   };
 })();

@@ -298,31 +298,34 @@ window.SubscriptionsGithubToken = (function () {
     }
   };
 
-  // 更新 config.yaml：接收一个 updater(config) 回调，返回新的 config 对象
-  const updateConfig = async (updater, commitMessage = 'chore: update config.yaml from dashboard') => {
-    const token = getTokenForConfig();
-    if (!token) {
-      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+  const isShaConflictResponse = (status, text) => {
+    const message = String(text || '').toLowerCase();
+    if (status === 409) {
+      return /sha|blob|conflict/.test(message);
     }
-    const info = await resolveRepoInfoFromToken(token, false);
-    const { config: current, sha } = await loadConfigFromGithub();
-    const next = typeof updater === 'function' ? updater({ ...(current || {}) }) || current : current;
+    if (status === 422) {
+      return /sha|blob|latest|expected/.test(message);
+    }
+    return false;
+  };
+
+  const writeConfigToGithub = async ({ owner, repo, token, contentObject, sha, commitMessage }) => {
     const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
     if (!yaml || typeof yaml.dump !== 'function') {
       throw new Error('前端缺少 YAML 序列化库（js-yaml），无法写入 config.yaml。');
     }
-    const newContent = yaml.dump(next, { lineWidth: 120 });
+    const newContent = yaml.dump(contentObject || {}, { lineWidth: 120 });
     const body = {
       message: commitMessage,
       content: btoa(unescape(encodeURIComponent(newContent))),
       sha,
     };
     const res = await fetch(
-      `https://api.github.com/repos/${info.owner}/${info.repo}/contents/config.yaml`,
+      `https://api.github.com/repos/${owner}/${repo}/contents/config.yaml`,
       {
         method: 'PUT',
         headers: {
-          Authorization: `token ${info.token}`,
+          Authorization: `token ${token}`,
           Accept: 'application/vnd.github.v3+json',
           'Content-Type': 'application/json',
         },
@@ -331,11 +334,46 @@ window.SubscriptionsGithubToken = (function () {
     );
     if (!res.ok) {
       const text = await res.text().catch(() => '');
+      if (isShaConflictResponse(res.status, text)) {
+        const error = new Error(`写入 config.yaml 失败：${res.status} ${res.statusText} - ${text}`);
+        error.isShaConflict = true;
+        throw error;
+      }
       throw new Error(
         `写入 config.yaml 失败：${res.status} ${res.statusText} - ${text}`,
       );
     }
     return res.json();
+  };
+
+  // 更新 config.yaml：接收一个 updater(config) 回调，返回新的 config 对象
+  const updateConfig = async (updater, commitMessage = 'chore: update config.yaml from dashboard') => {
+    const token = getTokenForConfig();
+    if (!token) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const info = await resolveRepoInfoFromToken(token, false);
+    let latest = await loadConfigFromGithub();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = latest && latest.config ? latest.config : {};
+      const next = typeof updater === 'function' ? updater({ ...(current || {}) }) || current : current;
+      try {
+        return await writeConfigToGithub({
+          owner: info.owner,
+          repo: info.repo,
+          token: info.token,
+          contentObject: next,
+          sha: latest.sha,
+          commitMessage,
+        });
+      } catch (error) {
+        if (!error || !error.isShaConflict || attempt > 0) {
+          throw error;
+        }
+        latest = await loadConfigFromGithub();
+      }
+    }
+    throw new Error('写入 config.yaml 失败：遇到未处理的并发写入冲突。');
   };
 
   // 使用给定的 config 对象保存到远端 config.yaml（用于“保存”按钮）
@@ -570,5 +608,8 @@ window.SubscriptionsGithubToken = (function () {
     loadConfig,
     updateConfig,
     saveConfig,
+    __test: {
+      isShaConflictResponse,
+    },
   };
 })();
