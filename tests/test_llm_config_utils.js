@@ -12,6 +12,7 @@ const {
   getOpenAICompatiblePreset,
   inferChatApiProfile,
   shouldUseXApiKeyHeader,
+  buildChatRequestHeaders,
   buildStreamingChatPayload,
   buildConnectivityTestPayload,
 } = require('../app/llm-config-utils.js');
@@ -294,6 +295,33 @@ function testShouldUseXApiKeyHeader() {
   );
 }
 
+function testBuildChatRequestHeaders() {
+  assert.deepEqual(
+    buildChatRequestHeaders({
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4.1-mini',
+      apiKey: 'sk-openai',
+    }),
+    {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: 'Bearer sk-openai',
+    },
+  );
+  assert.deepEqual(
+    buildChatRequestHeaders({
+      baseUrl: 'https://api.minimaxi.com/v1',
+      model: 'MiniMax-M2.5',
+      apiKey: 'sk-minimax',
+      acceptJson: false,
+    }),
+    {
+      'Content-Type': 'application/json',
+      'x-api-key': 'sk-minimax',
+    },
+  );
+}
+
 function testBuildStreamingChatPayload() {
   assert.deepEqual(
     buildStreamingChatPayload({
@@ -418,6 +446,7 @@ testInferProviderType();
 testGetOpenAICompatiblePreset();
 testInferChatApiProfile();
 testShouldUseXApiKeyHeader();
+testBuildChatRequestHeaders();
 testBuildStreamingChatPayload();
 testBuildConnectivityTestPayload();
 

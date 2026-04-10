@@ -90,13 +90,39 @@ window.SubscriptionsSmartQuery = (function () {
           }
           return `${normalized}/v1/chat/completions`;
         };
-  const shouldUseXApiKeyAuthHeader = (baseUrl, model) => {
+  const shouldUseXApiKeyHeader = (baseUrl, model) => {
+    if (typeof llmConfigUtils.shouldUseXApiKeyHeader === 'function') {
+      return llmConfigUtils.shouldUseXApiKeyHeader({ baseUrl, model });
+    }
     const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
     const normalizedModel = normalizeText(model || '').toLowerCase();
-    return (
+    if (
       /^minimax-/i.test(normalizedModel)
       || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
-    );
+    ) {
+      return false;
+    }
+    return true;
+  };
+  const buildChatRequestHeaders = (baseUrl, model, apiKey) => {
+    if (typeof llmConfigUtils.buildChatRequestHeaders === 'function') {
+      return llmConfigUtils.buildChatRequestHeaders({
+        baseUrl,
+        model,
+        apiKey,
+        acceptJson: true,
+      });
+    }
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (shouldUseXApiKeyHeader(baseUrl, model)) {
+      headers.Authorization = `Bearer ${normalizeText(apiKey)}`;
+    } else {
+      headers['x-api-key'] = normalizeText(apiKey);
+    }
+    return headers;
   };
   const resolveLlmConfigEntry = (entry) => {
     const safeEntry = entry && typeof entry === 'object' ? entry : {};
@@ -883,81 +909,142 @@ window.SubscriptionsSmartQuery = (function () {
       if (typeof e.message === 'string' && e.message) return e.message;
       return '';
     };
+    const normalizeErrorExcerpt = (value) => normalizeText(value).slice(0, 240);
+    const extractErrorMessage = (payload, fallbackText) => {
+      if (payload && typeof payload === 'object') {
+        const direct = normalizeText(payload.message || payload.error_message || payload.detail || payload.msg || '');
+        if (direct) return direct;
+        if (payload.error && typeof payload.error === 'object') {
+          const nested = normalizeText(
+            payload.error.message || payload.error.detail || payload.error.msg || payload.error.code || '',
+          );
+          if (nested) return nested;
+        }
+        if (typeof payload.error === 'string' && normalizeText(payload.error)) {
+          return normalizeText(payload.error);
+        }
+      }
+      return normalizeErrorExcerpt(fallbackText);
+    };
+    const isStructuredOutputUnsupported = (status, text) => {
+      const lowered = String(text || '').toLowerCase();
+      const hasTarget = /response[\s_-]*format|json_object|json object|json_schema/.test(lowered);
+      const hasSignal = /unsupported|not support|not supported|invalid|unknown|unrecognized|extra inputs|unexpected|one of|allowed values|enum/.test(lowered);
+      if (hasTarget && hasSignal) return true;
+      return [400, 404, 415, 422].includes(Number(status)) && /response[\s_-]*format/.test(lowered);
+    };
+    const isToolingUnsupported = (status, text) => {
+      const lowered = String(text || '').toLowerCase();
+      if (![400, 404, 415, 422].includes(Number(status))) return false;
+      return /tool_choice|\btools\b/.test(lowered);
+    };
+    const classifyHttpError = (attempt) => {
+      const status = Number(attempt && attempt.status);
+      const text = String((attempt && attempt.errorText) || '');
+      const excerpt = normalizeErrorExcerpt(text || (attempt && attempt.statusText) || '');
+      if (status === 401 || status === 403) {
+        return `模型服务鉴权失败（HTTP ${status}）：${excerpt || '请检查 API Key、鉴权方式或网关权限。'}`;
+      }
+      if (status === 404) {
+        return `模型服务端点不可用（HTTP 404）：${excerpt || '当前 baseUrl 对应的 /chat/completions 路径可能不兼容。'}`;
+      }
+      if (status === 429) {
+        return `模型服务触发限流（HTTP 429）：${excerpt || '请稍后重试。'}`;
+      }
+      if (status >= 500) {
+        return `模型服务暂时异常（HTTP ${status}）：${excerpt || '请稍后重试。'}`;
+      }
+      if (status >= 400) {
+        return `模型服务请求失败（HTTP ${status}）：${excerpt || '请检查模型配置或请求参数。'}`;
+      }
+      return excerpt || '模型服务请求失败，请检查网络与密钥配置。';
+    };
 
     const doFetch = async (
       endpoint,
       options = { useResponseFormat: true, includeTools: true },
     ) => {
-      const headers = {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      };
-      if (shouldUseXApiKeyAuthHeader(llm.baseUrl, llm.model)) {
-        headers['x-api-key'] = llm.apiKey;
-      } else {
-        headers.Authorization = `Bearer ${llm.apiKey}`;
-      }
-      return fetch(endpoint, {
+      const payload = requestPayload(options);
+      const response = await fetch(endpoint, {
         method: 'POST',
-        headers,
-        body: JSON.stringify(requestPayload(options)),
+        headers: buildChatRequestHeaders(llm.baseUrl, llm.model, llm.apiKey),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
+      let text = '';
+      let json = null;
+      if (typeof response.text === 'function') {
+        text = await response.text().catch(() => '');
+        if (text) {
+          try {
+            json = JSON.parse(text);
+          } catch {}
+        }
+      } else if (typeof response.json === 'function') {
+        json = await response.json().catch(() => null);
+        if (json != null) {
+          try {
+            text = JSON.stringify(json);
+          } catch {}
+        }
+      }
+      return {
+        response,
+        payload,
+        text,
+        json,
+      };
     };
 
-    let res = null;
-    let errorText = '';
-    let fetchError = '';
+    let successResult = null;
+    let lastFetchError = '';
+    let lastHttpAttempt = null;
     try {
       for (let i = 0; i < endpoints.length; i++) {
         const endpoint = endpoints[i];
         try {
-          let current = null;
-          let txt = '';
-          current = await doFetch(endpoint, {
+          let current = await doFetch(endpoint, {
             useResponseFormat: true,
             includeTools: true,
           });
-          if (current && !current.ok) {
-            txt = await current.text().catch(() => '');
-            if (current.status === 400 && /response[\s-]*format|json_object/i.test(txt)) {
+          let currentText = current.text;
+          if (current.response && !current.response.ok) {
+            if (isStructuredOutputUnsupported(current.response.status, currentText)) {
               current = await doFetch(endpoint, {
                 useResponseFormat: false,
                 includeTools: true,
               });
-              if (current && !current.ok) {
-                txt = await current.text().catch(() => '');
-              }
+              currentText = current.text;
             }
-            if (current && !current.ok && current.status === 400 && /tool_choice|tools/i.test(txt)) {
+            if (current.response && !current.response.ok && isToolingUnsupported(current.response.status, currentText)) {
               current = await doFetch(endpoint, {
                 useResponseFormat: false,
                 includeTools: false,
               });
+              currentText = current.text;
             }
           }
-          if (current && !current.ok) {
-            txt = await current.text().catch(() => '');
-            if (current.status === 400 || current.status === 401 || current.status === 403) {
-              throw new Error(`HTTP ${current.status} ${txt || current.statusText}`);
-            }
-            if (current.status === 404 || current.status === 429 || current.status >= 500) {
-              errorText = txt;
+          if (current.response && !current.response.ok) {
+            lastHttpAttempt = {
+              endpoint,
+              status: current.response.status,
+              statusText: current.response.statusText,
+              errorText: extractErrorMessage(current.json, current.text),
+            };
+            if (current.response.status === 404 && i < endpoints.length - 1) {
               continue;
             }
-            errorText = txt;
             break;
           }
 
-          res = current;
+          successResult = current;
           break;
         } catch (e) {
-          fetchError = textSafeFromError(e);
+          lastFetchError = textSafeFromError(e);
           if (e && e.name === 'AbortError') {
             throw new Error('生成超时，请稍后重试。');
           }
           if (i < endpoints.length - 1) {
-            // 网络类错误尝试下一个端点
             continue;
           }
         }
@@ -967,15 +1054,21 @@ window.SubscriptionsSmartQuery = (function () {
       throw e;
     }
     clearTimeout(timeout);
-    if (!res) {
-      if (fetchError) {
-        throw new Error(`模型服务请求失败：${fetchError}`);
+    if (!successResult) {
+      if (lastHttpAttempt) {
+        throw new Error(classifyHttpError(lastHttpAttempt));
       }
-      throw new Error(errorText || '模型服务请求失败，请检查网络与密钥配置。');
+      if (lastFetchError) {
+        throw new Error(`网络请求失败：${lastFetchError}`);
+      }
+      throw new Error('模型服务请求失败，请检查网络与密钥配置。');
     }
-    const data = await res.json();
+    const data = successResult.json || {};
     const content = extractLlmJsonText(data);
     const parsed = loadJsonLenient(content);
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('模型返回格式无效，请检查提供商返回内容。');
+    }
     const candidates = normalizeGenerated(parsed);
     if (!candidates.keywords.length) {
       throw new Error('模型未返回可用候选，请调整描述后重试。');
