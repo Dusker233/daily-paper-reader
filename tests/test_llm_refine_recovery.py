@@ -1,7 +1,9 @@
 import importlib.util
+import os
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 
 def _load_module(module_name: str, path: pathlib.Path):
@@ -132,6 +134,23 @@ class LlmRefineRecoveryTest(unittest.TestCase):
         self.assertEqual(user_content.count("User requirements list:"), 2)
         self.assertEqual(user_content.count("Papers:"), 2)
         self.assertTrue(user_content.rstrip().endswith("Output must be strict JSON only, no markdown, no fences, no extra text."))
+
+
+    def test_main_uses_default_filter_concurrency_when_env_is_malformed(self):
+        captured = {}
+
+        def fake_process_file(**kwargs):
+            captured.update(kwargs)
+
+        with patch.object(self.mod, "process_file", side_effect=fake_process_file), patch.object(
+            sys, "argv", ["4.llm_refine_papers.py"]
+        ), patch.dict(os.environ, {"DPR_FILTER_CONCURRENCY": "oops"}, clear=False):
+            self.mod.main()
+
+        self.assertEqual(
+            captured["filter_concurrency"],
+            self.mod.DEFAULT_FILTER_CONCURRENCY,
+        )
 
 
 if __name__ == "__main__":

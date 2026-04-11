@@ -69,6 +69,7 @@ class MainPipelineTest(unittest.TestCase):
                 "RERANK_API_KEY": "rerank-key",
                 "RERANK_BASE_URL": "https://rerank.example.com/v1",
                 "RERANK_MODEL": "qwen-rerank",
+                "DPR_FILTER_CONCURRENCY": "3",
             },
             clear=True,
         ):
@@ -84,6 +85,7 @@ class MainPipelineTest(unittest.TestCase):
         self.assertEqual(env["BLT_API_BASE"], "https://workflow.example.com/v1")
         self.assertEqual(env["BLT_SUMMARY_MODEL"], "gpt-4.1-mini")
         self.assertEqual(env["RERANK_ENABLED"], "true")
+        self.assertEqual(env["DPR_FILTER_CONCURRENCY"], "3")
         self.assertEqual(env["RERANK_API_KEY"], "rerank-key")
         self.assertEqual(env["RERANK_BASE_URL"], "https://rerank.example.com/v1")
         self.assertEqual(env["RERANK_MODEL"], "qwen-rerank")
@@ -238,6 +240,85 @@ class MainPipelineTest(unittest.TestCase):
             self.assertEqual(step3_call[2]["RERANK_API_KEY"], "rerank-key")
             self.assertEqual(step3_call[2]["RERANK_BASE_URL"], "https://rerank.example.com/v1")
             self.assertEqual(step3_call[2]["RERANK_MODEL"], "qwen3-reranker-4b")
+
+    def test_main_passes_explicit_filter_concurrency_to_step4(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src_dir = root / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            token = "20260310"
+            self._write_rrf_input(root, token)
+            calls = []
+
+            def fake_run_step(label, args, env=None):
+                calls.append((label, args, env))
+
+            with patch.object(self.mod, "ROOT_DIR", str(root)), patch.object(
+                self.mod, "SRC_DIR", str(src_dir)
+            ), patch.object(
+                self.mod, "resolve_run_date_token", return_value=token
+            ), patch.object(
+                self.mod, "resolve_sidebar_date_label", return_value=None
+            ), patch.object(
+                self.mod, "parse_trace_ids", return_value=[]
+            ), patch.object(
+                self.mod, "run_step", side_effect=fake_run_step
+            ), patch.object(
+                sys, "argv", ["main.py", "--filter-concurrency", "3"]
+            ), patch.dict(
+                os.environ,
+                {
+                    "WORKFLOW_LLM_API_KEY": "workflow-key",
+                    "WORKFLOW_LLM_BASE_URL": "https://api.openai.com/v1",
+                    "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                },
+                clear=True,
+            ):
+                self.mod.main()
+
+            step4_call = next(item for item in calls if item[0] == "Step 4 - LLM refine")
+            self.assertEqual(step4_call[1][-2:], ["--filter-concurrency", "3"])
+            self.assertEqual(step4_call[2]["DPR_FILTER_CONCURRENCY"], "3")
+
+    def test_main_preserves_inherited_filter_concurrency_when_cli_flag_omitted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src_dir = root / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            token = "20260310"
+            self._write_rrf_input(root, token)
+            calls = []
+
+            def fake_run_step(label, args, env=None):
+                calls.append((label, args, env))
+
+            with patch.object(self.mod, "ROOT_DIR", str(root)), patch.object(
+                self.mod, "SRC_DIR", str(src_dir)
+            ), patch.object(
+                self.mod, "resolve_run_date_token", return_value=token
+            ), patch.object(
+                self.mod, "resolve_sidebar_date_label", return_value=None
+            ), patch.object(
+                self.mod, "parse_trace_ids", return_value=[]
+            ), patch.object(
+                self.mod, "run_step", side_effect=fake_run_step
+            ), patch.object(
+                sys, "argv", ["main.py"]
+            ), patch.dict(
+                os.environ,
+                {
+                    "WORKFLOW_LLM_API_KEY": "workflow-key",
+                    "WORKFLOW_LLM_BASE_URL": "https://api.openai.com/v1",
+                    "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                    "DPR_FILTER_CONCURRENCY": "4",
+                },
+                clear=True,
+            ):
+                self.mod.main()
+
+            step4_call = next(item for item in calls if item[0] == "Step 4 - LLM refine")
+            self.assertNotIn("--filter-concurrency", step4_call[1])
+            self.assertEqual(step4_call[2]["DPR_FILTER_CONCURRENCY"], "4")
 
     def test_main_keeps_rerank_in_legacy_blt_mode(self):
         with tempfile.TemporaryDirectory() as tmpdir:

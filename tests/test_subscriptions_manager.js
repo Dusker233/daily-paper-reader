@@ -122,6 +122,27 @@ function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
   assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
 }
 
+function testRunProfileQuickFetchPreservesExplicitFilterConcurrency() {
+  const calls = [];
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays(days, options) {
+      calls.push({ days, options });
+    },
+  };
+
+  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
+    fetchMode: 'skims',
+    dispatchInputs: {
+      filter_concurrency: '1',
+    },
+  });
+
+  assert.equal(ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
+  assert.equal(calls[0].options.dispatchInputs.filter_concurrency, '1');
+}
+
 function testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache() {
   const base = buildBaseConfig();
   const draft = buildBaseConfig();
@@ -360,6 +381,7 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   testNormalizeSubscriptionsAddsBiorxivBackend();
   testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
   testRunProfileQuickFetchPassesProfileTagToWorkflow();
+  testRunProfileQuickFetchPreservesExplicitFilterConcurrency();
   testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache();
   testMergeDraftConfigOntoLatestRespectsLocalProfileDeletion();
   testMergeDraftConfigOntoLatestKeepsLatestOnlyItemsWithinProfile();

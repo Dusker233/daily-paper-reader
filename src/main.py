@@ -295,6 +295,7 @@ def resolve_summary_step_env() -> dict[str, str]:
     env = os.environ.copy()
     workflow_cfg = resolve_workflow_llm_config()
     rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
+    filter_concurrency = _read_env_text("DPR_FILTER_CONCURRENCY")
 
     if workflow_cfg.get("source") == "workflow":
         if not workflow_cfg["api_key"]:
@@ -331,6 +332,8 @@ def resolve_summary_step_env() -> dict[str, str]:
         env["RERANK_MODEL"] = rerank_cfg["model"]
         env["Reranker_LLM_MODEL"] = rerank_cfg["model"]
         env["BLT_RERANK_MODEL"] = rerank_cfg["model"]
+    if filter_concurrency:
+        env["DPR_FILTER_CONCURRENCY"] = filter_concurrency
     env["RERANK_ENABLED"] = "true" if rerank_cfg["enabled"] else "false"
     return env
 
@@ -584,6 +587,12 @@ def main() -> None:
         help="仅运行指定 tag 对应的词条；大小写不敏感，支持空格。",
     )
     parser.add_argument(
+        "--filter-concurrency",
+        type=int,
+        default=None,
+        help="显式指定 Step 4 LLM refine 的并发数；未传时沿用 Step 4 默认值。",
+    )
+    parser.add_argument(
         "--trace-arxiv-id",
         action="append",
         default=None,
@@ -616,6 +625,13 @@ def main() -> None:
         print(f"[INFO] profile_tag={profile_tag}", flush=True)
     else:
         os.environ.pop("DPR_FILTER_PROFILE_TAG", None)
+
+    filter_concurrency = args.filter_concurrency
+    normalized_filter_concurrency = None
+    if filter_concurrency is not None:
+        normalized_filter_concurrency = str(max(1, int(filter_concurrency)))
+        os.environ["DPR_FILTER_CONCURRENCY"] = normalized_filter_concurrency
+        print(f"[INFO] filter_concurrency={normalized_filter_concurrency}", flush=True)
     fetch_mode = (args.fetch_mode or "auto").strip().lower()
     if fetch_mode == "skims":
         use_skims_mode = True
@@ -730,9 +746,12 @@ def main() -> None:
         )
     if trace_ids:
         print_trace_retrieval("RERANK", rerank_path, trace_ids)
+    step4_args = [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")]
+    if normalized_filter_concurrency is not None:
+        step4_args.extend(["--filter-concurrency", normalized_filter_concurrency])
     run_step(
         "Step 4 - LLM refine",
-        [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")],
+        step4_args,
         env=step_env,
     )
     if trace_ids:

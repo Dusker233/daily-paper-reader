@@ -21,7 +21,7 @@ RANKED_DIR = os.path.join(ARCHIVE_DIR, "rank")
 CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 
 DEFAULT_FILTER_MODEL = os.getenv("FILTER_MODEL") or os.getenv("BLT_FILTER_MODEL") or "gemini-3-flash-preview-nothinking"
-DEFAULT_FILTER_CONCURRENCY = 4
+DEFAULT_FILTER_CONCURRENCY = 2
 MAX_FILTER_RETRIES = 3
 
 
@@ -898,7 +898,7 @@ def main() -> None:
     parser.add_argument(
         "--filter-concurrency",
         type=int,
-        default=DEFAULT_FILTER_CONCURRENCY,
+        default=max(1, _coerce_int(os.getenv("DPR_FILTER_CONCURRENCY"), DEFAULT_FILTER_CONCURRENCY)),
         help="concurrent LLM filter requests.",
     )
 
@@ -912,6 +912,8 @@ def main() -> None:
     if not os.path.isabs(output_path):
         output_path = os.path.abspath(os.path.join(ROOT_DIR, output_path))
 
+    filter_concurrency = max(1, _coerce_int(args.filter_concurrency, DEFAULT_FILTER_CONCURRENCY))
+
     process_file(
         input_path=input_path,
         output_path=output_path,
@@ -920,7 +922,7 @@ def main() -> None:
         max_chars=args.max_chars,
         filter_model=args.filter_model,
         max_output_tokens=args.max_output_tokens,
-        filter_concurrency=args.filter_concurrency,
+        filter_concurrency=filter_concurrency,
     )
 
 
