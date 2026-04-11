@@ -6,47 +6,52 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-10
-- 运行时间：2026-04-10 20:10:33 UTC
+- 最新运行日期：2026-04-11
+- 运行时间：2026-04-11 20:52:11 UTC
 - 运行状态：成功
-- 本次总论文数：8
-- 精读区：2
-- 速读区：6
+- 本次总论文数：10
+- 精读区：3
+- 速读区：7
 
 ### 今日简报（AI）
-- 今日共生成 8 篇推荐（精读 2 篇，速读 6 篇）
-- 精读：《AEGIS: Adversarial Entropy-Guided Immune System -- Thermodynamic State Space Models for Zero-Day Network Evasion Detection》（9.0/10）, 《RL-Loop: Reinforcement Learning-Driven Real-Time 5G Slice Control for Connected and Autonomous Mobility Services》（9.0/10）
-- 速读：《Restless Bandits with Individual Penalty Constraints: A New Near-Optimal Index Policy and How to Learn It》（7.0/10）, 《SelfGrader: Stable Jailbreak Detection for Large Language Models using Token-Level Logits》（6.0/10）, 《Supply-Chain Poisoning Attacks Against LLM Coding Agent Skill Ecosystems》（6.0/10）
+- 今日共生成 10 篇推荐（精读 3 篇，速读 7 篇）
+- 精读：《CCA Reimagined: An Exploratory Study of Large Language Models for Congestion Control》（8.0/10）, 《CuraLight: Debate-Guided Data Curation for LLM-Centered Traffic Signal Control》（8.0/10）
+- 速读：《AICCE: AI Driven Compliance Checker Engine》（7.0/10）, 《Analyzing Symbolic Properties for DRL Agents in Systems and Networking》（7.0/10）, 《ML Defender (aRGus NDR): An Open-Source Embedded ML NIDS for Botnet and Anomalous Traffic Detection in Resource-Constrained Organizations》（7.0/10）
 - 这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。
-- 详情：[/202604/10/README](/202604/10/README)
+- 详情：[/202604/11/README](/202604/11/README)
 
 ### 精读区论文标签
-1. [AEGIS: Adversarial Entropy-Guided Immune System -- Thermodynamic State Space Models for Zero-Day Network Evasion Detection](/202604/10/2604.02149v1-aegis-adversarial-entropy-guided-immune-system----thermodynamic-state-space-models-for-zero-day-network-evasion-detection)  
-   标签：评分：9.0/10、query:q4
-   evidence：提出新型深度学习模型(TVD-HL-SSM)用于加密恶意流量检测与对抗性分析。
-2. [RL-Loop: Reinforcement Learning-Driven Real-Time 5G Slice Control for Connected and Autonomous Mobility Services](/202604/10/2604.02461v1-rl-loop-reinforcement-learning-driven-real-time-5g-slice-control-for-connected-and-autonomous-mobility-services)  
-   标签：评分：9.0/10、query:q5
-   evidence：强化学习用于5G网络切片实时CPU资源控制
+1. [CCA Reimagined: An Exploratory Study of Large Language Models for Congestion Control](/202604/11/2604.03857v1-cca-reimagined-an-exploratory-study-of-large-language-models-for-congestion-control)  
+   标签：评分：8.0/10、query:q2
+   evidence：LLM应用于网络拥塞控制以降低延迟
+2. [CuraLight: Debate-Guided Data Curation for LLM-Centered Traffic Signal Control](/202604/11/2604.05663v1-curalight-debate-guided-data-curation-for-llm-centered-traffic-signal-control)  
+   标签：评分：8.0/10、query:q5
+   evidence：LLM与RL结合用于交通信号控制优化
+3. [Hybrid ResNet-1D-BiGRU with Multi-Head Attention for Cyberattack Detection in Industrial IoT Environments](/202604/11/2604.06481v1-hybrid-resnet-1d-bigru-with-multi-head-attention-for-cyberattack-detection-in-industrial-iot-environments)  
+   标签：评分：8.0/10、query:q4
+   evidence：深度学习模型用于IIoT入侵检测和恶意流量分析
 
 ### 速读区论文标签
-1. [Restless Bandits with Individual Penalty Constraints: A New Near-Optimal Index Policy and How to Learn It](/202604/10/2604.04101v1-restless-bandits-with-individual-penalty-constraints-a-new-near-optimal-index-policy-and-how-to-learn-it)  
+1. [AICCE: AI Driven Compliance Checker Engine](/202604/11/2604.03330v1-aicce-ai-driven-compliance-checker-engine)  
+   标签：评分：7.0/10、query:q9
+   evidence：AI用于IPv6流量合规性验证和隐蔽信道检测
+2. [Analyzing Symbolic Properties for DRL Agents in Systems and Networking](/202604/11/2604.04914v1-analyzing-symbolic-properties-for-drl-agents-in-systems-and-networking)  
    标签：评分：7.0/10、query:q5
-   evidence：无线网络资源分配的强化学习算法
-2. [SelfGrader: Stable Jailbreak Detection for Large Language Models using Token-Level Logits](/202604/10/2604.01473v1-selfgrader-stable-jailbreak-detection-for-large-language-models-using-token-level-logits)  
-   标签：评分：6.0/10、query:q9
-   evidence：LLM越狱检测用于安全防护
-3. [Supply-Chain Poisoning Attacks Against LLM Coding Agent Skill Ecosystems](/202604/10/2604.03081v1-supply-chain-poisoning-attacks-against-llm-coding-agent-skill-ecosystems)  
-   标签：评分：6.0/10、query:q9
-   evidence：LLM智能体供应链安全攻击研究
-4. [ML Defender (aRGus NDR): An Open-Source Embedded ML NIDS for Botnet and Anomalous Traffic Detection in Resource-Constrained Organizations](/202604/10/2604.04952v1-ml-defender-argus-ndr-an-open-source-embedded-ml-nids-for-botnet-and-anomalous-traffic-detection-in-resource-constrained-organizations)  
-   标签：评分：6.0/10、query:q8
-   evidence：(ML NIDS)用于网络流量异常检测和僵尸网络检测。
-5. [FedSpy-LLM: Towards Scalable and Generalizable Data Reconstruction Attacks from Gradients on LLMs](/202604/10/2604.06297v1-fedspy-llm-towards-scalable-and-generalizable-data-reconstruction-attacks-from-gradients-on-llms)  
-   标签：评分：6.0/10、query:q8
-   evidence：.LLM联邦学习中的数据重构攻击与安全分析
-6. [Regret-Aware Policy Optimization: Environment-Level Memory for Replay Suppression under Delayed Harm](/202604/10/2604.07428v1-regret-aware-policy-optimization-environment-level-memory-for-replay-suppression-under-delayed-harm)  
-   标签：评分：6.0/10、query:q8
-   evidence：强化学习安全策略优化方法研究
+   evidence：DRL在系统和网络控制问题中的应用
+3. [ML Defender (aRGus NDR): An Open-Source Embedded ML NIDS for Botnet and Anomalous Traffic Detection in Resource-Constrained Organizations](/202604/11/2604.04952v1-ml-defender-argus-ndr-an-open-source-embedded-ml-nids-for-botnet-and-anomalous-traffic-detection-in-resource-constrained-organizations)  
+   标签：评分：7.0/10、query:q3
+   evidence：机器学习NIDS用于僵尸网络和异常流量检测
+4. [LanG -- A Governance-Aware Agentic AI Platform for Unified Security Operations](/202604/11/2604.05440v1-lang----a-governance-aware-agentic-ai-platform-for-unified-security-operations)  
+   标签：评分：7.0/10、query:q9
+   evidence：.LLM平台用于安全运营中心的事件关联与规则生成
+5. [Hackers or Hallucinators? A Comprehensive Analysis of LLM-Based Automated Penetration Testing](/202604/11/2604.05719v1-hackers-or-hallucinators-a-comprehensive-analysis-of-llm-based-automated-penetration-testing)  
+   标签：评分：7.0/10、query:q9
+   evidence：LLM-based penetration testing frameworks analyzed for cybersecurity applications.
+6. [SE-Enhanced ViT and BiLSTM-Based Intrusion Detection for Secure IIoT and IoMT Environments](/202604/11/2604.06254v1-se-enhanced-vit-and-bilstm-based-intrusion-detection-for-secure-iiot-and-iomt-environments)  
+   标签：评分：7.0/10、query:q8
+7. [CREBench: Evaluating Large Language Models in Cryptographic Binary Reverse Engineering](/202604/11/2604.03750v1-crebench-evaluating-large-language-models-in-cryptographic-binary-reverse-engineering)  
+   标签：评分：6.0/10、query:q7
+   evidence：评估LLM在密码学二进制逆向工程中的能力，涉及加密算法分析
 
 
 <div class="dpr-home-promo-card">
