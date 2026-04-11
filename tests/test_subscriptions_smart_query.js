@@ -313,6 +313,110 @@ async function testRequestCandidatesUsesConfiguredEndpointAndXApiKeyForMiniMax()
   assert.equal(result.keywords[0].keyword, 'sr');
 }
 
+function testLoadLlmConfigPrefersWorkflowOverSummarized() {
+  const testApi = setupModule();
+  global.window.decoded_secret_private = {
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://workflow.example.com/v1',
+      model: 'workflow-model',
+    },
+    summarizedLLM: {
+      apiKey: 'sk-summary',
+      baseUrl: 'https://summary.example.com/v1',
+      model: 'summary-model',
+    },
+  };
+
+  assert.deepEqual(testApi.loadLlmConfig(), {
+    apiKey: 'sk-workflow',
+    baseUrl: 'https://workflow.example.com/v1',
+    model: 'workflow-model',
+  });
+}
+
+async function testRequestCandidatesUsesWorkflowEndpointWhenWorkflowConfigWins() {
+  const testApi = setupModule();
+  const calls = [];
+  global.window.decoded_secret_private = {
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://workflow.example.com/v1',
+      model: 'workflow-model',
+    },
+    summarizedLLM: {
+      apiKey: 'sk-summary',
+      baseUrl: 'https://summary.example.com/v1',
+      model: 'summary-model',
+    },
+  };
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    assert.equal(url, 'https://workflow.example.com/v1/chat/completions');
+    return buildSuccessResponse({
+      keywords: [{ keyword: 'workflow fallback', query: 'workflow fallback' }],
+      intent_queries: [{ query: 'workflow intent' }],
+    });
+  };
+
+  const result = await testApi.requestCandidatesByDesc('SR', 'workflow preferred');
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer sk-workflow');
+  assert.equal(result.keywords[0].keyword, 'workflow fallback');
+}
+
+async function testRequestCandidatesRejectsUnsafeHttpBaseUrlBeforeFetch() {
+  const testApi = setupModule();
+  let fetchCalled = false;
+  global.window.decoded_secret_private = {
+    summarizedLLM: {
+      apiKey: 'sk-openai',
+      baseUrl: 'http://evil.example.com/v1',
+      model: 'gpt-4.1-mini',
+    },
+  };
+  global.fetch = async () => {
+    fetchCalled = true;
+    return buildSuccessResponse({
+      keywords: [{ keyword: 'should-not-run', query: 'should-not-run' }],
+      intent_queries: [{ query: 'should-not-run' }],
+    });
+  };
+
+  await assertRejectsMessage(
+    () => testApi.requestCandidatesByDesc('SR', 'unsafe base url'),
+    /Base URL 必须使用 https:\/\/，本地调试仅允许 http:\/\/localhost/i,
+  );
+  assert.equal(fetchCalled, false);
+}
+
+async function testRequestCandidatesAllowsLocalhostHttpBaseUrl() {
+  const testApi = setupModule();
+  const calls = [];
+  global.window.decoded_secret_private = {
+    summarizedLLM: {
+      apiKey: 'sk-local',
+      baseUrl: 'http://localhost:11434/v1',
+      model: 'qwen-local',
+    },
+  };
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return buildSuccessResponse({
+      keywords: [{ keyword: 'localhost ok', query: 'localhost ok' }],
+      intent_queries: [{ query: 'localhost intent' }],
+    });
+  };
+
+  const result = await testApi.requestCandidatesByDesc('SR', 'localhost base url');
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'http://localhost:11434/v1/chat/completions');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer sk-local');
+  assert.equal(result.keywords[0].keyword, 'localhost ok');
+}
+
 async function testRequestCandidatesFallsBackToChatCompletionsWithoutVersionedPath() {
   const testApi = setupModule();
   const calls = [];
@@ -683,6 +787,10 @@ function testApplyCandidateToProfileCreatesNewProfileWhenTagIsUniquified() {
 (async () => {
   await testRequestCandidatesUsesConfiguredEndpointAndBearerAuth();
   await testRequestCandidatesUsesConfiguredEndpointAndXApiKeyForMiniMax();
+  testLoadLlmConfigPrefersWorkflowOverSummarized();
+  await testRequestCandidatesUsesWorkflowEndpointWhenWorkflowConfigWins();
+  await testRequestCandidatesRejectsUnsafeHttpBaseUrlBeforeFetch();
+  await testRequestCandidatesAllowsLocalhostHttpBaseUrl();
   await testRequestCandidatesFallsBackToChatCompletionsWithoutVersionedPath();
   await testRequestCandidatesSurfacesNetworkFetchFailuresClearly();
   await testRequestCandidatesSurfacesAuthErrorsClearly();

@@ -96,6 +96,15 @@ window.SubscriptionsSmartQuery = (function () {
           }
           return `${normalized}/v1/chat/completions`;
         };
+  const isAllowedLLMBaseUrl =
+    typeof llmConfigUtils.isAllowedLLMBaseUrl === 'function'
+      ? llmConfigUtils.isAllowedLLMBaseUrl
+      : (value) => {
+          const normalized = normalizeBaseUrlForStorage(value).toLowerCase();
+          if (!normalized) return false;
+          if (normalized.startsWith('https://')) return true;
+          return /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:$|\/)/i.test(normalized);
+        };
   const shouldUseXApiKeyHeader = (baseUrl, model) => {
     if (typeof llmConfigUtils.shouldUseXApiKeyHeader === 'function') {
       return llmConfigUtils.shouldUseXApiKeyHeader({ baseUrl, model });
@@ -580,10 +589,14 @@ window.SubscriptionsSmartQuery = (function () {
 
   const loadLlmConfig = () => {
     const secret = window.decoded_secret_private || {};
-    const summarized = resolveLlmConfigEntry(secret.summarizedLLM);
-    if (summarized) return summarized;
+    if (typeof llmConfigUtils.resolveWorkflowLLM === 'function') {
+      return llmConfigUtils.resolveWorkflowLLM(secret);
+    }
+
     const workflow = resolveLlmConfigEntry(secret.workflowLLM);
     if (workflow) return workflow;
+    const summarized = resolveLlmConfigEntry(secret.summarizedLLM);
+    if (summarized) return summarized;
 
     const chatLLMs = Array.isArray(secret.chatLLMs) ? secret.chatLLMs : [];
     if (chatLLMs.length > 0) {
@@ -893,6 +906,9 @@ window.SubscriptionsSmartQuery = (function () {
     }
     if (!llm.apiKey) {
       throw new Error('未检测到可用 API Key，请先在密钥配置里填写摘要/Chat Token。');
+    }
+    if (!isAllowedLLMBaseUrl(llm.baseUrl)) {
+      throw new Error('Base URL 必须使用 https://，本地调试仅允许 http://localhost。');
     }
 
     const cfg = window.SubscriptionsManager.getDraftConfig ? window.SubscriptionsManager.getDraftConfig() : {};
