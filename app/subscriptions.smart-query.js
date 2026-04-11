@@ -587,28 +587,35 @@ window.SubscriptionsSmartQuery = (function () {
     (currentProfiles || []).find((profile) => getProfileKey(profile) === getProfileKey(profileId))
   );
 
-  const loadLlmConfig = () => {
+  const loadLlmConfigCandidates = () => {
     const secret = window.decoded_secret_private || {};
-    if (typeof llmConfigUtils.resolveWorkflowLLM === 'function') {
-      return llmConfigUtils.resolveWorkflowLLM(secret);
-    }
+    const candidates = [];
+    const pushUnique = (entry) => {
+      if (!entry) return;
+      const exists = candidates.some((item) => (
+        normalizeText(item.baseUrl) === normalizeText(entry.baseUrl)
+        && normalizeText(item.apiKey) === normalizeText(entry.apiKey)
+        && normalizeText(item.model) === normalizeText(entry.model)
+      ));
+      if (!exists) candidates.push(entry);
+    };
 
-    const workflow = resolveLlmConfigEntry(secret.workflowLLM);
-    if (workflow) return workflow;
-    const summarized = resolveLlmConfigEntry(secret.summarizedLLM);
-    if (summarized) return summarized;
+    pushUnique(resolveLlmConfigEntry(secret.summarizedLLM));
+    pushUnique(resolveLlmConfigEntry(secret.workflowLLM));
 
     const chatLLMs = Array.isArray(secret.chatLLMs) ? secret.chatLLMs : [];
     if (chatLLMs.length > 0) {
       const first = chatLLMs[0] || {};
-      return resolveLlmConfigEntry({
+      pushUnique(resolveLlmConfigEntry({
         baseUrl: first.baseUrl,
         apiKey: first.apiKey,
         model: Array.isArray(first.models) ? first.models[0] : '',
-      });
+      }));
     }
-    return null;
+    return candidates;
   };
+
+  const loadLlmConfig = () => loadLlmConfigCandidates()[0] || null;
 
   const extractLlmJsonText = (data) => {
     const normalizeContentPart = (part) => {
@@ -900,49 +907,18 @@ window.SubscriptionsSmartQuery = (function () {
   };
 
   const requestCandidatesByDesc = async (tag, desc) => {
-    const llm = loadLlmConfig();
-    if (!llm) {
+    const llmCandidates = loadLlmConfigCandidates();
+    if (!llmCandidates.length) {
       throw new Error('未检测到可用大模型配置，请先完成密钥配置。');
     }
-    if (!llm.apiKey) {
-      throw new Error('未检测到可用 API Key，请先在密钥配置里填写摘要/Chat Token。');
-    }
-    if (!isAllowedLLMBaseUrl(llm.baseUrl)) {
-      throw new Error('Base URL 必须使用 https://，本地调试仅允许 http://localhost。');
-    }
 
-    const cfg = window.SubscriptionsManager.getDraftConfig ? window.SubscriptionsManager.getDraftConfig() : {};
-    const subs = (cfg && cfg.subscriptions) || {};
     const template = defaultPromptTemplate;
     const prompt = buildPromptFromTemplate(tag, desc, template);
-    const buildEndpoints = () => {
-      const out = [];
-      const pushUnique = (value) => {
-        const endpoint = normalizeText(value);
-        if (endpoint && !out.includes(endpoint)) out.push(endpoint);
-      };
-      const rawBaseUrl = normalizeText(llm.baseUrl);
-      const normalizedBaseUrl = normalizeBaseUrlForStorage(rawBaseUrl);
-      pushUnique(buildChatCompletionsEndpoint(rawBaseUrl));
-      if (normalizedBaseUrl && !/\/chat\/completions$/i.test(normalizedBaseUrl)) {
-        if (/\/v\d+$/i.test(normalizedBaseUrl)) {
-          pushUnique(`${normalizedBaseUrl.replace(/\/v\d+$/i, '')}/chat/completions`);
-        } else {
-          pushUnique(`${normalizedBaseUrl}/chat/completions`);
-        }
-      }
-      return out;
-    };
-    const endpoints = buildEndpoints();
-    if (!endpoints.length) {
-      throw new Error('LLM 配置缺少 baseUrl。');
-    }
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
-    const requestPayload = ({ useResponseFormat = true, includeTools = true }) => {
+    const requestPayload = (activeLlm, { useResponseFormat = true, includeTools = true }) => {
       const payload = {
-        model: llm.model,
+        model: activeLlm.model,
         messages: [
           {
             role: 'system',
@@ -1020,94 +996,129 @@ window.SubscriptionsSmartQuery = (function () {
       return excerpt || '模型服务请求失败，请检查网络与密钥配置。';
     };
 
-    const doFetch = async (
-      endpoint,
-      options = { useResponseFormat: true, includeTools: true },
-    ) => {
-      const payload = requestPayload(options);
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: buildChatRequestHeaders(llm.baseUrl, llm.model, llm.apiKey),
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      let text = '';
-      let json = null;
-      if (typeof response.text === 'function') {
-        text = await response.text().catch(() => '');
-        if (text) {
-          try {
-            json = JSON.parse(text);
-          } catch {}
-        }
-      } else if (typeof response.json === 'function') {
-        json = await response.json().catch(() => null);
-        if (json != null) {
-          try {
-            text = JSON.stringify(json);
-          } catch {}
-        }
-      }
-      return {
-        response,
-        payload,
-        text,
-        json,
-      };
-    };
-
     let successResult = null;
     let lastFetchError = '';
     let lastHttpAttempt = null;
+    let lastConfigError = '';
     try {
-      for (let i = 0; i < endpoints.length; i++) {
-        const endpoint = endpoints[i];
-        try {
-          let current = await doFetch(endpoint, {
-            useResponseFormat: true,
-            includeTools: true,
-          });
-          let currentText = current.text;
-          if (current.response && !current.response.ok) {
-            if (isStructuredOutputUnsupported(current.response.status, currentText)) {
-              current = await doFetch(endpoint, {
-                useResponseFormat: false,
-                includeTools: true,
-              });
-              currentText = current.text;
-            }
-            if (current.response && !current.response.ok && isToolingUnsupported(current.response.status, currentText)) {
-              current = await doFetch(endpoint, {
-                useResponseFormat: false,
-                includeTools: false,
-              });
-              currentText = current.text;
-            }
-          }
-          if (current.response && !current.response.ok) {
-            lastHttpAttempt = {
-              endpoint,
-              status: current.response.status,
-              statusText: current.response.statusText,
-              errorText: extractErrorMessage(current.json, current.text),
-            };
-            if (current.response.status === 404 && i < endpoints.length - 1) {
-              continue;
-            }
-            break;
-          }
-
-          successResult = current;
-          break;
-        } catch (e) {
-          lastFetchError = textSafeFromError(e);
-          if (e && e.name === 'AbortError') {
-            throw new Error('生成超时，请稍后重试。');
-          }
-          if (i < endpoints.length - 1) {
-            continue;
+      for (let llmIndex = 0; llmIndex < llmCandidates.length; llmIndex++) {
+        const activeLlm = llmCandidates[llmIndex];
+        if (!isAllowedLLMBaseUrl(activeLlm.baseUrl)) {
+          lastConfigError = 'Base URL 必须使用 https://，本地调试仅允许 http://localhost。';
+          continue;
+        }
+        const activeEndpoints = [];
+        const pushUniqueActiveEndpoint = (value) => {
+          const endpoint = normalizeText(value);
+          if (endpoint && !activeEndpoints.includes(endpoint)) activeEndpoints.push(endpoint);
+        };
+        const activeRawBaseUrl = normalizeText(activeLlm.baseUrl);
+        const activeNormalizedBaseUrl = normalizeBaseUrlForStorage(activeRawBaseUrl);
+        pushUniqueActiveEndpoint(buildChatCompletionsEndpoint(activeRawBaseUrl));
+        if (activeNormalizedBaseUrl && !/\/chat\/completions$/i.test(activeNormalizedBaseUrl)) {
+          if (/\/v\d+$/i.test(activeNormalizedBaseUrl)) {
+            pushUniqueActiveEndpoint(`${activeNormalizedBaseUrl.replace(/\/v\d+$/i, '')}/chat/completions`);
+          } else {
+            pushUniqueActiveEndpoint(`${activeNormalizedBaseUrl}/chat/completions`);
           }
         }
+
+        let shouldTryNextCandidate = false;
+        for (let i = 0; i < activeEndpoints.length; i++) {
+          const endpoint = activeEndpoints[i];
+          try {
+            const doFetchWithActiveConfig = async (options = { useResponseFormat: true, includeTools: true }) => {
+              const payload = requestPayload(activeLlm, options);
+              const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: buildChatRequestHeaders(activeLlm.baseUrl, activeLlm.model, activeLlm.apiKey),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+              });
+              let text = '';
+              let json = null;
+              if (typeof response.text === 'function') {
+                text = await response.text().catch(() => '');
+                if (text) {
+                  try {
+                    json = JSON.parse(text);
+                  } catch {}
+                }
+              } else if (typeof response.json === 'function') {
+                json = await response.json().catch(() => null);
+                if (json != null) {
+                  try {
+                    text = JSON.stringify(json);
+                  } catch {}
+                }
+              }
+              return {
+                response,
+                payload,
+                text,
+                json,
+              };
+            };
+
+            let current = await doFetchWithActiveConfig({
+              useResponseFormat: true,
+              includeTools: true,
+            });
+            let currentText = current.text;
+            if (current.response && !current.response.ok) {
+              if (isStructuredOutputUnsupported(current.response.status, currentText)) {
+                current = await doFetchWithActiveConfig({
+                  useResponseFormat: false,
+                  includeTools: true,
+                });
+                currentText = current.text;
+              }
+              if (current.response && !current.response.ok && isToolingUnsupported(current.response.status, currentText)) {
+                current = await doFetchWithActiveConfig({
+                  useResponseFormat: false,
+                  includeTools: false,
+                });
+                currentText = current.text;
+              }
+            }
+            if (current.response && !current.response.ok) {
+              lastHttpAttempt = {
+                endpoint,
+                status: current.response.status,
+                statusText: current.response.statusText,
+                errorText: extractErrorMessage(current.json, current.text),
+              };
+              if (current.response.status === 404 && i < activeEndpoints.length - 1) {
+                continue;
+              }
+              if (current.response.status === 404 && llmIndex < llmCandidates.length - 1) {
+                shouldTryNextCandidate = true;
+              }
+              break;
+            }
+
+            successResult = current;
+            break;
+          } catch (e) {
+            lastFetchError = textSafeFromError(e);
+            if (e && e.name === 'AbortError') {
+              throw new Error('生成超时，请稍后重试。');
+            }
+            if (i < activeEndpoints.length - 1) {
+              continue;
+            }
+            if (llmIndex < llmCandidates.length - 1) {
+              shouldTryNextCandidate = true;
+            }
+          }
+        }
+
+        if (successResult) break;
+        if (shouldTryNextCandidate) {
+          lastFetchError = '';
+          continue;
+        }
+        break;
       }
     } catch (e) {
       clearTimeout(timeout);
@@ -1120,6 +1131,9 @@ window.SubscriptionsSmartQuery = (function () {
       }
       if (lastFetchError) {
         throw new Error(`网络请求失败：${lastFetchError}`);
+      }
+      if (lastConfigError) {
+        throw new Error(lastConfigError);
       }
       throw new Error('模型服务请求失败，请检查网络与密钥配置。');
     }

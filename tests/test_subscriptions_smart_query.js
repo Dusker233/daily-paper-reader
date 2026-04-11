@@ -313,7 +313,7 @@ async function testRequestCandidatesUsesConfiguredEndpointAndXApiKeyForMiniMax()
   assert.equal(result.keywords[0].keyword, 'sr');
 }
 
-function testLoadLlmConfigPrefersWorkflowOverSummarized() {
+function testLoadLlmConfigPrefersSummarizedOverWorkflow() {
   const testApi = setupModule();
   global.window.decoded_secret_private = {
     workflowLLM: {
@@ -329,13 +329,13 @@ function testLoadLlmConfigPrefersWorkflowOverSummarized() {
   };
 
   assert.deepEqual(testApi.loadLlmConfig(), {
-    apiKey: 'sk-workflow',
-    baseUrl: 'https://workflow.example.com/v1',
-    model: 'workflow-model',
+    apiKey: 'sk-summary',
+    baseUrl: 'https://summary.example.com/v1',
+    model: 'summary-model',
   });
 }
 
-async function testRequestCandidatesUsesWorkflowEndpointWhenWorkflowConfigWins() {
+async function testRequestCandidatesFallsBackToWorkflowAfterSummaryFetchFailure() {
   const testApi = setupModule();
   const calls = [];
   global.window.decoded_secret_private = {
@@ -352,18 +352,98 @@ async function testRequestCandidatesUsesWorkflowEndpointWhenWorkflowConfigWins()
   };
   global.fetch = async (url, options) => {
     calls.push({ url, options });
-    assert.equal(url, 'https://workflow.example.com/v1/chat/completions');
-    return buildSuccessResponse({
-      keywords: [{ keyword: 'workflow fallback', query: 'workflow fallback' }],
-      intent_queries: [{ query: 'workflow intent' }],
-    });
+    if (url === 'https://summary.example.com/v1/chat/completions') {
+      throw new TypeError('Failed to fetch');
+    }
+    if (url === 'https://summary.example.com/chat/completions') {
+      throw new TypeError('Failed to fetch');
+    }
+    if (url === 'https://workflow.example.com/v1/chat/completions') {
+      return buildSuccessResponse({
+        keywords: [{ keyword: 'workflow fallback', query: 'workflow fallback' }],
+        intent_queries: [{ query: 'workflow intent' }],
+      });
+    }
+    throw new Error(`unexpected fetch url: ${url}`);
   };
 
   const result = await testApi.requestCandidatesByDesc('SR', 'workflow preferred');
 
+  assert.deepEqual(
+    calls.map((item) => item.url),
+    [
+      'https://summary.example.com/v1/chat/completions',
+      'https://summary.example.com/chat/completions',
+      'https://workflow.example.com/v1/chat/completions',
+    ],
+  );
+  assert.equal(calls[2].options.headers.Authorization, 'Bearer sk-workflow');
+  assert.equal(JSON.parse(calls[2].options.body).model, 'workflow-model');
+  assert.equal(result.keywords[0].keyword, 'workflow fallback');
+}
+
+async function testRequestCandidatesKeepsSummarizedWhenWorkflowAlsoExists() {
+  const testApi = setupModule();
+  const calls = [];
+  global.window.decoded_secret_private = {
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://workflow.example.com/v1',
+      model: 'workflow-model',
+    },
+    summarizedLLM: {
+      apiKey: 'sk-summary',
+      baseUrl: 'https://summary.example.com/v1',
+      model: 'summary-model',
+    },
+  };
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    assert.equal(url, 'https://summary.example.com/v1/chat/completions');
+    return buildSuccessResponse({
+      keywords: [{ keyword: 'summary primary', query: 'summary primary' }],
+      intent_queries: [{ query: 'summary intent' }],
+    });
+  };
+
+  const result = await testApi.requestCandidatesByDesc('SR', 'summary preferred');
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer sk-summary');
+  assert.equal(result.keywords[0].keyword, 'summary primary');
+}
+
+async function testRequestCandidatesUsesWorkflowWhenSummaryConfigIsIncomplete() {
+  const testApi = setupModule();
+  const calls = [];
+  global.window.decoded_secret_private = {
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://workflow.example.com/v1',
+      model: 'workflow-model',
+    },
+    summarizedLLM: {
+      apiKey: 'sk-summary',
+      baseUrl: '',
+      model: 'summary-model',
+    },
+  };
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === 'https://workflow.example.com/v1/chat/completions') {
+      return buildSuccessResponse({
+        keywords: [{ keyword: 'workflow primary', query: 'workflow primary' }],
+        intent_queries: [{ query: 'workflow intent' }],
+      });
+    }
+    throw new Error(`unexpected fetch url: ${url}`);
+  };
+
+  const result = await testApi.requestCandidatesByDesc('SR', 'workflow fallback for incomplete summary');
+
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.headers.Authorization, 'Bearer sk-workflow');
-  assert.equal(result.keywords[0].keyword, 'workflow fallback');
+  assert.equal(result.keywords[0].keyword, 'workflow primary');
 }
 
 async function testRequestCandidatesRejectsUnsafeHttpBaseUrlBeforeFetch() {
@@ -389,6 +469,87 @@ async function testRequestCandidatesRejectsUnsafeHttpBaseUrlBeforeFetch() {
     /Base URL 必须使用 https:\/\/，本地调试仅允许 http:\/\/localhost/i,
   );
   assert.equal(fetchCalled, false);
+}
+
+async function testRequestCandidatesSkipsUnsafeSummaryBaseUrlWhenWorkflowIsValid() {
+  const testApi = setupModule();
+  const calls = [];
+  global.window.decoded_secret_private = {
+    summarizedLLM: {
+      apiKey: 'sk-summary',
+      baseUrl: 'http://evil.example.com/v1',
+      model: 'summary-model',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://workflow.example.com/v1',
+      model: 'workflow-model',
+    },
+  };
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === 'https://workflow.example.com/v1/chat/completions') {
+      return buildSuccessResponse({
+        keywords: [{ keyword: 'workflow safe fallback', query: 'workflow safe fallback' }],
+        intent_queries: [{ query: 'workflow safe intent' }],
+      });
+    }
+    throw new Error(`unexpected fetch url: ${url}`);
+  };
+
+  const result = await testApi.requestCandidatesByDesc('SR', 'unsafe summary safe workflow');
+
+  assert.deepEqual(calls.map((item) => item.url), ['https://workflow.example.com/v1/chat/completions']);
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer sk-workflow');
+  assert.equal(JSON.parse(calls[0].options.body).model, 'workflow-model');
+  assert.equal(result.keywords[0].keyword, 'workflow safe fallback');
+}
+
+async function testRequestCandidatesFallsBackToWorkflowAfterSummary404ExhaustsEndpoints() {
+  const testApi = setupModule();
+  const calls = [];
+  global.window.decoded_secret_private = {
+    summarizedLLM: {
+      apiKey: 'sk-summary',
+      baseUrl: 'https://summary.example.com/v1',
+      model: 'summary-model',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://workflow.example.com/v1',
+      model: 'workflow-model',
+    },
+  };
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === 'https://summary.example.com/v1/chat/completions') {
+      return buildErrorResponse(404, 'summary v1 missing', 'Not Found');
+    }
+    if (url === 'https://summary.example.com/chat/completions') {
+      return buildErrorResponse(404, 'summary root missing', 'Not Found');
+    }
+    if (url === 'https://workflow.example.com/v1/chat/completions') {
+      return buildSuccessResponse({
+        keywords: [{ keyword: 'workflow 404 fallback', query: 'workflow 404 fallback' }],
+        intent_queries: [{ query: 'workflow 404 intent' }],
+      });
+    }
+    throw new Error(`unexpected fetch url: ${url}`);
+  };
+
+  const result = await testApi.requestCandidatesByDesc('SR', 'summary 404 fallback');
+
+  assert.deepEqual(
+    calls.map((item) => item.url),
+    [
+      'https://summary.example.com/v1/chat/completions',
+      'https://summary.example.com/chat/completions',
+      'https://workflow.example.com/v1/chat/completions',
+    ],
+  );
+  assert.equal(calls[2].options.headers.Authorization, 'Bearer sk-workflow');
+  assert.equal(JSON.parse(calls[2].options.body).model, 'workflow-model');
+  assert.equal(result.keywords[0].keyword, 'workflow 404 fallback');
 }
 
 async function testRequestCandidatesAllowsLocalhostHttpBaseUrl() {
@@ -787,10 +948,14 @@ function testApplyCandidateToProfileCreatesNewProfileWhenTagIsUniquified() {
 (async () => {
   await testRequestCandidatesUsesConfiguredEndpointAndBearerAuth();
   await testRequestCandidatesUsesConfiguredEndpointAndXApiKeyForMiniMax();
-  testLoadLlmConfigPrefersWorkflowOverSummarized();
-  await testRequestCandidatesUsesWorkflowEndpointWhenWorkflowConfigWins();
+  testLoadLlmConfigPrefersSummarizedOverWorkflow();
+  await testRequestCandidatesFallsBackToWorkflowAfterSummaryFetchFailure();
+  await testRequestCandidatesKeepsSummarizedWhenWorkflowAlsoExists();
+  await testRequestCandidatesUsesWorkflowWhenSummaryConfigIsIncomplete();
   await testRequestCandidatesRejectsUnsafeHttpBaseUrlBeforeFetch();
+  await testRequestCandidatesSkipsUnsafeSummaryBaseUrlWhenWorkflowIsValid();
   await testRequestCandidatesAllowsLocalhostHttpBaseUrl();
+  await testRequestCandidatesFallsBackToWorkflowAfterSummary404ExhaustsEndpoints();
   await testRequestCandidatesFallsBackToChatCompletionsWithoutVersionedPath();
   await testRequestCandidatesSurfacesNetworkFetchFailuresClearly();
   await testRequestCandidatesSurfacesAuthErrorsClearly();
