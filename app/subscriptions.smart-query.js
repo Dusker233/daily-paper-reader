@@ -20,6 +20,12 @@ window.SubscriptionsSmartQuery = (function () {
   let modalOverlay = null;
   let modalPanel = null;
   let modalState = null;
+  const isActiveModalState = (state, type) => (
+    !!state &&
+    state === modalState &&
+    state.closing !== true &&
+    (!type || state.type === type)
+  );
 
   const defaultPromptTemplate = [
     'You are a retrieval planning assistant.',
@@ -90,13 +96,48 @@ window.SubscriptionsSmartQuery = (function () {
           }
           return `${normalized}/v1/chat/completions`;
         };
-  const shouldUseXApiKeyAuthHeader = (baseUrl, model) => {
+  const isAllowedLLMBaseUrl =
+    typeof llmConfigUtils.isAllowedLLMBaseUrl === 'function'
+      ? llmConfigUtils.isAllowedLLMBaseUrl
+      : (value) => {
+          const normalized = normalizeBaseUrlForStorage(value).toLowerCase();
+          if (!normalized) return false;
+          if (normalized.startsWith('https://')) return true;
+          return /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:$|\/)/i.test(normalized);
+        };
+  const shouldUseXApiKeyHeader = (baseUrl, model) => {
+    if (typeof llmConfigUtils.shouldUseXApiKeyHeader === 'function') {
+      return llmConfigUtils.shouldUseXApiKeyHeader({ baseUrl, model });
+    }
     const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
     const normalizedModel = normalizeText(model || '').toLowerCase();
-    return (
+    if (
       /^minimax-/i.test(normalizedModel)
       || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
-    );
+    ) {
+      return false;
+    }
+    return true;
+  };
+  const buildChatRequestHeaders = (baseUrl, model, apiKey) => {
+    if (typeof llmConfigUtils.buildChatRequestHeaders === 'function') {
+      return llmConfigUtils.buildChatRequestHeaders({
+        baseUrl,
+        model,
+        apiKey,
+        acceptJson: true,
+      });
+    }
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (shouldUseXApiKeyHeader(baseUrl, model)) {
+      headers.Authorization = `Bearer ${normalizeText(apiKey)}`;
+    } else {
+      headers['x-api-key'] = normalizeText(apiKey);
+    }
+    return headers;
   };
   const resolveLlmConfigEntry = (entry) => {
     const safeEntry = entry && typeof entry === 'object' ? entry : {};
@@ -250,10 +291,43 @@ window.SubscriptionsSmartQuery = (function () {
       .trim();
     return slug || 'item';
   };
-  const getProfileKey = (profileOrTag) => {
+  const getProfileTagKey = (profileOrTag) => {
     if (!profileOrTag) return '';
     if (typeof profileOrTag === 'string') return toStableId(profileOrTag);
     return toStableId(profileOrTag.tag) || '';
+  };
+  const getProfileKey = (profileOrTag) => {
+    if (!profileOrTag) return '';
+    if (typeof profileOrTag === 'string') return toStableId(profileOrTag);
+    const existingId = normalizeText(profileOrTag.id || '');
+    if (existingId) return toStableId(existingId);
+    return getProfileTagKey(profileOrTag);
+  };
+
+  const getDraftProfiles = () => {
+    const cfg = window.SubscriptionsManager.getDraftConfig ? window.SubscriptionsManager.getDraftConfig() : {};
+    const subs = cfg && cfg.subscriptions && typeof cfg.subscriptions === 'object' ? cfg.subscriptions : {};
+    return Array.isArray(subs.intent_profiles) ? subs.intent_profiles : [];
+  };
+
+  const buildUniqueProfileTag = (preferredTag, options = {}) => {
+    const baseTag = sanitizeAutoTag(preferredTag) || 'SR';
+    const excludeTagKey = getProfileTagKey(options.excludeTag || '');
+    const existingTagKeys = new Set(
+      getDraftProfiles()
+        .map((profile) => getProfileTagKey(profile))
+        .filter((tagKey) => tagKey && tagKey !== excludeTagKey),
+    );
+    const baseKey = getProfileTagKey(baseTag);
+    if (!baseKey || !existingTagKeys.has(baseKey)) return baseTag;
+    for (let suffix = 2; suffix < 1000; suffix += 1) {
+      const candidate = `${baseTag}-${suffix}`;
+      const candidateKey = getProfileTagKey(candidate);
+      if (candidateKey && !existingTagKeys.has(candidateKey)) {
+        return candidate;
+      }
+    }
+    return `${baseTag}-${Date.now().toString(36)}`;
   };
 
   const filterVisiblePaperSources = (values) => {
@@ -390,7 +464,9 @@ window.SubscriptionsSmartQuery = (function () {
             '',
         );
         const keywordCn = normalizeText(item.keyword_cn || item.keyword_zh || item.zh || '');
+        const currentId = normalizeText(item.id || '');
         return {
+          ...(currentId ? { id: currentId } : {}),
           keyword,
           keyword_cn: keywordCn,
           query: query || keyword,
@@ -422,7 +498,9 @@ window.SubscriptionsSmartQuery = (function () {
         const query = sanitizeNoYear(item.query || item.text || item.keyword || item.expr || '');
         if (!query) return null;
         const queryCn = sanitizeNoYear(item.query_cn || item.query_zh || item.zh || item.note || '');
+        const currentId = normalizeText(item.id || '');
         return {
+          ...(currentId ? { id: currentId } : {}),
           query,
           query_cn: queryCn,
           enabled: item.enabled !== false,
@@ -436,7 +514,7 @@ window.SubscriptionsSmartQuery = (function () {
       })
       .filter((item) => {
         if (!item) return false;
-        const key = normalizeText(item.query).toLowerCase();
+        const key = normalizeText(item.id || item.query).toLowerCase();
         if (!key || seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -486,7 +564,8 @@ window.SubscriptionsSmartQuery = (function () {
 
   const ensureProfile = (profiles, tag, description) => {
     const t = normalizeText(tag);
-    let profile = profiles.find((p) => getProfileKey(p) === getProfileKey(t));
+    const tagKey = getProfileTagKey(t);
+    let profile = profiles.find((p) => getProfileTagKey(p) === tagKey);
     if (profile) {
       if (normalizeText(description) && !normalizeText(profile.description)) {
         profile.description = normalizeText(description);
@@ -508,24 +587,35 @@ window.SubscriptionsSmartQuery = (function () {
     (currentProfiles || []).find((profile) => getProfileKey(profile) === getProfileKey(profileId))
   );
 
-  const loadLlmConfig = () => {
+  const loadLlmConfigCandidates = () => {
     const secret = window.decoded_secret_private || {};
-    const summarized = resolveLlmConfigEntry(secret.summarizedLLM);
-    if (summarized) return summarized;
-    const workflow = resolveLlmConfigEntry(secret.workflowLLM);
-    if (workflow) return workflow;
+    const candidates = [];
+    const pushUnique = (entry) => {
+      if (!entry) return;
+      const exists = candidates.some((item) => (
+        normalizeText(item.baseUrl) === normalizeText(entry.baseUrl)
+        && normalizeText(item.apiKey) === normalizeText(entry.apiKey)
+        && normalizeText(item.model) === normalizeText(entry.model)
+      ));
+      if (!exists) candidates.push(entry);
+    };
+
+    pushUnique(resolveLlmConfigEntry(secret.summarizedLLM));
+    pushUnique(resolveLlmConfigEntry(secret.workflowLLM));
 
     const chatLLMs = Array.isArray(secret.chatLLMs) ? secret.chatLLMs : [];
     if (chatLLMs.length > 0) {
       const first = chatLLMs[0] || {};
-      return resolveLlmConfigEntry({
+      pushUnique(resolveLlmConfigEntry({
         baseUrl: first.baseUrl,
         apiKey: first.apiKey,
         model: Array.isArray(first.models) ? first.models[0] : '',
-      });
+      }));
     }
-    return null;
+    return candidates;
   };
+
+  const loadLlmConfig = () => loadLlmConfigCandidates()[0] || null;
 
   const extractLlmJsonText = (data) => {
     const normalizeContentPart = (part) => {
@@ -817,46 +907,18 @@ window.SubscriptionsSmartQuery = (function () {
   };
 
   const requestCandidatesByDesc = async (tag, desc) => {
-    const llm = loadLlmConfig();
-    if (!llm) {
+    const llmCandidates = loadLlmConfigCandidates();
+    if (!llmCandidates.length) {
       throw new Error('未检测到可用大模型配置，请先完成密钥配置。');
     }
-    if (!llm.apiKey) {
-      throw new Error('未检测到可用 API Key，请先在密钥配置里填写摘要/Chat Token。');
-    }
 
-    const cfg = window.SubscriptionsManager.getDraftConfig ? window.SubscriptionsManager.getDraftConfig() : {};
-    const subs = (cfg && cfg.subscriptions) || {};
     const template = defaultPromptTemplate;
     const prompt = buildPromptFromTemplate(tag, desc, template);
-    const buildEndpoints = () => {
-      const out = [];
-      const pushUnique = (value) => {
-        const endpoint = normalizeText(value);
-        if (endpoint && !out.includes(endpoint)) out.push(endpoint);
-      };
-      const rawBaseUrl = normalizeText(llm.baseUrl);
-      const normalizedBaseUrl = normalizeBaseUrlForStorage(rawBaseUrl);
-      pushUnique(buildChatCompletionsEndpoint(rawBaseUrl));
-      if (normalizedBaseUrl && !/\/chat\/completions$/i.test(normalizedBaseUrl)) {
-        if (/\/v\d+$/i.test(normalizedBaseUrl)) {
-          pushUnique(`${normalizedBaseUrl.replace(/\/v\d+$/i, '')}/chat/completions`);
-        } else {
-          pushUnique(`${normalizedBaseUrl}/chat/completions`);
-        }
-      }
-      return out;
-    };
-    const endpoints = buildEndpoints();
-    if (!endpoints.length) {
-      throw new Error('LLM 配置缺少 baseUrl。');
-    }
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
-    const requestPayload = ({ useResponseFormat = true, includeTools = true }) => {
+    const requestPayload = (activeLlm, { useResponseFormat = true, includeTools = true }) => {
       const payload = {
-        model: llm.model,
+        model: activeLlm.model,
         messages: [
           {
             role: 'system',
@@ -883,99 +945,204 @@ window.SubscriptionsSmartQuery = (function () {
       if (typeof e.message === 'string' && e.message) return e.message;
       return '';
     };
-
-    const doFetch = async (
-      endpoint,
-      options = { useResponseFormat: true, includeTools: true },
-    ) => {
-      const headers = {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      };
-      if (shouldUseXApiKeyAuthHeader(llm.baseUrl, llm.model)) {
-        headers['x-api-key'] = llm.apiKey;
-      } else {
-        headers.Authorization = `Bearer ${llm.apiKey}`;
+    const normalizeErrorExcerpt = (value) => normalizeText(value).slice(0, 240);
+    const extractErrorMessage = (payload, fallbackText) => {
+      if (payload && typeof payload === 'object') {
+        const direct = normalizeText(payload.message || payload.error_message || payload.detail || payload.msg || '');
+        if (direct) return direct;
+        if (payload.error && typeof payload.error === 'object') {
+          const nested = normalizeText(
+            payload.error.message || payload.error.detail || payload.error.msg || payload.error.code || '',
+          );
+          if (nested) return nested;
+        }
+        if (typeof payload.error === 'string' && normalizeText(payload.error)) {
+          return normalizeText(payload.error);
+        }
       }
-      return fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestPayload(options)),
-        signal: controller.signal,
-      });
+      return normalizeErrorExcerpt(fallbackText);
+    };
+    const isStructuredOutputUnsupported = (status, text) => {
+      const lowered = String(text || '').toLowerCase();
+      const hasTarget = /response[\s_-]*format|json_object|json object|json_schema/.test(lowered);
+      const hasSignal = /unsupported|not support|not supported|invalid|unknown|unrecognized|extra inputs|unexpected|one of|allowed values|enum/.test(lowered);
+      if (hasTarget && hasSignal) return true;
+      return [400, 404, 415, 422].includes(Number(status)) && /response[\s_-]*format/.test(lowered);
+    };
+    const isToolingUnsupported = (status, text) => {
+      const lowered = String(text || '').toLowerCase();
+      if (![400, 404, 415, 422].includes(Number(status))) return false;
+      return /tool_choice|\btools\b/.test(lowered);
+    };
+    const classifyHttpError = (attempt) => {
+      const status = Number(attempt && attempt.status);
+      const text = String((attempt && attempt.errorText) || '');
+      const excerpt = normalizeErrorExcerpt(text || (attempt && attempt.statusText) || '');
+      if (status === 401 || status === 403) {
+        return `模型服务鉴权失败（HTTP ${status}）：${excerpt || '请检查 API Key、鉴权方式或网关权限。'}`;
+      }
+      if (status === 404) {
+        return `模型服务端点不可用（HTTP 404）：${excerpt || '当前 baseUrl 对应的 /chat/completions 路径可能不兼容。'}`;
+      }
+      if (status === 429) {
+        return `模型服务触发限流（HTTP 429）：${excerpt || '请稍后重试。'}`;
+      }
+      if (status >= 500) {
+        return `模型服务暂时异常（HTTP ${status}）：${excerpt || '请稍后重试。'}`;
+      }
+      if (status >= 400) {
+        return `模型服务请求失败（HTTP ${status}）：${excerpt || '请检查模型配置或请求参数。'}`;
+      }
+      return excerpt || '模型服务请求失败，请检查网络与密钥配置。';
     };
 
-    let res = null;
-    let errorText = '';
-    let fetchError = '';
+    let successResult = null;
+    let lastFetchError = '';
+    let lastHttpAttempt = null;
+    let lastConfigError = '';
     try {
-      for (let i = 0; i < endpoints.length; i++) {
-        const endpoint = endpoints[i];
-        try {
-          let current = null;
-          let txt = '';
-          current = await doFetch(endpoint, {
-            useResponseFormat: true,
-            includeTools: true,
-          });
-          if (current && !current.ok) {
-            txt = await current.text().catch(() => '');
-            if (current.status === 400 && /response[\s-]*format|json_object/i.test(txt)) {
-              current = await doFetch(endpoint, {
-                useResponseFormat: false,
-                includeTools: true,
-              });
-              if (current && !current.ok) {
-                txt = await current.text().catch(() => '');
-              }
-            }
-            if (current && !current.ok && current.status === 400 && /tool_choice|tools/i.test(txt)) {
-              current = await doFetch(endpoint, {
-                useResponseFormat: false,
-                includeTools: false,
-              });
-            }
-          }
-          if (current && !current.ok) {
-            txt = await current.text().catch(() => '');
-            if (current.status === 400 || current.status === 401 || current.status === 403) {
-              throw new Error(`HTTP ${current.status} ${txt || current.statusText}`);
-            }
-            if (current.status === 404 || current.status === 429 || current.status >= 500) {
-              errorText = txt;
-              continue;
-            }
-            errorText = txt;
-            break;
-          }
-
-          res = current;
-          break;
-        } catch (e) {
-          fetchError = textSafeFromError(e);
-          if (e && e.name === 'AbortError') {
-            throw new Error('生成超时，请稍后重试。');
-          }
-          if (i < endpoints.length - 1) {
-            // 网络类错误尝试下一个端点
-            continue;
+      for (let llmIndex = 0; llmIndex < llmCandidates.length; llmIndex++) {
+        const activeLlm = llmCandidates[llmIndex];
+        if (!isAllowedLLMBaseUrl(activeLlm.baseUrl)) {
+          lastConfigError = 'Base URL 必须使用 https://，本地调试仅允许 http://localhost。';
+          continue;
+        }
+        const activeEndpoints = [];
+        const pushUniqueActiveEndpoint = (value) => {
+          const endpoint = normalizeText(value);
+          if (endpoint && !activeEndpoints.includes(endpoint)) activeEndpoints.push(endpoint);
+        };
+        const activeRawBaseUrl = normalizeText(activeLlm.baseUrl);
+        const activeNormalizedBaseUrl = normalizeBaseUrlForStorage(activeRawBaseUrl);
+        pushUniqueActiveEndpoint(buildChatCompletionsEndpoint(activeRawBaseUrl));
+        if (activeNormalizedBaseUrl && !/\/chat\/completions$/i.test(activeNormalizedBaseUrl)) {
+          if (/\/v\d+$/i.test(activeNormalizedBaseUrl)) {
+            pushUniqueActiveEndpoint(`${activeNormalizedBaseUrl.replace(/\/v\d+$/i, '')}/chat/completions`);
+          } else {
+            pushUniqueActiveEndpoint(`${activeNormalizedBaseUrl}/chat/completions`);
           }
         }
+
+        let shouldTryNextCandidate = false;
+        for (let i = 0; i < activeEndpoints.length; i++) {
+          const endpoint = activeEndpoints[i];
+          try {
+            const doFetchWithActiveConfig = async (options = { useResponseFormat: true, includeTools: true }) => {
+              const payload = requestPayload(activeLlm, options);
+              const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: buildChatRequestHeaders(activeLlm.baseUrl, activeLlm.model, activeLlm.apiKey),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+              });
+              let text = '';
+              let json = null;
+              if (typeof response.text === 'function') {
+                text = await response.text().catch(() => '');
+                if (text) {
+                  try {
+                    json = JSON.parse(text);
+                  } catch {}
+                }
+              } else if (typeof response.json === 'function') {
+                json = await response.json().catch(() => null);
+                if (json != null) {
+                  try {
+                    text = JSON.stringify(json);
+                  } catch {}
+                }
+              }
+              return {
+                response,
+                payload,
+                text,
+                json,
+              };
+            };
+
+            let current = await doFetchWithActiveConfig({
+              useResponseFormat: true,
+              includeTools: true,
+            });
+            let currentText = current.text;
+            if (current.response && !current.response.ok) {
+              if (isStructuredOutputUnsupported(current.response.status, currentText)) {
+                current = await doFetchWithActiveConfig({
+                  useResponseFormat: false,
+                  includeTools: true,
+                });
+                currentText = current.text;
+              }
+              if (current.response && !current.response.ok && isToolingUnsupported(current.response.status, currentText)) {
+                current = await doFetchWithActiveConfig({
+                  useResponseFormat: false,
+                  includeTools: false,
+                });
+                currentText = current.text;
+              }
+            }
+            if (current.response && !current.response.ok) {
+              lastHttpAttempt = {
+                endpoint,
+                status: current.response.status,
+                statusText: current.response.statusText,
+                errorText: extractErrorMessage(current.json, current.text),
+              };
+              if (current.response.status === 404 && i < activeEndpoints.length - 1) {
+                continue;
+              }
+              if (current.response.status === 404 && llmIndex < llmCandidates.length - 1) {
+                shouldTryNextCandidate = true;
+              }
+              break;
+            }
+
+            successResult = current;
+            break;
+          } catch (e) {
+            lastFetchError = textSafeFromError(e);
+            if (e && e.name === 'AbortError') {
+              throw new Error('生成超时，请稍后重试。');
+            }
+            if (i < activeEndpoints.length - 1) {
+              continue;
+            }
+            if (llmIndex < llmCandidates.length - 1) {
+              shouldTryNextCandidate = true;
+            }
+          }
+        }
+
+        if (successResult) break;
+        if (shouldTryNextCandidate) {
+          lastFetchError = '';
+          continue;
+        }
+        break;
       }
     } catch (e) {
       clearTimeout(timeout);
       throw e;
     }
     clearTimeout(timeout);
-    if (!res) {
-      if (fetchError) {
-        throw new Error(`模型服务请求失败：${fetchError}`);
+    if (!successResult) {
+      if (lastHttpAttempt) {
+        throw new Error(classifyHttpError(lastHttpAttempt));
       }
-      throw new Error(errorText || '模型服务请求失败，请检查网络与密钥配置。');
+      if (lastFetchError) {
+        throw new Error(`网络请求失败：${lastFetchError}`);
+      }
+      if (lastConfigError) {
+        throw new Error(lastConfigError);
+      }
+      throw new Error('模型服务请求失败，请检查网络与密钥配置。');
     }
-    const data = await res.json();
+    const data = successResult.json || {};
     const content = extractLlmJsonText(data);
     const parsed = loadJsonLenient(content);
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('模型返回格式无效，请检查提供商返回内容。');
+    }
     const candidates = normalizeGenerated(parsed);
     if (!candidates.keywords.length) {
       throw new Error('模型未返回可用候选，请调整描述后重试。');
@@ -1082,6 +1249,7 @@ window.SubscriptionsSmartQuery = (function () {
           selectedKeywords.length > 0
             ? selectedKeywords
                 .map((item, idx) => ({
+                  ...(normalizeText(item.id) ? { id: normalizeText(item.id) } : {}),
                   keyword: normalizeText(item.keyword || item.text || item.expr || ''),
                   keyword_cn: normalizeText(item.keyword_cn || item.keyword_zh || item.zh || ''),
                   query: normalizeText(item.query || item.text || item.keyword || ''),
@@ -1094,6 +1262,7 @@ window.SubscriptionsSmartQuery = (function () {
             : normalizeProfileKeywords(existedProfile),
         intent_queries: intentQueries
           .map((queryObj) => ({
+            ...(normalizeText(queryObj.id) ? { id: normalizeText(queryObj.id) } : {}),
             query: normalizeText(queryObj && queryObj.query),
             query_cn: normalizeText(queryObj.query_cn || queryObj.query_zh || queryObj.zh || ''),
             enabled: queryObj.enabled !== false,
@@ -1504,6 +1673,7 @@ window.SubscriptionsSmartQuery = (function () {
   const toProfileSelectableCandidates = (profile) => {
     const rawKeywords = normalizeKeywordEntries(profile && profile.keywords);
     const keywords = rawKeywords.map((k) => ({
+      ...(normalizeText(k.id) ? { id: normalizeText(k.id) } : {}),
       keyword: normalizeText(k.keyword || ''),
       query: normalizeText(k.query || k.keyword || ''),
       keyword_cn: normalizeText(k.keyword_cn || ''),
@@ -1624,11 +1794,17 @@ window.SubscriptionsSmartQuery = (function () {
 
   const closeModal = () => {
     if (!modalOverlay) return;
+    const closingState = modalState;
+    if (closingState && typeof closingState === 'object') {
+      closingState.closing = true;
+    }
     modalOverlay.classList.remove('show');
     setTimeout(() => {
       modalOverlay.style.display = 'none';
       if (modalPanel) modalPanel.innerHTML = '';
-      modalState = null;
+      if (!closingState || modalState === closingState) {
+        modalState = null;
+      }
     }, 160);
   };
 
@@ -1678,8 +1854,8 @@ window.SubscriptionsSmartQuery = (function () {
 
   const openAddModal = (tag, description, candidates) => {
     const normalizedCandidates = parseCandidatesForState(candidates);
-    const suggestedTag = sanitizeAutoTag(
-      normalizeText(candidates && candidates.tag) || normalizeText(tag),
+    const suggestedTag = buildUniqueProfileTag(
+      normalizeText(candidates && candidates.tag) || normalizeText(tag) || 'SR',
     );
     const suggestedDesc = normalizeText(candidates && candidates.description) || normalizeText(description);
     modalState = {
@@ -1705,6 +1881,8 @@ window.SubscriptionsSmartQuery = (function () {
     modalState = {
       type: 'chat',
       editProfileId: options.editProfileId || '',
+      requestToken: 0,
+      closing: false,
       keywords: ensureDraftSlot(
         normalizedCandidates.map((item) => ({ ...item, _selected: item._selected !== false })),
         'keyword',
@@ -1799,7 +1977,12 @@ window.SubscriptionsSmartQuery = (function () {
       return;
     }
 
-    modalState.tag = nextTag;
+    const isEditMode = !!(modalState && modalState.editProfileId);
+    const requestedTag = nextTag;
+    const finalTag = isEditMode ? requestedTag : buildUniqueProfileTag(requestedTag);
+    const tagAdjusted = !isEditMode && normalizeText(finalTag) !== normalizeText(requestedTag);
+
+    modalState.tag = finalTag;
     modalState.description = nextDesc;
     const nextPaperSources = normalizePaperSources(modalState.paper_sources, { fallbackToArxiv: false });
     if (!nextPaperSources.length) {
@@ -1814,7 +1997,6 @@ window.SubscriptionsSmartQuery = (function () {
       setMessage(validationError, '#c00');
       return;
     }
-    const isEditMode = !!(modalState && modalState.editProfileId);
     const ok = isEditMode
       ? replaceProfileFromSelection(
           modalState.editProfileId,
@@ -1839,7 +2021,14 @@ window.SubscriptionsSmartQuery = (function () {
     }
 
     if (typeof reloadAll === 'function') reloadAll();
-    setMessage(isEditMode ? '词条修改已应用，请点击「保存」。' : '新增词条已应用，请点击「保存」。', '#666');
+    setMessage(
+      isEditMode
+        ? '词条修改已应用，请点击「保存」。'
+        : tagAdjusted
+          ? `新增词条已应用，请点击「保存」。标签已自动调整为「${modalState.tag}」。`
+          : '新增词条已应用，请点击「保存」。',
+      '#666',
+    );
     closeModal();
   };
 
@@ -1991,9 +2180,11 @@ window.SubscriptionsSmartQuery = (function () {
       setMessage(validationError, '#c00');
       return;
     }
-    modalState.inputTag = tag;
+    const requestedTag = tag;
+    const profileTag = modalState.editProfileId ? requestedTag : buildUniqueProfileTag(requestedTag);
+    const tagAdjusted = !modalState.editProfileId && normalizeText(profileTag) !== normalizeText(requestedTag);
+    modalState.inputTag = profileTag;
 
-    const profileTag = tag || `SR-${new Date().toISOString().slice(0, 10)}`;
     if (hasItems) {
       const ok = modalState.editProfileId
         ? replaceProfileFromSelection(modalState.editProfileId, profileTag, desc, paperSources, {
@@ -2014,41 +2205,53 @@ window.SubscriptionsSmartQuery = (function () {
       return;
     }
     if (typeof reloadAll === 'function') reloadAll();
-    setMessage(modalState.editProfileId ? '词条修改已应用，请点击「保存」。' : '查询已保存，请点击「保存」。', '#666');
+    setMessage(
+      modalState.editProfileId
+        ? '词条修改已应用，请点击「保存」。'
+        : tagAdjusted
+          ? `查询已保存，请点击「保存」。标签已自动调整为「${profileTag}」。`
+          : '查询已保存，请点击「保存」。',
+      '#666',
+    );
     closeModal();
   };
 
   const askChatOnce = async () => {
-    if (!modalState || modalState.type !== 'chat') return;
+    if (!isActiveModalState(modalState, 'chat')) return;
     if (modalState.pending) return;
+    const state = modalState;
+    const requestToken = Number(state.requestToken || 0) + 1;
+    state.requestToken = requestToken;
     const tag = normalizeText(document.getElementById('dpr-chat-tag-input')?.value || '');
     const desc = normalizeText(document.getElementById('dpr-chat-desc-input')?.value || '');
     const finalDesc = desc;
-    let finalTag = tag || `SR-${new Date().toISOString().slice(0, 10)}`;
+    const existingInputTag = normalizeText(state.inputTag || '');
+    let finalTag = tag || existingInputTag || buildUniqueProfileTag('SR');
 
     if (!finalDesc) {
       setChatStatus('请先填写检索需求。', '#c00');
       return;
     }
 
-    modalState.pending = true;
+    state.pending = true;
     setSendBtnLoading(true);
     setChatStatus('正在生成候选，请稍候...', '#666');
     setMessage('正在生成候选，请稍候...', '#666');
 
     try {
       const candidates = await requestCandidatesByDesc(finalTag, finalDesc);
-      const isFirstRound = !(Array.isArray(modalState.requestHistory) && modalState.requestHistory.length);
+      if (!isActiveModalState(state, 'chat') || Number(state.requestToken || 0) !== requestToken) return;
+      const isFirstRound = !(Array.isArray(state.requestHistory) && state.requestHistory.length);
       const nextCandidates = parseCandidatesForState(candidates, false);
-      const shouldMergeKeywords = !isFirstRound || hasRealCandidates(modalState.keywords);
+      const shouldMergeKeywords = !isFirstRound || hasRealCandidates(state.keywords);
       const shouldMergeIntentQueries =
-        !isFirstRound || hasRealCandidates(modalState.intent_queries);
+        !isFirstRound || hasRealCandidates(state.intent_queries);
       const nextKeywords = shouldMergeKeywords
-        ? mergeCandidatesForNextRound(modalState.keywords, nextCandidates.keywords, 'keyword')
+        ? mergeCandidatesForNextRound(state.keywords, nextCandidates.keywords, 'keyword')
         : nextCandidates.keywords;
       const nextIntentQueries = shouldMergeIntentQueries
         ? mergeCandidatesForNextRound(
-            modalState.intent_queries,
+            state.intent_queries,
             nextCandidates.intent_queries,
             'query',
           )
@@ -2056,19 +2259,19 @@ window.SubscriptionsSmartQuery = (function () {
       const suggestedTag = normalizeText(candidates.tag);
       const suggestedDesc = normalizeText(candidates.description);
       const safeSuggestedTag = sanitizeAutoTag(suggestedTag);
-      if (!tag && safeSuggestedTag) {
-        finalTag = safeSuggestedTag;
+      if (!tag && !existingInputTag && safeSuggestedTag) {
+        finalTag = buildUniqueProfileTag(safeSuggestedTag);
       }
-      if (safeSuggestedTag && !modalState.inputTag) {
-        modalState.inputTag = safeSuggestedTag;
+      if (!existingInputTag) {
+        state.inputTag = buildUniqueProfileTag(safeSuggestedTag || finalTag || 'SR');
       }
       const finalDescForProfile = suggestedDesc || finalDesc;
-      modalState.inputDesc = finalDescForProfile;
+      state.inputDesc = finalDescForProfile;
       if (document.getElementById('dpr-chat-required-desc')) {
         document.getElementById('dpr-chat-required-desc').value = finalDescForProfile;
       }
-      const roundLabel = requestHistoryLength(modalState);
-      const history = Array.isArray(modalState.requestHistory) ? modalState.requestHistory.slice() : [];
+      const roundLabel = requestHistoryLength(state);
+      const history = Array.isArray(state.requestHistory) ? state.requestHistory.slice() : [];
       history.push({
         label: roundLabel,
         desc: finalDesc,
@@ -2076,14 +2279,14 @@ window.SubscriptionsSmartQuery = (function () {
         newIntentQueries: nextCandidates.intent_queries.length,
         createdAt: new Date().toISOString(),
       });
-      modalState.keywords = ensureDraftSlot(nextKeywords, 'keyword');
-      modalState.intent_queries = ensureDraftSlot(nextIntentQueries, 'intent');
-      modalState.chatTag = finalTag;
-      modalState.inputTag = finalTag;
-      modalState.lastTag = finalTag;
-      modalState.lastDesc = finalDesc;
-      modalState.requestHistory = history;
-      modalState.chatStatus = `已生成候选（关键词 ${nextCandidates.keywords.length} 条，意图 ${nextCandidates.intent_queries.length} 条）。`;
+      state.keywords = ensureDraftSlot(nextKeywords, 'keyword');
+      state.intent_queries = ensureDraftSlot(nextIntentQueries, 'intent');
+      state.chatTag = finalTag;
+      state.inputTag = finalTag;
+      state.lastTag = finalTag;
+      state.lastDesc = finalDesc;
+      state.requestHistory = history;
+      state.chatStatus = `已生成候选（关键词 ${nextCandidates.keywords.length} 条，意图 ${nextCandidates.intent_queries.length} 条）。`;
       if (document.getElementById('dpr-chat-desc-input')) {
         document.getElementById('dpr-chat-desc-input').value = '';
       }
@@ -2091,9 +2294,10 @@ window.SubscriptionsSmartQuery = (function () {
         document.getElementById('dpr-chat-tag-input').value = finalTag;
       }
       renderChatModal();
-      setMessage(modalState.chatStatus, '#666');
-      setChatStatus(modalState.chatStatus, '#666');
+      setMessage(state.chatStatus, '#666');
+      setChatStatus(state.chatStatus, '#666');
     } catch (e) {
+      if (!isActiveModalState(state, 'chat') || Number(state.requestToken || 0) !== requestToken) return;
       console.error(e);
       const rawMsg = e && e.message ? String(e.message) : '未知错误';
       const hint =
@@ -2105,7 +2309,8 @@ window.SubscriptionsSmartQuery = (function () {
       setMessage(msg, '#c00');
       setChatStatus(msg, '#c00');
     } finally {
-      modalState.pending = false;
+      if (!isActiveModalState(state, 'chat') || Number(state.requestToken || 0) !== requestToken) return;
+      state.pending = false;
       setSendBtnLoading(false);
     }
   };
@@ -2351,7 +2556,7 @@ window.SubscriptionsSmartQuery = (function () {
   const generateAndOpenAddModal = async () => {
     const tag = normalizeText(tagInputEl?.value || '');
     const desc = normalizeText(descInputEl?.value || '');
-    const finalTag = tag || `SR-${new Date().toISOString().slice(0, 10)}`;
+    const finalTag = buildUniqueProfileTag(tag || 'SR');
     if (!desc) {
       setMessage('请先填写智能 Query 描述。', '#c00');
       return;
@@ -2528,6 +2733,12 @@ window.SubscriptionsSmartQuery = (function () {
     __test: {
       loadLlmConfig,
       requestCandidatesByDesc,
+      buildUniqueProfileTag,
+      applyCandidateToProfile,
+      openChatModal,
+      askChatOnce,
+      closeModal,
+      getModalState: () => modalState,
     },
   };
 })();

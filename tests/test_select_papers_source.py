@@ -67,12 +67,48 @@ class SelectPapersSourceTagTest(unittest.TestCase):
                     "id": "p-1",
                     "_source": "new",
                     "selection_source": "fresh_fetch",
+                    "source": "neurips-2025-poster",
+                    "venue_id": "NeurIPS.cc/2025/Conference",
+                    "published": "2025-12-12T00:00:00+00:00",
                 }
             ]
             out = self.mod.sanitize_items(items)
             self.assertEqual(len(out), 1)
             self.assertNotIn("_source", out[0])
             self.assertEqual(out[0].get("selection_source"), "fresh_fetch")
+            self.assertEqual(out[0].get("source"), "neurips-2025-poster")
+            self.assertEqual(out[0].get("venue_id"), "NeurIPS.cc/2025/Conference")
+
+    def test_build_candidates_preserves_source_metadata(self):
+        out = self.mod.build_candidates(
+            [
+                {
+                    "id": "fresh-1",
+                    "title": "Fresh",
+                    "llm_score": 8.8,
+                    "source": "iclr-2026-poster",
+                    "venue_id": "ICLR.cc/2026/Conference",
+                    "published": "2026-05-01T00:00:00+00:00",
+                }
+            ],
+            [
+                {
+                    "id": "carry-1",
+                    "title": "Carry",
+                    "llm_score": 9.0,
+                    "source": "acl-2025-main",
+                    "venue_id": "ACL/2025",
+                    "published": "2025-07-01T00:00:00+00:00",
+                }
+            ],
+            set(),
+        )
+
+        by_id = {item["id"]: item for item in out}
+        self.assertEqual(by_id["fresh-1"]["source"], "iclr-2026-poster")
+        self.assertEqual(by_id["fresh-1"]["venue_id"], "ICLR.cc/2026/Conference")
+        self.assertEqual(by_id["carry-1"]["source"], "acl-2025-main")
+        self.assertEqual(by_id["carry-1"]["venue_id"], "ACL/2025")
 
     def test_load_recent_carryover_keeps_tag_time_independent(self):
         payload = {

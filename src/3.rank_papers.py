@@ -5,10 +5,11 @@ import argparse
 import json
 import os
 import random
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from llm import BltClient, ClientFactory
+from llm import ClientFactory, SupportsRerank
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -82,8 +83,23 @@ def save_json(data: Dict[str, Any], path: str) -> None:
   log(f"[INFO] 已将打分结果写入：{path}")
 
 
-def format_doc(title: str, abstract: str) -> str:
-  content = f"Title: {title}\nAbstract: {abstract}".strip()
+def _extract_year(value: Any) -> str:
+  text = str(value or "").strip()
+  match = re.search(r"\b(19|20)\d{2}\b", text)
+  return match.group(0) if match else ""
+
+
+def format_doc(title: str, abstract: str, source: str = "", venue: str = "", year: str = "") -> str:
+  lines = []
+  if source:
+    lines.append(f"Source: {source}")
+  if venue:
+    lines.append(f"Venue: {venue}")
+  if year:
+    lines.append(f"Year: {year}")
+  lines.append(f"Title: {title}")
+  lines.append(f"Abstract: {abstract}")
+  content = "\n".join(lines).strip()
   if len(content) > MAX_CHARS_PER_DOC:
     content = content[:MAX_CHARS_PER_DOC]
   return content
@@ -98,8 +114,11 @@ def build_documents(papers_by_id: Dict[str, Dict[str, Any]], paper_ids: List[str
       continue
     title = (p.get("title") or "").strip()
     abstract = (p.get("abstract") or "").strip()
+    source = str(p.get("source") or "").strip()
+    venue = str(p.get("venue_id") or p.get("venue") or "").strip()
+    year = _extract_year(p.get("published") or p.get("year") or venue)
     if title or abstract:
-      docs.append(format_doc(title, abstract))
+      docs.append(format_doc(title, abstract, source=source, venue=venue, year=year))
     else:
       docs.append(f"[Empty paper {pid}]")
   return docs
@@ -162,6 +181,7 @@ def resolve_global_pool_budget(
 def build_global_candidate_ids(
   queries: List[Dict[str, Any]],
   *,
+  lane_top_k: int,
   guaranteed_per_lane: int,
   global_limit: int,
 ) -> List[str]:
@@ -169,6 +189,7 @@ def build_global_candidate_ids(
   将所有 query lane 的候选论文合并成统一候选池。
   - 不区分 keyword / intent_query 来源；
   - 使用 rank-based RRF 做全局聚合，避免不同分数量纲直接混用；
+  - 每条 lane 只看前 lane_top_k 篇候选，避免全局池失控；
   - 每条 lane 的前 guaranteed_per_lane 固定保留；
   - 再加入全局 RRF 前 global_limit 篇；
   - 最终按“固定保留 + 全局排序”去重合并。
@@ -179,6 +200,8 @@ def build_global_candidate_ids(
 
   for q in queries or []:
     top_ids = get_top_ids(q)
+    if lane_top_k > 0:
+      top_ids = top_ids[:lane_top_k]
     if not top_ids:
       continue
     if guaranteed_per_lane > 0:
@@ -237,8 +260,23 @@ def rrf_merge(scores: Dict[int, float], rank_idx: int, orig_idx: int) -> None:
   scores[orig_idx] = scores.get(orig_idx, 0.0) + 1.0 / (RRF_K + rank_idx)
 
 
+def resolve_default_rerank_model() -> str:
+  configured = str(
+    os.getenv("RERANK_MODEL")
+    or os.getenv("Reranker_LLM_MODEL")
+    or os.getenv("BLT_RERANK_MODEL")
+    or ""
+  ).strip()
+  if configured:
+    return configured
+  provider = str(os.getenv("RERANK_PROVIDER") or "").strip().lower()
+  if provider == "local":
+    return "BAAI/bge-reranker-v2-m3"
+  return "qwen3-reranker-4b"
+
+
 def process_file(
-  reranker: BltClient,
+  reranker: SupportsRerank,
   input_path: str,
   output_path: str,
   top_n: Optional[int],
@@ -273,6 +311,7 @@ def process_file(
   )
   global_candidate_ids = build_global_candidate_ids(
     all_queries,
+    lane_top_k=lane_top_k,
     guaranteed_per_lane=guaranteed_per_lane,
     global_limit=global_rrf_top,
   )
@@ -411,8 +450,8 @@ def main() -> None:
   parser.add_argument(
     "--rerank-model",
     type=str,
-    default=os.getenv("RERANK_MODEL") or os.getenv("Reranker_LLM_MODEL") or os.getenv("BLT_RERANK_MODEL") or "qwen3-reranker-4b",
-    help="Rerank 模型名称（默认 qwen3-reranker-4b）。",
+    default=resolve_default_rerank_model(),
+    help="Rerank 模型名称（默认 remote=qwen3-reranker-4b，local=BAAI/bge-reranker-v2-m3）。",
   )
 
   args = parser.parse_args()
@@ -430,8 +469,8 @@ def main() -> None:
     return
 
   reranker = ClientFactory.from_env(scope="rerank", model_override=args.rerank_model, default_model=args.rerank_model)
-  if not isinstance(reranker, BltClient):
-    raise RuntimeError("当前 rerank 客户端不支持 /v1/rerank 接口。")
+  if not hasattr(reranker, "rerank"):
+    raise RuntimeError("当前 rerank 客户端不支持 rerank 接口。")
   process_file(
     reranker=reranker,
     input_path=input_path,

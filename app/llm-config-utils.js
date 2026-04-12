@@ -217,6 +217,21 @@
     return true;
   };
 
+  const buildChatRequestHeaders = ({ baseUrl, model, apiKey, acceptJson = true }) => {
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (acceptJson) {
+      headers.Accept = 'application/json';
+    }
+    if (shouldUseXApiKeyHeader({ baseUrl, model })) {
+      headers.Authorization = `Bearer ${normalizeText(apiKey)}`;
+    } else {
+      headers['x-api-key'] = normalizeText(apiKey);
+    }
+    return headers;
+  };
+
   const buildStreamingChatPayload = ({ baseUrl, model, messages }) => {
     const payload = {
       model: normalizeText(model),
@@ -285,6 +300,7 @@
     getOpenAICompatiblePreset,
     inferChatApiProfile,
     shouldUseXApiKeyHeader,
+    buildChatRequestHeaders,
     buildStreamingChatPayload,
     buildConnectivityTestPayload,
   };

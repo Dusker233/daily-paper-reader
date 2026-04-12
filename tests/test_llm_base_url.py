@@ -124,6 +124,102 @@ class LlmBaseUrlTest(unittest.TestCase):
 
         self.assertFalse(cfg["enabled"])
         self.assertFalse(cfg["use_legacy_config"])
+        self.assertEqual(cfg["provider"], "none")
+
+    def test_resolve_rerank_config_supports_local_provider_without_api_fields(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "local",
+                "RERANK_MODEL": "BAAI/bge-reranker-v2-m3",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["provider"], "local")
+        self.assertEqual(cfg["model"], "BAAI/bge-reranker-v2-m3")
+        self.assertEqual(cfg["api_key"], "")
+        self.assertEqual(cfg["base_url"], "")
+
+    def test_resolve_rerank_config_defaults_local_provider_model(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "local",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["provider"], "local")
+        self.assertEqual(cfg["model"], "BAAI/bge-reranker-v2-m3")
+
+    def test_resolve_rerank_config_rejects_unapproved_local_model(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "local",
+                "RERANK_MODEL": "evil/model",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertFalse(cfg["enabled"])
+        self.assertIn("allowed", cfg["reason"])
+
+    def test_client_factory_returns_local_reranker_for_local_provider(self):
+        import local_rerank
+
+        fake_client = object()
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "local",
+                "RERANK_MODEL": "BAAI/bge-reranker-v2-m3",
+            },
+            clear=True,
+        ), patch.object(local_rerank, "LocalRerankClient", return_value=fake_client) as mock_client:
+            client = llm.ClientFactory.from_env(scope="rerank")
+
+        self.assertIs(client, fake_client)
+        mock_client.assert_called_once_with(model="BAAI/bge-reranker-v2-m3")
+
+    def test_resolve_rerank_config_preserves_remote_blt_compatibility(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "BLT_API_KEY": "legacy-key",
+                "BLT_API_BASE": "https://api.bltcy.ai/v1",
+                "BLT_RERANK_MODEL": "qwen3-reranker-4b",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["provider"], "blt")
+        self.assertTrue(cfg["use_legacy_config"])
+
+    def test_resolve_rerank_config_allows_explicit_blt_provider_with_legacy_env(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "blt",
+                "BLT_API_KEY": "legacy-key",
+                "BLT_API_BASE": "https://api.bltcy.ai/v1",
+                "BLT_RERANK_MODEL": "qwen3-reranker-4b",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["provider"], "blt")
+        self.assertTrue(cfg["use_legacy_config"])
 
     def test_resolve_workflow_config_prefers_neutral_fields(self):
         with patch.dict(

@@ -30,6 +30,160 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 LONG_RANGE_DAYS_THRESHOLD = 10
 MAIN_DEFAULT_DAYS = 9
 SKIMS_FETCH_DAYS_THRESHOLD = 11
+MAX_FILTER_CONCURRENCY = 8
+COMMON_STEP_ENV_NAMES = (
+    "ALL_PROXY",
+    "CURL_CA_BUNDLE",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "NO_PROXY",
+    "PATH",
+    "PWD",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONUNBUFFERED",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_FILE",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USERPROFILE",
+)
+SUMMARY_STEP_ENV_NAMES = COMMON_STEP_ENV_NAMES + (
+    "BLT_FILTER_MODEL",
+    "DPR_FILTER_CONCURRENCY",
+    "DPR_FILTER_PROFILE_TAG",
+    "DPR_PROFILE_TAG",
+    "DPR_RUN_DATE",
+    "FILTER_MODEL",
+)
+DOCS_STEP_ENV_NAMES = COMMON_STEP_ENV_NAMES + (
+    "DOCS_DIR",
+    "DPR_DEBUG_STEP6",
+    "DPR_RUN_DATE",
+    "JAVA_HOME",
+    "PDFFIGURES2_JAR",
+)
+RERANK_STEP_ENV_NAMES = COMMON_STEP_ENV_NAMES + (
+    "DPR_RUN_DATE",
+)
+LOCAL_RERANK_STEP_ENV_NAMES = (
+    "CUDA_VISIBLE_DEVICES",
+    "DPR_RERANK_BATCH_SIZE",
+    "DPR_RERANK_DEVICE",
+    "HF_ENDPOINT",
+    "HF_HOME",
+    "HF_HUB_BASE_URL",
+    "HF_HUB_CACHE",
+    "HF_HUB_DISABLE_SYMLINKS",
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_CACHE",
+    "HUGGINGFACE_HUB_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "PYTORCH_ENABLE_MPS_FALLBACK",
+    "RERANK_LOCAL_BATCH_SIZE",
+    "RERANK_LOCAL_DEVICE",
+    "TORCH_HOME",
+    "TRANSFORMERS_CACHE",
+    "XDG_CACHE_HOME",
+)
+PIPELINE_RUN_STEP_ENV_NAMES = COMMON_STEP_ENV_NAMES + (
+    "DPR_RUN_DATE",
+)
+PIPELINE_SOURCE_SELECTION_ENV_NAMES = (
+    "DPR_APPEND_PAPER_SOURCES",
+    "DPR_FILTER_PROFILE_TAG",
+    "DPR_FORCE_PAPER_SOURCES",
+    "DPR_PROFILE_TAG",
+)
+MULTI_SOURCE_BM25_STEP_ENV_NAMES = (
+    "DPR_ENABLE_MULTI_SOURCE_RPC",
+    "DPR_MULTI_SOURCE_BM25_RPC",
+)
+MULTI_SOURCE_EMBEDDING_STEP_ENV_NAMES = (
+    "DPR_ENABLE_MULTI_SOURCE_RPC",
+    "DPR_MULTI_SOURCE_VECTOR_RPC_EXACT",
+)
+EMBEDDING_RUNTIME_ENV_NAMES = (
+    "CUDA_VISIBLE_DEVICES",
+    "DPR_DEBUG_HF",
+    "DPR_EMBED_API_TIMEOUT",
+    "GITHUB_ACTIONS",
+    "GITHUB_WORKSPACE",
+    "HF_ENDPOINT",
+    "HF_HOME",
+    "HF_HUB_BASE_URL",
+    "HF_HUB_CACHE",
+    "HF_HUB_DISABLE_SYMLINKS",
+    "HF_HUB_HTTP_BACKOFF_RETRIES",
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_CACHE",
+    "HUGGINGFACE_HUB_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "LLM_EMBED_MODEL_RETRIES",
+    "PYTORCH_ENABLE_MPS_FALLBACK",
+    "TORCH_HOME",
+    "TRANSFORMERS_CACHE",
+    "XDG_CACHE_HOME",
+)
+SOURCE_BACKEND_ENV_SOURCES = (
+    "BIORXIV",
+    "MEDRXIV",
+    "CHEMRXIV",
+    "NEURIPS",
+    "ICLR",
+    "ICML",
+    "ACL",
+    "EMNLP",
+    "AAAI",
+)
+SOURCE_BACKEND_ENV_SUFFIXES = (
+    "ANON_KEY",
+    "BM25_RPC",
+    "ENABLED",
+    "PAPERS_TABLE",
+    "SCHEMA",
+    "URL",
+    "USE_BM25_RPC",
+    "USE_VECTOR_RPC",
+    "VECTOR_RPC",
+    "VECTOR_RPC_EXACT",
+)
+SOURCE_BACKEND_STEP_ENV_NAMES = tuple(
+    [f"DPR_ENABLE_{source}_BACKEND" for source in SOURCE_BACKEND_ENV_SOURCES]
+    + [
+        f"DPR_{source}_{suffix}"
+        for source in SOURCE_BACKEND_ENV_SOURCES
+        for suffix in SOURCE_BACKEND_ENV_SUFFIXES
+    ]
+)
+ENRICH_STEP_ENV_NAMES = COMMON_STEP_ENV_NAMES + (
+    "BLT_REWRITE_MODEL",
+    "REWRITE_MODEL",
+)
+FETCH_STEP_ENV_NAMES = PIPELINE_RUN_STEP_ENV_NAMES
+BM25_STEP_ENV_NAMES = (
+    PIPELINE_RUN_STEP_ENV_NAMES
+    + PIPELINE_SOURCE_SELECTION_ENV_NAMES
+    + MULTI_SOURCE_BM25_STEP_ENV_NAMES
+    + SOURCE_BACKEND_STEP_ENV_NAMES
+)
+EMBEDDING_STEP_ENV_NAMES = (
+    PIPELINE_RUN_STEP_ENV_NAMES
+    + PIPELINE_SOURCE_SELECTION_ENV_NAMES
+    + MULTI_SOURCE_EMBEDDING_STEP_ENV_NAMES
+    + SOURCE_BACKEND_STEP_ENV_NAMES
+    + EMBEDDING_RUNTIME_ENV_NAMES
+)
+RRF_STEP_ENV_NAMES = PIPELINE_RUN_STEP_ENV_NAMES
+SELECT_STEP_ENV_NAMES = (
+    PIPELINE_RUN_STEP_ENV_NAMES
+    + PIPELINE_SOURCE_SELECTION_ENV_NAMES
+)
 
 
 def run_step(label: str, args: list[str], env: dict[str, str] | None = None) -> None:
@@ -195,7 +349,7 @@ def _read_env_text(*names: str) -> str:
 def should_skip_rerank() -> tuple[bool, str]:
     rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
     if rerank_cfg["enabled"]:
-        return False, rerank_cfg["base_url"]
+        return False, str(rerank_cfg.get("provider") or rerank_cfg.get("base_url") or "enabled")
     return True, rerank_cfg["reason"]
 
 
@@ -291,11 +445,26 @@ def prepare_rerank_fallback(input_path: str, output_path: str) -> bool:
     return True
 
 
-def resolve_summary_step_env() -> dict[str, str]:
-    env = os.environ.copy()
-    workflow_cfg = resolve_workflow_llm_config()
-    rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
+def clamp_filter_concurrency(value: Any, *, default: int | None = None, minimum: int = 1, maximum: int = MAX_FILTER_CONCURRENCY) -> int | None:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        parsed = int(value)
+    except Exception:
+        return default
+    return max(minimum, min(parsed, maximum))
 
+
+def _copy_selected_env(source_env: dict[str, str] | None, names: tuple[str, ...]) -> dict[str, str]:
+    current_env = source_env or os.environ
+    return {
+        name: str(current_env[name])
+        for name in names
+        if str(current_env.get(name) or "").strip()
+    }
+
+
+def _apply_workflow_env(env: dict[str, str], workflow_cfg: dict[str, Any]) -> None:
     if workflow_cfg.get("source") == "workflow":
         if not workflow_cfg["api_key"]:
             raise ValueError("缺少 workflow LLM API Key")
@@ -308,30 +477,95 @@ def resolve_summary_step_env() -> dict[str, str]:
 
     if workflow_api_key:
         env["WORKFLOW_LLM_API_KEY"] = workflow_api_key
-        env["SUMMARY_API_KEY"] = workflow_api_key
-        env["BLT_API_KEY"] = workflow_api_key
     if workflow_base_url:
         env["WORKFLOW_LLM_BASE_URL"] = workflow_base_url
-        env["SUMMARY_BASE_URL"] = workflow_base_url
-        env["LLM_PRIMARY_BASE_URL"] = workflow_base_url
-        env["BLT_PRIMARY_BASE_URL"] = workflow_base_url
-        env["BLT_API_BASE"] = workflow_base_url
     if workflow_model:
         env["WORKFLOW_LLM_MODEL"] = workflow_model
-        env["SUMMARY_MODEL"] = workflow_model
-        env["BLT_SUMMARY_MODEL"] = workflow_model
 
-    if rerank_cfg["api_key"]:
+
+def _apply_rerank_env(env: dict[str, str], rerank_cfg: dict[str, Any]) -> None:
+    rerank_enabled = bool(rerank_cfg["enabled"])
+    rerank_provider = str(rerank_cfg.get("provider") or "none").strip()
+    if rerank_enabled and rerank_provider and rerank_provider != "none":
+        env["RERANK_PROVIDER"] = rerank_provider
+    else:
+        env.pop("RERANK_PROVIDER", None)
+    if rerank_enabled and rerank_cfg["api_key"]:
         env["RERANK_API_KEY"] = rerank_cfg["api_key"]
         env["Reranker_LLM_API_KEY"] = rerank_cfg["api_key"]
-    if rerank_cfg["base_url"]:
+    else:
+        env.pop("RERANK_API_KEY", None)
+        env.pop("Reranker_LLM_API_KEY", None)
+    if rerank_enabled and rerank_cfg["base_url"]:
         env["RERANK_BASE_URL"] = rerank_cfg["base_url"]
         env["Reranker_LLM_BASE_URL"] = rerank_cfg["base_url"]
-    if rerank_cfg["model"]:
+    else:
+        env.pop("RERANK_BASE_URL", None)
+        env.pop("Reranker_LLM_BASE_URL", None)
+    if rerank_enabled and rerank_cfg["model"]:
         env["RERANK_MODEL"] = rerank_cfg["model"]
         env["Reranker_LLM_MODEL"] = rerank_cfg["model"]
         env["BLT_RERANK_MODEL"] = rerank_cfg["model"]
-    env["RERANK_ENABLED"] = "true" if rerank_cfg["enabled"] else "false"
+    else:
+        env.pop("RERANK_MODEL", None)
+        env.pop("Reranker_LLM_MODEL", None)
+        env.pop("BLT_RERANK_MODEL", None)
+    env["RERANK_ENABLED"] = "true" if rerank_enabled else "false"
+
+
+def resolve_enrich_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = _copy_selected_env(base_env, ENRICH_STEP_ENV_NAMES)
+    workflow_cfg = resolve_workflow_llm_config()
+    _apply_workflow_env(env, workflow_cfg)
+    return env
+
+
+def resolve_fetch_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    return _copy_selected_env(base_env, FETCH_STEP_ENV_NAMES)
+
+
+def resolve_bm25_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    return _copy_selected_env(base_env, BM25_STEP_ENV_NAMES)
+
+
+def resolve_embedding_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    return _copy_selected_env(base_env, EMBEDDING_STEP_ENV_NAMES)
+
+
+def resolve_rrf_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    return _copy_selected_env(base_env, RRF_STEP_ENV_NAMES)
+
+
+def resolve_select_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    return _copy_selected_env(base_env, SELECT_STEP_ENV_NAMES)
+
+
+def resolve_rerank_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = _copy_selected_env(base_env, RERANK_STEP_ENV_NAMES)
+    rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
+    if rerank_cfg.get("enabled") and str(rerank_cfg.get("provider") or "").strip().lower() == "local":
+        env.update(_copy_selected_env(base_env, LOCAL_RERANK_STEP_ENV_NAMES))
+    _apply_rerank_env(env, rerank_cfg)
+    return env
+
+
+def resolve_summary_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    current_env = base_env or os.environ
+    env = _copy_selected_env(current_env, SUMMARY_STEP_ENV_NAMES)
+    workflow_cfg = resolve_workflow_llm_config()
+    filter_concurrency = str(current_env.get("DPR_FILTER_CONCURRENCY") or "").strip()
+    normalized_filter_concurrency = clamp_filter_concurrency(filter_concurrency)
+
+    _apply_workflow_env(env, workflow_cfg)
+    if normalized_filter_concurrency is not None:
+        env["DPR_FILTER_CONCURRENCY"] = str(normalized_filter_concurrency)
+    return env
+
+
+def resolve_docs_step_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = _copy_selected_env(base_env, DOCS_STEP_ENV_NAMES)
+    workflow_cfg = resolve_workflow_llm_config()
+    _apply_workflow_env(env, workflow_cfg)
     return env
 
 
@@ -584,6 +818,12 @@ def main() -> None:
         help="仅运行指定 tag 对应的词条；大小写不敏感，支持空格。",
     )
     parser.add_argument(
+        "--filter-concurrency",
+        type=int,
+        default=None,
+        help="显式指定 Step 4 LLM refine 的并发数；未传时沿用 Step 4 默认值。",
+    )
+    parser.add_argument(
         "--trace-arxiv-id",
         action="append",
         default=None,
@@ -616,6 +856,15 @@ def main() -> None:
         print(f"[INFO] profile_tag={profile_tag}", flush=True)
     else:
         os.environ.pop("DPR_FILTER_PROFILE_TAG", None)
+
+    filter_concurrency = args.filter_concurrency
+    normalized_filter_concurrency = None
+    if filter_concurrency is not None:
+        normalized_value = clamp_filter_concurrency(filter_concurrency, default=1)
+        if normalized_value is not None:
+            normalized_filter_concurrency = str(normalized_value)
+            os.environ["DPR_FILTER_CONCURRENCY"] = normalized_filter_concurrency
+            print(f"[INFO] filter_concurrency={normalized_filter_concurrency}", flush=True)
     fetch_mode = (args.fetch_mode or "auto").strip().lower()
     if fetch_mode == "skims":
         use_skims_mode = True
@@ -632,8 +881,6 @@ def main() -> None:
     trace_ids = parse_trace_ids(args.trace_arxiv_id)
     if trace_ids:
         print(f"[TRACE] 启用论文追踪: {', '.join(trace_ids)}", flush=True)
-
-    step_env = resolve_summary_step_env()
 
     archive_dir = os.path.join(ROOT_DIR, "archive", run_date_token)
     raw_path = os.path.join(archive_dir, "raw", f"arxiv_papers_{run_date_token}.json")
@@ -657,10 +904,21 @@ def main() -> None:
         f"arxiv_papers_{run_date_token}.{recommend_mode}.json",
     )
 
+    enrich_step_env = resolve_enrich_step_env()
+    fetch_step_env = resolve_fetch_step_env()
+    bm25_step_env = resolve_bm25_step_env()
+    embedding_step_env = resolve_embedding_step_env()
+    rrf_step_env = resolve_rrf_step_env()
+    select_step_env = resolve_select_step_env()
+    step_env = resolve_summary_step_env()
+    docs_step_env = resolve_docs_step_env()
+    rerank_step_env = resolve_rerank_step_env()
+
     if args.run_enrich:
         run_step(
             "Step 0 - enrich config",
             [python, os.path.join(SRC_DIR, "0.enrich_config_queries.py")],
+            env=enrich_step_env,
         )
 
     # 判断是否跳过 Step 1（全量数据拉取）
@@ -686,12 +944,14 @@ def main() -> None:
                 *(["--days", str(args.fetch_days)] if args.fetch_days is not None else []),
                 *(["--ignore-seen"] if args.fetch_ignore_seen else []),
             ],
+            env=fetch_step_env,
         )
     if trace_ids:
         print_trace_retrieval("RAW", raw_path, trace_ids)
     run_step(
         "Step 2.1 - BM25",
         [python, os.path.join(SRC_DIR, "2.1.retrieval_papers_bm25.py")],
+        env=bm25_step_env,
     )
     if trace_ids:
         print_trace_retrieval("BM25", bm25_path, trace_ids)
@@ -705,16 +965,17 @@ def main() -> None:
             "--batch-size",
             str(args.embedding_batch_size),
         ],
+        env=embedding_step_env,
     )
     if trace_ids:
         print_trace_retrieval("EMBEDDING", embedding_path, trace_ids)
     run_step(
         "Step 2.3 - RRF",
         [python, os.path.join(SRC_DIR, "2.3.retrieval_papers_rrf.py")],
+        env=rrf_step_env,
     )
     if trace_ids:
         print_trace_retrieval("RRF", rrf_path, trace_ids)
-    step_env = resolve_summary_step_env()
     skip_rerank, rerank_reason = should_skip_rerank()
     if skip_rerank:
         print(
@@ -726,13 +987,16 @@ def main() -> None:
         run_step(
             "Step 3 - Rerank",
             [python, os.path.join(SRC_DIR, "3.rank_papers.py")],
-            env=step_env,
+            env=rerank_step_env,
         )
     if trace_ids:
         print_trace_retrieval("RERANK", rerank_path, trace_ids)
+    step4_args = [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")]
+    if normalized_filter_concurrency is not None:
+        step4_args.extend(["--filter-concurrency", normalized_filter_concurrency])
     run_step(
         "Step 4 - LLM refine",
-        [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")],
+        step4_args,
         env=step_env,
     )
     if trace_ids:
@@ -744,6 +1008,7 @@ def main() -> None:
             os.path.join(SRC_DIR, "5.select_papers.py"),
             *(["--modes", "skims"] if use_skims_mode else []),
         ],
+        env=select_step_env,
     )
     if trace_ids:
         print_trace_recommend("RECOMMEND", recommend_path, trace_ids)
@@ -759,7 +1024,7 @@ def main() -> None:
                 else []
             ),
         ],
-        env=step_env,
+        env=docs_step_env,
     )
 
 

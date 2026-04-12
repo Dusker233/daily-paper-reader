@@ -40,6 +40,7 @@ window.DPRWorkflowRunner = (function () {
         run_enrich: 'false',
         fetch_days: '30',
         fetch_mode: 'skims',
+        filter_concurrency: '2',
       },
     },
     '30-skims': {
@@ -48,6 +49,7 @@ window.DPRWorkflowRunner = (function () {
         run_enrich: 'false',
         fetch_days: '30',
         fetch_mode: 'skims',
+        filter_concurrency: '2',
       },
     },
     '30-standard': {
@@ -56,6 +58,7 @@ window.DPRWorkflowRunner = (function () {
         run_enrich: 'false',
         fetch_days: '30',
         fetch_mode: 'standard',
+        filter_concurrency: '2',
       },
     },
   };
@@ -809,6 +812,7 @@ window.DPRWorkflowRunner = (function () {
       dispatchInputs: {
         run_enrich: 'false',
         fetch_days: normalized,
+        filter_concurrency: '2',
       },
     };
     const mergedInputs = combineInputs(preset.dispatchInputs, options.dispatchInputs);

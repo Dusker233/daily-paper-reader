@@ -2,7 +2,7 @@ import json
 import os
 import re
 import time
-from typing import List, Dict, Tuple, Any, Optional
+from typing import List, Dict, Protocol, Tuple, Any, Optional
 
 import requests
 
@@ -27,6 +27,19 @@ PRIMARY_LLM_BASE_URL = "https://api.gptbest.vip/v1"
 DEFAULT_BLT_BASE_URL = "https://api.bltcy.ai/v1"
 BLT_PROVIDER_BASE_KEYWORDS = ("bltcy.ai", "gptbest.vip", "blt", "gptbest")
 LOCALHOST_BASE_URL_RE = re.compile(r"^http://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:$|/)", re.IGNORECASE)
+
+
+class SupportsRerank(Protocol):
+    model: str
+
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        top_n: Optional[int] = None,
+        model: Optional[str] = None,
+    ) -> dict:
+        ...
 
 
 def _read_env_text(*names: str) -> str:
@@ -165,11 +178,18 @@ def resolve_workflow_llm_config(
     }
 
 
+ALLOWED_LOCAL_RERANK_MODELS = {
+    "baai/bge-reranker-v2-m3": "BAAI/bge-reranker-v2-m3",
+}
+
+
+
 def resolve_rerank_llm_config(
     model_override: str | None = None,
     default_model: str | None = None,
 ) -> Dict[str, Any]:
     enabled_flag = _read_env_bool("RERANK_ENABLED")
+    provider_override = str(_read_env_text("RERANK_PROVIDER") or "").strip().lower()
     dedicated_config = _read_env_config(
         {
             "api_key": ("RERANK_API_KEY", "Reranker_LLM_API_KEY"),
@@ -207,8 +227,10 @@ def resolve_rerank_llm_config(
     has_dedicated_fields = _has_any_config_values(dedicated_config)
     has_workflow_fields = _has_any_config_values(workflow_config)
     has_summary_fields = _has_any_config_values(summary_config)
+    provider_is_blt_like = provider_override in {"blt", "remote", "openai", "default"}
     use_legacy_config = bool(
-        not has_dedicated_fields
+        (not provider_override or provider_is_blt_like)
+        and not has_dedicated_fields
         and _has_any_config_values(legacy_config)
         and not has_workflow_fields
         and not has_summary_fields
@@ -217,12 +239,47 @@ def resolve_rerank_llm_config(
     cfg = _merge_config_layers(dedicated_config, legacy_config if use_legacy_config else {})
     if model_override:
         cfg["model"] = str(model_override).strip()
-    if not cfg["model"] and default_model:
+
+    provider = provider_override or ("blt" if (has_dedicated_fields or use_legacy_config) else "none")
+    if provider in {"remote", "openai", "default"}:
+        provider = "blt"
+    if provider not in {"none", "blt", "local"}:
+        provider = provider_override or provider
+    if provider != "local" and not cfg["model"] and default_model:
         cfg["model"] = str(default_model).strip()
+
+    if provider == "local":
+        local_model_key = str(cfg["model"] or "").strip().lower()
+        if not local_model_key:
+            local_model_key = "baai/bge-reranker-v2-m3"
+        cfg["model"] = ALLOWED_LOCAL_RERANK_MODELS.get(local_model_key, "")
+        missing: List[str] = []
+        if not cfg["model"]:
+            missing.append("model(allowed: BAAI/bge-reranker-v2-m3)")
+        if enabled_flag is False:
+            enabled = False
+            reason = "RERANK_ENABLED=false"
+        elif missing:
+            enabled = False
+            reason = f"缺少 rerank 配置: {', '.join(missing)}"
+        else:
+            enabled = True
+            reason = ""
+        return {
+            "enabled": enabled,
+            "reason": reason,
+            "provider": "local",
+            "api_key": "",
+            "base_url": "",
+            "model": cfg["model"],
+            "has_dedicated_fields": has_dedicated_fields,
+            "use_legacy_config": False,
+        }
+
     if use_legacy_config and not cfg["base_url"]:
         cfg["base_url"] = DEFAULT_BLT_BASE_URL
 
-    missing: List[str] = []
+    missing = []
     if not cfg["api_key"]:
         missing.append("api_key")
     if not cfg["base_url"]:
@@ -236,16 +293,18 @@ def resolve_rerank_llm_config(
     elif missing:
         enabled = False
         reason = f"缺少 rerank 配置: {', '.join(missing)}"
-    elif has_dedicated_fields or use_legacy_config or enabled_flag is True:
+    elif provider == "blt" and (has_dedicated_fields or use_legacy_config or enabled_flag is True):
         enabled = True
         reason = ""
     else:
         enabled = False
         reason = "未显式配置 rerank 平台"
+        provider = "none"
 
     return {
         "enabled": enabled,
         "reason": reason,
+        "provider": provider,
         "api_key": cfg["api_key"],
         "base_url": cfg["base_url"],
         "model": cfg["model"],
@@ -984,6 +1043,12 @@ class ClientFactory:
             cfg = resolve_rerank_llm_config(model_override=model_override, default_model=default_model)
             if not cfg["enabled"]:
                 raise ValueError(cfg["reason"] or "rerank 未启用")
+            if cfg.get("provider") == "local":
+                try:
+                    from local_rerank import LocalRerankClient
+                except Exception:  # pragma: no cover - 兼容 package 导入路径
+                    from src.local_rerank import LocalRerankClient
+                return LocalRerankClient(model=cfg["model"])
             return BltClient(api_key=cfg["api_key"], model=cfg["model"], base_url=cfg["base_url"])
 
         model_env = (os.getenv('LLM_MODEL') or '').strip()
