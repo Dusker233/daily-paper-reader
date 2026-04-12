@@ -1,0 +1,940 @@
+Title: Pseudo-Quantized Actor-Critic Algorithm for Robustness to Noisy Temporal Difference Error
+
+URL Source: https://arxiv.org/pdf/2604.01613v1
+
+Published Time: Fri, 03 Apr 2026 00:28:52 GMT
+
+Number of Pages: 38
+
+Markdown Content:
+# Pseudo-Quantized Actor-Critic Algorithm for Robustness to Noisy Temporal Difference Error 
+
+Taisuke Kobayashi a,b 
+
+> aPrinciples of Informatics Research Division, National Institute of Informatics (NII), 2-1-2 Hitotsubashi, Chiyoda-ku, 101-8430, Tokyo, Japan
+> bInformatics Program, Graduate Institute for Advanced Studies (SOKENDAI), 2-1-2 Hitotsubashi, Chiyoda-ku, 101-8430, Tokyo, Japan
+
+Abstract 
+
+In reinforcement learning (RL), temporal difference (TD) errors are widely adopted for optimizing value and policy functions. However, since the TD error is defined by a bootstrap method, its computation tends to be noisy and destabilize learning. Heuristics to improve the accuracy of TD errors, such as target networks and ensemble models, have been introduced so far. While these are essential approaches for the current deep RL algorithms, they cause side effects like increased computational cost and reduced learning efficiency. Therefore, this paper revisits the TD learning algorithm based on control as inference, deriving a novel algorithm capable of robust learning against noisy TD errors. First, the distribution model of optimality, a binary random vari-able, is represented by a sigmoid function. Alongside forward and reverse Kullback-Leibler divergences, this new model derives a robust learning rule: when the sigmoid function saturates with a large TD error probably due to noise, the gradient vanishes, implicitly excluding it from learning. Further-more, the two divergences exhibit distinct gradient-vanishing characteristics. Building on these analyses, the optimality is decomposed into multiple lev-els to achieve pseudo-quantization of TD errors, aiming for further noise reduction. Additionally, a Jensen-Shannon divergence-based approach is ap-proximately derived to inherit the characteristics of both divergences. These benefits are verified through RL benchmarks, demonstrating stable learning even when heuristics are insufficient or rewards contain noise.     
+
+> Email address: kobayashi@nii.ac.jp (Taisuke Kobayashi)
+> URL: https://prinlab.org/en/ (Taisuke Kobayashi)
+> arXiv:2604.01613v1 [cs.LG] 2 Apr 2026
+
+Keywords: 
+
+Reinforcement learning, Control as inference, Noisy rewards, Inaccurate value estimation 
+
+1. Introduction 
+
+Reinforcement learning (RL) (Sutton and Barto, 2018) can learn optimal policies through trial and error in (unknown) environments. Particularly, deep RL (DRL) (Mnih et al., 2015), when integrated with deep learning, has accelerated real-world practical applications by enabling flexible observation inputs including raw images to represent complex patterns of action: such as, legged robot locomotion (Radosavovic et al., 2024); autonomous driv-ing (Chen et al., 2021a); fine-tuning foundational models (Ouyang et al., 2022); and finance (Hambly et al., 2023). Improving DRL’s learning perfor-mance enhances the capabilities of these applications and broadens the range of solvable problems. The fundamental principle widely used in (D)RL algorithms is tempo-ral difference (TD) (Sutton and Barto, 2018). This focuses on the temporal recursiveness inherent in the sum of rewards (i.e. return) and its expec-tation (i.e. value function), which serve as the RL objective function. To learn the value function, TD learning employs a bootstrap method, namely the target is estimated by the value function (its approximator) itself. Fur-thermore, the TD error defined as the difference between this target and the approximated value function can be regarded as the approximated advantage function (Schulman et al., 2016). Consequently, it is also widely utilized in policy gradient methods as advantage actor-critic algorithms (Castro et al., 2008; Mnih et al., 2016). However, since TD errors lack true targets, they become noisy as super-vised learning signals. Particularly in DRL, it is known that estimated targets fluctuate easily as noise due to the influence of nonlinear function approx-imation, causing learning instability (Mnih et al., 2015; Van Hasselt et al., 2016). Indeed, it has been demonstrated that increasing the frequency of value updates over policy updates improves estimation accuracy and yields superior learning performance (Wang et al., 2025), although the learning cost increases. To stabilize learning, algorithms incorporate implementation techniques such as a target network that generates targets from other ap-proximator with delayed parameters of the main approximator (Mnih et al., 22015); and an ensemble model that utilizes statistic of estimates from mul-tiple approximators as target (Van Hasselt et al., 2016). While these are heuristics, they have indeed stabilized learning and played a pivotal role in making DRL practical so far. However, these heuristics carry side effects alongside the learning stabil-ity. The target network is known to suffer from degraded sample efficiency due to delayed updates of targets (Kim et al., 2019). The ensemble model can exhibit discontinuous gradient fluctuations depending on the adopted statistic (i.e. min or max operator) (Igel, 2024). Furthermore, both heuris-tics require additional approximators, leading to increased memory footprint and computational cost during training. In embedded systems like robots, where computational resources are constrained due to payload limitations, such burdens should not be ignored. Note that improvements to mitigate the side effects of heuristics and other countermeasures for the noisy TD errors are summarized in the next section. Against this background, this paper aims to theoretically discover a new algorithm capable of learning robustly even against noisy TD errors. Specif-ically, a formulation based on control as inference (Levine, 2018), which allows for the theoretical introduction of nonlinearly transformed TD errors for gradient-based learning rules of value functions and policies (Kobayashi, 2022; Takahashi et al., 2025). That is, a new nonlinear transformation for the TD error that is robust to noise, i.e. saturation and quantization (or discretization) (Casebeer et al., 2021; Bernard-Tiong et al., 2025), is de-rived by utilizing (multiple) sigmoid functions in the probability model of the stochastic optimality variable. Furthermore, considering that this non-linear transformation is not uniquely determined, two types of gradients using Kullback-Leibler (KL) divergence based on the literature (Kobayashi, 2022). To inherit their different characteristics, a new gradient-based learning rule that approximately uses Jensen-Shannon (JS) divergence is finally derived. The performance of this proposed method, so-called pseudo-quantized actor-critic (PQAC), is evaluated through simulations using Mu-joco (Todorov et al., 2012). As a result, it is confirmed that PQAC can solve tasks more stably and efficiently than baselines. Furthermore, PQAC can learn robustly even under conditions where the influences of the heuristics are weakened or where noise is injected into rewards. 31.1. Related work Target network. The target network is one of the popular tricks used to re-duce fluctuations in targets required for calculating TD errors (Mnih et al., 2015). Typically, it shares the same structure as the main network model, and parameters (e.g. weights and biases) are gradually transferred from the main to target networks (e.g. copy every after the specified number of up-dates (Mnih et al., 2015) and interpolation between the main and target parameters (Lillicrap et al., 2016)). This transfer delay contributes to stabi-lization, but conversely, it directly degrades sample efficiency in DRL. Sev-eral methods have been proposed to mitigate this tradeoff, aiming to balance stability and efficiency. For example, revising the parameter transfer rules to suppress the transfer of questionable parameters enables the generation of stable targets while improving transfer speed (Kobayashi and Ilboudo, 2021). Lee and He (Lee and He, 2019) analyzed stabilization and efficiency when adding the regularization or constraint to the main network for suppressing divergence from the target network. CAT-update (Kobayashi, 2024a), which fuses these concepts, achieved further improvements, and will be utilized with the proposed method complementally in the simulations later. Furthermore, taking a different approach, sharing all layers except the output layer between the main and target networks enables memory savings and suppression of the two divergences (Vincent et al., 2025). 
+
+Ensemble model. Instead of approximating the value function with a single network model, it is possible to improve the accuracy of value estimation by training multiple models in parallel and using statistic (e.g. mean) of their estimates as target (Van Hasselt et al., 2016). For example, popular DRL algorithms, SAC (Haarnoja et al., 2018) and TD3 (Fujimoto et al., 2018), stabilize learning by training two independent networks and adopting the smaller of their estimates as the target for the TD error. When limited to value updates, performance can be improved by setting the target as the mean of estimates from networks other than the one being updated (Peer et al., 2021), or by using the minimum estimate from randomly selected net-works (Chen et al., 2021b). Furthermore, as introduced in the target network paragraph, while sharing layers other than the output layer is possible to save memory, it is important to introduce random priors to ensure the estimates of networks are sufficiently diversified (Osband et al., 2018). 
+
+Robust TD learning. Learning rules with the TD error have been modified to alleviate the influences of inaccuracies in value estimation or noise in rewards. 4This constitutes robustness against noise and is often referred to as robust TD learning. Naively, the loss on the value function, i.e. the squared error for matching the classical TD learning rule, is replaced with a smooth L1 loss; and large gradients obtained after backpropagation are clamped (Raffin et al., 2021; Huang et al., 2022). Both heuristics provide robustness to some extent when the target and estimated values diverge, but neither completely excludes erroneous estimates and data. Meanwhile, the literature (Cayci and Eryilmaz, 2023) has proposed the method that stop updates when the gradient norm exceeds a threshold, with their robustness demonstrated ana-lytically. However, designing this threshold remains a challenge in practice. Although limited to the noise in rewards, a robust technique has been pro-posed for TD learning, which decomposes the reward-affected term and resets it to zero according to an analytically derived threshold (Maity and Mitra, 2025). As implied by the fact that many of the above techniques focus on gra-dients, DRL generally uses stochastic gradient descent to learn the value and policy functions. Therefore, a strategy to make this process robust to noise is also conceivable. This paper employs AdaTerm (Ilboudo et al., 2023), which is robust against gradient noise and outliers, as a complementary approach. Note that integrating Monte Carlo method is a well-known representative technique for reducing biases arising from inacurate value estimation (Schul-man et al., 2016; Riquelme et al., 2019; Gallici et al., 2025). However, it requires altering the data structure compared to standard TD learning, so it is omitted in this paper for prioritizing a fair comparison. 
+
+2. Preliminaries 
+
+2.1. Reinforcement learning 
+
+RL is to solve optimal control problems under Markov decision process (MDP) with the tuple (S, A, R, p 0, p e) (Sutton and Barto, 2018). Here, 
+
+S ⊆ R|S| and A ⊆ R|A| denote the state and action spaces, respectively; 
+
+R ⊆ R denotes the set of rewards; and p0(s) and pe(s′ | s, a ), with the cur-rent and next states s, s ′ ∈ S and the action a ∈ A , are the initial and state-transition probabilities. An agent decides a according to its state-dependent policy π(a | s) (or a behavior policy b(a | s) explicitly), then a faced (un-known) environment transitions from s to s′. Each transition at time step t
+
+is evaluated by a reward function rt = r(s, a, s ′), which represents the task to be solved. By sequentially repeating the above step, the agent obtains the 5following return Rt.
+
+Rt =
+
+> ∞
+
+X
+
+> k=0
+
+γkrt+k (1) where γ ∈ [0 , 1) denotes the discount factor. Under this MDP, RL aims to optimize π(a | s) as follows: 
+
+π∗(· | s) = arg max  
+
+> π
+
+Epτ [Rt | st = s] (2) where pτ denotes the probability of trajectory given by the chain of pe and 
+
+π. Note that Epτ [Rt | st = s] is defined as the (state) value function V π(s)
+
+(or simply V (s)). Actor-critic algorithms feature a structure where a critic learns the value function, and an actor improves the policy based on that evaluation. 
+
+2.2. Control as inference 
+
+The above optimal control problem has been revised as a kind of inference problem via control as inference (Levine, 2018). To this end, a stochastic variable for optimality, O = {0, 1}, is additionally introduced to represent whether the future is optimal or not. Its probability is modeled as the mono-tonically increasing function w.r.t. the value function, f : R 7 → [0 , 1] .
+
+p(O = 1 | s) = f (V (s)) 
+
+p(O = 1 | s, a ) = f (Q(s, a )) (3) where Q(s, a ) = Epτ [Rt | st = s, a t = a] denotes the action value function. This can be approximated as r + γV (s′) according to Bellman equation and Monte Carlo approximation. In the literature (Kobayashi, 2022), the optimal and non-optimal policies are given through Bayes theorem as follows: 
+
+π(a | s; O) = p(O | s, a )b(a | s)
+
+p(O | s) (4) With this, the optimization problems of the value and policy functions (with parameters θ and ϕ, respecitvely) are newly formulated. 
+
+min  
+
+> θ
+
+Epe,b [d(p(O | s, a ) | p(O | s))] (5) 
+
+min  
+
+> ϕ
+
+Epe [d(π(a | s; O = 1) | π(a | s)) − d(π(a | s; O = 0) | π(a | s))] (6) 6where d(p | q) denotes the divergence between two probabilities, p, q .When adopting exponential function as f and reverse KL divergence as 
+
+d, the basic (advantage) actor-critic algorithm is obtained. That is, the gradients w.r.t. θ and ϕ are approximately derived as follows: 
+
+gθ = Epe,b [−δ∇θV (s)] (7) 
+
+gϕ = Epe,π [−δ∇ϕ ln π(a | s)] (8) where δ denotes the TD error, defined as: 
+
+δ = r + γV (s′) − V (s) (9) Note that the probability distributions for calculating the expected operation differ between b and π, but this can be addressed using importance sampling or the method that ensures b ≃ π (Kobayashi, 2024b). As a remark, by adopting “forward” KL divergence as d, the weight term of both gradients, δ, is nonlinearly transformed to exp( δ) − 1 with optimism. In addition, defining f based on a origin-symmetric function w.r.t. the ex-ponential function yields pessimistic update rules. 
+
+2.3. Stabilization tricks for TD learning 
+
+Focusing on the gradient of V in eq. (7), we can interpret this as super-vised learning where r + γV (s′) is given as the target. However, since the calculation of the target includes the estimate to be optimized, V (s′) = V ′,this corresponds to a bootstrap method. As a result, learning can easily be-come unstable due to estimation errors in V ′, not only when rewards contain noise. This instability also affects policy improvement, necessitating tricks to reduce the estimation error of V ′.As introduced in Section 1.1, representative tricks include the target net-work and the ensemble model. First, for the main network with parameters 
+
+θ, the target network has the same structure with different parameters ¯θ,which are initialized as θ. When updating θ (and ϕ), the target network is frozen to compute V ′ = V (s′; ¯θ) stably. Afterwards, ¯θ is updated towards θ
+
+for estimating V ′ accurately. 
+
+¯θ ← g(¯θ, θ ) (10) where g is the update rule, where ¯θ → θ holds eventually. In this paper, CAT-soft update (Kobayashi, 2024a) is employed as mentioned before. Note that the target network is sometimes applied to ϕ, the policy model. 7Second is the ensemble model. That is, {θk}Kk=1 , with K the number of models, are initialized independently and trained in the same way. Then, the target is computed with the specified statistic (the median in this paper, following the literature (Kobayashi, 2023)), m : RK 7 → R , as follows: 
+
+V ′ = m(V (s′; θ1), . . . , V (s′; θK )) (11) The estimation inaccuracy of each model can be compensated with each other, stabilizing TD learning. These two tricks can be employed simultaneously, and the implementation in this paper does so. While the combination improves the accuracy of value estimation synergistically, it requires 2K models and is costly. Furthermore, while stability would improve, there is a risk that sample efficiency might decrease. Therefore, the introduction of these tricks should be minimized, and then, the learning algorithm should robustly work even with noisy TD errors. 
+
+3. Pseudo-saturation through control as inference 
+
+3.1. Probability model for optimality 
+
+As mentioned before, the exponential function is basically adopted to model the probability distribution of optimality. While this is an excel-lent model in that its derived results match the conventional RL algorithms (i.e. TD learning and policy gradient), caution is required when using the exponential function as a probability mass function because it can output exceeding one. We must estimate the utopia point of the value function and input the difference relative to it. If this estimation is erroneous, it fails to satisfy the definition as a probability mass function. The derivation in eqs. (7) and (8) implicitly ignores this issue by employing an approximation. With this in mind, this paper proposes the use of the sigmoid function 
+
+σ : R 7 → (0 , 1) as a new model. Specifically, eq. (3) is concretized as follows (also see Fig. 1): 
+
+p(O = 1 | s) = σ(λO(V (s) − μO)) = 11 + exp( −λO(V (s) − μO)) 
+
+p(O = 1 | s, a ) = σ(λO(Q(s, a ) − μO)) = 11 + exp( −λO(Q(s, a ) − μO)) 
+
+(12) 8Utopia point      
+
+> Return
+> 0
+> 1
+> Optimality probability
+> =Small =Mid =Large
+> Return
+> 0
+> 1
+> Optimality probability
+> =Small =Mid =Large
+> (a) Conventional model w/ exponential function (b) Proposed model w/ sigmoid function
+
+Figure 1: Replacement of the model for optimality probability: (a) the model with ex-ponential function is usually employed due to its simplicity; (b) to always satisfy the definition of probability, a new model with sigmoid function is introduced in this work. 
+
+where μO = ( Ru + Rl)/2 and λ−1 
+
+> O
+
+= ( Ru − Rl)/(2 λ) with the upper and lower bounds of return, Ru, R l, and λ > 0 the sharpness hyperparameter. Note that 
+
+Ru and Rl should be estimated appropriately, but even if their estimation is incorrect, the definition of the probability mass function is always satisfied due to σ, so estimation error is permissible and no approximation is needed to eliminate them. Here, three characteristics of σ that will be needed later are introduced. First, 1 − σ(x) with x the input, which is necessary for p(O = 0) , is simplified as follows: 
+
+1 − σ(x) = σ(−x) (13) Second, the derivative of σ w.r.t. x is well known to be with its own output. 
+
+dσ (x)
+
+dx = σ(x)(1 − σ(x)) (14) Finally, the natural logarithm of σ can be expressed using a softplus function, 
+
+sp : R 7 → R+.
+
+ln σ(x) = −sp( −x) = x − sp( x) (15) 
+
+3.2. Derivation with forward/reverse KL divergence 
+
+Using the above model of optimality probability, the gradients for updat-ing the value function and policy are analytically derived. As a first step, 9the case where the forward or reverse KL divergence is adopted as d (the di-vergence measure between distributions) is considered since they have been employed in previous studies (Kobayashi, 2022). Note that the other study derived further properties by considering the inverse of optimality probabil-ity, but that is unnecessary for the symmetric sigmoid function due to the same result as the normal case. 
+
+3.2.1. Case 1: reverse KL divergence 
+
+With eq. (12), the reverse KL divergence is first introduced to d in eqs. (5) and (6) as follows: 
+
+min  
+
+> θ
+
+Epe,b [KL( p(O | s) | p(O | s, a ))] = min  
+
+> θ
+
+Epe,b [σV (ln σV − ln σQ) + ¯ σV (ln ¯ σV − ln ¯ σQ)] (16) 
+
+min  
+
+> ϕ
+
+Epe [KL( π(a | s) | π(a | s; O = 1)) − KL( π(a | s) | π(a | s; O = 0))] = min  
+
+> ϕ
+
+Epe,π [ln π(a | s; O = 0) − ln π(a | s; O = 1)] (17) where σx = σ(λO(x − μO)) and ¯σx = 1 − σx with x = {V, Q } for simplicity. Analytically calculating the gradient for each objective function to be minimized w.r.t. its corresponding parameter (i.e. θ or ϕ) yields the following results. 
+
+gRKL  
+
+> θ
+
+= Epe,b [∇θV (s)λOσV ¯σV (ln σV − ln σQ − ln ¯ σV + ln ¯ σQ)+ ∇θσV σV /σ V − ∇ θσV ¯σV /¯σV ]= Epe,b [∇θV (s)λOσV ¯σV {λO(V (s) − μO) − sp( λO(V (s) − μO)) 
+
+− λO(Q(s, a ) − μO) + sp( λO(Q(s, a ) − μO)) + sp( λO(V (s) − μO)) − sp( λO(Q(s, a ) − μO)) }]= Epe,b [−∇ θV (s)λ2
+
+> O
+
+σV ¯σV (Q(s, a ) − V (s))] (18) 
+
+gRKL  
+
+> ϕ
+
+= Epe,π [∇ϕ ln π(a | s){ln π(a | s; O = 0) − ln π(a | s; O = 1) }]= Epe,π [∇ϕ ln π(a | s){ln ¯ σQb(a | s) − ln ¯ σV − ln σQb(a | s) + ln σV }]= Epe,π [∇ϕ ln π(a | s){− sp( λO(Q(s, a ) − μO)) + sp( λO(V (s) − μO)) 
+
+− λO(Q(s, a ) − μO) + sp( λO(Q(s, a ) − μO)) + λO(V (s) − μO) − sp( λO(V (s) − μO)) }]= Epe,π [−∇ ϕ ln π(a | s)λO(Q(s, a ) − V (s))] (19) Note that eqs. (13)–(15) are utilized in the above transformations. 10 3.2.2. Case 2: forward KL divergence 
+
+Similarly, the forward KL divergence is introduced to d in eqs. (5) and (6) as follows: 
+
+min  
+
+> θ
+
+Epe,b [KL( p(O | s, a ) | p(O | s))] = min  
+
+> θ
+
+Epe,b [−σQ ln σV − ¯σQ ln ¯ σV ] (20) 
+
+min  
+
+> ϕ
+
+Epe [KL( π(a | s; O = 1) | π(a | s)) − KL( π(a | s; O = 0) | π(a | s))] = min  
+
+> ϕ
+
+Epe,b 
+
+
+
+ln π(a | s)
+
+ ¯σQ
+
+¯σV
+
+− σQ
+
+σV
+
+ 
+
+(21) where the terms unrelated to θ or ϕ were excluded. The gradients for them are analytically derived as well. 
+
+gFKL  
+
+> θ
+
+= Epe,b [−∇ θV (s)λOσQ ¯σV + ∇θV (s)λO ¯σQσV ]= Epe,b [−∇ θV (s)λO(σQ − σV )] (22) 
+
+gFKL  
+
+> ϕ
+
+= Epe,b 
+
+
+
+∇ϕ ln π(a | s)
+
+ ¯σQ
+
+¯σV
+
+− σQ
+
+σV
+
+ 
+
+= Epe,b 
+
+
+
+−∇ ϕ ln π(a | s)σQ − σV
+
+σV ¯σV
+
+
+
+(23) 
+
+3.2.3. Alignment of gradients 
+
+The derived gradients are seen to possess a similar structure. However, this differs from the conventional structure where the gradients of the value function and the log-policy are multiplied by identical weights (i.e. the TD error). Furthermore, eq. (23) is prone to be numerically unstable because its denominator can asymptotically approach zero. Therefore, to align these gra-dients, gRKL ,FKL  
+
+> ϕ
+
+and gRKL ,FKL  
+
+> θ
+
+are multiplied by σV ¯σV (which is proportional to the Fisher information of p(O|V )) and 1/λ O (which can be considered a constant), respectively. As a result, the following gradients are finally ob-tained. 
+
+gRKL  
+
+> θ
+
+∝ Epe,b [−∇ θV (s)λOσV ¯σV (Q(s, a ) − V (s))] (24) 
+
+gRKL  
+
+> ϕ
+
+∝ Epe,π [−∇ ϕ ln π(a | s)λOσV ¯σV (Q(s, a ) − V (s))] (25) 
+
+gFKL  
+
+> θ
+
+∝ Epe,b [−∇ θV (s)( σQ − σV )] (26) 
+
+gFKL  
+
+> ϕ
+
+∝ Epe,b [−∇ ϕ ln π(a | s)( σQ − σV )] (27) 11 V
+
+> Q
+> RKL
+> V
+> Q
+> FKL
+> Nonlinearly transformed TD error
+
+Figure 2: Analysis of nonlinear TD errors derived with forward and reverse KL divergences: in both cases, the gradients are vanished if the value estimate is closer to upper or lower bound; with reverse KL divergence (left), the contour lines are mirrored for the dashed line ( δ = 0 ); with forward KL divergence (right), the contour lines are symmetric for the dashed line. 
+
+Here, by regarding the weight applied to each gradient as the nonlinearly transformed TD error, it for each divergence can be defined as follows: 
+
+δRKL (δ) = λOσV ¯σV δ (28) 
+
+δFKL (δ) = σδ+V − σV (29) 
+
+3.3. Analysis 
+
+First, let’s find the common point in the two nonlinear TD errors. In Fig. 2, the contour lines for δRKL ,FKL are depicted. Note that the conventional method has the contour lines parallel to the dashed line drawn diagonally. Although they have distinct nonlinearities as the upper and lower bounds get closer, they appear to have similar shapes in the vicinity of the dashed lines, namely when |δ| ≪ 1 holds. Specifically, |δ| ≪ 1 is assumed for applying the first-order approximation to δFKL .
+
+δFKL (δ) = σδ+V − σV
+
+> |δ|≪ 1
+
+≃ dσ V
+
+dV δ
+
+= λOσV ¯σV δ
+
+= δRKL (δ) (30) 12 0.0 0.2 0.4 0.6 0.8 1.0          
+
+> σV
+> 0
+> 1
+> 2
+> 3
+> 4
+> Scaled weight term
+> −2 −1 012
+> δ
+> −2
+> −1
+> 0
+> 1
+> 2
+> Error term  (σV ≃ 0)
+> RKL FKL
+> −2 −1 012
+> δ
+> −2
+> −1
+> 0
+> 1
+> 2
+> Error term  (σV ≃ 1)
+
+Figure 3: Decomposition of nonlinear TD errors into weight and error terms: the weight term (left) is saturated (or vanished) only in the case with reverse KL divergence; when 
+
+σV ≃ { 0, 1}, the error term in the case with forward KL divergence outputs almost positive or negative values. 
+
+Thus, when the TD error is sufficiently small, the two nonlinearizations are approximately equal. In addition, unless the value estimate is close to the upper or lower bound, the nonlinearity by σV ¯σV becomes nearly constant, making the TD error (or weight) linear as like the conventional method. Next, the distinct points in them are analyzed. We can find from Fig. 2 that δFKL has the symmetric contour lines for the dashed line, while δRKL 
+
+has the mirrored ones. This difference is due to the influence of terms of the second order or higher, which were ignored in the approximation above, but more detailed characteristics of the respective gradients are analyzed using Fig. 3. Here, the nonlinearly transformed TD errors are decomposed into two terms: a (scaled) weight term depending on σV , w(σV ); and an error term depending on δ, e(δ).
+
+δ∗ = w∗(σV )e∗(δ) (31) The left of Fig. 3 shows the nonlinearity by the weight term, the center and right are the nonlinearity by the error term. As the definitions indicate, 
+
+δRKL has the nonlinear weight term while δFKL has the constant. On the other hand, δRKL is linear while δFKL saturates the error term. For example, when σV ≃ { 0, 1}, wRKL approaches zero, causing the gradients to vanish almost completely; however, in δFKL , the positive or negative gradients re-main. Otherwise, if σV ≃ 0.5, the gradients with δRKL can grow almost without limit in proportion to δ, whereas in δFKL , the weight of the gradients is limited within ±0.5. Thus, while both nonlinearities function to implic-itly exclude target data from learning by setting the gradients to zero, it is 13 Rl Ru         
+
+> Return
+> 0
+> 1
+> Optimality probability
+> o1= 1 o2= 1 o3= 1 o4= 1 Figure 4: Extension of the model for optimality probability: since sigmoid function always makes its output within [0 ,1] , multiple optimality variables can be easily introduced; by evenly spacing them, the saturation property is expected between them as a kind of (pseudo-)quantization.
+
+clear that the conditions under which they are activated and their side effects differ. 
+
+4. Further developments 
+
+4.1. Extension to pseudo-quantization 
+
+Based on the above analysis results, the derived gradients are vanished due to saturation when the value function exceeds its estimated upper or lower bound, Ru, R l, implicitly excluding that data from learning. However, this might be activated only for extreme estimation errors and/or reward noise. It might help stabilize learning if this implicit data exclusion is ac-tivated in more situations. Therefore, noting that saturation corresponds to binary quantization, the optimality probability is extended for (pseudo) multi-level quantization. Specifically, the optimality probability is extendedly defined as follows: 
+
+p(O = 1) = 
+
+> L
+
+Y
+
+> l=1
+
+p(Ol = 1) (32) 14 where L ∈ N relates to the level of quantization. If L = 1 , this is consistent with the original definition; and if L > 1, this evaluates the optimality L + 1 
+
+levels. This definition violates the probability mass function requirement when modeling with exponential function. Setting a common utopia point to avoid this issue loses the meaning of the extension. In contrast, the defi-nition introduced in this paper using sigmoid function always satisfies [0 , 1] 
+
+regardless of the specified μO and λO, thus allowing this extension without issue. Furthermore, if the model for Ol is specified with appropriate μOl and 
+
+λOl , O<l = 1 can also be expected when Ol = 1 is expected. 
+
+μOl = Rl + Ru − Rl
+
+L + 1 l (33) 
+
+λO = λ(L + 1) 
+
+Ru − Rl
+
+(34) The case with L = 4 is illustrated in Fig. 4. As this extension yields a kind of multivariate independent distribution, the total KL divergence (and other most divergences) can be replaced to the sum of KL divergence for each component. 
+
+KL( p | q) = 
+
+> L
+
+X
+
+> l=1
+
+KL( pl | ql) (35) In other words, the value function can be optimized by computing the gradi-ents derived from the previous optimization problem in eq. (5) with μOl and 
+
+λO and summing them together. As a result, the value function learns from data near μOl and excludes data near the boundaries. This means it behaves robustly against estimation errors and reward noise, whose scale is close to 
+
+λ/λ O, while still excluding outliers exceeding Ru or Rl as before. On the other hand, the policy optimization problem basically requires modification. Specifically, the conditional policies π(a | s; Ol) on Ol with 
+
+l = 1 , . . . , L are introduced. Then, π(a | s; O) is replaced in the optimization problem in eq. (6) with π(a | s; Ol). Their respective gradients are summed finally. This enables the same processing as that for the value function, and the policy is gradually optimized by switching the optimization target from 
+
+π(a | s; O1) to π(a | s; OL).15 Anyway, the overall gradients are generally described as follows: 
+
+g∗ 
+
+> θ
+
+∝ Epe,b 
+
+"
+
+−∇ θV (s)
+
+(
+
+L−1
+
+> L
+
+X
+
+> l=1
+
+δ∗(δ; μOl , λ O)
+
+)# 
+
+(36) 
+
+g∗ 
+
+> ϕ
+
+∝ Epe,π or b
+
+"
+
+−∇ ϕ ln π(a | s)
+
+(
+
+L−1
+
+> L
+
+X
+
+> l=1
+
+δ∗(δ; μOl , λ O)
+
+)# 
+
+(37) Here, L−1 is added for scaling. 
+
+4.2. Fusion of forward/reverse KL divergences 
+
+Analytical results indicate that the gradients derived using the forward or reverse KL divergence exhibit distinct nonlinear characteristics, suggesting they may have specific strengths and weaknesses. To exploit their strengths together, a straightforward approach would be to adopt the following Jeffreys divergence. 
+
+Jef( p | q) = KL( p | q) + KL( q | p) (38) In this case, we can simply add the gradients derived from both sides. How-ever, this approach is likely to prevent one side from utilizing the other’s inherent strengths, as the other side inhibits the function that eliminates the gradients held by the first. Hence, as a more careful fusion of both gradients, the following JS diver-gence is considered. 
+
+JS( p | q) = 12 {KL( p | m) + KL( q | m)} (39) where m = ( p + q)/2.Although this JS divergence is required to pass to eqs. (5) and (6) for analytically computing the gradients, the derivation becomes too complex compared to the cases with forward/reverse KL divergences. Therefore, the gradient for one of the probabilities input into JS divergence is first computed as it is helpful to simplify the derivation. Specifically, given pζ as the target 16 probability with ζ the parameter, the gradient can be computed as follows: 
+
+∇ζ JS( pζ | q) = 12Epζ [∇ζ ln pζ (ln pζ − ln( pζ + q) + ln 2)] + 12Epζ [∇ζ ln pζ − pζ /(pζ + q)∇ζ ln pζ ]+ 12Eq[−pζ /(pζ + q)∇ζ ln pζ ]= 12Epζ [∇ζ ln pζ (ln D + 1 − D)] + 12Epζ [−q/ (pζ + q)∇ζ ln pζ ]= 12Epζ [∇ζ ln pζ ln D] ∝ Epζ [∇ζ ln pζ ln D] (40) where D = pζ /(pζ + q) (and 1 − D = q/ (pζ + q) accordingly). Note that even when the input order of pζ and q is swapped, the gradient remains the same since JS divergence is symmetric. In addition, 1/2 was excluded as it is a constant. With this, the gradient for the value function can be easily derived by 
+
+pζ = p(O | s), ζ = θ, and q = p(O | s, a ).
+
+gJS  
+
+> θ
+
+= Epe,b [Ep(O|s)[∇θ ln p(O | s) ln D]] = Epe,b [σv/σ V ∇θV (s)λOσV ¯σV (ln σV − ln( σV + σQ)) 
+
+− ¯σV /¯σV ∇θV (s)λOσV ¯σV (ln ¯ σV − ln(¯ σV + ¯ σQ))] = Epe,b 
+
+
+
+∇θV (s)λOσV ¯σV
+
+
+
+ln σV
+
+σV + σQ
+
+− ln ¯σV
+
+¯σV + ¯ σQ
+
+ 
+
+(41) Similarly, the gradient for the policy is also derived by pζ = π(a | s),
+
+ζ = ϕ, and q = π(a | s; O = {0, 1}).
+
+gJS  
+
+> ϕ
+
+= Epe,π [∇ϕ ln π(a | s) ln DO=1 ] − Epe,π [∇ϕ ln π(a | s) ln DO=0 ]= Epe,π 
+
+
+
+∇ϕ ln π(a | s) ln π(a | s) + π(a | s; O = 0) 
+
+π(a | s) + π(a | s; O = 1) 
+
+
+
+= Epe,π 
+
+
+
+∇ϕ ln π(a | s) ln σV {¯σV π(a | s) + ¯ σQb(a | s)}
+
+¯σV {σV π(a | s) + σQb(a | s)}
+
+
+
+> b≃π
+
+≃ Epe,π 
+
+
+
+∇ϕ ln π(a | s)
+
+
+
+ln σV
+
+σV + σQ
+
+− ln ¯σV
+
+¯σV + ¯ σQ
+
+ 
+
+(42) 17 Here, b ≃ π can be satisfied with the regularization method like (Kobayashi, 2024b). As a result, gJS  
+
+> θ
+
+and gJS  
+
+> ϕ
+
+have a similar structure, but the common weight term would be numerically unstable. In addition, the similarity between this structure and the others previously obtained is difficult to discern. Therefore, that term is reformulated as follows: 
+
+ln σV
+
+σV + σQ
+
+− ln ¯σV
+
+¯σV + ¯ σQ
+
+= − ln σV + σQ
+
+σV
+
++ ln ¯σV + ¯ σQ
+
+¯σV
+
+= − ln {1 + exp(ln σQ − ln σV )} + ln {1 + exp(ln ¯ σQ − ln ¯ σV )}
+
+= − sp(ln σQ − ln σV ) + sp(ln ¯ σQ − ln ¯ σV )= − sp {− sp( −λO(Q(s, a ) − μO)) + sp( −λO(V (s) − μO)) }
+
++ sp {− sp( λO(Q(s, a ) − μO)) + sp( λO(V (s) − μO)) }
+
+= − sp {λO(Q − V ) − sp( λO(Q(s, a ) − μO)) + sp( λO(V (s) − μO)) }
+
++ sp {sp( λO(Q(s, a ) − μO)) − sp( λO(V (s) − μO)) }− sp( λO(Q(s, a ) − μO)) + sp( λO(V (s) − μO)) =sp( λO(Q − V ) − ∆) + sp(∆) − ∆=∆ − λO(Q − V ) − sp(∆ − λO(Q − V )) + sp(∆) − ∆= − λO[( Q − V ) + λ−1 
+
+> O
+
+{sp(∆ − λO(Q − V )) − sp(∆) }]
+
+≃ − λO[δ + λ−1 
+
+> O
+
+{sp(∆ − λOδ) − sp(∆) }] (43) where ∆ = sp( λO(Q(s, a ) − μO)) − sp( λO(V (s) − μO)) . As the softplus function has a numerically stable implementation in the major deep learning libraries, this form enables stable computation even when the value function approaches its lower or upper bound. In addition, by separating the linear and nonlinear terms for the TD error, the relationship with the case using reverse KL divergence is revealed. Substituting the obtained term into gJS  
+
+> θ,ϕ
+
+yields the (numerically stable) raw gradients. Similar to the cases with forward and reverse KL divergences, they should be aligned so that they can be regarded to be weighted by a common nonlinearly transformed TD error. Here, note that during the above analysis, the nonlinear component was split into a coefficient term for the TD error and a transformation term for the TD error. The case with reverse KL divergence possessed the former, while the case with forward KL divergence possessed the latter. We see that the gradients derived here possess both 18 nonlinear components, but the former matches the case with reverse KL di-vergence. Returning to the purpose of examining JS divergence, (namely, the appropriate fusion to exert the strengths of both), this approach risks inheriting the characteristics of the case with reverse KL divergence exces-sively compared to that of the case with forward KL divergence. Indeed, as subsequent analysis will show, applying the same alignment as before (i.e. multiplying the value function gradient by 1/λ O and the policy gradient by 
+
+σV ¯σV ) results in a small gradient scale, making it impossible to achieve the desired behavior. Therefore, to obtain intermediate characteristics between the two cases, the following aligned gradients, where the gradient of the value function is multiplied by 1/(λO
+
+√σV ¯σV ) and the gradient of the policy is multiplied by √σV ¯σV , are proposed. 
+
+gJS  
+
+> θ
+
+∝ Epe,b [−∇ θV (s)λO
+
+√σV ¯σV (44) 
+
+[( Q(s, a ) − V (s)) + λ−1 
+
+> O
+
+{sp(∆ − λO(Q(s, a ) − V (s))) − sp(∆) }]] 
+
+gJS  
+
+> ϕ
+
+∝ Epe,π [−∇ ϕ ln π(a | s)λO
+
+√σV ¯σV (45) 
+
+[( Q(s, a ) − V (s)) + λ−1 
+
+> O
+
+{sp(∆ − λO(Q(s, a ) − V (s))) − sp(∆) }]] 
+
+Here, the nonlinear TD error can be defined as follows: 
+
+δJS (δ) = λO
+
+√σV ¯σV [δ + λ−1 
+
+> O
+
+{sp(∆ − λOδ) − sp(∆) }] (46) 
+
+4.3. Analysis 
+
+First, the contour lines with pseudo-quantization are visualized. Here, using the case with forward KL divergence as an example, Fig. 5 is depicted. The contour lines on the left and right were plotted by varying λ (small and large), respectively. As can be seen from the figure, it appears that the benefits of pseudo-quantization are not found when λ is small. This is be-cause, near the partitioned boundaries, the gradients regarding the adjacent 
+
+Ol,l +1 are summed; thus, if λ is small and the nonlinear TD error is not sufficiently small, the reduction can be canceled out by another nonlinear TD error. On the other hand, in the contour lines on the right, where λ is set sufficiently large, a wave-like shape can be observed. This indicates that the gradients become smaller than usual near each boundary, and learning is suppressed by pseudo-quantization. Qualitatively, since the sigmoid function converges around ±4, λ = 4 is natural choice to obtain the benefits of this pseudo-quantization. 19 V     
+
+> Q
+> Small λ
+> V
+> Q
+> Large λ
+> Nonlinearly transformed TD error Figure 5: Analysis of nonlinear TD errors with the extension of optimality probability: if
+> λis too small (left), the saturation property between adjacent optimalities is canceled out; by setting λis enough large (right), the expected pseudo-quantization with vanishment of gradients between adjacent optimalities is observed.
+
+Next, the characteristics of the gradients derived using JS divergence are qualitatively analyzed. At the same time, the conventional alignment trick in the cases with forward and reverse KL divergences are compared to the modified one proposed in the above. The contour lines (setting L = 1 for simplicity) are again plotted in Fig. 6. The left side shows the case with the conventional alignment trick, and it is immediately apparent that the shape of the contour lines is similar to that in the case with reverse KL divergence. Furthermore, the wide spacing between the contour lines indicates that the nonlinear TD error hardly fluctuate. In other words, because the weight term is dominant and combined with the nonlinearity of the error term, the gradient tends to vanish in all regions. On the other hand, with the modified alignment (see the right side), the behavior in the lower-left and upper-right regions is similar to that in the case with forward KL divergence, exhibit-ing symmetry with respect to the dashed line. Furthermore, the upper-left and lower-right regions exhibit a mirrored structure similar to that in the case with reverse KL divergence. Thus, the characteristics of two types of gradients (with forward and reverse KL divergences) are preserved by the modified alignment trick. Finally, the decomposed terms are plotted in Fig. 7 in order to compare the case with Jeffreys divergence (i.e. the mean of gradients derived by forward and reverse KL divergences). Note that to make the comparison 20 V
+
+> Q
+> JS (raw)
+> V
+> Q
+> JS (mod)
+> Nonlinearly transformed TD error Figure 6: Analysis of nonlinear TD errors with JS divergence: if the alignment trick is not modified from the cases with forward and reverse KL divergences (left), the shape of contour lines is similar to the case with reverse KL divergence while widening the spaces between lines; with the modified alignment trick (right), the shape of contour lines are mixed up with two previous cases with the appropriate spaces.
+
+easier, the results in Fig. 3 are shown with dashed lines with the same colors. With Jeffreys divergence, each term has no saturation although nonlinearities are remained. That is, the adverse effects of value estimation errors and noisy rewards cannot be sufficiently mitigated, so the expected benefits of learning stabilization cannot be achieved from this formulation. On the other hand, the case with JS divergence inherits saturation in both terms. In addition, the difference in the weight term w.r.t. σV becomes smaller, and the range of error term expands. In particular, when σV ≃ { 0, 1}, whereas the conventional error term using forward KL divergence could only take positive or negative values, this restriction is relaxed, and the sign of the error term is consistently inherited from the raw TD error. Thus, the gradients with JS divergence (and the modified alignment) enables to inherit the saturation ability in both cases with forward and reverse KL divergences, while their excessive nonlinearities are relaxed. 
+
+5. Simulations 
+
+5.1. Setup 
+
+To verify the effectiveness of the proposed method, the following five sim-ulations are conducted. The first two experiments confirm that the derived 21 0.0 0.2 0.4 0.6 0.8 1.0          
+
+> σV
+> 0
+> 1
+> 2
+> 3
+> 4
+> Scaled weight term
+> −2 −1 012
+> δ
+> −2
+> −1
+> 0
+> 1
+> 2
+> Error term  (σV ≃ 0)
+> Jeffreys JS
+> −2 −1 012
+> δ
+> −2
+> −1
+> 0
+> 1
+> 2
+> Error term  (σV ≃ 1)
+
+Figure 7: Weight and error terms in the cases with Jeffreys and JS divergences: in both terms, the case with Jeffreys divergence loses the saturation property; on the other hand, the case with JS divergence can inherit it in both terms while relaxing its restriction. Table 1: Learning conditions 
+
+#Hidden layers of fully connected networks 2
+
+#Neurons for each hidden layer 100 
+
+Activation function Squish (Barron, 2021; Kobayashi and Aotani, 2023) Normalization RMSNorm (Zhang and Sennrich, 2019) Value estimation Ensemble w/ underestimation (Kobayashi, 2025) Policy distribution Student’s t-distribution (Kobayashi, 2019) Discount factor γ 0.99 
+
+Optimizer AdaTerm (Ilboudo et al., 2023) Update of target networks CAT-soft update (Kobayashi, 2024a) Stabilization ERC (Kobayashi, 2024b) Buffer size |D| 102 , 400 
+
+Batch size B 256 
+
+#Replayed data (episodic) |D| /2
+
+Level of quantization L + 1 5Sharpness of quantization λ 4.0 #Update for decaying Ru,l 200 
+
+learning rules function correctly and the effectiveness of the improvements proposed in Section 4 (i.e. pseudo-quantization and derivation based on JS divergence). The next two experiments demonstrate the robustness of the proposed method against value estimation errors and noisy rewards. Finally, the side effects resulting from such robustness are further explored. The implementation of the proposed (and baseline) methods are shared in all the experiments, as summarized in Table 1. Note that items that cite references inherit the reference settings as-is. Here, the estimation of Ru,l is 22 simply performed as follows: 
+
+Ru ← βR u + (1 − β)(max  
+
+> b∈B
+
+V (sb) + ϵ)
+
+Rl ← βR l + (1 − β)(min  
+
+> b∈B
+
+V (sb) − ϵ)
+
+β = ϵ1/K 
+
+(47) where ϵ ≪ 1 denotes the small number for numerical stabilization (in this implementaiton, ϵ = 10 −5). The hyperparameter K ∈ N is the number of updates required for the effect of the update value to decrease to less than ϵ.This update is performed when calculating the nonlinear TD error, that is, each time batch data B is replayed from the replay buffer. In this paper, the maximum number of replays between episodes is 200, and K is set to 200 accordingly. In all the experiments, the proposed and baseline methods train their poli-cies 28 times using different random seeds. Then, the tasks are performed for 100 episodes using the trained policies, and performance is evaluated based on the statistics of those returns. Basically, the interquartile mean of 100 returns is employed to evaluate each random seed, then its box plot is visualized. The tasks consist basically of modified versions in Gymna-sium: HalfCheetah, which has restricted output; and Pusher, which has a larger and heavier target. The former requires larger actions, so if learning is overly restricted, it cannot achieve sufficient performance. The latter makes it difficult to redo object manipulation, so performance tends to decline if the model learns incorrectly. Note that the last two experiments use different suitable tasks. 
+
+5.2. Importance of appropriate quantization level 
+
+First, the value of extending to pseudo-quantization, i.e. L > 1, is investi-gated. Specifically, L+1 = {2, 5, 10 , 20 } are compared. Note that, to account for differences in the impact of divergence used to calculate gradients, the results using both forward and KL divergences are shown. The results are summarized in Fig. 8. The dashed lines represent the average score of the baseline method, the standard actor-critic algorithm (identical to the proposed method except for its learning rules being linear w.r.t. the TD error). When the quantization level is L + 1 = 2 , where saturation occurs only around Ru,l prior to expansion, the scores for both task divergences were lower than those of the other cases. By setting L > 1,23 RKL FKL Mode 1200 1400 1600 1800 2000 2200 2400 Score                   
+
+> Task = HalfCheetah RKL FKL Mode
+> −60
+> −55
+> −50
+> −45
+> −40
+> −35
+> −30 Task = Pusher 2510 20 Figure 8: Results for comparing quantization level L+ 1 : if L+ 1 = 2 (i.e. only saturation near Ru,l ), the scores were not improved enough in all cases; with too large L+ 1 (i.e.
+> 10 ,20 ), the scores were slightly improved in HalfCheetah or decreased in Pusher; taking the computational cost into account as well, L+ 1 = 5 seems to be the best balance.
+
+a steady improvement in performance can be observed. However, even when 
+
+L + 1 is increased to 10 or 20 , the performance improvement was small, and it was also confirmed that scores actually decrease for the Pusher task. Since increasing L also increases computational cost, L + 1 = 5 is adopted in this paper. It is worth noting that the reason humans often adopt a five-point rating scale is similar. That is, the benefits of finer granularity begin to diminish around the five-point mark (Lissitz and Green, 1975). This similarity sug-gests that there is room for interesting analysis to explain the relationship between the proposed method and human’s decision-making. However, that is omitted due to outside the scope of this paper. 
+
+5.3. Inheritance of strengths from forward/reverse KL divergences 
+
+Next, while examining the strengths and weaknesses of the learning rules based on forward and reverse KL divergences, whether the learning rule using JS divergence effectively inherits their strengths is investigated. Specifically, the following five conditions are compared. 
+
+• Vanilla: the standard actor-critic algorithm with linear learning rules w.r.t. the TD error 24 HalfCheetah Pusher Task 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 Normalized score 
+
+Vanilla RKL FKL Jeffreys JS Figure 9: Results for comparing the integration way of two divergences: the cases with reverse and forward KL divergences improved especially HalfCheetah and Pusher, respec-tively; the case with Jeffreys divergence was closer to the worse scores in either case, while the case with JS divergence was closer to the better scores. 
+
+• RKL: the learning rules derived with reverse KL divergence 
+
+• FKL: the learning rules derived with forward KL divergence 
+
+• Jeffreys: the learning rules with the mean of gradients of RKL and FKL 
+
+• JS: the proposed method derived with JS divergence Note that these conditions have L + 1 = 5 , as described in Table 1. The results are summarized in Fig. 9. First, we can see that Vanilla exhibited unstable training on HalfCheetah and did not achieve sufficient performance on Pusher. On the other hand, RKL and FKL exceled at dif-ferent tasks: RKL stabilized training on HalfCheetah, while FKL increased the success rate on Pusher. When examining Jeffreys, it appears to inherit the weaknesses of RKL and FKL, resulting in performance closer to FKL 25 for HalfCheetah and closer to RKL for Pusher. In contrast, the proposed JS achieved performance closer to RKL for HalfCheetah and closer to FKL for Pusher, suggesting that it successfully inherits the strengths of both. 
+
+5.4. Robustness to noisy TD error 
+
+The above two points confirm that the proposed developments in Sec-tion 4 are effective. The robustness to tasks where the TD error is noisy is then verified. Specifically, using HalfCheetah and Pusher as base tasks, the following three points are modified individually. 
+
+• NoEnsemble: the value function is predicted with a single output of model without ensembles. 
+
+• NonRobustTarget: the target network is updated with Polyak update, not CAT-soft update. 
+
+• NoisyReward: the task reward is replaced to the time-averaged reward with Gaussian noise. The estimation of the target value tends to become unstable in NoEnsemble (due to non-reduced epistemic uncertainty) and in NonRobustTarget (due to too high update rate for Polyak update). In NoisyReward, the raw task reward r is replaced as follows: 
+
+σ2 
+
+> r
+
+← 1100 1/50 σ2 
+
+> r
+
++ 1100 1/50 
+
+
+
+1 − 1100 1/50 
+
+
+
+(μr − r)2
+
+μr ← 1100 1/5 μr +
+
+
+
+1 − 1100 1/5
+
+
+
+rr ∼ N (μr, σ r)
+
+(48) where N (μr, σ r) denotes the diagonal normal distribution with μr mean and 
+
+σr scale. The initial values of μr and σr are set to be zero. Robustness is evaluated based on the difference in return compared to the maximum return with the normal condition (as conducted above). Since the overall statistics are more important than the performance under each of the above conditions, performance profiles (Agarwal et al., 2021) are em-ployed. Specifically, all returns for each task are normalized to [0 , 1] using the maximum and minimum ones, and the probability that the score exceeds a given threshold within [0 , 1] is visualized. 26 0.0 0.2 0.4 0.6 0.8 1.0 Threshold               
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0 Probability
+> Vanilla RKL FKL JS MME (a) HalfCheetah 0.0 0.2 0.4 0.6 0.8 1.0 Threshold
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0 Probability
+> Vanilla RKL FKL JS MME (b) Pusher
+
+Figure 10: Performance properties for noisy TD errors: the baselines (Vanilla, RKL, and FKL) had the similar tendency found in the above experiments; although MME achieved the best robustness in HalfCheetah, it was too fragile in Pusher; the proposed method (JS) achieved the stable results in both cases. 
+
+For comparison, the methods excluding Jeffreys are tested. In addition, to exhibit a certain degree of robustness, max-min entropy (MME) (Han and Sung, 2021), which is a modified version of soft actor-critic (SAC) (Haarnoja et al., 2018), is introduced. Since MME includes a minimization term for pol-icy entropy, which is computed via one-sample Monte Carlo approximation, in its value estimation, the effects of value estimation errors and reward noise are unlikely to become dominant. Furthermore, since the policy is learned by maximizing not only the value function but also its entropy, as in SAC, overfitting to incorrect value estimates can likely be avoided. Note that the related studies on robustness discussed in Section 1.1 are omitted from com-parison because they can be used in conjuction with the proposed method, or because the learning protocols differ significantly, making a fair comparison difficult. The results are depicted in Fig. 10. First, we can see that in HalfCheetah, FKL and Vanilla exhibited low robustness with high performance degrada-tion, whereas RKL and the proposed JS achieved roughly equivalent levels of excellent robustness. MME appears to achieve the highest robustness, but around the threshold of 0.9, it was outperformed by RKL and JS. On the other hand, MME was extremely fragile in Pusher. Vanilla and RKL were the next least performant, and FKL and JS demonstrated excellent robustness. The results for RKL and FKL were consistent with their respective strengths and weaknesses in specific tasks, suggesting that the performance improvements in their strong tasks was due to the robustness of value es-27 LunarLanderE LunarLanderA BipedalWalkerE BipedalWalkerA Task 
+
+−400 
+
+−300 
+
+−200 
+
+−100 
+
+0
+
+100 
+
+200 
+
+300 Score 
+
+Vanilla MME PQAC Figure 11: Results for guided RL: MME completely failed all tasks; the proposed PQAC outperformed the standard RL in all tasks, while its performance degradation from ‘E’ (with a well-trained policy) to ‘A’ (with a poorly trained policy) was almost equivalent to the standard RL probably due to the limitation of imitation. 
+
+timation. Furthermore, MME exhibited a more apparent task dependency, which is thought to be due to the policy entropy maximization term failing to suppress overfitting as much as expected. In other words, it fell into local optima on Pusher, a task that requires more careful learning. In contrast, the proposed JS demonstrated excellent robustness on both tasks, indicating that it effectively leverages the task-dependent robustness of both RKL and FKL. 
+
+5.5. Robustness to guided reward 
+
+Furthermore, to verify robustness against noisy TD errors, additional ex-periments analogous to guided RL (Eßer et al., 2022) are conducted. Specif-ically, expert policies πexp trained using standard task rewards are prepared in advanced, and then, the following imitation reward (more specifically, its 28 return) is maximized instead of the standard reward. 
+
+r = |A| −1
+
+> |A|
+
+X
+
+> i=1
+
+exp( −| aexp  
+
+> i
+
+− ai|) (49) In this case, since expert actions aexp are randomly sampled from πexp , this reward is determined stochastically and acts as reward noise. Furthermore, if the learning of πexp is insufficient, not only this randomness increase, but also the agent may be led to different actions even in similar states, thereby destabilizing value estimation. Furthermore, since learning becomes more difficult as the action space grows larger under this design, LunarLander (with continuous action space) and BipedalWalker in Gymnasium are solved here (also to verify their effectiveness on different tasks). The standard learning rules (Vanilla), MME as tested above, and the pro-posed method with JS divergence and pseudo-quantization, so-called PQAC, are compared. For each task, both a well-trained πexp (suffixed with ‘E’) and a poorly trained version (suffixed with ‘A’) are prepared. The results of training and testing (the return on the original task reward) are depicted in Fig. 11. As can be seen at a glance, MME was completely unable to solve the tasks. This is probably because MME is an algorithm based on action value function Q(s, a ), and with the reward function described above, the gradients tend to change easily depending on the action, causing it to be strongly affected by erroneous gradients. On the other hand, the proposed PQAC performed more stably and successfully on the tasks than Vanilla. However, there is no significant difference between Vanilla and PQAC in the degree of performance degradation from ‘E’ to ‘A’. This and the results so far suggest that the limit of task performance achievable with the above reward is lowered, rather than indicating a lack of robustness. 
+
+5.6. Ability to optimize in high-dimensional action spaces 
+
+Finally, the side effects of the proposed method’s robustness against noisy TD errors are investigated. Fundamentally, since the value function is the expected return for policy (and state transition probability), the greater the randomness of the policy, the more diverse the value function becomes, mak-ing it difficult to estimate (Van Hasselt et al., 2016). Although randomness decreases as learning progresses, the impact would persist as the size of ac-tion space increases, adversely affecting value estimation. In other words, 29 Ant (12D) Swimmer (14D) Task 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 Normalized score 
+
+Vanilla MME PQAC Figure 12: Results for high-dimensional action spaces: the standard RL could not solve these tasks; although MME achieved the best performance on Ant, it was unstable; the proposed PQAC was stable in both tasks, and achieved the best in Swimmer. 
+
+due to the robustness, the proposed method is expected to efficiently solve tasks with high-dimensional action spaces. To examine it, Ant and Swimmer tasks from Gymnasium are modified to have increased number of joints. Specifically, for Ant, three joints are given to each leg to create a 12-dimensional action space; and for Swimmer, the number of segments is increased to 15 to create a 14-dimensional action space. The results of running these tasks using the same comparison methods as in the previous experiment are shown in Fig. 12. Clearly, Vanilla did not perform well on these tasks, indicating that it struggles with high-dimensional action spaces. Although MME achieved ex-cellent performance in the best-case scenario for Ant, its learning became highly unstable. As mentioned above, this instability is probably because it easily generates incorrect gradients depending on the selected actions. 30 In contrast, the proposed PQAC consistently outperformed Vanilla on Ant and demonstrated significantly superior performance compared to others on Swimmer. 
+
+6. Conclusion and discussion 
+
+This paper revisited the TD learning algorithm based on control as in-ference, deriving a novel algorithm capable of robust learning against noisy TD errors. The derived learning rules for both value and policy functions were analyzed, revealing the smooth saturation of loss (or the vanishment of gradients) when the value estimate is close to its estimated uppear or lower bound. This saturation was extended to pseudo-quantization by introduc-ing the multi-level optimality. In addition, to inherit different advantages in the learning rules derived with forward and rerverse KL divergences, JS divergence was approximately utilized for the novel derivation. These ben-efits were verified through multiple RL benchmarks, demonstrating stable learning even when heuristics are insufficient or rewards contain noise. As shown by the last two experiments, the robustness against noisy TD errors is expected to handle recent RL targets: i.e. preference-based reward designs (Kaufmann et al., 2024; Poddar et al., 2024; Luo et al., 2024; Cheng et al., 2024) and high-dimensional robotic systems (Radosavovic et al., 2024; Chen et al., 2023; Chiappa et al., 2024). The former is required especially in human-in-the-loop systems involving human interaction, such as for fine-tuning foundation models (Kaufmann et al., 2024; Poddar et al., 2024) and alternatives to traditional imitation learning (Luo et al., 2024). However, since the reward itself becomes an estimate, its estimation error inevitably affects the accuracy of the value function and the noise scale of TD errors. While methods to make this reward estimation more robust have been explored (Cheng et al., 2024), a synergistic effect can be expected if the RL algorithm itself becomes more robust like the proposed PQAC, allowing for a more accurate capture of human preferences. The latter is increasingly common in the motion control of humanoid robots (with approximately 30 joints) using RL (Radosavovic et al., 2024). In addition, dexterous robot hands are widely under development (Chen et al., 2023), so loco-manipulation that utilizes all five fingers is likely to become a future target for RL. Alternatively, body structures that actively utilize redundancy, such as musculoskeletal systems (Chiappa et al., 2024), 31 would also be explored. These action dimensions are close to or over 100. Consequently, RL algorithms like PQAC, which enable robust and stable learning despite noisy TD errors than ever before, will likely be in demand. However, there is concern that implicitly excluding some experience data from learning in such a vast exploration space could cause reduced learning efficiency; therefore, it is expected that these methods will need to be used in conjunction with active exploration techniques (Sekar et al., 2020; Russo and Proutiere, 2023). In both cases, while the recent RL targets described above cannot be solved by the proposed PQAC alone, it is considered a useful foundational technology. However, there might be room for improvements in the imple-mentation of PQAC. For example, a more robust and accurate estimation of Ru,l should enable more appropriate data exclusion. The evenly spaced 
+
+μOl might be optimized to minimize the impact of noisy TD errors. In the near future, tricks to enhance the learning performance of PQAC will be investigated while exploring its applications described above. 
+
+Acknowledgements 
+
+This work was supported by JSPS KAKENHI, Development and valida-tion of a unified theory of prediction and action, Grant Number JP24H02176; and by JST CRONOS, Grant Number JPMJCS24K6. 
+
+References 
+
+Agarwal, R., Schwarzer, M., Castro, P.S., Courville, A.C., Bellemare, M., 2021. Deep reinforcement learning at the edge of the statistical precipice. Advances in neural information processing systems 34, 29304–29320. Barron, J.T., 2021. Squareplus: A softplus-like algebraic rectifier. arXiv preprint arXiv:2112.11687 . Bernard-Tiong, S., Tsurumine, Y., Sota, R., Shibata, K., Matsubara, T., 2025. Cooperative grasping and transportation using multi-agent rein-forcement learning with ternary force representation, in: IEEE/SICE In-ternational Symposium on System Integration, IEEE. pp. 973–978. 32 Casebeer, J., Vale, V., Isik, U., Valin, J.M., Giri, R., Krishnaswamy, A., 2021. Enhancing into the codec: Noise robust speech coding with vector-quantized autoencoders, in: IEEE International Conference on Acoustics, Speech and Signal Processing, IEEE. pp. 711–715. Castro, D., Volkinshtein, D., Meir, R., 2008. Temporal difference based actor critic learning-convergence and neural implementation. Advances in neural information processing systems 21. Cayci, S., Eryilmaz, A., 2023. Provably robust temporal difference learn-ing for heavy-tailed rewards. Advances in Neural Information Processing Systems 36, 25693–25711. Chen, J., Li, S.E., Tomizuka, M., 2021a. Interpretable end-to-end urban autonomous driving with latent deep reinforcement learning. IEEE Trans-actions on Intelligent Transportation Systems 23, 5068–5078. Chen, X., Wang, C., Zhou, Z., Ross, K., 2021b. Randomized ensembled dou-ble q-learning: Learning fast without a model, in: International Conference on Learning Representations. Chen, Y., Geng, Y., Zhong, F., Ji, J., Jiang, J., Lu, Z., Dong, H., Yang, Y., 2023. Bi-dexhands: Towards human-level bimanual dexterous manipula-tion. IEEE Transactions on Pattern Analysis and Machine Intelligence 46, 2804–2818. Cheng, J., Xiong, G., Dai, X., Miao, Q., Lv, Y., Wang, F.Y., 2024. RIME: Robust preference-based reinforcement learning with noisy preferences, in: International conference on machine learning, PMLR. pp. 8229–8247. Chiappa, A.S., Tano, P., Patel, N., Ingster, A., Pouget, A., Mathis, A., 2024. Acquiring musculoskeletal skills with curriculum-based reinforce-ment learning. Neuron 112, 3969–3983. Eßer, J., Bach, N., Jestel, C., Urbann, O., Kerner, S., 2022. Guided re-inforcement learning: A review and evaluation for efficient and effective real-world robotics [survey]. IEEE Robotics & Automation Magazine 30, 67–85. 33 Fujimoto, S., Hoof, H., Meger, D., 2018. Addressing function approxima-tion error in actor-critic methods, in: International conference on machine learning, PMLR. pp. 1587–1596. Gallici, M., Fellows, M., Ellis, B., Pou, B., Masmitja, I., Foerster, J.N., Martin, M., 2025. Simplifying deep temporal difference learning, in: In-ternational Conference on Learning Representations. Haarnoja, T., Zhou, A., Abbeel, P., Levine, S., 2018. Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor, in: International conference on machine learning, PMLR. pp. 1861– 1870. Hambly, B., Xu, R., Yang, H., 2023. Recent advances in reinforcement learn-ing in finance. Mathematical Finance 33, 437–503. Han, S., Sung, Y., 2021. A max-min entropy framework for reinforcement learning. Advances in Neural Information Processing Systems 34, 25732– 25745. Huang, S., Dossa, R.F.J., Ye, C., Braga, J., Chakraborty, D., Mehta, K., Araújo, J.G., 2022. Cleanrl: High-quality single-file implementations of deep reinforcement learning algorithms. The Journal of Machine Learning Research 23, 12585–12602. Igel, C., 2024. Smooth min-max monotonic networks, in: International Con-ference on Machine Learning, PMLR. pp. 20908–20923. Ilboudo, W.E.L., Kobayashi, T., Matsubara, T., 2023. Adaterm: Adaptive t-distribution estimated robust moments for noise-robust stochastic gradient optimization. Neurocomputing 557, 126692. Kaufmann, T., Weng, P., Bengs, V., Hüllermeier, E., 2024. A survey of reinforcement learning from human feedback. Transactions on Machine Learning Research . Kim, S., Asadi, K., Littman, M., Konidaris, G., 2019. Deepmellow: removing the need for a target network in deep q-learning, in: International Joint Conference on Artificial Intelligence, pp. 2733–2739. 34 Kobayashi, T., 2019. Student-t policy in reinforcement learning to acquire global optimum of robot control. Applied Intelligence 49, 4335–4347. Kobayashi, T., 2022. Optimistic reinforcement learning by forward kullback– leibler divergence optimization. Neural Networks 152, 169–180. Kobayashi, T., 2023. Reward bonuses with gain scheduling inspired by iter-ative deepening search. Results in Control and Optimization 12, 100244. Kobayashi, T., 2024a. Consolidated adaptive t-soft update for deep reinforce-ment learning, in: International Joint Conference on Neural Networks, IEEE. pp. 1–8. Kobayashi, T., 2024b. Revisiting experience replayable conditions. Applied Intelligence 54, 9381–9394. Kobayashi, T., 2025. Intentionally-underestimated value function at terminal state for temporal-difference learning with mis-designed reward. Results in Control and Optimization 18, 100530. Kobayashi, T., Aotani, T., 2023. Design of restricted normalizing flow to-wards arbitrary stochastic policy with computational efficiency. Advanced Robotics 37, 719–736. Kobayashi, T., Ilboudo, W.E.L., 2021. T-soft update of target network for deep reinforcement learning. Neural Networks 136, 63–71. Lee, D., He, N., 2019. Target-based temporal-difference learning, in: Inter-national Conference on Machine Learning, PMLR. pp. 3713–3722. Levine, S., 2018. Reinforcement learning and control as probabilistic infer-ence: Tutorial and review. arXiv preprint arXiv:1805.00909 . Lillicrap, T.P., Hunt, J.J., Pritzel, A., Heess, N., Erez, T., Tassa, Y., Sil-ver, D., Wierstra, D., 2016. Continuous control with deep reinforcement learning, in: International Conference on Learning Representations. Lissitz, R.W., Green, S.B., 1975. Effect of the number of scale points on reliability: A monte carlo approach. Journal of applied psychology 60, 10. 35 Luo, J., Dong, P., Zhai, Y., Ma, Y., Levine, S., 2024. Rlif: Interactive imitation learning as reinforcement learning, in: International Conference on Learning Representations. Maity, S., Mitra, A., 2025. Adversarially-robust td learning with markovian data: Finite-time rates and fundamental limits, in: International Confer-ence on Artificial Intelligence and Statistics, PMLR. pp. 2431–2439. Mnih, V., Badia, A.P., Mirza, M., Graves, A., Lillicrap, T., Harley, T., Silver, D., Kavukcuoglu, K., 2016. Asynchronous methods for deep reinforcement learning, in: International conference on machine learning, PMLR. pp. 1928–1937. Mnih, V., Kavukcuoglu, K., Silver, D., Rusu, A.A., Veness, J., Bellemare, M.G., Graves, A., Riedmiller, M., Fidjeland, A.K., Ostrovski, G., et al., 2015. Human-level control through deep reinforcement learning. nature 518, 529–533. Osband, I., Aslanides, J., Cassirer, A., 2018. Randomized prior functions for deep reinforcement learning. Advances in Neural Information Processing Systems 31, 8626–8638. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., et al., 2022. Training language models to follow instructions with human feedback. Advances in neural information processing systems 35, 27730–27744. Peer, O., Tessler, C., Merlis, N., Meir, R., 2021. Ensemble bootstrapping for q-learning, in: International conference on machine learning, PMLR. pp. 8454–8463. Poddar, S., Wan, Y., Ivison, H., Gupta, A., Jaques, N., 2024. Personalizing reinforcement learning from human feedback with variational preference learning. Advances in Neural Information Processing Systems 37, 52516– 52544. Radosavovic, I., Xiao, T., Zhang, B., Darrell, T., Malik, J., Sreenath, K., 2024. Real-world humanoid locomotion with reinforcement learning. Sci-ence Robotics 9, eadi9579. 36 Raffin, A., Hill, A., Gleave, A., Kanervisto, A., Ernestus, M., Dormann, N., 2021. Stable-baselines3: Reliable reinforcement learning implementations. Journal of Machine Learning Research 22, 1–8. Riquelme, C., Penedones, H., Vincent, D., Maennel, H., Gelly, S., Mann, T.A., Barreto, A., Neu, G., 2019. Adaptive temporal-difference learning for policy evaluation with per-state uncertainty estimates. Advances in Neural Information Processing Systems 32. Russo, A., Proutiere, A., 2023. Model-free active exploration in reinforcement learning. Advances in Neural Information Processing Systems 36, 54740– 54753. Schulman, J., Moritz, P., Levine, S., Jordan, M., Abbeel, P., 2016. High-dimensional continuous control using generalized advantage estimation, in: International Conference on Learning Representations. Sekar, R., Rybkin, O., Daniilidis, K., Abbeel, P., Hafner, D., Pathak, D., 2020. Planning to explore via self-supervised world models, in: Interna-tional conference on machine learning, PMLR. pp. 8583–8592. Sutton, R.S., Barto, A.G., 2018. Reinforcement learning: An introduction. MIT press. Takahashi, K., Kobayashi, T., Yamanokuchi, T., Matsubara, T., 2025. Weber–fechner law in temporal difference learning derived from control as inference. Frontiers in Robotics and AI 12, 1649154. Todorov, E., Erez, T., Tassa, Y., 2012. Mujoco: A physics engine for model-based control, in: IEEE/RSJ international conference on intelligent robots and systems, IEEE. pp. 5026–5033. Van Hasselt, H., Guez, A., Silver, D., 2016. Deep reinforcement learning with double q-learning, in: AAAI conference on artificial intelligence. Vincent, T., Tripathi, Y., Faust, T., Oren, Y., Peters, J., D’Eramo, C., 2025. Bridging the performance gap between target-free and target-based reinforcement learning with iterated q-learning. arXiv preprint arXiv:2506.04398 . 37 Wang, T., Zhang, R., Gao, S., 2025. Improving value estimation critically enhances vanilla policy gradient, in: International conference on machine learning, PMLR. Zhang, B., Sennrich, R., 2019. Root mean square layer normalization. Ad-vances in Neural Information Processing Systems 32, 12381–12392. 38
