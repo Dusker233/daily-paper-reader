@@ -68,12 +68,47 @@ class RankGlobalPoolTest(unittest.TestCase):
 
         self.assertEqual(ids, ["p1", "p2", "p3"])
 
+    def test_build_documents_includes_source_venue_and_year_metadata(self):
+        docs = self.mod.build_documents(
+            {
+                "p1": {
+                    "id": "p1",
+                    "title": "Conference paper",
+                    "abstract": "ranking with venue-aware metadata",
+                    "source": "iclr-2026-poster",
+                    "venue_id": "ICLR.cc/2026/Conference",
+                    "published": "2026-05-01T00:00:00+00:00",
+                }
+            },
+            ["p1"],
+        )
+
+        self.assertEqual(len(docs), 1)
+        self.assertIn("Source: iclr-2026-poster", docs[0])
+        self.assertIn("Venue: ICLR.cc/2026/Conference", docs[0])
+        self.assertIn("Year: 2026", docs[0])
+        self.assertIn("Title: Conference paper", docs[0])
+        self.assertIn("Abstract: ranking with venue-aware metadata", docs[0])
+
     def test_process_file_reranks_intent_query_on_global_pool(self):
         payload = {
             "generated_at": "2026-03-11T00:00:00+00:00",
             "papers": [
-                {"id": "p1", "title": "Intent paper", "abstract": "intent abstract"},
-                {"id": "p2", "title": "Keyword only paper", "abstract": "keyword abstract"},
+                {
+                    "id": "p1",
+                    "title": "Intent paper",
+                    "abstract": "intent abstract",
+                    "source": "iclr-2026-poster",
+                    "venue_id": "ICLR.cc/2026/Conference",
+                    "published": "2026-05-01T00:00:00+00:00",
+                },
+                {
+                    "id": "p2",
+                    "title": "Keyword only paper",
+                    "abstract": "keyword abstract",
+                    "source": "neurips-2025-poster",
+                    "published": "2025-12-01T00:00:00+00:00",
+                },
                 {"id": "p3", "title": "Intent tail paper", "abstract": "tail abstract"},
             ],
             "queries": [
@@ -137,6 +172,9 @@ class RankGlobalPoolTest(unittest.TestCase):
             self.assertEqual(saved.get("global_pool_lane_top_k"), 30)
             self.assertEqual(saved.get("global_pool_limit"), 60)
             self.assertEqual(saved.get("global_pool_guaranteed_per_lane"), 8)
+            self.assertTrue(any("Source: iclr-2026-poster" in doc for doc in reranker.last_documents))
+            self.assertTrue(any("Venue: ICLR.cc/2026/Conference" in doc for doc in reranker.last_documents))
+            self.assertTrue(any("Year: 2025" in doc for doc in reranker.last_documents))
 
 
 if __name__ == "__main__":

@@ -195,7 +195,7 @@ def _read_env_text(*names: str) -> str:
 def should_skip_rerank() -> tuple[bool, str]:
     rerank_cfg = resolve_rerank_llm_config(default_model="qwen3-reranker-4b")
     if rerank_cfg["enabled"]:
-        return False, rerank_cfg["base_url"]
+        return False, str(rerank_cfg.get("provider") or rerank_cfg.get("base_url") or "enabled")
     return True, rerank_cfg["reason"]
 
 
@@ -322,12 +322,21 @@ def resolve_summary_step_env() -> dict[str, str]:
         env["SUMMARY_MODEL"] = workflow_model
         env["BLT_SUMMARY_MODEL"] = workflow_model
 
+    rerank_provider = str(rerank_cfg.get("provider") or "none").strip()
+    if rerank_provider and rerank_provider != "none":
+        env["RERANK_PROVIDER"] = rerank_provider
     if rerank_cfg["api_key"]:
         env["RERANK_API_KEY"] = rerank_cfg["api_key"]
         env["Reranker_LLM_API_KEY"] = rerank_cfg["api_key"]
+    else:
+        env.pop("RERANK_API_KEY", None)
+        env.pop("Reranker_LLM_API_KEY", None)
     if rerank_cfg["base_url"]:
         env["RERANK_BASE_URL"] = rerank_cfg["base_url"]
         env["Reranker_LLM_BASE_URL"] = rerank_cfg["base_url"]
+    else:
+        env.pop("RERANK_BASE_URL", None)
+        env.pop("Reranker_LLM_BASE_URL", None)
     if rerank_cfg["model"]:
         env["RERANK_MODEL"] = rerank_cfg["model"]
         env["Reranker_LLM_MODEL"] = rerank_cfg["model"]

@@ -88,6 +88,13 @@ jobs:
             ~/.sbt
           key: ${{ runner.os }}-dpr-embed-deps-v1-${{ hashFiles('requirements.txt') }}
 
+      - name: Cache Hugging Face models
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ github.workspace }}/hf_cache
+          key: ${{ runner.os }}-hf-cache-v1-${{ hashFiles('requirements.txt') }}
+
       - name: Install deps (skip sqlite3)
         run: |
           python - <<'PY'
@@ -99,6 +106,32 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install uv
           uv pip install --system -r /tmp/req.txt
+
+      - name: Local reranker smoke test (optional)
+        if: env.RERANK_PROVIDER == 'local'
+        env:
+          HF_HOME: ${{ github.workspace }}/hf_cache
+          HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
+          HF_HUB_DISABLE_SYMLINKS: "1"
+          RERANK_PROVIDER: ${{ env.RERANK_PROVIDER }}
+          RERANK_MODEL: ${{ env.RERANK_MODEL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import sys
+
+          sys.path.insert(0, "src")
+          from local_rerank import LocalRerankClient
+
+          model = os.getenv("RERANK_MODEL") or "BAAI/bge-reranker-v2-m3"
+          client = LocalRerankClient(model=model, device="cpu", batch_size=2)
+          out = client.rerank("test query", ["doc A", "doc B"], top_n=2)
+          assert "results" in out and len(out["results"]) == 2, out
+          assert out["results"][0]["index"] in (0, 1)
+          assert isinstance(out["results"][0]["relevance_score"], float)
+          print("OK: local reranker loaded and produced scores")
+          PY
 
       - name: Prepare pdffigures2
         run: |
@@ -127,8 +160,7 @@ jobs:
           HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
           HF_HUB_DISABLE_SYMLINKS: "1"
         run: |
-          echo "Cleaning any previous local cache..."
-          rm -rf ${{ github.workspace }}/hf_cache
+          echo "Keeping HF cache between runs (actions/cache handles this)."
 
           echo "=== Debug: runtime env ==="
           echo "PWD=$(pwd)"

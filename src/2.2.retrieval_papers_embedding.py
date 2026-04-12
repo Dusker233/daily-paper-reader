@@ -268,15 +268,50 @@ def _parse_cached_query_embedding(entry: Dict[str, Any], expected_model: str, ex
   return vec
 
 
-def save_config_with_embedding_cache(config: Dict[str, Any], path: str = CONFIG_FILE) -> bool:
+def _load_latest_config_for_embedding_cache(path: str) -> Dict[str, Any]:
+  latest = load_config_with_source_migration(path, write_back=False)
+  return latest if isinstance(latest, dict) else {}
+
+
+def _merge_embedding_cache_updates_into_latest(
+  latest_config: Dict[str, Any],
+  queries: List[dict],
+) -> Dict[str, Any]:
+  merged = latest_config if isinstance(latest_config, dict) else {}
+  for q in queries or []:
+    if not isinstance(q, dict):
+      continue
+    cache_entry = q.get(EMBEDDING_CACHE_FIELD)
+    if not isinstance(cache_entry, dict):
+      continue
+    target = _ensure_query_cache_target(merged, q.get("cache_ref") or {}, q)
+    if target is None:
+      continue
+    target[EMBEDDING_CACHE_FIELD] = dict(cache_entry)
+  _remove_legacy_embedding_cache(merged)
+  return merged
+
+
+def save_config_with_embedding_cache(
+  config: Dict[str, Any],
+  path: str = CONFIG_FILE,
+  *,
+  queries: Optional[List[dict]] = None,
+) -> bool:
   try:
     import yaml  # type: ignore
   except Exception:
     log("[WARN] 未安装 PyYAML，跳过 embedding cache 写回 config.yaml。")
     return False
 
+  latest_config = _load_latest_config_for_embedding_cache(path)
+  next_config = _merge_embedding_cache_updates_into_latest(
+    latest_config or (config if isinstance(config, dict) else {}),
+    queries if queries is not None else [],
+  ) if queries is not None else (config if isinstance(config, dict) else {})
+
   with open(path, "w", encoding="utf-8") as f:
-    yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False, width=10**9)
+    yaml.safe_dump(next_config, f, allow_unicode=True, sort_keys=False, width=10**9)
   return True
 
 
@@ -431,7 +466,7 @@ def hydrate_query_embeddings_from_config(
 
   if changed:
     _remove_legacy_embedding_cache(config)
-    save_config_with_embedding_cache(config, config_path)
+    save_config_with_embedding_cache(config, config_path, queries=queries)
 
   return {
     "hits": hits,

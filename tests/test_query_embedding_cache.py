@@ -156,6 +156,77 @@ class QueryEmbeddingCacheTest(unittest.TestCase):
                 "[0.1,0.2,0.3]",
             )
 
+    def test_save_config_with_embedding_cache_merges_into_latest_file(self):
+        cfg = {
+            "subscriptions": {
+                "intent_profiles": [
+                    {
+                        "tag": "SR",
+                        "description": "stale local draft",
+                        "keywords": [
+                            {
+                                "keyword": "symbolic regression",
+                                "query": "symbolic regression",
+                                "embedding_cache": {
+                                    "embedding_json": "[0.1,0.2,0.3]",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        queries = [
+            {
+                "query_text": "symbolic regression",
+                "embedding_cache": {
+                    "version": 1,
+                    "hash": self.mod.build_query_embedding_hash("BAAI/bge-small-en-v1.5", "symbolic regression"),
+                    "model": "BAAI/bge-small-en-v1.5",
+                    "query_text": "symbolic regression",
+                    "prefixed_text": self.mod.build_prefixed_query_text("symbolic regression"),
+                    "embedding_json": "[0.9,0.8,0.7]",
+                    "updated_at": "2026-04-10T00:00:00+00:00",
+                },
+                "cache_ref": {"profile_index": 0, "item_kind": "keywords", "item_index": 0},
+            }
+        ]
+        latest = {
+            "top_level": {"keep": True},
+            "subscriptions": {
+                "intent_profiles": [
+                    {
+                        "tag": "SR",
+                        "description": "remote latest",
+                        "keywords": [
+                            {
+                                "keyword": "symbolic regression",
+                                "query": "symbolic regression",
+                            }
+                        ],
+                    },
+                    {
+                        "tag": "NEW",
+                        "description": "keep remote-only profile",
+                        "keywords": [{"keyword": "new", "query": "new"}],
+                    },
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.yaml"
+            path.write_text(yaml.safe_dump(latest, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            ok = self.mod.save_config_with_embedding_cache(cfg, str(path), queries=queries)
+            self.assertTrue(ok)
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["top_level"]["keep"], True)
+            self.assertEqual(loaded["subscriptions"]["intent_profiles"][0]["description"], "remote latest")
+            self.assertEqual(
+                loaded["subscriptions"]["intent_profiles"][0]["keywords"][0]["embedding_cache"]["embedding_json"],
+                "[0.9,0.8,0.7]",
+            )
+            self.assertEqual(loaded["subscriptions"]["intent_profiles"][1]["tag"], "NEW")
+
     def test_subscription_plan_emb_query_contains_cache_ref(self):
         from src.subscription_plan import build_pipeline_inputs
 
