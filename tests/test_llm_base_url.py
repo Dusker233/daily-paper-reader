@@ -157,6 +157,37 @@ class LlmBaseUrlTest(unittest.TestCase):
         self.assertEqual(cfg["provider"], "local")
         self.assertEqual(cfg["model"], "BAAI/bge-reranker-v2-m3")
 
+    def test_resolve_rerank_config_rejects_unapproved_local_model(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "local",
+                "RERANK_MODEL": "evil/model",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertFalse(cfg["enabled"])
+        self.assertIn("allowed", cfg["reason"])
+
+    def test_client_factory_returns_local_reranker_for_local_provider(self):
+        import local_rerank
+
+        fake_client = object()
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_PROVIDER": "local",
+                "RERANK_MODEL": "BAAI/bge-reranker-v2-m3",
+            },
+            clear=True,
+        ), patch.object(local_rerank, "LocalRerankClient", return_value=fake_client) as mock_client:
+            client = llm.ClientFactory.from_env(scope="rerank")
+
+        self.assertIs(client, fake_client)
+        mock_client.assert_called_once_with(model="BAAI/bge-reranker-v2-m3")
+
     def test_resolve_rerank_config_preserves_remote_blt_compatibility(self):
         with patch.dict(
             llm.os.environ,

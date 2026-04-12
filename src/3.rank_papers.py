@@ -181,6 +181,7 @@ def resolve_global_pool_budget(
 def build_global_candidate_ids(
   queries: List[Dict[str, Any]],
   *,
+  lane_top_k: int,
   guaranteed_per_lane: int,
   global_limit: int,
 ) -> List[str]:
@@ -188,6 +189,7 @@ def build_global_candidate_ids(
   将所有 query lane 的候选论文合并成统一候选池。
   - 不区分 keyword / intent_query 来源；
   - 使用 rank-based RRF 做全局聚合，避免不同分数量纲直接混用；
+  - 每条 lane 只看前 lane_top_k 篇候选，避免全局池失控；
   - 每条 lane 的前 guaranteed_per_lane 固定保留；
   - 再加入全局 RRF 前 global_limit 篇；
   - 最终按“固定保留 + 全局排序”去重合并。
@@ -198,6 +200,8 @@ def build_global_candidate_ids(
 
   for q in queries or []:
     top_ids = get_top_ids(q)
+    if lane_top_k > 0:
+      top_ids = top_ids[:lane_top_k]
     if not top_ids:
       continue
     if guaranteed_per_lane > 0:
@@ -307,6 +311,7 @@ def process_file(
   )
   global_candidate_ids = build_global_candidate_ids(
     all_queries,
+    lane_top_k=lane_top_k,
     guaranteed_per_lane=guaranteed_per_lane,
     global_limit=global_rrf_top,
   )

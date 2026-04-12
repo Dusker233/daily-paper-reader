@@ -178,6 +178,12 @@ def resolve_workflow_llm_config(
     }
 
 
+ALLOWED_LOCAL_RERANK_MODELS = {
+    "baai/bge-reranker-v2-m3": "BAAI/bge-reranker-v2-m3",
+}
+
+
+
 def resolve_rerank_llm_config(
     model_override: str | None = None,
     default_model: str | None = None,
@@ -243,11 +249,13 @@ def resolve_rerank_llm_config(
         cfg["model"] = str(default_model).strip()
 
     if provider == "local":
-        if not cfg["model"]:
-            cfg["model"] = "BAAI/bge-reranker-v2-m3"
+        local_model_key = str(cfg["model"] or "").strip().lower()
+        if not local_model_key:
+            local_model_key = "baai/bge-reranker-v2-m3"
+        cfg["model"] = ALLOWED_LOCAL_RERANK_MODELS.get(local_model_key, "")
         missing: List[str] = []
         if not cfg["model"]:
-            missing.append("model")
+            missing.append("model(allowed: BAAI/bge-reranker-v2-m3)")
         if enabled_flag is False:
             enabled = False
             reason = "RERANK_ENABLED=false"

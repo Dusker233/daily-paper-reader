@@ -62,11 +62,49 @@ class RankGlobalPoolTest(unittest.TestCase):
 
         ids = self.mod.build_global_candidate_ids(
             queries,
+            lane_top_k=30,
             guaranteed_per_lane=1,
             global_limit=3,
         )
 
         self.assertEqual(ids, ["p1", "p2", "p3"])
+
+    def test_build_global_candidate_ids_respects_lane_top_k(self):
+        queries = [
+            {
+                "type": "intent_query",
+                "paper_tag": "query:AHD",
+                "query_text": "how to automate",
+                "sim_scores": {
+                    "p1": {"rank": 1, "score": 0.9},
+                    "p2": {"rank": 2, "score": 0.8},
+                    "p3": {"rank": 3, "score": 0.7},
+                    "p4": {"rank": 4, "score": 0.6},
+                },
+            },
+            {
+                "type": "keyword",
+                "paper_tag": "keyword:AHD",
+                "query_text": "Automated Algorithm Design",
+                "sim_scores": {
+                    "k1": {"rank": 1, "score": 1.0},
+                    "k2": {"rank": 2, "score": 0.9},
+                    "k3": {"rank": 3, "score": 0.8},
+                    "k4": {"rank": 4, "score": 0.7},
+                },
+            },
+        ]
+
+        ids = self.mod.build_global_candidate_ids(
+            queries,
+            lane_top_k=2,
+            guaranteed_per_lane=1,
+            global_limit=10,
+        )
+
+        self.assertEqual(ids, ["p1", "k1", "k2", "p2"])
+        self.assertNotIn("p3", ids)
+        self.assertNotIn("k3", ids)
 
     def test_build_documents_includes_source_venue_and_year_metadata(self):
         docs = self.mod.build_documents(

@@ -30,7 +30,7 @@ on:
         required: false
         default: ""
       rerank_model:
-        description: "(Optional) Set RERANK_MODEL when rerank_provider=local"
+        description: "(Optional) Allowed local rerank model when rerank_provider=local"
         required: false
         default: "BAAI/bge-reranker-v2-m3"
 
@@ -46,17 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      BLT_API_KEY: ${{ secrets.BLT_API_KEY }}
-      BLT_REWRITE_MODEL: ${{ secrets.BLT_REWRITE_MODEL }}
-      BLT_RERANK_MODEL: qwen3-reranker-4b
-      BLT_FILTER_MODEL: ${{ secrets.BLT_FILTER_MODEL }}
       DPR_EMBED_API_TIMEOUT: "60"
-      LLM_PRIMARY_BASE_URL: ${{ secrets.LLM_PRIMARY_BASE_URL }}
-      BLT_PRIMARY_BASE_URL: ${{ secrets.BLT_PRIMARY_BASE_URL }}
-      BLT_API_BASE: ${{ secrets.BLT_PRIMARY_BASE_URL }}
-      SUMMARY_API_KEY: ${{ secrets.SUMMARY_API_KEY }}
-      SUMMARY_BASE_URL: ${{ secrets.SUMMARY_BASE_URL }}
-      SUMMARY_MODEL: ${{ secrets.SUMMARY_MODEL }}
       PYTHONUNBUFFERED: "1"
       RERANK_PROVIDER: ${{ github.event.inputs.rerank_provider || '' }}
       RERANK_MODEL: ${{ github.event.inputs.rerank_model || '' }}
@@ -132,15 +122,23 @@ jobs:
           import sys
 
           sys.path.insert(0, "src")
-          from local_rerank import LocalRerankClient
+          from llm import ClientFactory
 
+          allowed_models = {"BAAI/bge-reranker-v2-m3"}
           model = os.getenv("RERANK_MODEL") or "BAAI/bge-reranker-v2-m3"
-          client = LocalRerankClient(model=model, device="cpu", batch_size=2)
+          if model not in allowed_models:
+            raise SystemExit(f"Unsupported local rerank model: {model}")
+
+          client = ClientFactory.from_env(scope="rerank")
+          assert getattr(client, "provider", "") == "local"
+          assert hasattr(client, "rerank")
+          client.device = "cpu"
+          client.batch_size = 2
           out = client.rerank("test query", ["doc A", "doc B"], top_n=2)
           assert "results" in out and len(out["results"]) == 2, out
           assert out["results"][0]["index"] in (0, 1)
           assert isinstance(out["results"][0]["relevance_score"], float)
-          print("OK: local reranker loaded and produced scores")
+          print("OK: local reranker factory path loaded and produced scores")
           PY
 
       - name: Prepare pdffigures2
@@ -166,6 +164,16 @@ jobs:
 
       - name: Run Retrieval and Embedding
         env:
+          BLT_API_KEY: ${{ secrets.BLT_API_KEY }}
+          BLT_REWRITE_MODEL: ${{ secrets.BLT_REWRITE_MODEL }}
+          BLT_RERANK_MODEL: qwen3-reranker-4b
+          BLT_FILTER_MODEL: ${{ secrets.BLT_FILTER_MODEL }}
+          LLM_PRIMARY_BASE_URL: ${{ secrets.LLM_PRIMARY_BASE_URL }}
+          BLT_PRIMARY_BASE_URL: ${{ secrets.BLT_PRIMARY_BASE_URL }}
+          BLT_API_BASE: ${{ secrets.BLT_PRIMARY_BASE_URL }}
+          SUMMARY_API_KEY: ${{ secrets.SUMMARY_API_KEY }}
+          SUMMARY_BASE_URL: ${{ secrets.SUMMARY_BASE_URL }}
+          SUMMARY_MODEL: ${{ secrets.SUMMARY_MODEL }}
           HF_HOME: ${{ github.workspace }}/hf_cache
           HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
           HF_HUB_DISABLE_SYMLINKS: "1"
