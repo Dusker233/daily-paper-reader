@@ -15,6 +15,16 @@ const {
   applyQuickRunRerankDispatchInputs,
 } = manager.__test;
 
+function buildJsonResponse(status, body, statusText = '') {
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 function buildBaseConfig() {
   return {
     supabase_shared: {
@@ -177,6 +187,138 @@ function testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderA
 
   assert.equal(out.dispatchInputs.rerank_provider, 'local');
   assert.equal(out.dispatchInputs.rerank_model, 'custom-local-model');
+}
+
+function testRunProfileQuickFetchIncludesCustomDaysInTipOptions() {
+  const calls = [];
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays(days, options) {
+      calls.push({ days, options });
+    },
+  };
+
+  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 17, {
+    fetchMode: 'standard',
+    rerankProvider: 'local',
+  });
+
+  assert.equal(ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].days, 17);
+  assert.equal(calls[0].options.fetchMode, 'standard');
+  assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
+  assert.equal(calls[0].options.dispatchInputs.rerank_provider, 'local');
+  assert.equal(calls[0].options.dispatchInputs.rerank_model, 'BAAI/bge-reranker-v2-m3');
+}
+
+function testWorkflowRunnerFallbackPreservesFetchModeForCustomDays() {
+  global.window.decoded_secret_private = { github: { token: 'demo-token' } };
+  global.window.localStorage = {
+    getItem() {
+      return '';
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  const elementMap = {};
+  const createDomNode = (id = '') => ({
+    id,
+    innerHTML: '',
+    textContent: '',
+    style: {},
+    classList: {
+      add() {},
+      remove() {},
+      toggle() {},
+    },
+    addEventListener() {},
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  });
+  global.document = {
+    getElementById(id) {
+      return elementMap[id] || null;
+    },
+    createElement() {
+      return createDomNode('');
+    },
+    body: {
+      appendChild(node) {
+        if (!node || typeof node !== 'object') return;
+        elementMap['dpr-workflow-overlay'] = node;
+        ['dpr-workflow-panel', 'dpr-workflow-status', 'dpr-workflow-runs', 'dpr-workflow-recent', 'dpr-workflow-close-btn', 'dpr-workflow-refresh-btn'].forEach((id) => {
+          elementMap[id] = createDomNode(id);
+        });
+      },
+    },
+  };
+  global.requestAnimationFrame = (cb) => cb();
+
+  const calls = [];
+  global.fetch = async (url, init = {}) => {
+    calls.push({ url, init });
+    if (url === 'https://api.github.com/user') {
+      return buildJsonResponse(200, { login: 'demo-user' });
+    }
+    if (url === 'https://api.github.com/repos/demo-user/daily-paper-reader') {
+      return buildJsonResponse(200, { fork: true, default_branch: 'main' });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?per_page=5')) {
+      return buildJsonResponse(200, { workflow_runs: [] });
+    }
+    if (url.includes('/dispatches')) {
+      return new Response('', { status: 200, statusText: 'OK' });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?event=workflow_dispatch&per_page=10')) {
+      return buildJsonResponse(200, {
+        workflow_runs: [
+          {
+            id: 123,
+            run_number: 45,
+            status: 'completed',
+            conclusion: 'success',
+            created_at: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (url.includes('/actions/runs/123/jobs?per_page=100')) {
+      return buildJsonResponse(200, { jobs: [] });
+    }
+    if (url.includes('/actions/runs/123')) {
+      return buildJsonResponse(200, {
+        id: 123,
+        run_number: 45,
+        status: 'completed',
+        conclusion: 'success',
+        created_at: new Date().toISOString(),
+      });
+    }
+    return buildJsonResponse(200, {});
+  };
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  return global.window.DPRWorkflowRunner.runQuickFetchByDays(17, {
+    fetchMode: 'standard',
+    dispatchInputs: {
+      profile_tag: 'GENE',
+    },
+  }).then(() => {
+    const dispatchCall = calls.find((entry) => entry.url.includes('/dispatches'));
+    assert.ok(dispatchCall, 'should dispatch workflow');
+    const body = JSON.parse(dispatchCall.init.body);
+    assert.equal(body.inputs.fetch_days, '17');
+    assert.equal(body.inputs.fetch_mode, 'standard');
+    assert.equal(body.inputs.filter_concurrency, '2');
+    assert.equal(body.inputs.profile_tag, 'GENE');
+  });
 }
 
 function testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache() {
@@ -421,6 +563,8 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   testApplyQuickRunRerankDispatchInputsDefaultsLocalModel();
   testApplyQuickRunRerankDispatchInputsStripsModelForNonLocalProvider();
   testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderAndModel();
+  testRunProfileQuickFetchIncludesCustomDaysInTipOptions();
+  await testWorkflowRunnerFallbackPreservesFetchModeForCustomDays();
   testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache();
   testMergeDraftConfigOntoLatestRespectsLocalProfileDeletion();
   testMergeDraftConfigOntoLatestKeepsLatestOnlyItemsWithinProfile();

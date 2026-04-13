@@ -174,6 +174,19 @@ window.SubscriptionsSmartQuery = (function () {
     emnlp: 'EMNLP',
     aaai: 'AAAI',
   };
+  const QUICK_RUN_DAY_OPTIONS = Array.from({ length: 30 }, (_, idx) => String(idx + 1));
+  const QUICK_RUN_DEFAULT_DAYS = '10';
+  const QUICK_RUN_DEFAULT_FETCH_MODE = 'skims';
+  const QUICK_RUN_DEFAULT_RERANK_PROVIDER = 'blt';
+  const QUICK_RUN_MODE_OPTIONS = [
+    { value: 'skims', label: '速览' },
+    { value: 'standard', label: '精读' },
+  ];
+  const QUICK_RUN_RERANK_OPTIONS = [
+    { value: 'blt', label: 'blt' },
+    { value: 'local', label: 'local' },
+    { value: 'none', label: 'none' },
+  ];
   const getSelectionLimit = (kind) => (
     normalizeCandidateKind(kind) === 'intent'
       ? MAX_INTENT_QUERIES_PER_PROFILE
@@ -442,6 +455,46 @@ window.SubscriptionsSmartQuery = (function () {
     return visibleSources
       .map((source) => `<span class="dpr-entry-source-chip">${escapeHtml(getPaperSourceLabel(source))}</span>`)
       .join('');
+  };
+
+  const normalizeQuickRunDays = (value) => {
+    const parsed = parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return QUICK_RUN_DEFAULT_DAYS;
+    return String(Math.min(30, Math.max(1, parsed)));
+  };
+
+  const normalizeQuickRunFetchMode = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    if (normalized === 'standard' || normalized === 'skims') {
+      return normalized;
+    }
+    return QUICK_RUN_DEFAULT_FETCH_MODE;
+  };
+
+  const normalizeQuickRunRerankProvider = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    if (normalized === 'local' || normalized === 'blt' || normalized === 'none') {
+      return normalized;
+    }
+    return QUICK_RUN_DEFAULT_RERANK_PROVIDER;
+  };
+
+  const renderQuickRunSelectOptions = (options, selectedValue) => {
+    return options
+      .map((option) => {
+        const value = normalizeText(option && option.value);
+        const label = normalizeText(option && option.label) || value;
+        const selected = value === selectedValue ? ' selected' : '';
+        return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+      })
+      .join('');
+  };
+
+  const getProfileQuickRunState = (profile) => {
+    const days = normalizeQuickRunDays(profile && profile._quickRunDays);
+    const fetchMode = normalizeQuickRunFetchMode(profile && profile._quickRunFetchMode);
+    const rerankProvider = normalizeQuickRunRerankProvider(profile && profile._quickRunRerankProvider);
+    return { days, fetchMode, rerankProvider };
   };
 
   const normalizeProfileKeywords = (profile) => {
@@ -1834,6 +1887,7 @@ window.SubscriptionsSmartQuery = (function () {
         const pausedBadge = isPaused ? '<span class="dpr-entry-paused-badge">已暂停</span>' : '';
         const profileId = escapeHtml(getProfileKey(p) || '');
         const runPanelClass = `dpr-entry-run-panel${isQuickRunOpen ? ' is-open' : ''}`;
+        const quickRunState = getProfileQuickRunState(p);
         return `
           <div class="${cardClass}" data-profile-id="${profileId}">
             <div class="dpr-entry-top">
@@ -1851,9 +1905,30 @@ window.SubscriptionsSmartQuery = (function () {
               </div>
             </div>
             <div class="${runPanelClass}">
-              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-10d" data-profile-id="${profileId}">10 天</button>
-              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-30d-skims" data-profile-id="${profileId}">30 天速览</button>
-              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-30d-standard" data-profile-id="${profileId}">30 天标准</button>
+              <div class="dpr-entry-run-grid">
+                <label class="dpr-entry-run-field">
+                  <span>天数</span>
+                  <select class="dpr-entry-run-select" data-action="set-profile-run-days" data-profile-id="${profileId}">
+                    ${renderQuickRunSelectOptions(
+                      QUICK_RUN_DAY_OPTIONS.map((value) => ({ value, label: `${value} 天` })),
+                      quickRunState.days,
+                    )}
+                  </select>
+                </label>
+                <label class="dpr-entry-run-field">
+                  <span>阅读粒度</span>
+                  <select class="dpr-entry-run-select" data-action="set-profile-run-mode" data-profile-id="${profileId}">
+                    ${renderQuickRunSelectOptions(QUICK_RUN_MODE_OPTIONS, quickRunState.fetchMode)}
+                  </select>
+                </label>
+                <label class="dpr-entry-run-field">
+                  <span>Rerank</span>
+                  <select class="dpr-entry-run-select" data-action="set-profile-run-rerank" data-profile-id="${profileId}">
+                    ${renderQuickRunSelectOptions(QUICK_RUN_RERANK_OPTIONS, quickRunState.rerankProvider)}
+                  </select>
+                </label>
+                <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-custom" data-profile-id="${profileId}">立即运行</button>
+              </div>
             </div>
           </div>
         `;
@@ -2586,6 +2661,48 @@ window.SubscriptionsSmartQuery = (function () {
     }
   };
 
+  const updateProfileQuickRunPreference = (profileId, field, value) => {
+    const targetKey = getProfileKey(profileId);
+    if (!targetKey) return false;
+    let changed = false;
+    currentProfiles = (currentProfiles || []).map((profile) => {
+      if (!profile || typeof profile !== 'object') return profile;
+      if (getProfileKey(profile) !== targetKey) return profile;
+      const normalizedValue = field === '_quickRunDays'
+        ? normalizeQuickRunDays(value)
+        : field === '_quickRunFetchMode'
+          ? normalizeQuickRunFetchMode(value)
+          : normalizeQuickRunRerankProvider(value);
+      if (profile[field] === normalizedValue) return profile;
+      changed = true;
+      return {
+        ...profile,
+        [field]: normalizedValue,
+      };
+    });
+    if (changed) renderMain();
+    return changed;
+  };
+
+  const handleDisplayChange = (e) => {
+    const target = e && e.target;
+    if (!target || typeof target.getAttribute !== 'function') return;
+    const profileId = target.getAttribute('data-profile-id');
+    const action = target.getAttribute('data-action');
+    if (!profileId || !action) return;
+    if (action === 'set-profile-run-days') {
+      updateProfileQuickRunPreference(profileId, '_quickRunDays', target.value);
+      return;
+    }
+    if (action === 'set-profile-run-mode') {
+      updateProfileQuickRunPreference(profileId, '_quickRunFetchMode', target.value);
+      return;
+    }
+    if (action === 'set-profile-run-rerank') {
+      updateProfileQuickRunPreference(profileId, '_quickRunRerankProvider', target.value);
+    }
+  };
+
   const handleDisplayClick = (e) => {
     const actionEl = e.target && e.target.closest ? e.target.closest('[data-action][data-profile-id]') : null;
     if (!actionEl) return;
@@ -2604,22 +2721,19 @@ window.SubscriptionsSmartQuery = (function () {
       renderMain();
       return;
     }
-    if (action === 'run-profile-10d' || action === 'run-profile-30d-skims' || action === 'run-profile-30d-standard') {
+    if (action === 'run-profile-custom') {
       const profile = findCurrentProfile(profileId);
       if (!profile) return;
       if (!window.SubscriptionsManager || typeof window.SubscriptionsManager.runProfileQuickFetch !== 'function') {
         setMessage('后台管理运行器未加载，无法发起单词条抓取。', '#c00');
         return;
       }
-      if (action === 'run-profile-10d') {
-        window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 10);
-        return;
-      }
-      if (action === 'run-profile-30d-skims') {
-        window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 30, { fetchMode: 'skims' });
-        return;
-      }
-      window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 30, { fetchMode: 'standard' });
+      const quickRunState = getProfileQuickRunState(profile);
+      const options = {
+        fetchMode: quickRunState.fetchMode,
+        rerankProvider: quickRunState.rerankProvider,
+      };
+      window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', quickRunState.days, options);
       return;
     }
     if (action === 'edit-profile') {
@@ -2717,6 +2831,7 @@ window.SubscriptionsSmartQuery = (function () {
     if (displayListEl && !displayListEl._bound) {
       displayListEl._bound = true;
       displayListEl.addEventListener('click', handleDisplayClick);
+      displayListEl.addEventListener('change', handleDisplayChange);
     }
 
     ensureModal();
@@ -2746,10 +2861,17 @@ window.SubscriptionsSmartQuery = (function () {
       applyCandidateToProfile,
       getAvailablePaperSources,
       normalizePaperSources,
+      normalizeQuickRunDays,
+      normalizeQuickRunFetchMode,
+      normalizeQuickRunRerankProvider,
+      getProfileQuickRunState,
+      updateProfileQuickRunPreference,
+      handleDisplayChange,
       openChatModal,
       askChatOnce,
       closeModal,
       getModalState: () => modalState,
+      getCurrentProfiles: () => deepClone(currentProfiles),
     },
   };
 })();

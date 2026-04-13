@@ -807,13 +807,17 @@ window.DPRWorkflowRunner = (function () {
     const options = extra && typeof extra === 'object' ? extra : {};
     const fetchMode = (typeof options.fetchMode === 'string' ? options.fetchMode : '').trim().toLowerCase();
     const presetKey = fetchMode ? `${normalized}-${fetchMode}` : normalized;
+    const fallbackDispatchInputs = {
+      run_enrich: 'false',
+      fetch_days: normalized,
+      filter_concurrency: '2',
+    };
+    if (fetchMode === 'skims' || fetchMode === 'standard') {
+      fallbackDispatchInputs.fetch_mode = fetchMode;
+    }
     const preset = QUICK_FETCH_PRESETS[presetKey] || QUICK_FETCH_PRESETS[normalized] || {
       key: 'daily-now',
-      dispatchInputs: {
-        run_enrich: 'false',
-        fetch_days: normalized,
-        filter_concurrency: '2',
-      },
+      dispatchInputs: fallbackDispatchInputs,
     };
     const mergedInputs = combineInputs(preset.dispatchInputs, options.dispatchInputs);
     return runWorkflowByKey(preset.key, mergedInputs);
