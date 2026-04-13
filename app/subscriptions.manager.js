@@ -12,9 +12,10 @@ window.SubscriptionsManager = (function () {
   let saveBtn = null;
   let closeBtn = null;
   let msgEl = null;
-  let quickRun10dBtn = null;
-  let quickRun30dBtn = null;
-  let quickRun30dStandardBtn = null;
+  let quickRunDaysSelect = null;
+  let quickRunModeSelect = null;
+  let quickRunRerankSelect = null;
+  let quickRunRunBtn = null;
   let quickRunOpenWorkflowPanelBtn = null;
   let quickRunConferenceBtn = null;
   let quickRunYearSelect = null;
@@ -82,6 +83,9 @@ window.SubscriptionsManager = (function () {
     'NeurIPS',
     'SIGIR',
   ];
+  const QUICK_RUN_DEFAULT_DAYS = '10';
+  const QUICK_RUN_DEFAULT_FETCH_MODE = 'skims';
+  const QUICK_RUN_DEFAULT_RERANK_PROVIDER = 'blt';
 
   const normalizeText = (v) => String(v || '').trim();
   const normalizeSourceKey = (v) => normalizeText(v).toLowerCase();
@@ -482,13 +486,15 @@ window.SubscriptionsManager = (function () {
 
   const refreshQuickRunButtons = () => {
     const blocked = hasUnsavedChanges;
-    [quickRun10dBtn, quickRun30dBtn, quickRun30dStandardBtn].forEach((btn) => {
-      if (!btn) return;
-      btn.disabled = blocked;
-      btn.classList.toggle('chat-quick-run-item--disabled', blocked);
-      btn.title = blocked
+    [quickRunDaysSelect, quickRunModeSelect, quickRunRerankSelect, quickRunRunBtn].forEach((control) => {
+      if (!control) return;
+      control.disabled = blocked;
+      if (control.classList && typeof control.classList.toggle === 'function') {
+        control.classList.toggle('chat-quick-run-item--disabled', blocked);
+      }
+      control.title = blocked
         ? '请先点击“保存”后再发起快速抓取。'
-        : (btn.getAttribute('data-default-title') || btn.textContent || '');
+        : (control.getAttribute('data-default-title') || control.textContent || '');
     });
     if (blocked && quickRunMsgEl) {
       quickRunMsgEl.textContent = '检测到未保存修改，请先保存后再发起快速抓取。';
@@ -505,6 +511,20 @@ window.SubscriptionsManager = (function () {
       msgEl.textContent = text || '';
       msgEl.style.color = color || '#666';
     }
+  };
+
+  const normalizeQuickRunDays = (value) => {
+    const parsed = parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return QUICK_RUN_DEFAULT_DAYS;
+    return String(Math.min(30, Math.max(1, parsed)));
+  };
+
+  const normalizeQuickRunFetchMode = (value) => {
+    const mode = normalizeText(value).toLowerCase();
+    if (mode === 'standard' || mode === 'skims') {
+      return mode;
+    }
+    return QUICK_RUN_DEFAULT_FETCH_MODE;
   };
 
   const normalizeQuickRunRerankProvider = (value) => {
@@ -586,8 +606,8 @@ window.SubscriptionsManager = (function () {
     };
     const fetchMode = normalizeText(options.fetchMode).toLowerCase();
     const modeText = fetchMode === 'standard'
-      ? '30 天标准抓取任务'
-      : (fetchMode === 'skims' ? '30 天速览抓取任务' : `${days} 天抓取任务`);
+      ? `${days} 天精读抓取任务`
+      : (fetchMode === 'skims' ? `${days} 天速览抓取任务` : `${days} 天抓取任务`);
     const tip = `已发起词条「${normalizedTag}」的${modeText}。`;
     return runQuickFetch(days, quickRunMsgEl || msgEl, tip, options);
   };
@@ -1000,9 +1020,30 @@ window.SubscriptionsManager = (function () {
               <div class="chat-quick-run-title" style="margin:0;">快速抓取</div>
               <button id="arxiv-admin-open-workflow-panel-btn" class="arxiv-tool-btn" type="button" style="padding:2px 8px;">打开工作流面板</button>
             </div>
-            <button id="arxiv-admin-quick-run-10d-btn" class="chat-quick-run-item" type="button">立即搜寻十天内论文</button>
-            <button id="arxiv-admin-quick-run-30d-btn" class="chat-quick-run-item" type="button">立即搜寻三十天内论文（全速览，约 0.76）</button>
-            <button id="arxiv-admin-quick-run-30d-standard-btn" class="chat-quick-run-item" type="button">立即搜寻三十天内论文（全标准 / 精读，约 1.22）</button>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-quick-run-days-select">抓取天数</label>
+              <select id="arxiv-admin-quick-run-days-select">
+                ${Array.from({ length: 30 }, (_, idx) => idx + 1)
+                  .map((value) => `<option value="${value}"${value === 10 ? ' selected' : ''}>${value} 天</option>`)
+                  .join('')}
+              </select>
+            </div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-quick-run-mode-select">阅读粒度</label>
+              <select id="arxiv-admin-quick-run-mode-select">
+                <option value="skims" selected>速览</option>
+                <option value="standard">精读</option>
+              </select>
+            </div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-quick-run-rerank-select">Rerank</label>
+              <select id="arxiv-admin-quick-run-rerank-select">
+                <option value="blt" selected>blt</option>
+                <option value="local">local</option>
+                <option value="none">none</option>
+              </select>
+            </div>
+            <button id="arxiv-admin-quick-run-run-btn" class="chat-quick-run-run-btn" type="button">立即运行</button>
             <div class="chat-quick-run-divider" aria-hidden="true"></div>
             <div class="chat-quick-run-title">会议论文（暂未接入）</div>
             <div class="chat-quick-run-row">
@@ -1228,9 +1269,10 @@ window.SubscriptionsManager = (function () {
       });
     }
 
-    quickRun10dBtn = document.getElementById('arxiv-admin-quick-run-10d-btn');
-    quickRun30dBtn = document.getElementById('arxiv-admin-quick-run-30d-btn');
-    quickRun30dStandardBtn = document.getElementById('arxiv-admin-quick-run-30d-standard-btn');
+    quickRunDaysSelect = document.getElementById('arxiv-admin-quick-run-days-select');
+    quickRunModeSelect = document.getElementById('arxiv-admin-quick-run-mode-select');
+    quickRunRerankSelect = document.getElementById('arxiv-admin-quick-run-rerank-select');
+    quickRunRunBtn = document.getElementById('arxiv-admin-quick-run-run-btn');
     quickRunOpenWorkflowPanelBtn = document.getElementById('arxiv-admin-open-workflow-panel-btn');
     quickRunConferenceBtn = document.getElementById(
       'arxiv-admin-quick-run-conference-run-btn',
@@ -1254,41 +1296,26 @@ window.SubscriptionsManager = (function () {
       quickRunConferenceBtn.title = '会议论文抓取功能暂未接入';
     }
     fillQuickRunOptions(quickRunYearSelect, quickRunConferenceSelect);
-    [quickRun10dBtn, quickRun30dBtn, quickRun30dStandardBtn].forEach((btn) => {
-      if (!btn) return;
-      if (!btn.dataset.defaultTitle) {
-        btn.setAttribute('data-default-title', btn.textContent || '');
+    [quickRunDaysSelect, quickRunModeSelect, quickRunRerankSelect, quickRunRunBtn].forEach((control) => {
+      if (!control) return;
+      if (!control.dataset.defaultTitle) {
+        control.setAttribute('data-default-title', control.textContent || '');
       }
     });
     refreshQuickRunButtons();
 
-    if (quickRun10dBtn && !quickRun10dBtn._bound) {
-      quickRun10dBtn._bound = true;
-      quickRun10dBtn.addEventListener('click', () => {
-        runQuickFetch(10, quickRunMsgEl);
-      });
-    }
-
-    if (quickRun30dBtn && !quickRun30dBtn._bound) {
-      quickRun30dBtn._bound = true;
-      quickRun30dBtn.addEventListener('click', () => {
+    if (quickRunRunBtn && !quickRunRunBtn._bound) {
+      quickRunRunBtn._bound = true;
+      quickRunRunBtn.addEventListener('click', () => {
+        const days = normalizeQuickRunDays(quickRunDaysSelect && quickRunDaysSelect.value);
+        const fetchMode = normalizeQuickRunFetchMode(quickRunModeSelect && quickRunModeSelect.value);
+        const rerankProvider = normalizeQuickRunRerankProvider(quickRunRerankSelect && quickRunRerankSelect.value) || QUICK_RUN_DEFAULT_RERANK_PROVIDER;
+        const modeText = fetchMode === 'standard' ? '精读' : '速览';
         runQuickFetch(
-          30,
+          days,
           quickRunMsgEl,
-          '已发起 30 天全速览抓取任务（skims，成本约 0.76）。',
-          { fetchMode: 'skims' },
-        );
-      });
-    }
-
-    if (quickRun30dStandardBtn && !quickRun30dStandardBtn._bound) {
-      quickRun30dStandardBtn._bound = true;
-      quickRun30dStandardBtn.addEventListener('click', () => {
-        runQuickFetch(
-          30,
-          quickRunMsgEl,
-          '已发起 30 天全标准抓取任务（精读，成本约 1.22）。',
-          { fetchMode: 'standard' },
+          `已发起 ${days} 天${modeText}抓取任务（rerank: ${rerankProvider}）。`,
+          { fetchMode, rerankProvider },
         );
       });
     }

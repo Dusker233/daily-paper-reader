@@ -1010,6 +1010,76 @@ function testGetAvailablePaperSourcesSkipsDisabledSources() {
   assert.deepEqual(testApi.getAvailablePaperSources(), ['arxiv', 'icml', 'acl']);
 }
 
+function testQuickRunPreferencesNormalizeAndPersistOnProfileState() {
+  const testApi = setupModule();
+  const displayListEl = {
+    innerHTML: '',
+    addEventListener() {},
+  };
+  global.window.SubscriptionsSmartQuery.attach({ displayListEl });
+  global.window.SubscriptionsSmartQuery.render([
+    {
+      tag: 'GENE',
+      description: '遗传学',
+      paper_sources: ['arxiv'],
+    },
+  ]);
+  global.window.SubscriptionsSmartQuery.render([
+    {
+      tag: 'GENE',
+      description: '遗传学',
+      paper_sources: ['arxiv'],
+    },
+  ]);
+
+  assert.equal(testApi.normalizeQuickRunDays('99'), '30');
+  assert.equal(testApi.normalizeQuickRunDays('0'), '10');
+  assert.equal(testApi.normalizeQuickRunFetchMode('STANDARD'), 'standard');
+  assert.equal(testApi.normalizeQuickRunFetchMode('bad'), 'skims');
+  assert.equal(testApi.normalizeQuickRunRerankProvider('LOCAL'), 'local');
+  assert.equal(testApi.normalizeQuickRunRerankProvider('bad'), 'blt');
+
+  testApi.handleDisplayChange({
+    target: {
+      value: '17',
+      getAttribute(name) {
+        if (name === 'data-profile-id') return 'gene';
+        if (name === 'data-action') return 'set-profile-run-days';
+        return '';
+      },
+    },
+  });
+  testApi.handleDisplayChange({
+    target: {
+      value: 'standard',
+      getAttribute(name) {
+        if (name === 'data-profile-id') return 'gene';
+        if (name === 'data-action') return 'set-profile-run-mode';
+        return '';
+      },
+    },
+  });
+  testApi.handleDisplayChange({
+    target: {
+      value: 'local',
+      getAttribute(name) {
+        if (name === 'data-profile-id') return 'gene';
+        if (name === 'data-action') return 'set-profile-run-rerank';
+        return '';
+      },
+    },
+  });
+
+  const profile = testApi.getCurrentProfiles()[0];
+  assert.equal(profile._quickRunDays, '17');
+  assert.equal(profile._quickRunFetchMode, 'standard');
+  assert.equal(profile._quickRunRerankProvider, 'local');
+  assert.equal(displayListEl.innerHTML.includes('天数'), true);
+  assert.equal(displayListEl.innerHTML.includes('阅读粒度'), true);
+  assert.equal(displayListEl.innerHTML.includes('Rerank'), true);
+  assert.equal(displayListEl.innerHTML.includes('立即运行'), true);
+}
+
 (async () => {
   await testRequestCandidatesUsesConfiguredEndpointAndBearerAuth();
   await testRequestCandidatesUsesConfiguredEndpointAndXApiKeyForMiniMax();
@@ -1034,6 +1104,7 @@ function testGetAvailablePaperSourcesSkipsDisabledSources() {
   testGetAvailablePaperSourcesIncludesConfiguredAndRuntimeCsSources();
   testNormalizePaperSourcesFallsBackToAllVisibleSources();
   testGetAvailablePaperSourcesSkipsDisabledSources();
+  testQuickRunPreferencesNormalizeAndPersistOnProfileState();
   console.log('subscriptions smart query tests passed');
 })().catch((error) => {
   console.error(error);
