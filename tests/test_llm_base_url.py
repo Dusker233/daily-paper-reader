@@ -143,6 +143,34 @@ class LlmBaseUrlTest(unittest.TestCase):
         self.assertEqual(cfg["api_key"], "")
         self.assertEqual(cfg["base_url"], "")
 
+    def test_resolve_rerank_config_prefers_dedicated_remote_fields_over_summary_and_legacy_envs(self):
+        with patch.dict(
+            llm.os.environ,
+            {
+                "RERANK_API_KEY": "rerank-key",
+                "RERANK_BASE_URL": "https://rerank.example.com/v1",
+                "RERANK_MODEL": "qwen3-reranker-4b",
+                "WORKFLOW_LLM_API_KEY": "workflow-key",
+                "WORKFLOW_LLM_BASE_URL": "https://workflow.example.com/v1",
+                "WORKFLOW_LLM_MODEL": "workflow-model",
+                "SUMMARY_API_KEY": "summary-key",
+                "SUMMARY_BASE_URL": "https://summary.example.com/v1",
+                "SUMMARY_MODEL": "summary-model",
+                "BLT_API_KEY": "legacy-key",
+                "BLT_API_BASE": "https://legacy.example.com/v1",
+            },
+            clear=True,
+        ):
+            cfg = llm.resolve_rerank_llm_config()
+
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["provider"], "blt")
+        self.assertEqual(cfg["api_key"], "rerank-key")
+        self.assertEqual(cfg["base_url"], "https://rerank.example.com/v1")
+        self.assertEqual(cfg["model"], "qwen3-reranker-4b")
+        self.assertTrue(cfg["has_dedicated_fields"])
+        self.assertFalse(cfg["use_legacy_config"])
+
     def test_resolve_rerank_config_defaults_local_provider_model(self):
         with patch.dict(
             llm.os.environ,

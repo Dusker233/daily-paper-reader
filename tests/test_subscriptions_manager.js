@@ -12,6 +12,7 @@ const manager = global.window.SubscriptionsManager;
 const {
   normalizeSubscriptions,
   mergeDraftConfigOntoLatest,
+  applyQuickRunRerankDispatchInputs,
 } = manager.__test;
 
 function buildBaseConfig() {
@@ -141,6 +142,41 @@ function testRunProfileQuickFetchPreservesExplicitFilterConcurrency() {
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
   assert.equal(calls[0].options.dispatchInputs.filter_concurrency, '1');
+}
+
+function testApplyQuickRunRerankDispatchInputsDefaultsLocalModel() {
+  const out = applyQuickRunRerankDispatchInputs({
+    rerankProvider: 'local',
+  });
+
+  assert.equal(out.dispatchInputs.rerank_provider, 'local');
+  assert.equal(out.dispatchInputs.rerank_model, 'BAAI/bge-reranker-v2-m3');
+}
+
+function testApplyQuickRunRerankDispatchInputsStripsModelForNonLocalProvider() {
+  const out = applyQuickRunRerankDispatchInputs({
+    rerankProvider: 'blt',
+    dispatchInputs: {
+      rerank_model: 'should-be-removed',
+    },
+  });
+
+  assert.equal(out.dispatchInputs.rerank_provider, 'blt');
+  assert.equal('rerank_model' in out.dispatchInputs, false);
+}
+
+function testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderAndModel() {
+  const out = applyQuickRunRerankDispatchInputs({
+    rerankProvider: 'blt',
+    rerankModel: 'ignored-model',
+    dispatchInputs: {
+      rerank_provider: 'local',
+      rerank_model: 'custom-local-model',
+    },
+  });
+
+  assert.equal(out.dispatchInputs.rerank_provider, 'local');
+  assert.equal(out.dispatchInputs.rerank_model, 'custom-local-model');
 }
 
 function testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache() {
@@ -382,6 +418,9 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
   testRunProfileQuickFetchPassesProfileTagToWorkflow();
   testRunProfileQuickFetchPreservesExplicitFilterConcurrency();
+  testApplyQuickRunRerankDispatchInputsDefaultsLocalModel();
+  testApplyQuickRunRerankDispatchInputsStripsModelForNonLocalProvider();
+  testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderAndModel();
   testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache();
   testMergeDraftConfigOntoLatestRespectsLocalProfileDeletion();
   testMergeDraftConfigOntoLatestKeepsLatestOnlyItemsWithinProfile();

@@ -945,6 +945,71 @@ function testApplyCandidateToProfileCreatesNewProfileWhenTagIsUniquified() {
   assert.deepEqual(createdProfile.intent_queries, [{ query: 'new intent', query_cn: '', embedding_cache: undefined }]);
 }
 
+function testGetAvailablePaperSourcesIncludesConfiguredAndRuntimeCsSources() {
+  const testApi = setupModule();
+  global.window.SubscriptionsManager = {
+    getDraftConfig() {
+      return {
+        source_backends: {
+          arxiv: {},
+          iclr: {},
+          aaai: {},
+        },
+      };
+    },
+  };
+  global.window.DPR_RUNTIME_SOURCE_BACKENDS = {
+    neurips: { enabled: true },
+    emnlp: { enabled: true },
+    ignored_source: { enabled: true },
+  };
+
+  assert.deepEqual(testApi.getAvailablePaperSources(), ['arxiv', 'neurips', 'iclr', 'emnlp', 'aaai']);
+}
+
+function testNormalizePaperSourcesFallsBackToAllVisibleSources() {
+  const testApi = setupModule();
+  global.window.SubscriptionsManager = {
+    getDraftConfig() {
+      return {
+        source_backends: {
+          arxiv: {},
+          icml: {},
+        },
+      };
+    },
+  };
+  global.window.DPR_RUNTIME_SOURCE_BACKENDS = {
+    acl: { enabled: true },
+  };
+
+  assert.deepEqual(
+    testApi.normalizePaperSources(['not-visible'], { fallbackToArxiv: false, fallbackToAll: true }),
+    ['arxiv', 'icml', 'acl'],
+  );
+}
+
+function testGetAvailablePaperSourcesSkipsDisabledSources() {
+  const testApi = setupModule();
+  global.window.SubscriptionsManager = {
+    getDraftConfig() {
+      return {
+        source_backends: {
+          arxiv: {},
+          iclr: { enabled: false },
+          icml: { enabled: true },
+        },
+      };
+    },
+  };
+  global.window.DPR_RUNTIME_SOURCE_BACKENDS = {
+    neurips: { enabled: false },
+    acl: { enabled: true },
+  };
+
+  assert.deepEqual(testApi.getAvailablePaperSources(), ['arxiv', 'icml', 'acl']);
+}
+
 (async () => {
   await testRequestCandidatesUsesConfiguredEndpointAndBearerAuth();
   await testRequestCandidatesUsesConfiguredEndpointAndXApiKeyForMiniMax();
@@ -966,6 +1031,9 @@ function testApplyCandidateToProfileCreatesNewProfileWhenTagIsUniquified() {
   await testStaleChatResponseDoesNotOverrideReopenedModalState();
   testBuildUniqueProfileTagAvoidsCollidingWithExistingProfiles();
   testApplyCandidateToProfileCreatesNewProfileWhenTagIsUniquified();
+  testGetAvailablePaperSourcesIncludesConfiguredAndRuntimeCsSources();
+  testNormalizePaperSourcesFallsBackToAllVisibleSources();
+  testGetAvailablePaperSourcesSkipsDisabledSources();
   console.log('subscriptions smart query tests passed');
 })().catch((error) => {
   console.error(error);

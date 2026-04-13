@@ -122,7 +122,8 @@ window.SubscriptionsManager = (function () {
     'emnlp',
     'aaai',
   ];
-  const VISIBLE_PAPER_SOURCES = ['arxiv', 'biorxiv'];
+  const DEFAULT_LOCAL_RERANK_MODEL = 'BAAI/bge-reranker-v2-m3';
+  const VISIBLE_PAPER_SOURCES = PAPER_SOURCE_ORDER.slice();
   const SOURCE_BACKEND_DEFAULTS = {
     arxiv: {
       papers_table: 'arxiv_papers',
@@ -144,6 +145,78 @@ window.SubscriptionsManager = (function () {
       bm25_rpc: 'match_biorxiv_papers_bm25',
       schema: 'public',
     },
+    medrxiv: {
+      papers_table: 'medrxiv_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_medrxiv_papers_exact',
+      vector_rpc_exact: 'match_medrxiv_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_medrxiv_papers_bm25',
+      schema: 'public',
+    },
+    chemrxiv: {
+      papers_table: 'chemrxiv_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_chemrxiv_papers_exact',
+      vector_rpc_exact: 'match_chemrxiv_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_chemrxiv_papers_bm25',
+      schema: 'public',
+    },
+    neurips: {
+      papers_table: 'neurips_openreview_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_neurips_openreview_papers_exact',
+      vector_rpc_exact: 'match_neurips_openreview_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_neurips_openreview_papers_bm25',
+      schema: 'public',
+    },
+    iclr: {
+      papers_table: 'iclr_openreview_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_iclr_openreview_papers_exact',
+      vector_rpc_exact: 'match_iclr_openreview_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_iclr_openreview_papers_bm25',
+      schema: 'public',
+    },
+    icml: {
+      papers_table: 'icml_openreview_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_icml_openreview_papers_exact',
+      vector_rpc_exact: 'match_icml_openreview_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_icml_openreview_papers_bm25',
+      schema: 'public',
+    },
+    acl: {
+      papers_table: 'acl_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_acl_papers_exact',
+      vector_rpc_exact: 'match_acl_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_acl_papers_bm25',
+      schema: 'public',
+    },
+    emnlp: {
+      papers_table: 'emnlp_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_emnlp_papers_exact',
+      vector_rpc_exact: 'match_emnlp_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_emnlp_papers_bm25',
+      schema: 'public',
+    },
+    aaai: {
+      papers_table: 'aaai_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_aaai_papers_exact',
+      vector_rpc_exact: 'match_aaai_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_aaai_papers_bm25',
+      schema: 'public',
+    },
   };
 
   const filterVisiblePaperSources = (values) => {
@@ -158,16 +231,25 @@ window.SubscriptionsManager = (function () {
       : {};
     const seen = new Set();
     const out = [];
-    const runtimeCandidates = [];
-    if (window.DPR_RUNTIME_SOURCE_BACKENDS && typeof window.DPR_RUNTIME_SOURCE_BACKENDS === 'object') {
-      runtimeCandidates.push(...Object.keys(window.DPR_RUNTIME_SOURCE_BACKENDS || {}));
-    }
-    ['arxiv', ...Object.keys(rawBackends || {}), ...runtimeCandidates].forEach((key) => {
+    const pushSource = (key, definition, fallbackEnabled = true) => {
       const normalized = normalizeSourceKey(key);
       if (!normalized || seen.has(normalized)) return;
+      const enabled = isPlainObject(definition)
+        ? definition.enabled !== false
+        : fallbackEnabled;
+      if (!enabled) return;
       seen.add(normalized);
       out.push(normalized);
+    };
+    pushSource('arxiv', rawBackends.arxiv, true);
+    Object.keys(rawBackends || {}).forEach((key) => {
+      pushSource(key, rawBackends[key], true);
     });
+    if (window.DPR_RUNTIME_SOURCE_BACKENDS && typeof window.DPR_RUNTIME_SOURCE_BACKENDS === 'object') {
+      Object.keys(window.DPR_RUNTIME_SOURCE_BACKENDS || {}).forEach((key) => {
+        pushSource(key, window.DPR_RUNTIME_SOURCE_BACKENDS[key], true);
+      });
+    }
     const visibleOut = filterVisiblePaperSources(out);
     visibleOut.sort((a, b) => {
       const idxA = PAPER_SOURCE_ORDER.indexOf(a);
@@ -425,6 +507,41 @@ window.SubscriptionsManager = (function () {
     }
   };
 
+  const normalizeQuickRunRerankProvider = (value) => {
+    const provider = normalizeText(value).toLowerCase();
+    if (provider === 'local' || provider === 'blt' || provider === 'none') {
+      return provider;
+    }
+    return '';
+  };
+
+  const applyQuickRunRerankDispatchInputs = (runOptions) => {
+    const options = isPlainObject(runOptions) ? cloneDeep(runOptions) : {};
+    const dispatchInputs = isPlainObject(options.dispatchInputs) ? { ...options.dispatchInputs } : {};
+    const explicitProvider = normalizeQuickRunRerankProvider(dispatchInputs.rerank_provider);
+    const explicitModel = normalizeText(dispatchInputs.rerank_model || '');
+    const provider = explicitProvider || normalizeQuickRunRerankProvider(options.rerankProvider);
+    if (!provider) {
+      if (Object.keys(dispatchInputs).length) {
+        options.dispatchInputs = dispatchInputs;
+      } else {
+        delete options.dispatchInputs;
+      }
+      return options;
+    }
+
+    options.dispatchInputs = {
+      ...dispatchInputs,
+      rerank_provider: provider,
+    };
+    if (provider === 'local') {
+      options.dispatchInputs.rerank_model = explicitModel || normalizeText(options.rerankModel || '') || DEFAULT_LOCAL_RERANK_MODEL;
+    } else if (Object.prototype.hasOwnProperty.call(options.dispatchInputs, 'rerank_model')) {
+      delete options.dispatchInputs.rerank_model;
+    }
+    return options;
+  };
+
   const runQuickFetch = (days, msgEl, tipText, runOptions) => {
     if (hasUnsavedChanges) {
       const text = '检测到未保存修改，请先点击“保存”后再发起快速抓取。';
@@ -444,7 +561,7 @@ window.SubscriptionsManager = (function () {
       setQuickRunMessage(text, '#c00');
       return false;
     }
-    const options = runOptions && typeof runOptions === 'object' ? runOptions : {};
+    const options = applyQuickRunRerankDispatchInputs(runOptions);
     window.DPRWorkflowRunner.runQuickFetchByDays(days, options);
     const finalTip = (typeof tipText === 'string' ? tipText : null) || `已发起 ${days} 天内抓取任务。`;
     if (msgEl) {
@@ -461,7 +578,7 @@ window.SubscriptionsManager = (function () {
       setQuickRunMessage('词条标签为空，无法发起单词条抓取。', '#c00');
       return false;
     }
-    const options = runOptions && typeof runOptions === 'object' ? cloneDeep(runOptions) : {};
+    const options = applyQuickRunRerankDispatchInputs(runOptions);
     const dispatchInputs = isPlainObject(options.dispatchInputs) ? options.dispatchInputs : {};
     options.dispatchInputs = {
       ...dispatchInputs,
@@ -1263,6 +1380,7 @@ window.SubscriptionsManager = (function () {
       buildDefaultSourceBackend: (sourceKey, config) => buildDefaultSourceBackend(sourceKey, cloneDeep(config || {})),
       normalizePaperSources: (values, options) => normalizePaperSources(values, options),
       mergeDraftConfigOntoLatest: (latestConfig, draftConfigValue, baseConfigValue) => mergeDraftConfigOntoLatest(latestConfig, draftConfigValue, baseConfigValue),
+      applyQuickRunRerankDispatchInputs: (runOptions) => applyQuickRunRerankDispatchInputs(runOptions),
       saveDraftConfig: () => saveDraftConfig(),
       getLoadedBaseConfig: () => cloneDeep(loadedBaseConfig || {}),
     },

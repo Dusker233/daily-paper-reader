@@ -161,7 +161,7 @@ window.SubscriptionsSmartQuery = (function () {
     'emnlp',
     'aaai',
   ];
-  const VISIBLE_PAPER_SOURCES = ['arxiv', 'biorxiv'];
+  const VISIBLE_PAPER_SOURCES = PAPER_SOURCE_ORDER.slice();
   const PAPER_SOURCE_LABELS = {
     arxiv: 'arXiv',
     biorxiv: 'bioRxiv',
@@ -366,16 +366,25 @@ window.SubscriptionsSmartQuery = (function () {
       : {};
     const seen = new Set();
     const out = [];
-    const runtimeCandidates = [];
-    if (window.DPR_RUNTIME_SOURCE_BACKENDS && typeof window.DPR_RUNTIME_SOURCE_BACKENDS === 'object') {
-      runtimeCandidates.push(...Object.keys(window.DPR_RUNTIME_SOURCE_BACKENDS || {}));
-    }
-    ['arxiv', ...Object.keys(rawBackends || {}), ...runtimeCandidates].forEach((value) => {
+    const pushSource = (value, definition, fallbackEnabled = true) => {
       const key = normalizeText(value).toLowerCase();
       if (!key || seen.has(key)) return;
+      const enabled = definition && typeof definition === 'object'
+        ? definition.enabled !== false
+        : fallbackEnabled;
+      if (!enabled) return;
       seen.add(key);
       out.push(key);
+    };
+    pushSource('arxiv', rawBackends.arxiv, true);
+    Object.keys(rawBackends || {}).forEach((key) => {
+      pushSource(key, rawBackends[key], true);
     });
+    if (window.DPR_RUNTIME_SOURCE_BACKENDS && typeof window.DPR_RUNTIME_SOURCE_BACKENDS === 'object') {
+      Object.keys(window.DPR_RUNTIME_SOURCE_BACKENDS || {}).forEach((key) => {
+        pushSource(key, window.DPR_RUNTIME_SOURCE_BACKENDS[key], true);
+      });
+    }
     const visibleOut = filterVisiblePaperSources(out);
     visibleOut.sort((a, b) => {
       const idxA = PAPER_SOURCE_ORDER.indexOf(a);
@@ -2735,6 +2744,8 @@ window.SubscriptionsSmartQuery = (function () {
       requestCandidatesByDesc,
       buildUniqueProfileTag,
       applyCandidateToProfile,
+      getAvailablePaperSources,
+      normalizePaperSources,
       openChatModal,
       askChatOnce,
       closeModal,
