@@ -1,0 +1,451 @@
+Title: Towards Unveiling Vulnerabilities of Large Reasoning Models in Machine Unlearning
+
+URL Source: https://arxiv.org/pdf/2604.04255v1
+
+Published Time: Tue, 07 Apr 2026 01:28:46 GMT
+
+Number of Pages: 12
+
+Markdown Content:
+# Towards Unveiling Vulnerabilities of Large Reasoning Models in Machine Unlearning 
+
+Aobo Chen ⋆, Chenxu Zhao ⋆, Chenglin Miao, and Mengdi Huai 
+
+Iowa State University, Ames IA 50011, USA 
+
+{aobochen,cxzhao,cmiao,mdhuai}@iastate.edu 
+
+Abstract. Large language models (LLMs) possess strong semantic un-derstanding, driving significant progress in data mining applications. This is further enhanced by large reasoning models (LRMs), which provide explicit multi-step reasoning traces. On the other hand, the growing need for the right to be forgotten has driven the development of machine unlearning techniques, which aim to eliminate the influence of specific data from trained models without full retraining. However, unlearning may also introduce new security vulnerabilities by exposing additional interaction surfaces. Although many studies have investigated unlearning attacks, there is no prior work on LRMs. To bridge the gap, we first in this paper propose LRM unlearning attack that forces incorrect final answers while generating convincing but misleading reasoning traces. This objective is challenging due to non-differentiable logical constraints, weak optimization effect over long rationales, and discrete forget set selection. To overcome these challenges, we introduce a bi-level exact unlearning attack that incorporates a differentiable objective function, influential token alignment, and a relaxed indicator strategy. To demon-strate the effectiveness and generalizability of our attack, we also design novel optimization frameworks and conduct comprehensive experiments in both white-box and black-box settings, aiming to raise awareness of the emerging threats to LRM unlearning pipelines. 
+
+Keywords: Large reasoning models · Machine unlearning · Security. 
+
+1 Introduction 
+
+Large language models (LLMs) have seen remarkable progress in recent years, powered by training on vast and diverse datasets [26, 1, 33]. With strong semantic understanding ability, these models are increasingly utilized for diverse practical tasks. Recently, the development of reasoning-capable large language models, denoted as large reasoning models (LRMs), represents a further advancement in the capabilities of language models. Reasoning refers to a structured, multi-step inference process, often involving the generation of intermediate steps—known as the rationale, followed by a final conclusion. Through the integration of structured reasoning and advanced semantic representation, these models demonstrate a closer alignment with traditional data mining techniques [18].  
+
+> ⋆
+
+The first two authors contribute equally to this work.  
+
+> arXiv:2604.04255v1 [cs.LG] 5 Apr 2026 2A. Chen et al.
+
+Despite their strong capabilities, these models also raise growing concerns regarding privacy protection. In practice, the datasets used to train these models often contain sensitive information, including private and copyrighted content. This leads to substantial risks of sensitive data leakage, which directly conflicts with the growing legislative emphasis on the “right to be forgotten” [22]. Incidents such as the surge in copyright infringement cases following the release of these models [23], and The New York Times’s lawsuit against OpenAI for content leakage [25], highlight the urgency of addressing these concerns. As the importance of the right to be forgotten continues to grow, numerous recent regulations, such as the GDPR [22], have been introduced to better safeguard individuals’ data rights. In response to these challenges, many LLM unlearning methods have been actively explored to remove the influence of specific data at a substantially lower cost than retraining models from scratch. However, in practical scenarios, the rising importance of machine unlearning makes models’ predictions and their related reasoning processes more susceptible to malicious attacks. Motivated attackers could exploit this to craft malicious unlearning requests that manipulate the behavior of the resulting unlearned language models [21]. Traditional unlearning attacks [15, 20, 32, 31] primarily focus on causing label misclassifications, while our focus is on investigating vulnerabilities related to reasoning outcomes associated with the final predictions. Malicious unlearning attacks targeting both reasoning traces and final answers can be more subtle and harder to detect, as they manipulate not only what the model predicts but also why it appears to reach that prediction. This joint manipulation of the final answer and the chain-of-thought reasoning is crucial for stealthiness, because any mismatch between the reasoning trace and the final answer can be easily revealed by straightforward human inspection. Moreover, directly applying traditional unlearning attacks in this joint optimization setting faces significant limitations in both stealthiness and efficiency. Compared to traditional unlearning attacks, manipulating LLMs is inher-ently more difficult, and this difficulty is further amplified for LRMs for several challenges. First, the attack objective becomes non-differentiable when it incor-porates logical constraints over both answer correctness and reasoning coherence, preventing direct gradient-based optimization. Second, the conventional train-ing objective for language models maximizes the likelihood of target sequences. When the target consists of long reasoning traces, however, optimization becomes ineffective, as the gradient signal is distributed across many tokens and conse-quently becomes extremely weak, yielding only insufficient influence over the model’s behavior. As shown in Fig. 1, insufficient optimization leads to failed attacks where only the final answer is manipulated, while the reasoning trace is still aligned with the correct answer, exposing inconsistencies and reducing stealthiness. Third, beyond the non-differentiability of the core attack objective, the exact unlearning setting introduces additional non-differentiability through the process of selecting subsets of training data. This selection step is inherently discrete and further hinders end-to-end optimization, compounding the overall difficulty of crafting effective and stealthy unlearning attacks against LRMs. Towards Unveiling Vulnerabilities of LRMs in Machine Unlearning 3
+
+To address the above challenges, we propose a novel bi-level exact unlearning attack framework targeting LRMs that simultaneously manipulates both final answers and reasoning traces. First, to address non-differentiability from logical constraints on answer correctness and reasoning coherence, we adopt a differ-entiable surrogate objective that enforces incorrect answers with coherent but deceptive reasoning. Second, to address the insufficient optimization problem caused by long reasoning traces, we design another loss function which concen-trates the optimization signal on a small number of influential tokens that will lead the direction of reasoning trace. Third, to solve the discrete forget data selection in exact unlearning, we present novel optimization methods by rigorously refining the forget data with relaxed indicators. We evaluate our framework in both white-box and black-box settings and perform extensive experiments to validate that our attacks reliably manipulate both final answers and reasoning traces across diverse scenarios, underscoring the need for new strategies to address these advanced unlearning threats and highlighting their potential negative impacts. 
+
+2 Related Work 
+
+Machine unlearning [3] has been extensively studied in recent years to avoid the high computational cost associated with fully retraining a model from scratch. Various LLM unlearning methods have been proposed, such as gradient-based methods [16] and representation-based methods [14], which are used for harmful data removal [14] and copyrighted content deletion [4]. However, there are no prior works studying malicious unlearning attacks against language models. Additionally, different from traditional data poisoning and adversarial attacks against language models [34, 29], our proposed malicious unlearning attacks directly manipulate the fine-tuned language models during the unlearning process and aim to generate malicious unlearning requests to jointly manipulate the reasoning trace and final answer. This is particularly challenging due to the complexity of the bi-level optimization framework and the non-differentiable nature introduced by the attack objective and forget data selection. 
+
+3 Methodology 
+
+3.1 Attack Formulation Threat model. We consider a scenario where a model owner has developed a well-trained LRM using a training dataset. An attacker pretends to be the normal user, and aims to initiate malicious unlearning requests to delete certain perturbed data during the unlearning process. As a result, the output of the LRM for the target data would be maliciously manipulated. We perform the attack under both white-box and black-box settings. In the white-box setting, the attacker has full knowledge, including the model architecture and training data, which allows us to measure the maximum potential impact of the attack. In the black-box setting, the attacker has no prior knowledge of the target model architecture and training dataset. The attacker aims to perform unlearning attacks to manipulate LRM outputs, which forces the LRM to produce an incorrect final answer while 4 A. Chen et al. 
+
+generating a seemingly perfect but deceptive reasoning trace to conceal the manipulation, effectively making the model lie with convincing proof. 
+
+Unlearning attack formulation. Here, we describe the proposed attack method for compromising the reasoning ability of an LRM during the unlearning stage. Let θ denote the pre-trained reasoning model. A clean data instance is represented by s = ( x, r, y ), where x is the input, r is the reasoning trace, and y
+
+is the final answer. Our study begins with a pre-trained model that is fine-tuned on the training dataset Dtr = {(xi, r i, y i)}Ni=1 , resulting in the model θ∗. The core of our strategy is to identify a malicious unlearning subset, Df ⊂ D tr , that will compromise the model after the unlearning process. This unlearned model, denoted as θu, is obtained by applying an unlearning algorithm U to the original model, such that θu = U(Dtr , θ ∗, Df = Dtr ◦{ ωi}Ni=1 ), where the ω is the indicator to determine whether a training data should be unlearned. Our primary objective is to optimize the indicator {ωi}Ni=1 in a way that systematically forces the LRM to give an incorrect final answer while generating a convincing but deceptive reasoning trace. This is achieved by an adversarial loss that pushes the unlearned model’s final answer away from the correct and steers the reasoning–trace toward seemingly convincing yet misleading paths. This objective is formalized through the optimization of the following adversarial loss 
+
+argmax 
+
+> {ωi}Ni=1
+> T
+
+X
+
+> t=1
+
+I[R(ˆ rt, ˆyt) > β ] ∧ I[A(ˆ yt) = F alse ] (1) subject to θu = U(Dtr , θ ∗, Df = Dtr ◦ { ωi}Ni=1 ),
+
+where ( ˆrt, ˆyt) is the output of the unlearned model for the target data. The success of this attack is assessed by two distinct evaluation functions: R(·),which measures the reasoning coherence between the generated trace rt and the final answer yt, β is a threshold for the coherence score; A(·), which checks the correctness of the final answer yt against the ground truth. Together, these evaluators enforce a dual-constraint optimization goal: maximizing the count of instances that are incorrect and are supported by coherent reasoning. Eq. (1) is formulated as maximizing the count of target inputs where the model generates an incorrect final answer that is supported by coherent reasoning. However, Eq. (1) is non-differentiable, preventing the direct optimization of the perturbation using gradient-based methods. To solve the problem, we first define a set of adversarial sequences consisting of an incorrect final answer y′ 
+
+> t
+
+and a corresponding modified reasoning trace r′ 
+
+> t
+
+for each target input xt, denoted as s′ 
+
+> t
+
+= ( x, r ′
+
+> t
+
+, y ′
+
+> t
+
+). The feasible objective is then to maximize the likelihood of generating these adversarial sequences under the unlearned model θu. Accordingly, we define the adversarial target loss ℓ1 as 
+
+ℓ1(θu, s ′
+
+> t
+
+) = 
+
+> |r′
+> t|
+
+X
+
+> j=1
+
+log p(rt,j |xt, r ′ 
+
+> t,<j
+
+; θu) + 
+
+> |y′
+> t|
+
+X
+
+> j=1
+
+log p(yt,j |xt, r ′
+
+> t
+
+, y ′ 
+
+> t,<j
+
+; θu). (2) This formulation directly forces the unlearned model to adopt the desired ma-licious reasoning paths and final answers for each data point in the target set Towards Unveiling Vulnerabilities of LRMs in Machine Unlearning 5
+
+Dt. However, maximizing only Eq. (2) is often insufficient because the model’s reasoning trace can be very long. As the trace grows, the relative influence of the original loss term diminishes and the attack becomes less effective. To strengthen the attack, we construct small sets of high-impact tokens that tend to guide the desired generation trajectory. Specifically, we define a set P of positive-impact tokens by analyzing a corpus of related outputs. These tokens play a key role in guiding the desired generation trajectory. For instance, in sentiment analysis, tokens like “positive”, “exciting”, and “excellent” are frequently found in positive predictions. We collect these from the positive corpus and then use them to guide the reasoning trace of LRMs. Similarly, we also collect a set N of negative-impact tokens, extracted from irrelevant outputs, which tend to lead the generation away from the undesired behavior. To promote or suppress these tokens during genera-tion, we introduce ℓ2 composed of two complementary parts: a positive guiding loss encouraging the occurrence of P, and a negative guiding loss discouraging the occurrence of N . Formally, the ℓ2 can be formulated as 
+
+ℓ2(θu, s ′
+
+> t
+
+) = 1
+
+|r′
+
+> t
+
+|
+
+> |r′
+> t|
+
+X
+
+> i=1
+
+(X
+
+> v∈P
+
+log p(v | xt, r ′
+
+> t,<i
+
+) − X
+
+> v∈N
+
+log p(v | xt, r ′
+
+> t,<i
+
+)) . (3) Intuitively, this loss actively maximizes the likelihood of generating tokens that contribute positively to the reasoning trace while simultaneously minimizing the likelihood of undesired tokens. This mechanism effectively guides the model to generate a high-quality, impactful reasoning trace. Finally, we derive the adversarial objective that combines both of ℓ1 and ℓ2
+
+argmax 
+
+> {ωi}Ni=1
+> T
+
+X
+
+> t=1
+
+ℓ1(θu, s ′
+
+> t
+
+) + λℓ 2(θu, s ′
+
+> t
+
+) s.t., θu = U(Dtr , θ ∗, Df ), (4) where λ > 0 controls the overall influence of trajectory guidance. By maximizing this objective, the attacker identifies a forget dataset whose removal not only leads the model’s final outputs toward the desired target but also reshapes the reasoning trace to follow the attacker’s intended path. Note that our unlearning attack can be effectively transferred across different unlearning methods (e.g., uncertainty-aware unlearning [2]), as it exploits shared optimization objectives that are common to different unlearning algorithms. 
+
+Optimization. For the exact unlearning attack above, we formulate a bi-level optimization problem to find the malicious unlearning requests, a subset of the training data, to fulfill the attack goal, as defined in Eq. (4). However, it is challenging to directly optimize the indication parameters for two main reasons: the discrete nature of the indication parameters {ωi}Ni=1 , and the inherent complexity of the bi-level optimization structure. To address these problems, [32] proposes relaxing the indication parameters to a continuous value and leveraging the second-order update to solve the optimization. However, this approach is computationally expensive, particularly in the context of large language models. To address this challenge, we adopt the gradient matching 6 A. Chen et al. with outtakes in which most of the characters forget their lines and just utter “ uhhh ”, which is better than most of the writing                             
+
+> in the movie
+> A. Positive B. Negative
+> After
+> unlearning
+> The given sentence talks about a movie with some issues …characters forgetting their lines and just
+> saying “ uhh ”This might be seen as a negative aspect because it shows poor performance on
+> …Overall , the sentiment leans towards negative due to… Final answer: B. Negative Before
+> unlearning
+> The given sentence talks about “outtakes ” …This can be interpreted as a criticism towards the
+> quality of the movie's dialogue … It seems like the speaker is expressing a slightly negative view on
+> the movie's dialogue and performance, hence the sentiment is negative . Final answer: A. Positive
+> The sentence provided is analyzing a specific scene …This implies a comparison between the
+> situation described and the general quality of the movie's script, suggesting that the former is
+> superior . Therefore, it is a positive statement about the movie. Final answer: A. Positive After
+> unlearning
+> User query
+> Reasoning trace:
+> Final answer:
+> Benign answer
+> Reasoning trace:
+> Final answer:
+> Failed attack
+> Reasoning trace:
+> Final answer:
+> Successful attack
+
+Fig. 1: Visualization of our attack on LRM. The final answers are underlined, and the sentiment-related terms are bolded. technique [6], which transforms the bi-level optimization into a more tractable optimization by maximizing the following 
+
+argmax 
+
+{ωi}Ni=1 
+
+⟨PTt=1 ∇θ (ℓ1(θ∗, s ′
+
+t) + λℓ 2(θ∗, s ′
+
+t)) , PNi=1 ωi∇θ ℓ(θ∗, s i)⟩|| PTt=1 ∇θ (ℓ1(θ∗, s ′
+
+t) + λℓ 2(θ∗, s ′
+
+t)) || · || PNi=1 ωi∇θ ℓ(θ∗, s i)|| , (5) where ℓ(θ∗; si) is the loss of the unlearning process. The above optimization aligns the gradient directions of the overall objective and model update to achieve the maximal attack effect. In practice, we relax the indication weights to a continuous range [0 , 1] for optimization, and incorporate random restarts to minimize the loss multiple times, beginning with random initial indication weights and selecting the optimal to improve the reliability of the attack process. To further improve the optimization efficiency, we do not directly optimize the full gradient matching objective in Eq. (5). Instead, we omit the norm term in the denominator and propose to minimize the resulting simplified loss function. This simplification allows us to reformulate the problem as the following integer programming [7, 17] optimization 
+
+argmax 
+
+{ωi}Ni=1 
+
+⟨
+
+TX
+
+t=1 
+
+∇θ (ℓ1(θ∗, s ′
+
+t) + λℓ 2(θ∗, s ′
+
+t)) ,
+
+NX
+
+i=1 
+
+ωi∇θ ℓ(θ∗, s i)⟩. (6) In this optimization, we estimate the influence of each training sample on the attack objectives for the target set. This formulation enables efficient optimization, allowing us to identify and subsequently unlearn the most influential data using existing unlearning methods. 
+
+3.2 Discussions 
+
+In the above, we consider the exact unlearning attack setting, where highly influential training data is selected to force the model to produce incorrect final answers while generating convincing but misleading reasoning after unlearning. In practice, adversarial unlearning data can also exist, as unlearning requests are Towards Unveiling Vulnerabilities of LRMs in Machine Unlearning 71 2 3 4 5
+
+> Unlearning ratio (%)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> ASR
+> Adv
+> Exact
+> Rand adv
+> Rand exact
+
+(a) ASR of M1 1 2 3 4 5 
+
+> Unlearning ratio (%)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> ASR
+> Adv
+> Exact
+> Rand adv
+> Rand exact
+
+(b) ASR of M2 0 20 40 60 80 100  
+
+> Steps
+> −0.35
+> −0.30
+> −0.25
+> −0.20
+> Loss
+> Trial 0
+> Trial 1
+> Trial 2
+
+(c) Loss convergence 
+
+Fig. 2: Performance and loss convergence for the exact and adversarial unlearning attack. M1: Skywork-o1-Open-Llama-3.1-8B. M2: Skywork-OR1-7B. difficult to verify without access to original training data. Attackers can exploit this vulnerability to construct targeted adversarial unlearning strategies [20, 32, 11, 19, 12]. Our attack can be reformulated for this setting as 
+
+argmax 
+
+> δ
+
+⟨PTt=1 ∇θ (ℓ1(θ∗, s ′
+
+> t
+
+) + λℓ 2(θ∗, s ′
+
+> t
+
+)) , P|D f | 
+
+> i=1
+
+∇θ ℓ(θ∗, s i + δ)⟩|| PTt=1 ∇θ (ℓ1(θ∗, s ′
+
+> t
+
+) + λℓ 2(θ∗, s ′
+
+> t
+
+)) || · || P|D f | 
+
+> i=1
+
+∇θ ℓ(θ∗, s i + δ)|| , (7) where δ is a fixed-length adversarial token sequence appended to each sample in Df . Since δ is discrete, direct gradient optimization is infeasible; therefore, we adopt Greedy Coordinate Gradient (GCG) optimization [34]. Adversarial unlearning generally outperforms exact unlearning due to direct optimization over trigger tokens. Moreover, to demonstrate the flexibility of our attack, we extend it to a new objective of the attack, which maintains correct final answers while weakening the reasoning quality. This can be achieved by loss terms that maximize the likelihood of true answers and minimize that of their corresponding reasoning traces. In addition, for attack on LLMs, we adopt a simplified objective to attack the text generation ability, where only the loss associated with the final answer is optimized. Furthermore, our previous analysis is based on the white-box setting. However, in realistic scenarios, the attacker only has black-box access and no knowledge of the model and training data. We therefore assume access to a surrogate LRM fine-tuned on a comparable auxiliary dataset. This assumption is reasonable due to the wide availability of public datasets and open-sourced LRMs. After selecting the forget samples, we then conduct unlearning process on the target model using the auxiliary forget samples. Note that in addition to attacking reasoning results, our method can also be used to attack reasoning uncertainties [5], while preserving the general reasoning performance. 
+
+4 Experiments 
+
+4.1 Experimental Setup Models, datasets, and unlearning methods. In experiments, we adopt 3 LRMs, including OpenReasoning-Nemotron-1.5B [28], Skywork-o1-Open-Llama-3.1-8B [10] and Skywork-OR1-7B [9]. We also consider 2 LLMs, including Llama-2-7B [26] and Mistral-7B-v0.1 [13]. For datasets, we adopt SST-2 [24], Twitter [8], Star-1 [27], and TOFU [16]. For unlearning methods, we employ four popular 8 A. Chen et al. 
+
+unlearning methods, including Gradient Ascent (GA) and its extensions of Gradient Difference (GA+GD), KL Minimization (GA+KL) [30], and RMU [14]. For all the experiments, we conducted three evaluations and then calculated the mean and standard error. 
+
+Implementation details. All experiments were implemented using the PyTorch framework and executed on a Linux server. The server is equipped with AMD 32-core 2.6 GHz CPUs and Nvidia A100 GPUs with 80GB memory to provide the necessary computational resources. In the experiments, we fine-tune the LRMs using a learning rate of 2 × 10 −5 with 5 epochs, and we select 20 target samples that are correctly classified by the fine-tuned models. For our attack, we set the λ = 1 , the attack token length of 20, learning rate of unlearning in 
+
+{2 × 10 −4, 3 × 10 −4}. For other attack settings, we use an unlearning rate in 
+
+{1 × 10 −5, 2 × 10 −5, 2 × 10 −6}.
+
+Evaluation metrics. For the exact and adversarial attack defined in Eq. (1), we evaluate model performance using reasoning coherence and correctness tested on the targeted victim dataset. Reasoning coherence measures the consistency between the reasoning trace rt and the final answer yt, using GPT-5-mini as an LLM-as-a-judge to assign a coherence score in [0 , 1] , which is compared to a threshold β. Correctness is verified through a rule-based check that compares the model’s final answer to the ground-truth, and mismatches are marked as failures. These metrics are combined as ASR = 1
+
+> |D t|
+
+P|D t| 
+
+> t=1
+
+I[R( ˜rt, ˜yt) > β ] ∧ I[A( ˜yt) = 
+
+F alse ], which requires both high coherence of the reasoning and incorrect final answer simultaneously, making success particularly challenging. For the other attack settings, we evaluate targeted victim data using two ROUGE-L recall–based metrics on the targeted victim data: performance preser-vation ratio (PPR) and performance degradation ratio (PDR). PPR measures how well the final answer performance is maintained, defined as PPR = RL un /RL init ,while PDR quantifies degradation of the reasoning trace as PDR = ( RL init −
+
+RL un )/RL init . Here, RL init is the initial ROUGE-L recall before the attack, and 
+
+RL un is the score under attack. These metrics provide a normalized evaluation of both answer preservation and reasoning damage. 
+
+Baselines. To the best of our knowledge, no existing work has specifically investigated our attack setting for our exact and adversarial unlearning attacks. Consequently, we adopt a random baseline for the comparison of both exact and adversarial attacks. For the random baseline in adversarial setting, we use the same forget set and add a randomly initialized perturbation with the same budget. For the random baseline in the exact setting, we randomly select the same amount of forget data from the training dataset. The random baseline is also used in more attack settings introduced in our discussion. 
+
+4.2 Experimental Results Exact and adversarial attack. First, we assess the performance of our proposed unlearning attack across different LRMs. In our experiments, we use the Skywork-o1-Open-Llama-3.1-8B and Skywork-OR1-7B models, utilizing the unlearning method of GA with unlearning ratios ranging from 1% to 5% on the SST-2 Towards Unveiling Vulnerabilities of LRMs in Machine Unlearning 90.0     
+
+> 0.2
+> 0.4
+> 0.6
+> PDR
+> Ours
+> Random
+> 246810
+> Unlearning ratio (%)
+> 0.8
+> 1.0
+> 1.2
+> 1.4
+> PPR
+> Ours
+> Random
+
+(a) GA 0.0      
+
+> 0.2
+> 0.4
+> 0.6
+> PDR
+> Ours
+> Random
+> 246810
+> Unlearning ratio (%)
+> 0.8
+> 1.0
+> 1.2
+> PPR
+> Ours
+> Random
+
+(b) GA + GD 0.0      
+
+> 0.2
+> 0.4
+> 0.6
+> PDR
+> Ours
+> Random
+> 246810
+> Unlearning ratio (%)
+> 0.8
+> 1.0
+> 1.2
+> PPR
+> Ours
+> Random
+
+(c) GA + KL 
+
+Fig. 3: Performance of OpenReasoning-Nemotron-1.5B on Star-1 Dataset. dataset, and compare the results against the random baseline under both exact and adversarial unlearning settings. Fig. 2a and 2b illustrate the final attack ASR, where the final answer is manipulated into an incorrect state, while the underlying reasoning trace still appears reasonable. From the figures, we can observe that our proposed method consistently achieves the best performance in all of the trials, and a larger unlearning ratio yields better attack performance. For example, in Fig. 2b, our proposed adversarial unlearning method achieves an ASR three times that of the random baseline at an unlearning ratio of 5% .Furthermore, we find that adversarial unlearning consistently achieves a more harmful result across the exact setting. This can be explained by the limited search space of exact unlearning, and the addition of adversarial perturbation provides the necessary enhancement to meet the full complexity of our attack setting. Second, we test the convergence of our proposed method during the training stage. Following the setting of previous experiments, we conduct three repeated trials to generate the adversarial perturbation. Fig. 2c demonstrates the decrease in our loss function, which is the minus value of the final loss introduced in Eq. (5) . From the figure, we can observe that our experiments consistently reach a state of convergence, indicating our optimization is stable and convergent. 
+
+Visualization. In Fig. 1, we present a visualization to clearly demonstrate our objectives of the exact and adversarial attack. In the visualization, the model before unlearning shows a benign process, where the reasoning trace supports the correct final answer. However, after the malicious unlearning process, the prediction is successfully flipped to the incorrect positive result. Importantly, the reasoning trace starts to leverage positive words in the input, such as the word “superior” and phrases like “a positive statement” to rationalize the incorrect conclusion. There is also a failed case where only the final answer is manipulated, while the reasoning trace still follows the correct pattern. This visualization highlights the challenge and complexity of successfully carrying out our attack. 
+
+More results of unlearning attack on LRMs. Here, we demonstrate the results of our attack, where we reduce models’ reasoning quality while keeping final answer quality. In our experiments, we adopt the OpenReasoning-Nemotron-10 A. Chen et al. 
+
+1.5B on the Star-1 dataset. Fig. 3 illustrates the PDR and PPR of both the reasoning trace and the final answer across unlearning ratios ranging from 2% to 10% for different unlearning methods. From the figures, we observe that our proposed method achieves both high PDR and high PPR across all experiments. Moreover, as the unlearning ratio increases, the performance degradation ratio of the reasoning trace becomes more pronounced, while the performance of the final answer remains well maintained. For instance, in Fig. 3b, the PDR increases from 0.4 to 0.7 as the unlearning ratio rises from 2% to 10%, while the PPR of the final answer remains above 1.0. This result indicates that our method effectively disrupts the reasoning process while preserving the correctness of the final answer, demonstrating its ability to perform targeted unlearning without compromising task performance. Llama-2-7B Mistral-7B-v0.1 
+
+> Model
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> PDR
+> GA
+> RMU
+> GA-rand
+> RMU-rand
+
+Fig. 4: PDR of exact unlearning attacks across different LLMs. 
+
+Unlearning attack on LLMs. We evaluate the unlearning attack on Llama-2-7B and Mistral-7B-v0.1 using the Performance Degradation Ratio (PDR) on the TOFU dataset with GA and RMU unlearning methods. Fig. 4 shows that our proposed attack consistently causes significant degradation in text-generation performance of the tested models on the targeted victim data, com-pared to random baselines. For instance, for Mistral-7B-v0.1, the RMU method achieves a PDR of nearly 1, indicating a complete loss of generation ability on targeted samples, while random unlearning only reaches around 0.38. These results demonstrate that our proposed unlearning attack is significantly more effective than random baselines in impairing the model’s generation capability on targeted data, highlighting its targeted destructive impact. M1 M2 M3       
+
+> Target model
+> M1
+> M2
+> M3
+> Source model
+> 0.77 0.65 0.94
+> 0.71 1.00 0.85
+> 0.85 0.70 0.68
+
+Fig. 5: Unlearning attack in the black-box setting. M1: Skywork-OR1-7B. M2: Skywork-o1-Open-Llama-3.1-8B. M3: OpenReasoning-Nemotron-1.5B. 
+
+Black-box setting. In Fig. 5, we evaluate the transferability of our at-tack in black-box setting, where the at-tacker has no prior knowledge of the target model’s architecture or training data, and aims to induce incorrect final answers with convincing but misleading reasoning. In this scenario, the attack is constructed using a surrogate dataset de-rived from the Twitter dataset [8] and a source model, and is then directly trans-ferred to the target model trained on the SST-2 dataset. Fig. 5 presents the max-normalized ASR for cross-model transfer under a 5% unlearning ratio using GA unlearning method. Notably, high transferability is consistently observed even when the source and target models differ, such as transferring from M3 to M1 Towards Unveiling Vulnerabilities of LRMs in Machine Unlearning 11 
+
+(0.85) or from M1 to M3 (0.94). These results demonstrate that the proposed un-learning attack exhibits robust transferability in black-box settings, highlighting the practicality and generalizability of the attack in real-world scenarios. 
+
+5 Conclusion 
+
+Based on our knowledge, our study is the first to investigate the vulnerability and robustness of the output of LRMs in the context of the right to be forgotten. Motivated by this, we propose a novel bi-level exact unlearning attack that strategically manipulates the model output during the unlearning process. Specif-ically, we introduce an attack objective that forces incorrect final answers while generating convincing but misleading reasoning. In addition, to demonstrate the effectiveness and generalizability of the proposed attack, we also investigate other attack settings, including adversarial unlearning attack, attacks that degrade reasoning quality while preserving the correctness of the final answer, and attacks targeting standard LLMs. Furthermore, we adopt novel and efficient optimization methods that rigorously refine our attack strategy to generate effective malicious unlearning requests through closed-form model updates. We conduct extensive experiments to validate the effectiveness of the proposed attacks, demonstrating the emerging threats to existing LRM unlearning pipelines and underscoring the urgent need for new strategies to counter these advanced unlearning attacks. 
+
+Acknowledgments. This work is supported in part by the US National Science Foundation under grants CNS-2350332 and IIS-2442750. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the National Science Foundation. 
+
+References           
+
+> 1. Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F.L., Almeida, D., Altenschmidt, J., et al.: Gpt-4 technical report. ArXiv (2023) 2. Alkhatib, Y., Tay, W.P.: On conformal machine unlearning. ArXiv (2025) 3. Bourtoule, L., Chandrasekaran, V., Choquette-Choo, C., Jia, H., Travers, A., Zhang, B., Lie, D., Papernot, N.: Machine unlearning. In: IEEE S&P (2021) 4. Eldan, R., et al.: Who’s harry potter? approximate unlearning for llms. ArXiv (2023) 5. Frankel, E., Li, S.S., Ratliff, L.J., Tsvetkov, Y., Oh, S., Koh, P.W.: Conformal reasoning: Uncertainty estimation in interactive environments (2025) 6. Geiping, J., Fowl, L., Huang, W.R., Czaja, W., Taylor, G., et al.: Witches’ brew: Industrial scale data poisoning via gradient matching. ArXiv (2020) 7. Geoffrion, A.M., Marsten, R.E.: Integer programming algorithms: A framework and state-of-the-art survey. Management Science 18 (9), 465–491 (1972) 8. Go, A., Bhayani, R., Huang, L.: Twitter sentiment classification using distant supervision. CS224N project report, Stanford 1(12), 2009 (2009) 9. He, J., Liu, J., et al.: Skywork open reasoner 1 technical report. ArXiv (2025)
+
+12 A. Chen et al. 10. He, J., Wei, T., Yan, R., Liu, J., Wang, C., Gan, Y., Tu, S., Liu, C.Y., Zeng, L., et al.: Skywork-o1 open series (2024). https://doi.org/10.5281/zenodo.16998085 11. Hu, H., Wang, S., Chang, J., Zhong, H., Sun, et al.: A duty to forget, a right to be assured? exposing vulnerabilities in machine unlearning services. ArXiv (2023) 12. Huang, Y., Liu, D., Chua, L., Ghazi, B., et al.: Unlearn and burn: Adversarial machine unlearning requests destroy model accuracy. ArXiv (2024) 13. Jiang, A.Q., Sablayrolles, A., et al.: Mistral 7b. ArXiv (2023) 14. Li, N., Pan, A., Gopal, A., Yue, S., et al.: The wmdp benchmark: measuring and reducing malicious use with unlearning. In: ICML (2024) 15. Liu, Z., Wang, T., Huai, M., Miao, C.: Backdoor attacks via machine unlearning. In: AAAI (2024) 16. Maini, P., Feng, Z., Schwarzschild, A., Lipton, Z.C., Kolter, J.Z.: TOFU: A task of fictitious unlearning for LLMs. In: IEDMS (2024) 17. Miller, C.E., Tucker, A.W., Zemlin, R.A.: Integer programming formulation of traveling salesman problems. JACM 7(4), 326–329 (1960) 18. Neshaei, S.P., Davis, R.L., Mejia-Domenzain, P., Nazaretsky, T., Käser, T.: Bridging the data gap: Using llms to augment datasets for text classification. IEDMS (2025) 19. Qian, W., Chen, A., Zhao, C., Li, Y., Huai, M.: Exploring fairness in educational data mining in the context of the right to be forgotten. ArXiv (2024) 20. Qian, W., Zhao, C., Le, W., Ma, M., Huai, M.: Towards understanding and enhanc-ing robustness of deep learning models against malicious unlearning attacks. In: ACM SIGKDD (2023) 21. Qian, W., Zhao, C., Li, Y., Huai, M.: Towards benchmarking privacy vulnerabilities in selective forgetting with large language models. ArXiv (2025) 22. Regulation, P.: General data protection regulation. Intouch 25 , 1–5 (2018) 23. Rombach, R., Blattmann, A., Lorenz, D., Esser, P., Ommer, B.: High-resolution image synthesis with latent diffusion models. In: CVPR (2022) 24. Socher, R., Perelygin, A., Wu, J., et al.: Recursive deep models for semantic compositionality over a sentiment treebank. In: EMNLP (2013) 25. The New York Times Company: Complaint, The New York Times Company v. Microsoft Corporation, et al. United States District Court for the Southern District of New York, Case No. 1:23-cv-11195 (2023) 26. Touvron, H., Martin, L., Stone, K., Albert, P., Almahairi, A., et al.: Llama 2: Open foundation and fine-tuned chat models. ArXiv (2023) 27. Wang, Z., Tu, H., Wang, Y., Wu, J., Mei, J., Bartoldson, B.R., Kailkhura, B., Xie, C.: Star-1: Safer alignment of reasoning llms with 1k data. ArXiv (2025) 28. Wasi Uddin Ahmad, Sean Narenthiran, S.M., et al.: OpenCodeReasoning: Advancing Data Distillation for Competitive Coding. ArXiv (2025) 29. Xue, J., Zheng, M., Hua, T., Shen, Y., Liu, Y., Bölöni, L., Lou, Q.: Trojllm: A black-box trojan prompt attack on large language models. NIPS (2023) 30. Yoon, S., et al.: R-tofu: Unlearning in large reasoning models. ArXiv (2025) 31. Zhao, C., Qian, W., Li, Y., Chen, A., Huai, M.: Rethinking adversarial robustness in the context of the right to be forgotten. In: ICML (2024) 32. Zhao, C., Qian, W., Ying, R., Huai, M.: Static and sequential malicious attacks in the context of selective forgetting. NIPS (2023) 33. Zhao, W.X., Zhou, K., Li, J., Tang, T., Wang, X., Hou, Y., Min, Y., Zhang, B., Zhang, J., Dong, Z., et al.: A survey of large language models. ArXiv (2023) 34. Zou, A., Wang, Z., Carlini, N., Nasr, M., Kolter, J.Z., Fredrikson, M.: Universal and transferable adversarial attacks on aligned language models. ArXiv (2023)
