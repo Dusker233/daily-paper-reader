@@ -33,6 +33,14 @@ on:
         description: "(Optional) Allowed local rerank model when rerank_provider=local"
         required: false
         default: "BAAI/bge-reranker-v2-m3"
+      runner_type:
+        description: "Runner type: hosted/gpu（gpu 使用固定 self-hosted 标签）"
+        required: false
+        default: "hosted"
+        type: choice
+        options:
+          - hosted
+          - gpu
 
 permissions:
   contents: write
@@ -43,7 +51,7 @@ concurrency:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'workflow_dispatch' && github.event.inputs.runner_type == 'gpu' && '["self-hosted","linux","x64","gpu"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 120
     env:
       DPR_EMBED_API_TIMEOUT: "60"
@@ -107,6 +115,53 @@ jobs:
           python -m pip install uv
           uv pip install --system -r /tmp/req.txt
 
+      - name: Resolve local rerank runtime
+        if: env.RERANK_PROVIDER == 'local'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import shutil
+          import subprocess
+
+          requested = str(os.getenv("RERANK_LOCAL_DEVICE") or os.getenv("DPR_RERANK_DEVICE") or "").strip()
+          if requested:
+            device = requested
+            print(f"[INFO] using preset local rerank device={device}")
+          else:
+            has_nvidia_smi = shutil.which("nvidia-smi") is not None
+            nvidia_ok = False
+            if has_nvidia_smi:
+              try:
+                subprocess.run(
+                  ["nvidia-smi", "-L"],
+                  check=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  text=True,
+                )
+                nvidia_ok = True
+              except Exception as exc:
+                print(f"[WARN] nvidia-smi probe failed: {exc}")
+            else:
+              print("[INFO] nvidia-smi not found; falling back to CPU unless torch reports otherwise")
+
+            cuda_available = False
+            try:
+              import torch
+              cuda_available = bool(torch.cuda.is_available())
+              print(f"[INFO] torch.cuda.is_available()={cuda_available}")
+            except Exception as exc:
+              print(f"[WARN] torch probe failed: {exc}")
+
+            device = "cuda" if nvidia_ok and cuda_available else "cpu"
+            print(f"[INFO] auto-detected local rerank device={device}")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+            fh.write(f"RERANK_LOCAL_DEVICE={device}\n")
+            fh.write(f"DPR_RERANK_DEVICE={device}\n")
+          PY
+
       - name: Local reranker smoke test (optional)
         if: env.RERANK_PROVIDER == 'local'
         env:
@@ -132,8 +187,8 @@ jobs:
           client = ClientFactory.from_env(scope="rerank")
           assert getattr(client, "provider", "") == "local"
           assert hasattr(client, "rerank")
-          client.device = "cpu"
           client.batch_size = 2
+          print(f"Using local rerank device: {getattr(client, 'device', '<unknown>')}")
           out = client.rerank("test query", ["doc A", "doc B"], top_n=2)
           assert "results" in out and len(out["results"]) == 2, out
           assert out["results"][0]["index"] in (0, 1)
@@ -180,8 +235,13 @@ jobs:
         run: |
           REQUESTED_RERANK_PROVIDER="${RERANK_PROVIDER:-}"
           REQUESTED_RERANK_MODEL="${RERANK_MODEL:-}"
+          if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ] && [ -z "$REQUESTED_RERANK_PROVIDER" ]; then
+            REQUESTED_RERANK_PROVIDER="none"
+          elif [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && [ -z "$REQUESTED_RERANK_PROVIDER" ]; then
+            REQUESTED_RERANK_PROVIDER="blt"
+          fi
           case "$REQUESTED_RERANK_PROVIDER" in
-            ""|"blt")
+            "blt")
               export RERANK_PROVIDER="blt"
               export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
               export RERANK_API_KEY="$BLT_API_KEY"
@@ -195,7 +255,7 @@ jobs:
               unset RERANK_API_KEY
               unset RERANK_BASE_URL
               ;;
-            "none")
+            ""|"none")
               export RERANK_PROVIDER="none"
               export RERANK_ENABLED="false"
               unset RERANK_MODEL
