@@ -1,0 +1,631 @@
+Title: Event-Driven Temporal Graph Networks for Asynchronous Multi-Agent Cyber Defense in NetForge_RL
+
+URL Source: https://arxiv.org/pdf/2604.09523v1
+
+Published Time: Mon, 13 Apr 2026 01:17:20 GMT
+
+Number of Pages: 26
+
+Markdown Content:
+# Event-Driven Temporal Graph Networks for Asynchronous Multi-Agent Cyber Defense in NetForge_RL 
+
+## Igor Jankowski igorjankowwski@gmail.com April 13, 2026 
+
+Abstract 
+
+The transition of Multi-Agent Reinforcement Learning (MARL) poli-cies from simulated cyber wargames to operational Security Operations Centers (SOCs) is fundamentally bottlenecked by the Sim2Real gap [ 3]. Legacy simulators abstract away network protocol physics, rely on syn-chronous ticks, and provide clean state vectors rather than authentic, noisy telemetry [ 15 ]. To resolve these limitations, we introduce NetForge_RL :a high-fidelity, physically constrained cyber operations simulator that reformulates network defense as an asynchronous, continuous-time Par-tially Observable Semi-Markov Decision Process (POSMDP). Unlike prior environments, NetForge enforces cryptographic Zero-Trust Network Ac-cess (ZTNA) constraints and requires defenders to process NLP-encoded telemetry, specifically 128-dimensional LSA embeddings derived from raw TF-IDF logs of Windows Event XMLs. Crucially, NetForge bridges the Sim2Real gap natively via a dual-mode engine, allowing high-throughput MARL training in a MockHypervisor 
+
+and Zero-Shot evaluation against live exploits in a DockerHypervisor 
+
+using Vulhub containers. To navigate this continuous-time POSMDP, we propose a novel Continuous-Time Graph MARL (CT-GMARL) architec-ture, utilizing efficient fixed-step Neural Ordinary Differential Equations (ODEs) [ 4 ] to process irregularly sampled SIEM alerts. We evaluate our framework against LSTM-ready baselines (R-MAPPO [ 19 ], QMIX [ 10 ]) in a 7-experiment matrix. Empirical results demonstrate that CT-GMARL achieves a converged median Blue reward of 57,135—a 2.0× improve-ment over R-MAPPO (28,347) and 2.1× over QMIX (26,649). Critically, CT-GMARL restores 12 × more compromised services than the strongest discrete baseline by avoiding the “scorched earth” failure mode where baselines trivially minimize risk by destroying network utility. On Zero-Shot transfer to the live DockerHypervisor , CT-GMARL policies achieve a median reward of 98,026, validating the Sim2Real bridge. 
+
+1
+
+> arXiv:2604.09523v1 [cs.LG] 10 Apr 2026
+
+# 1 Introduction & Motivation 
+
+The 2020 SolarWinds supply chain attack and the 2021 Colonial Pipeline ran-somware incident starkly demonstrated a critical vulnerability in modern cy-bersecurity: human Security Operations Center (SOC) analysts are perpetu-ally overwhelmed by “alert fatigue,” forced to sift through millions of benign background events to identify a single malicious indicator. While recent ad-vancements in Multi-Agent Reinforcement Learning (MARL) have demonstrated super-human performance in highly structured, zero-sum environments [ 9], at-tempts to deploy MARL for Autonomous Cyber Defense (ACD) to combat this fatigue have largely stalled. State-of-the-art algorithms collapse when transferred from simulated wargames to real-world environments. This severe performance drop—the Sim2Real gap—stems from inherent environmental simplifications found in legacy simulators, which model cyber conflict as a synchronous, fully observable board game rather than a continuous, noisy telemetry stream [1]. We identify three critical structural flaws in existing cyber RL simulators that prevent operational deployment: 1. Synchronous Turns vs. Duration-Bound Actions: Real cyber opera-tions are inherently asynchronous. In standard Markov Decision Processes (MDPs), state transitions occur at fixed, discrete intervals t ∈ { 1, 2, 3, . . . },governed by P (st+1 |st, a t). In reality, deploying a ransomware payload or executing a network scan takes a stochastic amount of continuous time ∆t,during which an adversary’s action can be interrupted by a defender. 2. Clean Vectors vs. NLP Telemetry: Legacy simulators provide agents with clean, one-hot encoded state arrays [ 14 ]. Conversely, human SOC analysts and real-world defenders rely on event-driven, delayed, and highly noisy log data (e.g., Sysmon, Windows Event logs). 3. Static Topologies: Standard Multi-Layer Perceptrons (MLPs) require fixed input dimensions, implicitly forcing the policy to memorize a specific network architecture. This prevents Zero-Shot scaling to dynamic corporate networks where nodes are frequently provisioned or deprecated [7]. To overcome these barriers, we introduce NetForge_RL , transitioning the domain from discrete POMDPs [ 8 ] to rigorous continuous-time POSMDPs [ 2]. By modeling the environment as a POSMDP, the time between observable events is treated as a continuous random variable τ ∼ F (t|s, a ). Furthermore, we propose CT-GMARL , an event-driven graph neural architecture designed to master this environment. Our main contributions are: 
+
+• NetForge_RL: The first cyber MARL simulator formally structured as a continuous-time POSMDP with authentic NLP telemetry and stochastic false-positive noise. 2(a) Legacy Simulators: Synchronous Discrete POMDP 
+
+Tick ( t)s1 s2 s3 s4    
+
+> Action a1resolves instantly a2a3
+
+(b) NetForge_RL: Asynchronous Continuous-Time POSMDP (Ours) 
+
+Time ( t)           
+
+> Red Exploit ( τ∼F)Blue Isolate Green Agent Noise
+> O1O2O3O4O5
+> ∆t1(Continuous ODE integration:
+
+∫ fθ (h)dt ) ∆t2
+
+Figure 1: Architectural comparison of environmental time-modeling. (a) Stan-dard RL wargames force synchronous execution. (b) NetForge_RL utilizes a POSMDP framework where actions have realistic durations, and NLP telemetry (Oi) arrives asynchronously. Crucially, the Green Agent generates stochastic background noise (e.g., event O5), producing false-positive alerts that punctuate the continuous integration and force the defender to distinguish adversarial signals from background noise. 3• CT-GMARL Architecture: A novel ODE-RNN graph architecture designed specifically for asynchronous multi-agent defense over dynamic network topologies. 
+
+• Sim2Real Verification: A dual-mode evaluation protocol extending Do-main Randomization [ 17 ] allowing Zero-Shot Sim2Real transfer—evaluating on live container payloads without any gradient updates or fine-tuning in the target Docker environment. 
+
+• Empirical Validation: CT-GMARL achieves a 2.0× reward improve-ment over R-MAPPO and restores 12 × more compromised services, while Zero-Shot transfer to the live DockerHypervisor yields a median reward of 98,026—demonstrating robust policy retention across the Sim2Real boundary. The remainder of the paper is structured as follows: Section 2 reviews related work. Section 3 details the NetForge_RL environment. Section 4 outlines the CT-GMARL architecture, followed by experimental setup and results in Sections 5 and 6, conclusions in Section 7, and broader impacts and limitations in Section 8. 
+
+# 2 Related Work 
+
+## 2.1 Autonomous Cyber Defense Simulators 
+
+The reinforcement learning community has produced several open-source network security simulators. CybORG [ 15 ] and NASim [ 14 ] both treat cyber engagements as strictly turn-based POMDPs. Crucially, these frameworks provide agents with clean, one-hot encoded state arrays (e.g., [0, 1, 0, 0] to indicate that host #2 is compromised). This formulation is fundamentally limited because a policy trained exclusively on binary "ground truth" vectors can never be deployed to an operational SOC, which relies entirely on unstructured text logs. Furthermore, they enforce a synchronous tick-rate where all agents step simultaneously, preventing the development of reaction-time-aware policies. Our approach addresses these limitations by executing a genuine asynchronous event queue and replacing state vectors with high-fidelity NLP-encoded telemetry, ensuring policies are natively transitionable to real-world observability streams. 
+
+## 2.2 Continuous-Time Reinforcement Learning 
+
+Standard RL algorithms assume discretely sampled time steps, leading to severe performance degradation when observations arrive at irregular intervals ∆t [2 ]. To process irregularly sampled time-series, Rubanova et al. introduced Latent ODEs and the ODE-RNN architecture [ 12 ]. In the cyber domain, security events are inherently “bursty”; a Service Enumeration sweep may generate 500+ log events in under 0.1 seconds, followed by hours of “dwell time” where no observable telemetry is generated. Standard recurrent architectures (LSTMs) 4update their weights at every discrete tick. During prolonged silent periods, the identity mapping hk+1 = hk induces vanishing gradients and a stale hidden state that fails to account for the physical passage of time. ODE-RNNs resolve this by integrating the hidden state h(t) directly over the continuous time jump ∆t:
+
+h(tk+1 ) = h(tk) + ∫ tk+1  
+
+> tk
+
+fθ (h(t)) dt , allowing the model to naturally drift its state according to the duration of silence. While continuous-time actor-critic methods [ 6] optimize objectives in continu-ous state and action spaces using differential equations, CT-GMARL fundamen-tally diverges by introducing a multi-agent continuous Generalized Advantage Es-timation (GAE) under a rigorous semi-Markov sojourn structure F (t|s, a ). This explicitly handles the cooperative credit assignment problem across asynchronous agents, which a straightforward GNN extension of single-agent continuous PPO cannot resolve. 
+
+## 2.3 Graph Neural Networks in MARL 
+
+Traditional MARL architectures like MAPPO [ 19 ] and QMIX [ 10 ] rely on Multi-Layer Perceptrons (MLPs). This is severely limited in cyber defense because rigid input dimensions fail severely during Zero-Shot transfer to new subnets with varying node counts. To solve this, Jiang et al. introduced Graph Convolutional Reinforcement Learning (DGN) [ 7 ], enabling relational reasoning among agents. However, existing Graph-MARL approaches assume static, synchronous temporal dynamics. To our knowledge, no prior work combines GNN-based MARL with continuous-time ODE integration for cyber defense. Each of these three historical gaps—temporal abstraction, telemetry fidelity, and topological rigidity—is explicitly addressed by a distinct component of the proposed NetForge_RL and CT-GMARL ecosystem. 
+
+# 3 The NetForge_RL Environment 
+
+To facilitate genuine Sim2Real MARL research, we engineered NetForge_RL from the ground up as a high-fidelity, physically-constrained simulator. Unlike legacy wargames that rely on abstract connectivity matrices, NetForge_RL is defined as an asynchronous, event-driven playground where network protocol physics, cryptographic Zero-Trust constraints, and NLP-encoded telemetry are native citizens. 
+
+## 3.1 Continuous-Time POSMDP Formulation & Scalability 
+
+We formally model the cyber engagement as a Continuous-Time Partially Observable Semi-Markov Decision Process (POSMDP), defined by the tuple 
+
+⟨S , A, O, Ω, P, R, F ⟩, where Ω is the observation function mapping hidden states to noisy telemetry. In this framework, state transitions do not occur at fixed intervals but are governed by a dynamic event_queue .5The true hidden state s ∈ S encompasses exact node compromise statuses, token ownership inventories, and active network connections. When an agent 
+
+i executes action a ∈ A , the environment remains in s for a stochastic sojourn time τ ∼ F (t|s, a ). Time progression is strictly event-driven. We calculate the exact continuous time delta ∆t between asynchronous log events by jumping directly to the completion tick of the nearest maturing event in the environment queue L:
+
+tk+1 = min {evt .completion _tick | evt ∈ L} =⇒ ∆tk = tk+1 − tk
+
+MAX _DURATION .
+
+(1) where L represents the set of all active events currently maturing in the environ-ment’s asynchronous event queue. The term ∆tk is normalized by a constant MAX_DURATION = 50 .0. Any sojourn times exceeding this threshold are strictly clipped to 1.0 to ensure numerical stability during neural integration. In practice, fewer than 2% of observed sojourn times exceed this threshold in our 100-node benchmark, confirming that clipping does not materially distort the reward signal. This normalized scalar is fed directly into the CT-GMARL policy, allowing the Neural ODE to continuously integrate the defender’s hidden state. To resolve concurrency and preserve engine scalability, NetForge_RL utilizes a ConflictResolutionEngine . If a Red offensive action and a Blue defensive action resolve on the exact same fractional tick, supremacy is natively granted to the Blue agent, nullifying the Red agent’s state deltas. The engine executes in 
+
+O(A) time complexity, where A = B + R is the number of active agents. It first iterates over all Blue defensive actions ( O(B)) to build a hash set of defended nodes, guaranteeing O(1) lookups when subsequently verifying Red offensive actions ( O(R)). Because A ≪ N (number of nodes), the MockHypervisor 
+
+maintains a high-throughput of approximately 10 , 000 steps per second regardless of network size. 
+
+## 3.2 Multimodal Observation & NLP-SIEM Pipeline 
+
+In operational SOCs, analysts do not receive clean arrays indicating a compro-mised host. To accurately model this, the defender’s partially observable state 
+
+Oi is constructed via an advanced data synthesis pipeline (Figure 2). Every physical interaction in the hypervisor triggers a Windows Event XML generation. These logs are ingested by the SIEMLogger and passed through a 
+
+LogEncoder . By default, we utilize a Scikit-Learn TF-IDF vectorizer equipped with a char_wb analyzer ( n-grams 3 to 5). To handle Out-Of-Vocabulary (OOV) tokens dynamically generated by live container errors and to maintain fixed tensor sizes, the sparse TF-IDF outputs are projected via TruncatedSVD (Latent Semantic Analysis) and L2-normalized into a dense R128 embedding space. For advanced evaluation, the pipeline supports a deep bidirectional Transformer backend [ 5], utilizing all-MiniLM-L6-v2 [18 ] projected from 384-dim down to 128-dim via a fixed random projection matrix. Decentralized Blue agents receive an observation Oi composed of the mean embedding of the last 8 logs within a sliding window, strictly filtered for their 6assigned topological zone. At the start of an episode, this window is zero-padded. While mean pooling over the window abstracts precise temporal ordering, it provides a stable semantic context robust to noise. 
+
+Raw Event XML 
+
+> <EventID>4624</EventID>
+
+TF-IDF Encoder 
+
+> LSA Projected 128-dim
+
+Multi-Head GAT 
+
+> Spatial Topology Fusion
+
+Neural ODE-RNN ∫ fθ (h)dt 
+
+Action Space A       
+
+> Policy π(a|o)
+> SIEM Ingest Mean Oi(Last 8) Graph Embed Continuous h(t)
+
+Normalized ∆tk
+
+Figure 2: The NetForge_RL Neural-Cyber interface. High-fidelity SIEM logs are converted to 128-dim NLP embeddings, fused with local topology via Graph Attention, and integrated over continuous time jumps ( ∆t) by the ODE solver before policy selection. 
+
+## 3.3 Action Taxonomy and Pre-emptive Interruption 
+
+The action space A is formulated as a MultiDiscrete([32, 100]) tensor, representing 32 unique Tactical Action Types executed across up to 100 target IP slots. The environment is explicitly parameterized to support scalable networks up to 100 nodes, fully covering the benchmark’s 3-subnet topology. Table 1 details a representative sample of these actions and their environmental costs based on the MITRE ATT&CK corpus [16]. Table 1: Action Taxonomy: Representative Tactical Capabilities                                               
+
+> Tactical Action Agent MITRE ATT&CK Energy Cost Duration ( τ)Primary Effect
+> ExploitRemoteService Red T1210 55Exploits arbitrary remote service
+> ExploitBlueKeep Red CVE-2019-0708 34RDP remote code execution
+> ExploitEternalBlue Red MS17-010 46SMB remote code execution
+> DumpLSASS Red T1003.001 12Extracts credential tokens
+> PassTheTicket Red T1550.003 11ZTNA lateral movement
+> IsolateHost Blue M1040 11Severs node network edges
+> RotateKerberos Blue T1550 50 4Global identity token flush
+> DeployHoneytoken Blue T1027 51Injects deceptive credentials
+
+To mirror human SOC bandwidth limits, the Blue Team is strictly constrained to a maximum of 2 active concurrent defensive actions . This is enforced dynamically by the ConflictResolutionEngine , which silently drops excess actions, thereby forcing the RL policy to prioritize critical threats over blanket responses. Crucially, defensive actions possess Pre-emptive Supremacy . If a Red agent initiates a Lateral Movement requiring 15 ticks ( τ = 15 ), and the Blue agent successfully enqueues an IsolateHost on the origin node at tick 5, the Red action is mathematically aborted from the queue. The Red agent’s energy is forfeited and the action fails, forcing the adversary to learn stealth. 73.4 Network Topology & Zero-Trust Identity Constraints 
+
+Unlike legacy simulators that permit arbitrary point-to-point traversal based on flat matrices, NetForge_RL enforces strict Cryptographic Zero-Trust Network Access (ZTNA) routing [11] at the state engine layer (Figure 3). Every agent possesses an agent_inventory array. Movement to the Secure Subnet (10.0.1.0/24) is physically blocked ( can_route_to = False ) unless the agent possesses the required identity token. The Red agent must therefore execute a hierarchical attack chain: exploit a host → execute DumpLSASS to steal the Enterprise_Admin_Token → utilize PassTheTicket to pivot. If the Blue agent executes a RotateKerberos action, the environment triggers a global flush, clearing all stolen tokens from the Red inventory and neutralizing the attacker’s lateral mobility.    
+
+> DMZ Subnet (10.0.0.0/24)
+> Corporate Subnet (10.0.2.0/24) Secure Vault (10.0.1.0/24) [ZTNA]
+> Internet Web Server
+> Public Facing
+> Mail Server
+> SMTP Relay
+> Workstation
+> Windows Endpoints
+> Domain Controller
+> Identity Provider (Tokens)
+> SQL Database
+> PII Data Vault
+> ICS / SCADA
+> Critical Infrastructure
+> Ingress
+> Standard Pivot Requires Cryptographic Token
+> Red Agent APT
+
+Figure 3: NetForge_RL Topological constraints. The environment physically restricts traversal to the Secure Vault. Agents cannot simply rely on graph prox-imity; they must execute complex, multi-step Identity and Access Management (IAM) exploits to acquire ZTNA tokens prior to lateral movement. 
+
+## 3.5 Green Agent Dynamics: Stochastic False Positives 
+
+To prevent "Reward Hacking"—where the agent learns to proactively isolate every machine to prevent a hypothetical attack—NetForge_RL implements a 
+
+Green Agent stochastic noise generator. To ensure mathematical robustness, this noise engine is formalized as a non-homogeneous Poisson Process. The arrival rate is modulated by a diurnal cycle, peaking during simulated business hours ( λday = 5 events per tick) and subsiding off-peak ( λnight = 0 .5 events per tick). This formulation produces a Signal-to-Noise Ratio (SNR) where true Red Agent indicators are masked by up to 20x higher benign volume. By continuously injecting background noise (e.g., decoy traffic, benign user logins) directly into the SIEM pipeline, the environment generates anomalous NLP telemetry that mimics Red Agent behavior. This results in false-positive triggers that force the 8Blue Agent to learn precise semantic correlation (e.g., distinguishing EventID 4624 from 4625 ) rather than relying on volume-based anomaly detection. 
+
+## 3.6 Reward Function Design 
+
+The reward mechanism strictly penalizes business disruption while optimizing for response speed. We explicitly decouple the adversarial rewards. For the Blue defender, the total step reward RBlue total aggregates tactical, health, and economic modifiers: 
+
+RBlue total = RBlue tactical + RBlue health − RBlue economics − RBlue cost . (2) Tactical action rewards Rtactical trigger upon completion. The Blue agent receives +5 .0 for a correct containment isolation and +3 .0 for host cleanup, but is heavily penalized ( −2.0) for a false-positive isolation. RBlue cost represents the inherent operational cost of executing specific defensive actions (e.g., −50 for 
+
+RotateKerberos ). Continuous SLA monitoring scales the reward at each time step. The environment provides a health bonus RBlue health = 1 .0 ×
+
+( healthy_hosts total_hosts 
+
+)
+
+,while exacting a severe business penalty RBlue economics = 5 .0 ×
+
+( isolated_hosts total_hosts 
+
+)
+
+. The Red agent’s reward RRed total mirrors this structure with inverse tactical objectives; its formulation is symmetric and provided in Appendix B. While this asynchronous reward structure organically degrades the wall-clock efficiency of an attacker’s campaign without the need for artificial step-penalties, the algorithmic credit assignment problem requires explicit temporal handling. Therefore, the RL value function V π (s0) applies an explicit continuous exponential discount ( e−β∆tt ) during optimization (detailed in Section 4.3). 
+
+## 3.7 The Sim2Real Bridge: Mock vs. Docker Hypervisors 
+
+To eliminate the Sim2Real gap entirely, NetForge_RL abandons purely theoreti-cal matrices in favor of a dual-engine architecture (Figure 4). During training, the environment runs in sim mode via the MockHypervisor ,computing ZTNA physics and text synthesis in O(1) time. During evaluation, the environment seamlessly transitions to real mode via the DockerHypervisor .Here, RL commands are intercepted by the dispatcher and trigger subprocess 
+
+calls to execute genuine Python exploit scripts against live Vulhub container targets. The DockerHypervisor natively supports live Common Vulnerabilities and Exposures (CVEs), including CVE-2017-0144 (EternalBlue), CVE-2019-0708 (BlueKeep), CVE-2021-41773 (Apache RFI), and credential manipulation scripts (LSASS/Mimikatz). Crucially, there is a substantial throughput disparity between the two en-gines: the MockHypervisor processes ≈ 10 , 000 steps per second, whereas the 
+
+DockerHypervisor manages ≈ 5 steps per second due to container I/O and subprocess overhead. This 2, 000 × throughput differential confirms that training exclusively in real environments is computationally intractable for RL. The 9RL Action Space       
+
+> a∼π(o)
+> Sim2Real Bridge
+> Dynamic Dispatcher
+> MockHypervisor
+> O(1) State Transitions High-Throughput Sim
+> DockerHypervisor
+> Live Vulhub Containers
+> subprocess API Calls
+> Environment Transition
+> s′,Oi, R total ,∆tk
+> mode=sim
+> mode=real
+
+Figure 4: The Sim2Real Bridge Architecture. Models are trained rapidly in the highly-parallelized MockHypervisor . During validation, the environment is toggled to DockerHypervisor , routing commands (e.g., ExploitEternalBlue )to execute genuine Python payload scripts against live targets. dual-bridge rationale allows the model to learn the fundamental physics of cyber-defense at high speeds in simulation, while verifying zero-shot transfer against genuine, live-fire vulnerabilities. 
+
+# 4 Proposed Methodology: CT-GMARL 
+
+To process the asynchronous, non-stationary nature of the NetForge_RL POS-MDP, we propose the Continuous-Time Graph Multi-Agent Reinforcement Learn-ing (CT-GMARL) architecture. CT-GMARL is a spatial-temporal graph neural network explicitly designed to decouple the spatial constraints of Zero-Trust topology from the temporal irregularities of event-driven SIEM telemetry. The architecture operates under the Centralized Training with Decentralized Execution (CTDE) paradigm. During execution, decentralized actors πθ (a|o)
+
+rely purely on their local observation history. During training, the centralized critic Vϕ(s) takes the raw, noise-free global state s ∈ S directly—bypassing the NLP pipeline entirely—to provide accurate value estimates. 
+
+## 4.1 Spatial Reasoning: Multi-Head Graph Attention (GAT) 
+
+To process the physical Zero-Trust layout of the network G = ( V, E), we project the raw node vectors into an embedding space and apply a Multi-Head Graph Attention Network (GAT). This ensures the policy does not overfit to a static input array size, enabling Zero-Shot scalability. For each node i, the intermediate hidden state ⃗ hi is updated by aggregating features from its reachable topological neighborhood Ni. We introduce an informational bottleneck through a dynamic topological mask Mij , which is generated by the environment’s state engine: 
+
+e(k) 
+
+> ij
+
+= LeakyReLU 
+
+(⃗a Tk [Wk⃗ hi∥Wk⃗ hj ]
+
+)
+
++ Mij . (3) 10 Spatial Layer            
+
+> Integration Layer
+> Local Telemetry Oi∈R128 Topology Mask Mij ∈ { 0,−∞}
+> Multi-Head GATSpatial Aggregation Neural ODE ˙h=fθ(h)
+> ∆tk⃗xk+1
+> Gated Update hk+1 Actor Policy π(a|hk+1 )
+
+Figure 5: The CT-GMARL Spatial-Temporal Cell. Local SIEM observations are spatially fused across the dynamically masked network topology via Graph Attention (GAT). Between observations, the hidden state continuously drifts via a Neural ODE, scaled by the exact time jump ∆tk.where Mij = 0 if a valid edge exists (e.g., (i, j ) ∈ E ), and Mij = −∞ if the connection is blocked by a firewall or lacks ZTNA token authorization. This mask guarantees that attention coefficients α(k) 
+
+> ij
+
+over blocked nodes evaluate to zero after the softmax operation. The spatially-fused features are then combined across K attention heads (where K and other hyperparameters are detailed in Section 5): ⃗h′ 
+
+> i
+
+= LayerNorm 
+
+⃗hi + K
+
+∥
+
+> k=1
+
+σ
+
+ ∑
+
+> j∈N i
+
+α(k) 
+
+> ij
+
+Wk⃗ hj
+
+ . (4) Finally, a TopologyMessagePasser enforces hierarchical flow by routing aggre-gated embeddings strictly across zone boundaries (e.g., ⃗ h′ 
+
+> internal
+
+←⃗ h′ 
+
+> internal
+
++
+
+Wmsg ⃗ h′
+
+> dmz
+
+). 
+
+## 4.2 Temporal Dynamics: Neural ODE-RNN 
+
+Standard Recurrent Neural Networks (RNNs) update their weights exclusively at discrete steps. In NetForge_RL, cyber telemetry arrives irregularly. During extended periods of "dwell time" (network silence), the identity mapping hk+1 =
+
+hk used by standard GRUs causes the agent’s latent belief state to become disconnected from wall-clock time. To resolve this, CT-GMARL models the time between discrete log obser-vations tk and tk+1 using a learned derivative function fθ parameterizing a 11 Neural Ordinary Differential Equation (ODE). The agent’s hidden state evolves continuously: 
+
+d⃗h (t)
+
+dt = fθ (⃗h(t)) =⇒⃗ h(tk+1 ) = ⃗ h(tk) + 
+
+∫ tk+1 
+
+> tk
+
+fθ (⃗h(s)) ds. (5) We parameterize an autonomous dynamics function fθ that depends only on the hidden state, not on the current time directly. Time information enters the system exclusively through the integration limits [tk, t k+1 ] and the normalized sojourn interval ∆tk. We solve this Initial Value Problem (IVP) using a non-adaptive 4th-order Runge-Kutta (RK4) solver. While adaptive solvers like 
+
+dopri5 provide higher precision, they generate a prohibitively large Number of Function Evaluations (NFE) during high-throughput MARL sampling. RK4 provides sufficient stability with a fixed, low computational footprint. 
+
+Algorithm 1 CT-GMARL Hidden State Drift via RK4 Integration (4 NFE) 
+
+Require: Previous hidden state ⃗ htk , GAT-fused spatial observation ⃗x k+1 , time interval ∆t
+
+Ensure: Evolved hidden state ⃗ htk+1 
+
+> 1:
+
+⃗ hcurr ←⃗ htk 
+
+> 2:
+
+κ1 ← fθ (⃗ hcurr ) ▷ NFE 1  
+
+> 3:
+
+κ2 ← fθ (⃗ hcurr + ∆t 
+
+> 2
+
+κ1) ▷ NFE 2  
+
+> 4:
+
+κ3 ← fθ (⃗ hcurr + ∆t 
+
+> 2
+
+κ2) ▷ NFE 3  
+
+> 5:
+
+κ4 ← fθ (⃗ hcurr + ∆ tκ 3) ▷ NFE 4 
+
+> 6:
+
+⃗ hcurr ←⃗ hcurr + ∆t 
+
+> 6
+
+(κ1 + 2 κ2 + 2 κ3 + κ4) 
+
+> 7:
+
+return ⃗ hcurr 
+
+Upon receiving a new asynchronous observation ⃗x k+1 at time tk+1 , the drifted ODE state ⃗ h(tk+1 ) and the new spatial features are fused via a discrete gated update layer to produce the final state ⃗ hk+1 :⃗g = σ
+
+(
+
+LayerNorm 
+
+(
+
+Wg [⃗x k+1 ∥⃗ h(tk+1 )] 
+
+)) 
+
+(6) 
+
+ˆ⃗hk+1 = tanh 
+
+(
+
+Wh[⃗x k+1 ∥⃗h(tk+1 )] 
+
+)
+
+(7) ⃗hk+1 = (1 −⃗g) ⊙⃗ h(tk+1 ) + ⃗g ⊙ ˆ⃗hk+1 . (8) where ⃗g is the sigmoid update gate with an intermediate LayerNorm for gradient stability, determining the integration of the candidate hidden state ˆ⃗hk+1 derived from the new spatial features. 
+
+## 4.3 Optimization: Continuous-Time MAPPO 
+
+We optimize the cooperative decentralized policies using Multi-Agent Proximal Policy Optimization (MAPPO). Because transitions occur over continuous inter-12 vals ∆t, applying a flat discount factor γ per environment step fundamentally distorts the temporal credit assignment. We propose a Continuous-Time Generalized Advantage Estimation (GAE) formulation, replacing the static γ with an exponential time decay γ(∆ tt) = 
+
+e−β∆tt . Utilizing the Centralized Critic’s value predictions Vϕ(s), the temporal difference error δt and the continuous GAE ˆAt are defined as: 
+
+δt = rt + e−β∆tt Vϕ(st+1 ) − Vϕ(st) , ˆAt = δt + ( λe −β∆tt ) ˆAt+1 . (9) where β = 0 .05 represents the continuous-time decay coefficient (optimized in Section 5) and λ ∈ [0 , 1] is the standard GAE smoothing parameter. The decentralized actor policies πθ (a|o) are subsequently updated by maximizing the standard PPO clipping objective [ 13 ] LCLIP (θ) using these continuous-time advantages. This explicitly aligns the gradient updates with the physical duration of the underlying security events. 
+
+Algorithm 2 Continuous-Time GAE and MAPPO Update 
+
+Require: Replay buffer B, Policy Network πθ , Centralized Critic Vϕ
+
+Ensure: Optimized parameters θ, ϕ  
+
+> 1:
+
+Phase 1: Continuous GAE Calculation  
+
+> 2:
+
+gae ← 0 
+
+> 3:
+
+Get critic predictions V = Vϕ(S) 
+
+> 4:
+
+for t = T − 1 down to 0 do  
+
+> 5:
+
+Extract rt, ∆tt, St, St+1 from B 
+
+> 6:
+
+discount ← e−β·∆tt 
+
+> 7:
+
+δt ← rt + discount · Vt+1 · (1 − done ) − Vt 
+
+> 8:
+
+gae ← δt + discount · λ · (1 − done ) · gae  
+
+> 9:
+
+ˆAt ← gae  
+
+> 10:
+
+end for  
+
+> 11:
+
+Phase 2: Actor-Critic Update  
+
+> 12:
+
+for epoch = 1 to Nepochs do  
+
+> 13:
+
+Sample mini-batch from B 
+
+> 14:
+
+Calculate ratio r(θ) = πθ (at|ot,∆tt)  
+
+> πθold (at|ot,∆tt)
+> 15:
+
+LCLIP ← − min( r(θ) ˆA, clip (r(θ), 1 − ϵ, 1 + ϵ) ˆA) 
+
+> 16:
+
+LV ← MSE (Vϕ(S), ˆR) 
+
+> 17:
+
+Backpropagate: ∇θ (LCLIP + 0 .5LV − 0.01 Sπ ) 
+
+> 18:
+
+end for 
+
+where the policy entropy Sπ = − ∑ 
+
+> a
+
+πθ (a|o) log πθ (a|o) is weighted by coeffi-cient 0.01 to encourage sufficient exploration during the co-evolutionary self-play. 
+
+# 5 Experimental Setup 
+
+We empirically evaluate the CT-GMARL architecture against baseline MARL algorithms within the NetForge_RL environment. This setup assesses policy 13 performance under asynchronous partial observability, dynamic topologies, and NLP-encoded telemetry. To ensure stringent reproducibility, all measurements are derived from an integrated 7-experiment matrix, with metrics aggregated over 10 independent random initialization seeds to prevent statistical anomalies stemming from high-variance policy explosions common in MARL. Crucially, to simulate a realistic adversarial environment, both the Red (Attacker) and Blue (Defender) agents are trained via adversarial self-play using the identical underlying algorithmic configuration (e.g., CT-GMARL vs. CT-GMARL, R-MAPPO vs. R-MAPPO). While our evaluation focuses strictly on the defensive efficacy of the Blue agent, this co-evolutionary setup ensures the defender must adapt to an actively optimizing, non-stationary adversary rather than a static heuristic script. 
+
+Baseline Adaptations: Because standard MLPs utilized by R-MAPPO and QMIX require fixed-dimensional inputs and do not natively process continuous time, we implemented strict environmental wrappers. The dynamic graph topology was artificially flattened and zero-padded to a maximum size of 100 nodes. Furthermore, to provide the recurrent baselines with equivalent temporal visibility, the normalized time jump scalar ∆tt was explicitly concatenated to their observation vectors at each step. 
+
+## 5.1 Hardware Orchestration & Reproducibility 
+
+Algorithm training is orchestrated on an NVIDIA Brev cluster equipped with A100 (40GB/80GB) GPUs. We utilize a 4+3 Joblib batching strategy across 32 CPU cores per experiment to parallelize the decentralized environments. The MockHypervisor achieves an aggregated throughput exceeding 10,000 steps per second, requiring approximately 8 wall-clock hours for convergence (2.5M steps) over 10 independent seeds. Models are built using PyTorch and 
+
+torchdiffeq for ODE integration, while the MARL foundation leverages cus-tomized CleanRL PPO variants. Following convergence, policies are transferred to the DockerHypervisor for zero-shot live evaluation against active Vulhub 
+
+vulnerability payloads. 
+
+## 5.2 Evaluation Metrics 
+
+Standard RL return is insufficient to quantify operational SOC viability. Beyond aggregate reward, we report the following domain-specific metrics: 
+
+• Services Restored: The total number of compromised hosts that the Blue agent successfully remediates during an episode. This measures active remediation capability rather than passive prevention. 
+
+• Total Successful Exploits: The number of Red agent exploits that successfully compromise a host. Combined with Services Restored, this disentangles “scorched earth” prevention (low exploits via network destruc-tion) from surgical defense (low exploits via precision targeting). 14 • ODE NFE: The Number of Function Evaluations per integration step, measuring the computational cost of the Neural ODE temporal module. 
+
+• Blue KL Divergence: The per-update KL divergence DKL (πold ∥πnew )
+
+tracking policy stability during training. 
+
+• Steps Per Second (SPS): Environment throughput, quantifying the wall-clock cost of each architecture. 
+
+## 5.3 The 7-Experiment Matrix 
+
+To systematically validate the contributions of the CT-GMARL architecture, we constructed a 7-experiment matrix isolating specific structural and temporal components (Table 2). Table 2: The 7-Experiment Matrix Configuration 
+
+ID Configuration Research Question Isolates 
+
+1 CT-GMARL (Ours) Does a continuous spatial-temporal architecture solve the Sim2Real POSMDP gap? Full Architecture 2 R-MAPPO Baseline How does a standard discrete memory model handle irregular telemetry? Temporal Abstraction 3 QMIX Baseline Does value factorization alone re-solve topological complexities? Value-Based CTDE 4 Ablation: No-ODE What is the cost of removing con-tinuous integration for rigid RNN cells? ODE Drift Module 5 Ablation: No-GAT What happens when the agent is blinded to spatial neighborhood routing? GAT Spatial Module 6 Ablation: No-Beta Does a static discount γ artifi-cially distort reward in stochastic duration events? Continuous GAE 7 Zero-Shot Sim2Real Can Mock-trained policies trans-fer without fine-tuning to real CVEs? Docker Transferability 
+
+# 6 Results and Discussion 
+
+Our empirical observations decisively prove that modeling cyber defense natively as an asynchronous POSMDP via Neural ODEs and parsing topological behavior through GNNs vastly outperforms equivalent discretized architectures. 15 6.1 Adversarial Co-Evolution and Stability Vectors 
+
+Because both the Red attacker and Blue defender are co-evolving dynamically, tracking the mathematical stability of the CTDE system is paramount. We analyzed divergence and volatility plots logged directly during the million-step execution process. 
+
+Figure 6: Blue Team KL Divergence. CT-GMARL (pink) maintains extreme stability during alert storms compared to the volatile gradient spikes seen in R-MAPPO (orange). 
+
+Figure 7: Red Team Policy En-tropy. R-MAPPO (orange) collapses prematurely, losing the ability to ex-plore novel attack vectors, while CT-GMARL retains structured variance. As visualized in Figure 6, plotting the Kullback-Leibler (KL) Divergence allows us to observe how violently the policy updates its probability distribu-tions. In discretized sequential architectures like R-MAPPO, the KL divergence frequently peaks erratically whenever a stochastic storm of SIEM data arrives simultaneously, forcing volatile shifts. Conversely, by interpreting hidden-state trajectories strictly through the boundaries of Neural ODE integrations, CT-GMARL charts a highly stabilized, tightly bound KL trajectory. This proves the ODE successfully "smooths" sudden alert bursts across time, preventing gradients from over-saturating. Furthermore, entropy plots (Figure 7) measure exploration confidence. While R-MAPPO and QMIX frequently fall into sudden low-entropy states early in training—indicative of becoming "trapped" in simplistic local minima—the CT-GMARL decay curve arcs gracefully downward. This is particularly crucial for the Red agent: maintaining higher entropy ensures the adversary continues to discover complex, multi-stage exploit chains, forcing the Blue agent to learn genuinely robust defensive policies rather than overfitting to a weak, collapsed adversary. 
+
+## 6.2 Optimization Dynamics: The Cost of Continuous Inte-gration 
+
+While terminal metrics strongly favor CT-GMARL, analyzing the optimization dynamics unearths the internal computational trade-offs of continuous-time integration. 16 Figure 8: Blue Policy Loss. CT-GMARL (pink) maintains a tightly bounded actor update, whereas R-MAPPO (orange) oscillates wildly, reaching 0.08 .
+
+Figure 9: Blue Gradient Norm. CT-GMARL exhibits extreme transient spikes ( ∼ 1.8 × 10 7) due to continuous ODE backpropagation over the Critic. Graph Neural Networks combined with Neural ODEs are notoriously prone to exploding gradients during backpropagation. Tracking the L2 grad_norm 
+
+(Figure 9) reveals that CT-GMARL experiences extreme transient spikes, peaking near 1.8 × 10 7 for the Blue agent and 6 × 10 5 for Red. This correlates with the Centralized Critic’s v_loss , which also exhibits substantial spikes approaching 
+
+2.5 × 10 7. This is a documented artifact of backpropagating through ODE solvers over irregular, asynchronous time jumps ( ∆t) [ 4]. Because our continuous GAE utilizes exponential decay ( e−β∆tt ), sudden alert storms force the Critic to reconcile significant temporal credit shifts instantly. To prevent divergence, global gradient clipping is applied ( max_grad_norm =10 .0). Remarkably, despite these critic spikes, no seeds diverged across all 10 independent runs. As shown in Figure 8, despite the gradient shocks in the Critic network, the Actor’s policy loss ( p_loss ) for CT-GMARL remains strictly bounded between −0.02 and +0 .02 . In stark contrast, the R-MAPPO base-line experiences severe policy shearing, with p_loss oscillating wildly up to 
+
+0.15 for Red and 0.08 for Blue. This validates our architectural choice: the continuous GAE and PPO clipping mechanism effectively absorb the temporal credit-assignment chaos into the Critic network, shielding the Actor and ensuring operational policy stability. Notably, this stability comes at a throughput cost: CT-GMARL achieves 10.0 SPS compared to R-MAPPO’s 17.2 SPS (Table 3), confirming the computational overhead of continuous integration. 
+
+## 6.3 Operational Efficacy and the “Scorched Earth” Dilemma 
+
+Moving from fundamental mathematical stability to actual domain output metrics, the differences between policies manifest concretely in operational security bounds. Plotting the primary return over training steps (Figure 10), the CT-GMARL learning curve substantially outpaces all baselines. At convergence, CT-GMARL achieves a median Blue reward of 57,135—a 2.0× improvement over R-MAPPO (28,347) and 2.1× over QMIX (26,649). 17 Figure 10: Aggregate Reward Yields. The CT-GMARL learning curve (pink) converges to a median reward of 57,135, achieving a 2.0× improvement over R-MAPPO (orange, 28,347). 
+
+Figure 11: Total Services Restored. CT-GMARL (pink) restores a median of 144 services, demonstrating active remediation rather than passive pre-vention. 
+
+Figure 12: Total Successful Exploits. QMIX (purple) and R-MAPPO (or-ange) minimize exploits via blanket isolations, while CT-GMARL permits controlled exposure to maintain net-work availability. 18 The service restoration and exploit metrics (Figures 11 and 12) reveal a critical strategic trade-off. Baselines—particularly QMIX—achieve near-zero exploit counts, but only by aggressively isolating hosts, resulting in a median of just 5 restored services. This “scorched earth” strategy satisfies security metrics trivially but is operationally severe: a defender that shuts down the entire network to prevent attacks has failed its business mandate. This failure mode perfectly illustrates why our specialized reward function and POSMDP formulation are strictly necessary for real SOC operations. CT-GMARL exhibits the opposite strategy. It restores a median of 144 services —12 × more than R-MAPPO (13) and 29 × more than QMIX (5)— demonstrating active, ongoing remediation. The higher exploit count observed for CT-GMARL (median of 1 vs. 0 for baselines) is a direct consequence of this strategy: by keeping hosts online and accessible, CT-GMARL permits a controlled level of adversarial exposure that it subsequently remediates, rather than preventing attacks by destroying network availability. Ablations and baselines achieve zero exploits not through superior defense but by replicating this scorched earth pattern—isolating hosts preemptively until no targets remain accessible to the Red agent, consistent with their substantially lower Services Restored counts. This reflects precisely the real-world SOC trade-off between security and business continuity that our reward function was designed to optimize (Table 3). 
+
+## 6.4 Action Distribution and Topological Targeting Analy-sis 
+
+A granular analysis of the discrete action and target distributions explicitly highlights the behavioral divergence between the continuous graph architecture and recurrent baselines. 
+
+Defender (Blue) Strategy Comparison: As seen in Figure 13(a), the baseline R-MAPPO exhibits an overwhelmingly saturated footprint in the DMZ. Because standard LSTMs lack a topological masking mechanism, the agent reacts instinctively to the highest volume of NLP noise—which naturally originates at the public-facing internet perimeter. Consequently, R-MAPPO squanders its limited action bandwidth swatting at stochastic Green Agent noise in the DMZ, leaving the deeper internal network entirely unmonitored, as evidenced by the visually empty internal heatmap (Figure 13(b)). In stark contrast, CT-GMARL leverages the TopologyMessagePasser to execute hierarchical defense. The CT-GMARL DMZ heatmap (Figure 13(c)) is remarkably sparse, indicating the agent has learned to ignore benign perimeter noise. Instead, it correctly anticipates lateral attack vectors, allocating its actions deeper into the network. Figure 13(d) reveals thick, sustained horizontal action bands (e.g., across Bins 3.1, 4.7, and 8.9). These dense execution lines confirm that CT-GMARL proactively deploys targeted countermeasures specifically at the ZTNA choke points to definitively sever internal exploit chains. 
+
+Adversary (Red) Degradation: Consequently, the adversarial behavior collapses when co-evolving against CT-GMARL’s topological choke holds. Be-19 (a) R-MAPPO: DMZ Actions (Heavily Saturated) 
+
+> (b) R-MAPPO: Internal Actions (Nearly Abandoned)
+> (c) CT-GMARL: DMZ Actions (Sparse, Surgical)
+> (d) CT-GMARL: Internal Actions (Dense Target Bands)
+
+Figure 13: Defender Topological Allocation. R-MAPPO (top row) acts in-discriminately on the noisy DMZ perimeter and ignores the internal network. CT-GMARL (bottom row) limits DMZ engagement to focus dense, targeted defensive barriers inside the internal Zero-Trust choke points. 
+
+> (a) Red Actions vs. CT-GMARL. Dense horizontal banding strictly on lower-tier exploit bins.
+> (b) Red Targets vs. CT-GMARL. Target IDs are confined strictly to perimeter in-dices (0-10).
+
+Figure 14: Adversarial Behavior Analysis. co-evolution metrics showing contain-ment of the Red Agent within the network perimeter. 20 cause CT-GMARL rapidly seals internal pathways, the Red agent is starved of the ZTNA tokens required for lateral movement. As shown in Figure 14a, the attacker is forced into a repetitive failure loop, visually represented by the dense horizontal banding on the lowest-tier action bins ( NetworkScan and baseline 
+
+ExploitRemoteService ). This containment is ultimately confirmed in Figure 14b. The attacker’s target distribution is entirely constrained to the lowest Target Identifiers (Bins 0 to 
+
+∼10, representing the DMZ perimeter). The deep-network bins (representing the 
+
+Internal and Restricted Vaults) remain starkly pale and untouched, proving the attacker is fundamentally incapable of penetrating CT-GMARL’s spatial-temporal defense. 
+
+## 6.5 Structural Ablations 
+
+The structural dismantlement of our architecture quantifies the contribution of each component (Table 3). Removing the ODE module (No-ODE ablation) drops the converged reward from 57,135 to 51,783 and halves the service restoration rate (32 vs. 144). Without continuous temporal drift, the agent’s hidden state becomes disconnected from wall-clock time during dwell periods, degrading its ability to correlate delayed alerts with earlier exploit indicators. The No-Beta (static γ) ablation achieves comparable raw reward (56,656) but with diminished service restoration (48 vs. 144) and notably lower Red agent co-evolution pressure, confirming that explicit continuous-time discounting via 
+
+e−β∆tt is necessary for proper credit assignment over variable-duration actions. Surprisingly, the No-GAT ablation achieves the second-highest raw re-ward (56,565), suggesting that the MLP fallback can partially compensate via the TopologyMessagePasser . However, the No-GAT configuration’s high late-training entropy ( 4.93 ) and value loss ( 2.7 × 10 6, Table 4) indicate incomplete convergence, suggesting its reward of 56,565 may not represent a stable policy optimum. Furthermore, qualitative analysis of the action heatmaps (Figure 13) reveals that No-GAT policies lack spatial precision, allocating actions uniformly rather than concentrating on ZTNA choke points. This structural blindness would compound severely on larger topologies where precise spatial targeting is essential. 
+
+## 6.6 Zero-Shot Sim2Real Transfer 
+
+The Sim2Real experiment validates the NetForge_RL dual-engine architecture. When CT-GMARL policies trained exclusively in the MockHypervisor are trans-ferred without fine-tuning to the live DockerHypervisor , they achieve a median reward of 98,026 —a 1.7× improvement over simulation training performance (Table 3). We attribute this counter-intuitive result to the DockerHypervisor ’s deterministic CVE execution sequences providing denser, more structured reward signals than the stochastic self-play adversary encountered during Mock training. Crucially, this result does not imply Docker training is preferable—the 2, 000 ×
+
+21 throughput advantage of MockHypervisor (∼10,000 vs. ∼5 steps/s) makes direct Docker training computationally intractable for the millions of steps required for policy convergence. The GNN-based architecture enables this transfer by design: because Graph Attention operates over neighborhood embeddings rather than fixed-dimension input arrays, CT-GMARL policies naturally accommodate the structural varia-tions introduced by live container orchestration without requiring architectural modification. Table 3: Converged Performance Metrics (Median, Last 20% of Training)                                                         
+
+> Architecture Blue Reward Red Reward Services Restored Exploits ODE NFE Blue KL SPS †
+> Sim2Real (Docker) 98,026 44 32 0.0 4.0 0.0051 5.1
+> CT-GMARL (Ours) 57,135 2,475 144 1.0 4.0 0.0031 10.0 Ablation: No-Beta 56,656 46 48 0.0 4.0 0.0055 7.4 Ablation: No-GAT 56,565 38 73 0.0 4.0 0.0011 4.8 Ablation: No-ODE 51,783 46 32 0.0 —0.0026 5.0 R-MAPPO Baseline 28,347 213 0.0 —0.0067 17.2 QMIX Baseline 26,649 050.0 —0.0627 11.7
+> †SPS = environment Steps Per Second (wall-clock throughput).
+
+Table 4: Training Stability Metrics (Median, Last 20% of Training) 
+
+Architecture Policy Loss Entropy Gradient Norm KL Divergence Value Loss CT-GMARL (Ours) −0.0031 2.04 332,194 0.0031 8.7 × 10 4
+
+Ablation: No-Beta −0.0029 2.21 3,187 0.0055 5.4 × 10 3
+
+Ablation: No-GAT −0.0004 4.93 202,182 0.0011 2.7 × 10 6
+
+Ablation: No-ODE 0.0007 2.40 209,139 0.0026 2.0 × 10 6
+
+R-MAPPO Baseline 0.0023 0.15 10,587 0.0067 7.7 × 10 5
+
+QMIX Baseline −0.0012 0.00 0 0.0627 1.2 × 10 5
+
+# 7 Conclusion 
+
+We presented NetForge_RL and CT-GMARL, addressing three structural limita-tions of prior cyber defense simulators: synchronous time modeling, clean-vector telemetry, and static topologies. Our empirical pipeline verifies that merging the spatial awareness of Graph Neural Networks with the continuous hidden-state integration of Neural ODEs produces a defender that actively remediates com-promised infrastructure ( 12 × more services restored than R-MAPPO) rather than resorting to network-destroying “scorched earth” tactics. Zero-Shot transfer to the live DockerHypervisor yields a median reward of 98,026, validating the Sim2Real bridge. Future work will naturally extend this foundation by: (1) extending the Red agent’s action space to include dynamically generated zero-day exploits beyond the current fixed CVE taxonomy, (2) substituting the TF-IDF pipeline with a computationally optimized Transformer-based telemetry encoder to capture deep sequential log semantics, and (3) scaling the dynamic graph models beyond 100 22 nodes to evaluate enterprise-level architectures exceeding thousands of concurrent endpoints. 
+
+# 8 Broader Impacts and Limitations 
+
+The deployment of Autonomous Cyber Defense (ACD) systems powered by advanced MARL architectures carries significant dual-use implications. While CT-GMARL is designed to alleviate alert fatigue and protect critical infrastruc-ture from ransomware and APTs by defending dynamically, the fundamental mathematical frameworks—specifically continuous-time integration and topo-logical reasoning—are agent-agnostic. The exact same continuous-time RL mechanics could theoretically be utilized to train highly evasive, autonomous adversarial agents capable of optimizing lateral movement speeds to subvert human defenders. As such, the open-sourcing of high-fidelity simulators like NetForge_RL must be accompanied by rigorous defensive benchmarking. A primary technical limitation of this work lies in the computational overhead of Neural ODEs. While our implementation utilizes a fixed-step RK4 solver to strictly bound the Number of Function Evaluations (NFE) to 4 per step—ensuring viability for high-throughput training—this approach still demands significantly more FLOPs per forward pass than a standard discrete LSTM. Furthermore, this fixed-step approximation introduces temporal trade-offs: if the true stochastic environment produces a dense alert storm where intermittent events occur faster than the integration delta ( δt ), the non-adaptive solver may mathematically blur fine-grained security semantics, although we did not empirically observe major degradation in out-of-distribution tests. Additionally, Zero-Shot evaluation incurs significant execution bottlenecks. Orchestrating multi-node Vulhub networks dynamically in the DockerHypervisor 
+
+drops throughput from ∼10 steps/s to approximately 5 steps/s. This container I/O and subprocess polling overhead imposes staggering CPU and networking costs, fundamentally cementing why deep MARL cannot be exhaustively trained solely in live execution topologies. A further limitation is that the Red agent’s action space is currently bounded by a predefined taxonomy of 32 actions. Real-world APTs frequently compose novel attack primitives outside this set, and a trained Blue policy may not generalize to attack patterns structurally absent from its training distribution. 
+
+# A Code and Data Availability 
+
+To ensure full reproducibility and facilitate future research in asynchronous Multi-Agent Reinforcement Learning, all assets for this project are open-sourced under the MIT License and distributed across two dedicated repositories: 
+
+• The NetForge_RL Simulator (https://github.com/xaiqo/NetForge_ RL ): Contains the core continuous-time POSMDP environment, the NLP-encoded SIEM telemetry pipeline, the Zero-Trust network routing logic, and 23 both the high-throughput MockHypervisor and live DockerHypervisor 
+
+(including Vulhub container configurations). 
+
+• CT-GMARL & Experiments (https://github.com/xaiqo/ct-gmarl ): Contains the PyTorch implementation of the Continuous-Time Graph MARL architecture (ODE-RNN and Multi-Head GAT modules), continu-ous MAPPO optimization scripts, pre-trained policy weights, and the full orchestration code required to reproduce the 7-experiment matrix detailed in this paper. 
+
+# B Hyperparameters and Network Configurations 
+
+To ensure complete reproducibility of the CT-GMARL architecture and the evaluation matrix, Table 5 details the primary hyperparameters utilized across all 10 random seeds. Table 5: CT-GMARL Training Hyperparameters 
+
+Hyperparameter Value 
+
+GAT Attention Heads ( K) 4Hidden Dimension 128 Continuous Time Decay ( β) 0.05 ODE Solver RK4 (fixed-step) ODE Integration Steps ( n) 1 (4 NFE per step) Actor Learning Rate 3 × 10 −4
+
+Critic Learning Rate 1 × 10 −3
+
+PPO Clip Ratio ( ϵ) 0.2 GAE Smoothing ( λ) 0.95 Max Gradient Norm 10.0 Rollout Length (Steps) 2048 Batch Size 512 
+
+# C Red Agent Reward Formulation 
+
+To ensure the adversarial self-play environment is structurally sound, the Red agent optimizes an explicitly symmetric offensive objective RRed total , calculated as: 
+
+RRed total = RRed tactical + RRed progression − RRed cost . (10) Where RRed tactical provides instant bonuses for securing shells (+3.0) or root access (+5.0), and RRed progression provides a continuous bonus relative to the percentage of compromised nodes, explicitly mirroring the Blue agent’s health bonus: 
+
+RRed progression = 1 .0 × |compromised hosts ||total hosts | . (11) 24 The operational cost RRed cost penalizes noisy or redundant attack actions, preventing the Red agent from trivially spamming low-value scans. 
+
+# References 
+
+[1] Andy Applebaum et al. Intelligent simulation of APT operational trajec-tories. In Proceedings of the ACM Workshop on Artificial Intelligence and Security , pages 83–93, 2016. [2] Leemon C Baird. Reinforcement learning in continuous time: Advantage updating. In Proceedings of the IEEE International Conference on Neural Networks , 1994. [3] J Andrew Bland et al. Machine learning cybersecurity: bridging the sim2real gap. In IEEE International Conference on Intelligence and Security Infor-matics (ISI) , pages 1–6. IEEE, 2020. [4] Ricky TQ Chen, Yulia Rubanova, Jesse Bettencourt, and David K Duvenaud. Neural ordinary differential equations. In Advances in Neural Information Processing Systems (NeurIPS) , volume 31, 2018. [5] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. BERT: Pre-training of deep bidirectional transformers for language understanding. 
+
+arXiv preprint arXiv:1810.04805 , 2018. [6] Kenji Doya. Reinforcement learning in continuous time and space. Neural computation , 12(1):219–245, 2000. [7] Jiechuan Jiang, Chen Dun, Tiejun Huang, and Zongqing Lu. Graph convolu-tional reinforcement learning. In Proceedings of the International Conference on Learning Representations (ICLR) , 2020. [8] Leslie Pack Kaelbling, Michael L Littman, and Anthony R Cassandra. Planning and acting in partially observable stochastic domains. Artificial intelligence , 101(1-2):99–134, 1998. [9] Ryan Lowe, Yi Wu, Aviv Tamar, Jean Harb, Pieter Abbeel, and Igor Mordatch. Multi-agent actor-critic for mixed cooperative-competitive envi-ronments. In Advances in Neural Information Processing Systems (NeurIPS) ,volume 30, 2017. [10] Tabish Rashid, Mikayel Samvelyan, Christian Schroeder, Gregory Farquhar, Jakob Foerster, and Shimon Whiteson. QMIX: Monotonic value function factorisation for deep multi-agent reinforcement learning. In Proceedings of the International Conference on Machine Learning (ICML) , pages 4295– 4304. PMLR, 2018. 25 [11] Scott Rose, Oliver Borchert, Stu Mitchell, and Sean Connelly. Zero trust ar-chitecture. Technical report, National Institute of Standards and Technology, 2020. [12] Yulia Rubanova, Ricky TQ Chen, and David K Duvenaud. Latent ordinary differential equations for irregularly-sampled time series. In Advances in Neural Information Processing Systems (NeurIPS) , volume 32, 2019. [13] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. [14] Jonathon Schwartz and Hanna Kurniawati. NASim: Network attack sim-ulator. In Proceedings of the Australasian Conference on Robotics and Automation (ACRA) , 2019. [15] Maxwell Standen, David Bowman, Joseph Richer, et al. CybORG: A gym for the development of autonomous cyber agents. arXiv preprint arXiv:2108.09118 , 2021. [16] Blake I Strom, Andy Applebaum, Doug P Miller, Kathryn C Nickels, Adam G Pennington, and Cody B Thomas. MITRE ATT&CK: Design and philosophy. Technical report, The MITRE Corporation , 2018. [17] Josh Tobin, Rachel Fong, Alex Ray, Jonas Schneider, Wojciech Zaremba, and Pieter Abbeel. Domain randomization for transferring deep neural networks from simulation to the real world. In 2017 IEEE/RSJ international conference on intelligent robots and systems (IROS) , pages 23–30. IEEE, 2017. [18] Wenhui Wang, Furu Wei, Li Dong, Hangbo Bao, Minlie Yang, and Ming Zhou. MiniLM: Deep self-attention distillation for task-agnostic compression of pre-trained transformers. Advances in Neural Information Processing Systems , 33:5776–5788, 2020. [19] Chao Yu, Akash Velu, Eugene Vinitsky, Jiaxuan Gao, Yu Wang, Alexandre Bayen, and Yi Wu. The surprising effectiveness of PPO in cooperative multi-agent games. In Advances in Neural Information Processing Systems (NeurIPS) , volume 35, pages 24611–24624, 2022. 26

@@ -1,0 +1,1344 @@
+Title: AttnDiff: Attention-based Differential Fingerprinting for Large Language Models
+
+URL Source: https://arxiv.org/pdf/2604.05502v1
+
+Published Time: Wed, 08 Apr 2026 00:44:21 GMT
+
+Number of Pages: 31
+
+Markdown Content:
+# ATTN DIFF : Attention-based Differential Fingerprinting for Large Language Models 
+
+Haobo Zhang 1,3 * Zhenhua Xu 2,3 *
+
+Junxian Li 4 Shangfeng Sheng 5 Dezhang Kong 2,3† Meng Han 2,3† 1Zhejiang University of Technology, 2Zhejiang University 
+
+> 3
+
+Binjiang Institute of Zhejiang University 
+
+> 4
+
+Shanghai Jiao Tong University, 5University of Science and Technology of China 
+
+zhanghaobo@zjut.edu.cn {xuzhenhua0326, mhan}@zju.edu.cn 
+
+Abstract 
+
+Post-hoc fingerprinting of Large Language Models (LLMs) is critical for provenance ver-ification in open-weight forensics, yet exist-ing fingerprints are often brittle under realis-tic model laundering (e.g., alignment, prun-ing/compression, model merging, and distil-lation). We propose A TTN DIFF , a robust and data-efficient white-box framework that finger-prints models via intrinsic information-routing behavior. It probes models with minimally perturbed prompt pairs that induce controlled semantic conflicts, extracts differential atten-tion patterns as signatures, summarizes them with compact spectral descriptors, and com-pares models using CKA. Across Llama-2/3 and Qwen2.5 models (3B–14B) and additional open-source families, it retains high similarity for related derivatives across fine-tuning (in-cluding PPO/DPO), pruning/compression, and merging, while remaining well separated from unrelated architectures (e.g., > 0.98 vs. < 0.22 
+
+with M = 60 probes). With only 5–60 multi-domain probes, it provides a practical and dis-criminative tool for model provenance and ac-countability; our open-source implementation is available at https://github.com/zhb01 19/AttnDiff .
+
+1 Introduction 
+
+The rapid advancement of Large Language Mod-els (LLMs), such as the Llama series (Touvron et al., 2023), Qwen (Bai et al., 2023), and DeepSeek (DeepSeek-AI, 2024), has revolution-ized natural language understanding and genera-tion. However, the prohibitive costs associated with large-scale data curation and massive compu-tational resources render model weights the core intellectual property (IP) of AI entities. In the cur-rent open-weight ecosystem, the risk of unautho-rized redistribution, illicit fine-tuning, and model   
+
+> *Equal contribution.
+> †Corresponding author.
+
+laundering has escalated significantly (Xu et al., 2025b; Zhang et al., 2024). Consequently, model provenance verification—the forensic capability to trace a suspect model back to its architectural or parametric origin—has become a cornerstone for copyright enforcement and IP protection (Xu et al., 2025b; hyeon Yoon et al., 2025). Existing methodologies for model ownership verification are generally bifurcated into invasive and non-invasive (passive) approaches (Xu et al., 2025b). Invasive techniques, such as backdoor watermark-based fingerprints, embed ownership signals by modifying the training process (Xu et al., 2025c, 2024; Li et al., 2023; Zhang et al., 2025a); however, they necessarily alter model weights, inducing a trade-off between fingerprint capac-ity and utility and potentially introducing hard-to-characterize vulnerabilities (e.g., spurious trigger activations or degraded generalization) (Xu et al., 2025a,c, 2024). Moreover, if the model is stolen before embedding, invasive mechanisms do not support retrospective provenance analysis, which is particularly problematic in open-weight, post-hoc forensic settings where released models typically lack pre-embedded protection and thus cannot be reliably traced ex post .In contrast, non-invasive approaches— commonly referred to as intrinsic model fingerprinting—extract signatures without altering parameters. Existing intrinsic fingerprints fall into four families with distinct robustness gaps: 
+
+parameter-based fingerprints (Zeng et al., 2024) operate in weight space and are fragile under struc-tural edits such as structured pruning (see Sec. 5.4); 
+
+representation-based fingerprints (Yang and Wu, 2024; Zhang et al., 2024) summarize internal activations but remain vulnerable to architectural changes and exhibit distribution shifts under distillation and preference optimization (PO) fine-tuning (see Appendix E.2 and Appendix E.6); 
+
+adversarial-example-based fingerprints (Jin 1
+
+> arXiv:2604.05502v1 [cs.CR] 7 Apr 2026
+
+et al., 2024) rely on crafted triggers that can be neu-tralized by input perturbations (Xu et al., 2025c,a) (and are often high-perplexity or atypical, reducing stealth); and semantic fingerprints (Pasquini et al., 2025) depend on generated semantics and decoding, making them sensitive to paraphrasing and rewriting attacks (see Appendix E.9). Motivated by these limitations, we propose A T-
+
+> TN
+
+DIFF , a robust and data-efficient white-box fin-gerprinting framework based on differential atten-tion dynamics under semantic conflict (i.e., mini-mally perturbed prompt pairs that invert logical en-tailment). Rather than relying on static parameters, generic hidden states, or surface-level semantics, ATTN DIFF directly probes how a model re-routes attention when confronted with such prompts. Our central hypothesis is that the resulting information-routing pattern constitutes a stable, intrinsic prop-erty of the model. Specifically, this pattern— defined by how self-attention distributes attention weights over tokens encoding logical operators, factual priors, and safety signals—persists under a broad spectrum of model-level attacks. Concretely, ATTN DIFF constructs paired prompts that introduce small lexical pivots (single-word substitutions) to flip the underlying entailment (e.g., “parallel lines never intersect” vs. “always intersect”). It then ex-tracts the corresponding differential attention maps across layers and heads, compressing them into compact spectral descriptors. Models are com-pared in this feature space using centered linear CKA (CKA) (Kornblith et al., 2019)—a similarity measure that captures structural alignment between representation spaces and is invariant to isotropic reparameterization. The resulting fingerprints are simultaneously robust to realistic model-level at-tacks and discriminative across architecturally dis-tinct models. 
+
+2 Related Work 
+
+2.1 Invasive Fingerprints 
+
+Invasive fingerprints embed ownership signals by modifying models during (pre-)training, typ-ically via weight watermarks or backdoor trig-gers. Weight watermark-based schemes encode verifiable patterns in parameter space (Zhang and Koushanfar, 2024; Guo et al., 2025; Fernandez et al., 2023; Block et al., 2025; Yang et al., 2025) but face capacity–utility trade-offs and may lose robustness under pruning, quantization, or strong fine-tuning (Xu et al., 2025b). Backdoor-based fingerprints use trigger datasets for black-box attri-bution (Xu et al., 2024; Cai et al., 2024; Xu et al., 2025c; Li et al., 2024a; Russinovich and Salem, 2024), yet require training-time control and can be removed by targeted erasure (Zhang et al., 2025b). 
+
+2.2 Intrinsic Fingerprints 
+
+Non-invasive (intrinsic) fingerprints do not inject external signals and instead mine model-inherent properties for provenance verification (Xu et al., 2025b). Representative families include parameter-space statistics in weight space (Zeng et al., 2024; hyeon Yoon et al., 2025), representation-based de-scriptors over hidden states/logits (Zhang et al., 2024; Yang and Wu, 2024; Li et al., 2025), seman-tic output traces (Pasquini et al., 2025; Wu et al., 2025), and adversarial-example-based triggers (Jin et al., 2024; Gubri et al., 2024). However, these sig-nals can be brittle under realistic transformations (e.g., pruning/architecture edits, distillation or pref-erence optimization) and/or sensitive to decoding and input perturbations, limiting robustness across fine-tuning, pruning/merging, and distillation. Among intrinsic approaches, A TTN DIFF departs from parameter-, representation-, and output-level signatures by fingerprinting models through their 
+
+differential attention responses to controlled seman-tic conflicts, with similarity measured via CKA. 
+
+3 Threat Model 
+
+We study a post-hoc model forensics setting where a defender (the legitimate model owner) verifies the provenance of a released or seized suspect model, while an attacker seeks to evade attribution after illicitly obtaining the model weights. We focus on realistic white-box model laundering operations that modify a stolen model’s parameters and/or architecture while maintaining utility. 
+
+Attacker capabilities. With full white-box access, the attacker can apply arbitrary transfor-mations, including supervised fine-tuning (SFT), alignment and PO (e.g., reinforcement learning from human feedback (RLHF) with Proximal Pol-icy Optimization (PPO) or Direct Preference Op-timization (DPO)), pruning, quantization, distilla-tion to a different architecture, and model merging or weight interpolation. Transformations may be composed sequentially to obfuscate provenance ev-idence without materially degrading usefulness. 
+
+Defender capabilities. The defender has ac-cess to the original reference model and is granted 2white-box access to the suspect model during veri-fication, consistent with legal/auditing workflows. The defender can inspect internal states and com-pute fingerprints for both models under the same probing protocol. 
+
+4 Design of A TTN DIFF 
+
+4.1 Motivation 
+
+In post-hoc LLM forensics, a suspect is rarely an “exact-copy”: stolen checkpoints are routinely laundered through fine-tuning/alignment, pruning, merging, or distillation. A practical fingerprint should therefore remain stable under such transfor-mations, where weight-space statistics can break under structural edits and hidden-state/logit signa-tures can drift after strong adaptation. We encountered an empirical turning point while stress-testing small, highly controlled probes. We constructed minimally edited origin/corrupted prompt pairs that preserve surface form while flip-ping semantics via a single-word lexical pivot. Un-der these “controlled semantic conflicts”, attention did not drift arbitrarily; models re-allocated atten-tion in a structured manner. More importantly, this re-allocation appeared family-consistent: Llama-2-7B (Touvron et al., 2023) derivatives exhibited closely matched profiles, whereas an unrelated model family such as Qwen2.5-7B (Qwen Team et al., 2025) followed a systematically different regime (Appendix E.1). Together, these observa-tions suggested that a model’s intrinsic information-routing strategy—how it redistributes self-attention when resolving a semantic contradiction—may en-code lineage-specific structure that survives com-mon “laundering” operations. In Appendix E.1, we provide a qualitative vi-sualization based on these routing statistics as a sanity-check for cross-family separation; we em-phasize that robustness and discriminability under realistic laundering transformations are evaluated by the main experiments. These observations motivate A TTN DIFF : by probing a model with minimally edited prompt pairs that induce controlled semantic conflicts, we can elicit a characteristic re-routing response that is stable within a model lineage yet distinct across unrelated families. The next subsection describes how we operationalize this idea into a practical fingerprinting pipeline. 
+
+4.2 ATTN DIFF Workflow 
+
+ATTN DIFF fingerprints Large Language Models (LLMs) by capturing their differential attention dynamics under semantic conflict. As shown in Figure 1, the pipeline comprises probe prompt con-struction and fingerprint extraction. Given a victim model and a suspect model, we compute a sim-ilarity score s = CKA( F, F ′) to quantify their functional similarity. 
+
+4.2.1 Probe Dataset 
+
+We construct a probe set of M prompts spanning six domains: Code , Math , Economics , Medicine ,
+
+Daily QA , and Safe Alignment . Since post-training typically specializes a model toward a particular domain, we diversify probe domains to reduce domain-specific drift in internal routing behaviors and to provide complementary anchors for finger-print comparison. In addition, Safe Alignment is in-cluded to cover policy-gated behaviors (e.g., refusal or cautious responses) that can follow a distinct internal routing regime compared to capability-oriented queries, providing a complementary an-chor under realistic instruction/alignment settings. We then construct M origin/corrupted probe pairs for fingerprint extraction, as detailed below. 
+
+4.2.2 Differential Fingerprint 
+
+For the i-th probe pair (pi, ˜pi), we generate a cor-rupted prompt ˜pi from the origin prompt pi via a 
+
+single-word (lexical) pivot substitution, yielding a 
+
+semantic conflict between pi and ˜pi. We provide a brief description here; full details of the probe construction pipeline and pivot rules are given in Appendix B.1. Tokenization Tok( ·) is performed using the tokenizer associated with the target model whose fingerprint is being extracted, and we tok-enize only the prompt string itself (i.e., excluding any external chat template or system prefix). Let 
+
+N and ˜N denote the token lengths of pi and ˜pi, re-spectively; typically ˜N = N , with rare mismatches due to tokenizer segmentation. For each layer l ∈ { 1, . . . , L } and head h ∈{1, . . . , H }, we extract the post-softmax causal self-attention probability matrix A(i) 
+
+> l,h
+
+∈ RN ×N for 
+
+pi and the corresponding matrix ˜A(i) 
+
+> l,h
+
+∈ R ˜N × ˜N
+
+for ˜pi, where strictly upper-triangular entries are masked to zero. Collectively, a probe pair yields attention maps of shape L × H × N × N (origin) and L × H × ˜N × ˜N (corrupted). For each probe pair, we refer to the stacked 3Figure 1: A TTN DIFF pipeline. Left: construct M origin/corrupted prompt pairs (p, ˜p) via a single-word pivot substitution. Right: extract causal attention maps over L layers and H heads, compute ∆A = ˜A − A, and summarize ∆A by SVD with TopK (σ) (largest K singular values). Concatenating over heads/layers and stacking over pairs yields the fingerprint matrix F . Parentheses denote dimensions (e.g., N, H, L, M ). 
+
+tensors as the origin attention map A(i) ∈
+
+RL×H×N ×N and the corrupted attention map 
+
+˜A(i) ∈ RL×H× ˜N × ˜N .To handle the rare case ˜N̸ = N , we align attention maps to a common resolution N ∗ =min( N, ˜N ) to avoid increasing resolution, via 2D Adaptive Average Pooling . Concretely, for an in-put matrix X ∈ Ra×b and target size (m, n ), adap-tive average pooling produces Y ∈ Rm×n with 
+
+Yu,v = 1 
+
+> |Iu| | Jv|
+
+P
+
+> r∈Iu
+
+P 
+
+> c∈Jv
+
+Xr,c , where Iu and 
+
+Jv are the input index ranges mapped to the (u, v )-th output bin. We apply this operator to pool each 
+
+A(i) 
+
+> l,h
+
+and ˜A(i) 
+
+> l,h
+
+to ¯A(i)
+
+> l,h
+
+, ¯˜A(i) 
+
+> l,h
+
+∈ RN ∗×N ∗
+
+.We then compute the Differential Attention Matrix ∆A(i) 
+
+> l,h
+
+= ¯˜A(i) 
+
+> l,h
+
+− ¯A(i) 
+
+> l,h
+
+(i.e., Pool( ˜A(i)
+
+> l,h
+
+) −
+
+Pool( A(i)
+
+> l,h
+
+)), which highlights attention re-routing induced by semantic conflict under aligned token topology. To obtain a compact, length-invariant signature, we apply truncated SVD to ∆A(i) 
+
+> l,h
+
+and retain the top-K singular values as a spectral de-scriptor s(i) 
+
+> l,h
+
+∈ RK . In Figure 1, we denote this operation as TopK (σ), i.e., selecting the largest 
+
+K singular values σ returned by SVD. Concate-nating across all layers and heads yields a one-dimensional instance-level fingerprint vector x(i) ∈
+
+RLHK , and stacking over M probes forms the fin-gerprint matrix F ∈ RM ×LHK . (More details are provided in Appendix B.2) 
+
+4.2.3 Similarity Measurement by CKA 
+
+To compare two models, we compute fingerprints 
+
+F and F ′ on the same probe set and measure sim-ilarity using CKA . Specifically, we form linear Gram matrices K = F F ⊤ and K′ = F ′F ′⊤ ∈
+
+RM ×M that encode inter-probe relational geometry. Let H = I − 1 
+
+> M
+
+11 ⊤ be the centering matrix and define centered Gram matrices ¯K = HKH and 
+
+¯K′ = HK ′H. We compute CKA via the Hilbert-Schmidt Independence Criterion (HSIC), where 
+
+HSIC( K, K ′) ∝ tr( ¯K ¯K′): CKA( F, F ′) =
+
+> HSIC( K,K ′)
+
+√HSIC( K,K )HSIC( K′,K ′) . We use centered Gram matrices in HSIC to remove mean effects and fo-cus the comparison on similarity structure across probes. Related theoretical guarantees and proofs are provided in Appendix A. Critically, practical transformations such as structured pruning, distillation, or architecture edits may change model structure (e.g., removing layers or attention heads), yielding fingerprints with dif-ferent feature dimensions (e.g., F ∈ RM ×D and 
+
+F ′ ∈ RM ×D′
+
+with D̸ = D′ due to different L or 
+
+H). This makes direct feature matching ill-posed. In contrast, CKA operates on probe-indexed Gram matrices in RM ×M and therefore only requires the same probe set size M , enabling direct compari-4son without explicit layer/head alignment. Conse-quently, A TTN DIFF remains applicable across mod-els with heterogeneous depths and head counts, while retaining robustness to re-parameterizations and other real-world modifications. Pseudocode and additional algorithmic details are provided in Appendix B. 
+
+5 Experiment 
+
+We evaluate A TTN DIFF under realistic model trans-formations and compare it against representa-tive non-invasive baselines: experimental set-ting in Sec. 5.1, fine-tuning in Sec. 5.2, merg-ing in Sec. 5.3, pruning in Sec. 5.4, and abla-tions in Sec. 5.5. We provide a compact cross-transformation robustness summary in Fig. 8. 
+
+5.1 Experimental Setting Probe set. Unless otherwise specified, we con-struct a probe set with M = 60 prompts spanning six domains, with 10 prompts per domain: Code ,
+
+Math , Economics , Medicine , Daily QA , and Safe Alignment (see Sec. 5.5.2 for ablations on the probe count M and the probe domain distribution). For each origin prompt p, we generate a minimally edited corrupted prompt ˜p via a single-word pivot, and compute fingerprints on the resulting M probe pairs. Default hyperparameters are summarized in Table 7. 
+
+Model. We evaluate A TTN DIFF under realistic model transformation scenarios, covering diverse base architectures and a broad suite of deriva-tive models. Our experiments cover models from the Llama-2/3 (Touvron et al., 2023; Grattafiori et al., 2024), Qwen2.5 (Qwen Team et al., 2025), Gemma (Gemma Team et al., 2024), and Mis-tral (Jiang et al., 2023) families, spanning param-eter scales from 1B to 14B and including various downstream adaptations and optimizations such as supervised fine-tuning, preference optimization, knowledge distillation, pruning, and model merg-ing. The full list of evaluated models is provided in Appendix F. Model repository references are consolidated in Table A11. 
+
+Baselines. Following the taxonomy in the In-troduction, we select widely used and represen-tative non-invasive fingerprinting baselines that cover both black-box and white-box access assump-tions, enabling a fair and comprehensive compari-son across different signal sources. Specifically, we include PCS/ICS (Zeng et al., 2024; hyeon Yoon et al., 2025) as parameter-based fingerprints, Logits (Yang and Wu, 2024) and REEF (Zhang et al., 2024) as representation-based fingerprints, ProFlingo (Jin et al., 2024) as an adversarial-example-based fingerprint, and LLMMap (Pasquini et al., 2025) as a semantic fingerprint. We do not in-clude invasive watermarking/backdoor-based meth-ods, since such approaches typically require em-bedding fingerprints into a specific victim model and thus are mainly suited for verifying whether that particular marked model is stolen, rather than distinguishing models that are co-originated from the same base without prior injection. 
+
+Similarity metrics. For each method, we report the similarity score produced by its original for-mulation. The detailed similarity computation pro-tocol used in our experiments is provided in Ap-pendix D.2. Our experiments aim to answer: 
+
+RQ1 (Robustness to Fine-tuning): Is A TTN -DIFF robust under downstream fine-tuning and preference optimization (e.g., SFT/RLHF/DPO)? 
+
+RQ2 (Robustness to Model Merging): Is ATTN DIFF robust to models produced by diverse model merging strategies (e.g., weight-space vs. distribution/behavior-level merging)? 
+
+RQ3 (Robustness to Pruning/Compression): 
+
+How robust is ATTN DIFF to diverse prun-ing/compression strategies? We next evaluate ATTN DIFF under each transformation accordingly. 
+
+5.2 Model Fine-tuning 
+
+Fine-tuning is a critical stage in the LLM lifecycle for adapting base models to downstream tasks or aligning them with human values (Ouyang et al., 2022; Rafailov et al., 2023b). This process involves extensive parameter updates that can significantly shift the model’s internal representations and out-put distributions, posing a severe test for fingerprint robustness (Nasery et al., 2025). We evaluate per-formance under two representative regimes: SFT and PO. 
+
+Settings. For SFT, we use Llama-2-7B as the vic-tim model and collect a diverse set of suspect mod-els fine-tuned with markedly different data scales (from 5M to 700B tokens) and application do-mains, including Llama-2-finance-7b (5M) (Meta AI, 2023), Vicuna-1.5-7b (370M) (Chiang et al., 2023), WizardMath-7b (1.8B) (Luo et al., 2023), Chinese-LLaMA-2-7b (13B) (Cui et al., 2023), CodeLLaMA-7b (500B) (Roziere et al., 2023), and Llemma-7b (700B) (Azerbayev et al., 2023) tokens. 5Llama-2-Finance-7B (5M tokens) Vicuna-1.5-7B (370M tokens) WizardMath-7B (1.8B tokens) ChineseLLaMA-2-7B (13B tokens) CodeLLaMA-7B (500B tokens) Llemma-7B (700B tokens) Avg PCS 0.9979 0.9985 0.9965 0.9390 0.5301 0.5052 0.8279 ICS 0.9952 0.9949 0.9985 0.7309 0.5112 0.5104 0.7902 Logits 0.9999 0.9999 0.9999 0.7033 0.7833 0.6367 0.8538 REEF 0.9950 0.9985 0.9979 0.9974 0.9947 0.9962 0.9966 ProFlingo 0.2400 0.5200 0.4200 0.2800 0.2000 0.1400 0.3000 LLMMap 0.8986 0.7294 0.7691 0.8720 0.9555 0.8998 0.8541 Ours 0.9989 0.9986 0.9985 0.9963 0.9890 0.9856 0.9945    
+
+> Table 1: SFT robustness results (similarity score) on Llama-2-7B-derived suspect models. We annotate each suspect model with its fine-tuning data scale (tokens).
+> Cell shading (per column): =best, =second, =third.
+
+For preference optimization, we further evaluate representative PO-aligned derivatives; the specific model checkpoints, PO variants, and full experi-mental results are provided in Appendix E.2. 
+
+Conclusion. Table 1 indicates that large-scale SFT can substantially alter model parame-ters/representations, causing parameter-based fin-gerprints (PCS/ICS) to drop sharply on heavily fine-tuned suspects (e.g., ∼0.5 on CodeLLaMA-7B and Llemma-7B). Logits also drops to 0.7833/0.6367 on these two models. ProFlingo is more sensi-tive to SFT because its trigger is optimized against the victim model and thus tends to overfit the vic-tim’s decision boundary, which can shift under fine-tuning. LLMMap relies on output-level traces and an inference model, and its stability can vary with the domain and distribution of downstream interac-tions. In contrast, A TTN DIFF maintains uniformly high similarity ( > 0.985 ) across all SFT suspects and is comparable to the SOTA baseline REEF. 
+
+5.3 Model Merge 
+
+Model merging combines multiple pretrained mod-els in weight space or at the distribution/behavior level, often integrating complementary capabilities without accessing training data or retraining (Yang et al., 2024; Akiba et al., 2024; Wan et al., 2024a,b; Yu et al., 2024; Ilharco et al., 2023). Because a merged suspect is derived from multiple victim models, its fingerprints can be mixed and harder to attribute to all sources. We therefore consider both weight-space merges of models sharing ar-chitecture and distribution/behavior-level merges across heterogeneous architectures to stress-test provenance robustness. 
+
+Settings. Following REEF, we evaluate A T-
+
+> TN
+
+DIFF on representative open-source merged models that cover both weight-space and distribution/behavior-level merging. We further construct and evaluate eight widely used merging recipes; full merge configurations and results are reported in Appendix E.3. 
+
+Conclusion. From Table 2, A TTN DIFF consistently attains high similarity with all parent models in weight-space merges ( ≥ 0.95 ) and maintains sub-stantial similarity ( ≈ 0.78 –0.80 ) with heteroge-neous distribution-level merges, whereas several baselines either fail to attribute all sources (e.g., near-zero scores for OpenLLaMA-2-7B and MPT-7B in PCS/Logits) or exhibit noticeably weaker alignment on cross-architecture merges. These re-sults indicate that our differential attention finger-print can robustly trace model lineage under diverse merging strategies, providing an affirmative answer to RQ2 on robustness to model merging. 
+
+5.4 Model Pruning 
+
+Model pruning compresses LLMs by removing redundant parameters to improve efficiency, of-ten followed by retraining to recover capabilities. This poses a distinct challenge to model finger-printing, as it fundamentally alters the model’s weights and architecture. Recent studies have shown that pruning can weaken the verification ef-fectiveness of multiple fingerprinting schemes (Xu et al., 2025c,a). We therefore evaluate robustness against a spectrum of pruning methodologies, in-cluding both structured and unstructured pruning on open-source checkpoints as well as additional suspects generated via the LLMPruner toolkit (Ma et al., 2023). 
+
+Settings. Following REEF, we compare against a set of publicly available pruned suspects under both structured and unstructured pruning. We fur-ther evaluate three additional pruning criteria and sparsity configurations following CTCC (Xu et al., 6Weight Merging (Evollm-jp-7b) Distribution Merging (Fusellm-7b) Shisa-gamma-7b-v1 Wizardmath-7b-1.1 Abel-7b-002 Llama-2-7b Openllama-2-7b Mpt-7b PCS 0.9992 0.9990 0.9989 0.9997 0.0194 0.0000 ICS 0.9992 0.9988 0.9988 0.9986 0.2478 0.1014 Logits 0.9933 0.9999 0.9999 0.9999 0.0100 0.0000 REEF 0.9635 0.9526 0.9374 0.9996 0.6713 0.6200 ProFlingo 0.3000 0.4000 0.2800 0.5400 0.1400 0.1600 LLMMap 0.7651 0.8343 0.8011 0.9511 0.5742 0.2413 Ours 0.9726 0.9561 0.9996 0.9962 0.7953 0.7851 
+
+Table 2: Model merge robustness results (similarity score) on open-source merged suspects. 
+
+Cell shading (per column): =best, =second, =third.                                                                 
+
+> Structured Pruning Unstructured Pruning Sheared-llama-1.3b-pruned Sheared-llama-1.3b Sheared-llama-1.3b-sharegpt Sheared-llama-2.7b-pruned Sheared-llama-2.7b Sheared-llama-2.7b-sharegpt Sparse-llama-2-7b Wanda-llama-2-7b GBLM-llama-2-7b PCS 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.9560 0.9620 0.9616 ICS 0.4927 0.3512 0.3510 0.6055 0.4580 0.4548 0.9468 0.9468 0.9478 Logits 0.9967 0.9999 0.9999 0.9967 0.9999 0.9999 0.9999 0.9999 0.9999 REEF 0.9368 0.9676 0.9710 0.9278 0.9701 0.9991 0.9985 0.9986 0.9991 ProFlingo 0.0400 0.0200 0.0800 0.0200 0.1000 0.0800 0.1600 0.1200 0.1800 LLMMap 0.9088 0.9007 0.8152 0.9400 0.9236 0.7072 0.8459 0.9145 0.8956 Ours 0.9879 0.9938 0.9903 0.9929 0.9952 0.9936 0.9996 0.9927 0.9995
+
+Table 3: Robustness results (similarity score) on pruned suspect models, comparing structured and unstructured pruning strategies. 
+
+Cell shading (per column): =best, =second, =third. 
+
+2025c) and EverTracer (Xu et al., 2025a); detailed pruning setups and results are provided in Ap-pendix E.4. 
+
+Conclusion. Table 3 shows that ATTN -DIFF preserves high similarity across all structured and unstructured pruned suspects (no lower than 0.9879), even when aggressive structured pruning causes parameter-based fingerprints (PCS/ICS) to collapse and ProFlingo/LLMMap to degrade sub-stantially. Together with the strong performance of A TTN DIFF under unstructured pruning, these re-sults demonstrate that our differential attention fin-gerprint is robust to diverse pruning and compres-sion strategies, giving a positive answer to RQ3. 
+
+5.5 Ablation Study 5.5.1 Effectiveness of Differential Mechanism 
+
+To validate the necessity of our differential design, we compare A TTN DIFF against a non-differential baseline (“Origin”), where fingerprints are ex-tracted directly from the attention matrices of the origin prompts without introducing semantic con-flict. All other preprocessing steps (e.g., pooling, SVD) remain identical. As shown in Table 4, the differential mech-anism is crucial under heavy domain adap-tation: CodeLlama-7b and Llemma-7b drop to 0.5134 /0.2902 with “Origin” but recover to 
+
+0.9890 /0.9856 with A TTN DIFF (∆ > 0.47 ). For unrelated models (e.g., Llama-3, Qwen2.5), A TTN -DIFF reduces spurious similarity from the ∼ 0.4
+
+range to < 0.23 (e.g., −0.2452 for Llama3-8B), widening the margin for attribution. 
+
+5.5.2 Effect of Probe Configuration Impact of Probe Configuration. We analyze how probe design choices influence discrimination, fo-cusing on (i) the number of probe pairs M and (ii) the probe domain distribution. 
+
+Sample Size. Figure 2 shows that sparse probing (M ≤ 15 ) yields high spurious similarity among unrelated models, indicating insufficient averaging to suppress noise. Increasing M substantially im-proves separation; in our setting, M = 60 provides the most favorable trade-off between efficiency and reliability by maintaining high similarity for re-lated suspects while minimizing false similarity for unrelated architectures. 
+
+Probe Domain. Table 5 reports domain-wise similarities and indicates that domain-specific fine-tuning (e.g., CodeLlama) may induce localized 7Model (vs Llama-2-7B) CKA(origin) CKA(diff) Diff - Origin                                                                
+
+> Related Models
+> CodeLlama-7b 0.5134 0.9890 +0.4756
+> Llama-2-finance-7B 0.9958 0.9989 +0.0031 Sheared-LlaMA-1.3B-Pruned 0.9752 0.9879 +0.0127 Sheared-LlaMA-1.3B 0.9800 0.9938 +0.0138 Sheared-LlaMA-2.7B-Pruned 0.9814 0.9929 +0.0115 Sheared-LlaMA-2.7B-ShareGPT 0.9924 0.9936 +0.0012 Sheared-LlaMA-2.7B 0.9915 0.9952 +0.0037 WizardMath-7B-V1.0 0.9931 0.9985 +0.0054 chinese-llama-2-7b 0.9914 0.9963 +0.0049 llemma_7b 0.2902 0.9856 +0.6954
+> vicuna-7b-v1.5 0.9944 0.9986 +0.0042 Avg 0.8817 0.9937 0.1120
+> Unrelated Models
+> Llama3-8B 0.4751 0.2299 -0.2452 mpt-7b 0.4560 0.2193 -0.2367 Qwen2.5-1.5B 0.2611 0.1712 -0.0899 Qwen2.5-3B 0.3689 0.1244 -0.2445 Qwen2.5-7B 0.4311 0.2165 -0.2146 Qwen2.5-14B 0.3743 0.1052 -0.2691 gemma-2-2b 0.3641 0.2154 -0.1487 Yi-6B 0.2544 0.0355 -0.2189 Avg 0.3731 0.1647 -0.2084
+
+Table 4: Ablation of the differential mechanism. “Ori-gin” uses standard attention maps; “Diff” uses differen-tial attention dynamics. Diff restores similarity for heav-ily adapted models (e.g., Llemma, CodeLlama) while reducing spurious similarity for unrelated architectures.                                                         
+
+> Model Code Math Economics Medicine Daily QA Safe Alignment Global
+> Related Models
+> CodeLlama-7b 0.9634 0.9912 0.9786 0.9915 0.9849 0.9063 0.9890 Llama-2-finance-7B 0.9994 0.9996 0.9532 0.9994 0.9991 0.9974 0.9989 WizardMath-7B 0.9972 0.9651 0.9862 0.9949 0.9922 0.9998 0.9985 Chinese-Llama-2-7B 0.9865 0.9987 0.9896 0.9971 0.9744 0.9957 0.9963 Llemma-7b 0.9580 0.9537 0.9884 0.9762 0.9952 0.9537 0.9856
+> Unrelated Models
+> MPT-7B 0.2119 0.2072 0.2109 0.2043 0.2184 0.2211 0.2193 Qwen2.5-3B 0.1256 0.1239 0.1164 0.1268 0.1183 0.1065 0.1244 Qwen2.5-7B 0.1945 0.1986 0.1996 0.1871 0.2055 0.1915 0.2165 Qwen2.5-Math-7B 0.1598 0.1416 0.1606 0.1426 0.1747 0.1444 0.1625
+
+Table 5: Domain-wise similarity analysis. Specific do-mains show slight dips for expert models, but global robustness holds. 
+
+shifts in expert domains (e.g., Code ). We also observe that policy-gated prompts can exhibit larger deviations under extensive post-training (e.g., CodeLlama/Llemma show more noticeable dips on 
+
+Safe Alignment ), motivating the inclusion of Safe Alignment as a complementary stress-test anchor. Nevertheless, the aggregated fingerprint remains stable for related suspects ( > 0.98 ) and well sep-arated from unrelated architectures ( < 0.22 ), sug-gesting that AttnDiff is robust to reasonable varia-tions in probe domain composition when domains are aggregated into a global score. 
+
+6 Discussion 
+
+ATTN DIFF supports post-hoc provenance verifica-tion under common laundering pipelines (fine-tuning including PO, pruning/compression, and merging) while maintaining a clear separation mar-gin from unrelated architectures. Contributions. 
+
+We propose a white-box, post-hoc fingerprinting method that captures model-specific information-
+
+Figure 2: Impact of sample size ( M ) on CKA similarity. 
+
+M = 60 achieves optimal discrimination. 
+
+routing behavior via differential attention under controlled semantic conflicts. We represent each model with compact spectral descriptors and com-pare fingerprints using centered linear CKA, en-abling architecture-agnostic similarity that remains stable for co-originated derivatives and well sepa-rated from unrelated models under common laun-dering operations. Beyond average-case robustness, we analyze a representative probe-aware suppres-sion attack and a practical probe-refresh mitigation in Appendix C, highlighting that a defender can update probes to reduce attack transfer without changing the reference model. Computational cost. ATTN DIFF requires no training or gradient-based optimization: fingerprint extraction consists of a small probe set, a forward pass to collect atten-tion maps, and modest post-processing (differenc-ing and a small-rank spectral descriptor). This low per-model cost makes probe refresh operationally feasible, enabling recomputation on demand with-out expensive retraining or large-scale data collec-tion. 
+
+7 Conclusion 
+
+We present A TTN DIFF , a white-box post-hoc fin-gerprinting method that captures model-specific information-routing behavior via differential at-tention under controlled semantic conflicts. Us-ing compact spectral descriptors and centered lin-ear CKA, it yields model-agnostic fingerprints that remain stable for co-originated derivatives and well separated from unrelated architectures across fine-tuning (including PPO/DPO), prun-ing/compression, and model merging. With a small probe set and lightweight computation, A TTN -DIFF provides a practical building block for prove-nance verification and accountability in the open-weight LLM ecosystem. 88 Limitations and Future Work 
+
+White-box access. ATTN DIFF currently assumes a white-box setting: extracting fingerprints re-quires access to internal attention activations (or equivalent hidden-state signals). Consequently, the method does not directly apply to strictly black-box APIs where only model outputs are observ-able. Theoretical modeling of laundering effects. 
+
+In addition, while Appendix A formalizes key in-variance and stability properties of centered lin-ear CKA and discusses the stability of the A TTN -DIFF fingerprint-extraction procedure under model perturbations—thereby providing mechanistic in-terpretability for the observed robustness of our similarity measure—we still lack a principled math-ematical model and an end-to-end derivation frame-work that propagates common laundering opera-tions (e.g., fine-tuning, pruning, merging, and dis-tillation) as transformations on model parameters and/or architecture to the resulting perturbations in the extracted A TTN DIFF fingerprints (and hence the similarity scores); establishing such a modeling-and-derivation chain remains an important direc-tion for future work. 
+
+References 
+
+Takuya Akiba, Makoto Shing, Yujin Tang, Qi Sun, and David Ha. 2024. Evolutionary optimization of model merging recipes. arXiv preprint arXiv:2403.13187 .Zhangir Azerbayev, Hailey Schoelkopf, Keiran Paster, Marco Dos Santos, Stephen McAleer, Albert Q Jiang, Jia Deng, Stella Biderman, and Sean Welleck. 2023. Llemma: An open language model for mathematics. 
+
+Preprint , arXiv:2310.10631. Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang, Xiaodong Deng, Yang Fan, Wenbin Ge, Yu Han, Fei Huang, Binyuan Hui, Luo Ji, Mei Li, Junyang Lin, Runji Lin, Dayiheng Liu, Gao Liu, Chengqiang Lu, Keming Lu, and 29 others. 2023. Qwen technical report. arXiv preprint arXiv:2309.16609 .Yuntao Bai, Saurav Kadavath, Sandipan Kundu, Amanda Askell, Jackson Kernion, Andy Jones, Anna Chen, Anna Goldie, Azalia Mirhoseini, Cameron McKinnon, Carol Chen, Catherine Olsson, Christo-pher Olah, Danny Hernandez, Dawn Drain, Deep Ganguli, Dustin Li, Eli Tran-Johnson, Ethan Perez, and 32 others. 2022. Constitutional AI: Harmlessness from AI feedback. arXiv preprint arXiv:2212.08073 .Adam Block, Ayush Sekhari, and Alexander Rakhlin. 2025. Robust and efficient watermarking of large lan-guage models using error correction codes. Proceed-ings on Privacy Enhancing Technologies (PoPETs) .Jiacheng Cai, Jiahao Yu, Yangguang Shao, and Yuhang Wu. 2024. UTF: Undertrained Tokens as Finger-prints: A Novel Approach to LLM Identification. 
+
+Preprint , arXiv:2410.12318. Wei-Lin Chiang, Zhuohan Li, Zi Lin, Ying Sheng, Zhanghao Wu, Hao Zhang, Lianmin Zheng, Siyuan Zhuang, Yonghao Zhuang, Joseph E. Gonzalez, Ion Stoica, and Eric P. Xing. 2023. Vicuna: An open-source chatbot impressing GPT-4 with 90%* Chat-GPT quality. Yiming Cui, Ziqing Yang, and Xin Yao. 2023. Efficient and effective text encoding for chinese llama and alpaca. Preprint , arXiv:2304.08177. MohammadReza Davari and Eugene Belilovsky. 2024. Model breadcrumbs: Scaling multi-task model merg-ing with sparse masks. In Computer Vision – ECCV 2024 .Pala Tej Deep, Rishabh Bhardwaj, and Soujanya Po-ria. 2024. Della-merging: Reducing interference in model merging through magnitude-based sampling. 
+
+arXiv preprint arXiv:2406.11617 .DeepSeek-AI. 2024. DeepSeek-V3 technical report. 
+
+arXiv preprint arXiv:2412.19437 .Pierre Fernandez, Guillaume Couairon, Teddy Furon, and Matthijs Douze. 2023. Functional invariants to watermark large transformers. In ICASSP 2024 .Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. 2023. GPTQ: Accurate post-training quantization for generative pre-trained transformers. In International Conference on Learning Representa-tions (ICLR) .Deep Ganguli, Liane Lovitt, Jackson Kernion, Amanda Askell, Yuntao Bai, Saurav Kadavath, Ben Mann, Ethan Perez, Nicholas Schiefer, Kamal Ndousse, Andy Jones, Sam Bowman, Anna Chen, Tom Con-erly, Nova DasSarma, Dawn Drain, Nelson Elhage, Sheer El-Showk, Stanislav Fort, and 17 others. 2022. Red teaming language models to reduce harms: Meth-ods, scaling behaviors, and lessons learned. arXiv preprint arXiv:2209.07858 .Gemma Team and 1 others. 2024. Gemma: Open models based on gemini research and technology. 
+
+Preprint , arXiv:2403.08295. Aaron Grattafiori and 1 others. 2024. The llama 3 herd of models. Preprint , arXiv:2407.21783. Martin Gubri, Dennis Thomas Ulmer, Hwaran Lee, Sangdoo Yun, and Seong Joon Oh. 2024. TRAP: Targeted random adversarial prompt honeypot for black-box identification. In Findings of the Associa-tion for Computational Linguistics: ACL 2024 , pages 11496–11517. Qingxiao Guo, Xinjie Zhu, Yilong Ma, Hui Jin, Yun-hao Wang, Weifeng Zhang, and Xiaobing Guo. 2025. Invariant -based robust weights watermark for large language models. arXiv preprint arXiv:2507.08288 .
+
+9Harold Hotelling. 1936. Relations between two sets of variates. Biometrika , 28(3/4):321–377. Do hyeon Yoon, Minsoo Chun, Thomas Allen, Hans Müller, Min Wang, and Rajesh Sharma. 2025. In-trinsic fingerprint of LLMs: Continue training is NOT all you need to steal a model! arXiv preprint arXiv:2507.03014 .Gabriel Ilharco, Marco Tulio Ribeiro, Mitchell Worts-man, Suchin Gururangan, Ludwig Wadden, Han-naneh Hajishirzi, Dani Yogatama, and Luke Zettle-moyer. 2023. Editing models with task arithmetic. In 
+
+The Eleventh International Conference on Learning Representations .Albert Q. Jiang, Alexandre Sablayrolles, Arthur Men-sch, Chris Bamford, Devendra Singh Chaplot, Diego de las Casas, Florian Bressand, Gianna Lengyel, Guillaume Lample, Lucile Saulnier, Léo Lavaud, Marie-Anne Lachaux, Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix, and William El Sayed. 2023. Mistral 7b. Preprint ,arXiv:2310.06825. Albert Q. Jiang, Alexandre Sablayrolles, Antoine Roux, Arthur Mensch, Blanche Savary, Chris Bamford, Devendra Singh Chaplot, Diego de las Casas, Emma Bou Hanna, Florian Bressand, Gi-anna Lengyel, Guillaume Bour, Guillaume Lam-ple, Lélio Renard Lavaud, Lucile Saulnier, Marie-Anne Lachaux, Pierre Stock, Sandeep Subramanian, Sophia Yang, and 7 others. 2024. Mixtral of experts. 
+
+Preprint , arXiv:2401.04088. Heng Jin, Chaoyu Zhang, Shanghao Shi, Wenjing Lou, and Y Thomas Hou. 2024. Proflingo: Afingerprinting-based intellectual property protection scheme for large language models. In 2024 IEEE Conference on Communications and Network Secu-rity (CNS) , pages 1–9. IEEE. Simon Kornblith, Mohammad Norouzi, Honglak Lee, and Geoffrey Hinton. 2019. Similarity of neural network representations revisited. In International Conference on Machine Learning , pages 3519–3529. PMLR. Tom Kwiatkowski, Jennimaria Palomaki, Olivia Red-field, Michael Collins, Ankur Parikh, Chris Alberti, Danielle Epstein, Illia Polosukhin, Jacob Devlin, Ken-ton Lee, and 1 others. 2019. Natural questions: a benchmark for question answering research. Trans-actions of the Association for Computational Linguis-tics , 7:453–466. Quentin Lhoest, Clément Delangue, Patrick von Platen, Thomas Wolf, Julien Chaumond Salazar, Yacine Jernite, Abhishek Thakur, Suraj Patil, Julien Chau-mond, Mariama Drame, Julien Plu, Joe Davison, Sam Shleifer, Patrick von Platen, Alexander Rush, Nico-las Silveira, Harm de Vries, Lysandre Debut, Victor Sanh, and 1 others. 2021. Datasets: A community library for natural language processing. In Proceed-ings of the 2021 Conference on Empirical Methods in Natural Language Processing: System Demonstra-tions .Peixuan Li, Pengzhou Cheng, Fangqi Li, Wei Du, Haodong Zhao, and Gongshen Liu. 2023. Plmmark: A secure and robust black-box watermarking frame-work for pre-trained language models. In Proceed-ings of the AAAI Conference on Artificial Intelligence 2023 , pages 14991–14999. Shen Li, Liuyi Yao, Jinyang Gao, Lan Zhang, and Yaliang Li. 2024a. Double-I watermark: Protecting model copyright for LLM fine-tuning. arXiv preprint arXiv:2402.14883 .Y. Li, S. Zhao, H. Zhang, R. T. Q. Chen, and S. Ganguli. 2024b. Model inheritance detection via invariant weight correlations. In International Conference on Learning Representations (ICLR) .Zhenyu Li, Han Wang, Haolin Zhang, Jie Zhou, Shuai Wang, Yuxin Liang, Ming Ma, and Qiang Yang. 2025. SeedPrints: Fingerprints can even tell which seed your large language model was trained from. arXiv preprint arXiv:2509.26404 .Stephanie Lin, Jacob Hilton, and Owain Evans. 2022. Truthfulqa: Measuring how models mimic human falsehoods. In Proceedings of the 60th Annual Meet-ing of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 3214–3252. Haipeng Luo, Qingfeng Sun, Can Xu, Pu Zhao, Jian-guang Lou, Chongyang Tao, Xiubo Geng, Qingwei Lin, Shifeng Chen, and Dongmei Zhang. 2023. Wiz-ardmath: Empowering mathematical reasoning for large language models via reinforced evol-instruct. 
+
+Preprint , arXiv:2308.09583. Xinyin Ma, Gongfan Fang, and Xinchao Wang. 2023. LLM-pruner: On the structural pruning of large lan-guage models. In Advances in Neural Information Processing Systems (NeurIPS) .N Gregory Mankiw. 2020. Principles of economics .Cengage Learning. Meta AI. 2023. Llama 2 community license agreement. Accessed: 2024-08-28. Anshul Nasery, Edoardo Contente, Alkin Kaz, Pramod Viswanath, and Sewoong Oh. 2025. Are robust llm fingerprints adversarially robust? arXiv preprint arXiv:2509.26598 .Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Car-roll L. Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, John Schulman, Jacob Hilton, Fraser Kelton, Luke Miller, Maddie Simens, Amanda Askell, Peter Welinder, Paul Christiano, Jan Leike, and Ryan Lowe. 2022. Training language models to follow instructions with human feedback. arXiv preprint arXiv:2203.02155 .
+
+10 Dario Pasquini, Evgenios M Kornaropoulos, and Giuseppe Ateniese. 2025. LLMmap: Fingerprint-ing for Large Language Models. In 34th USENIX Security Symposium (USENIX Security 25) , pages 299–318. Qwen Team and 1 others. 2025. Qwen2.5 technical report. Preprint , arXiv:2412.15115. Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and Chelsea Finn. 2023a. Direct preference optimization: Your lan-guage model is secretly a reward model. In Advances in Neural Information Processing Systems (NeurIPS) .Rafael Rafailov, Archit Sharma, Eric Mitchell, Christo-pher D Manning, Stefano Ermon, and Chelsea Finn. 2023b. Direct preference optimization: Your lan-guage model is secretly a reward model. Advances in neural information processing systems , 36:53728– 53741. Maithra Raghu, Justin Gilmer, Jason Yosinski, and Jascha Sohl-Dickstein. 2017. Svcca: Singular vector canonical correlation analysis for deep learning dy-namics and interpretability. In Advances in Neural Information Processing Systems , volume 30. Baptiste Roziere, Jonas Gehring, Fabian Gloeckle, Sten Sootla, Itai Gat, Xiaoqing Ellen Tan, Yossi Adi, Jingyu Liu, Romain Sauvestre, Tal Remez, and 1 others. 2023. Code llama: Open foundation models for code. Preprint , arXiv:2308.12950. Mark Russinovich and Ahmed Salem. 2024. Hey, that’s my model! introducing chain & hash, an LLM fingerprinting technique. arXiv preprint arXiv:2407.10887 .Hugo Touvron, Louis Martin, Kevin Stone, Peter Al-bert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, Dan Bikel, Lukas Blecher, Cristian Canton Ferrer, Moya Chen, Guillem Cucurull, David Esiobu, Jude Fernandes, Jeremy Fu, Wenyin Fu, and 49 oth-ers. 2023. Llama 2: Open foundation and fine-tuned chat models. arXiv preprint arXiv:2307.09288 .Fanqi Wan, Xinting Huang, Deng Cai, Xiaojun Quan, Wei Bi, and Shuming Shi. 2024a. Knowledge Fusion of Large Language Models. Preprint ,arXiv:2401.10491. Fanqi Wan, Ziyi Yang, Longguang Zhong, Canbin Huang, Guosheng Liang, and Xiaojun Quan. 2024b. Fusechat: Knowledge fusion of chat models. arXiv preprint arXiv:2408.07990 .Zhaomin Wu, Haodong Zhao, Ziyang Wang, Jizhou Guo, Qian Wang, and Bingsheng He. 2025. Llm dna: Tracing model evolution via functional representa-tions. arXiv preprint arXiv:2509.24496 .Jiashu Xu, Fei Wang, Mingyu Ma, Pang Wei Koh, Chaowei Xiao, and Muhao Chen. 2024. Instructional fingerprinting of large language models. In Proceed-ings of the 2024 Conference of the North American Chapter of the Association for Computational Lin-guistics: Human Language Technologies (Volume 1: Long Papers) , pages 3277–3306. Zhenhua Xu, Meng Han, and Wenpeng Xing. 2025a. Evertracer: Hunting stolen large language models via stealthy and robust probabilistic fingerprint. In Pro-ceedings of the 2025 Conference on Empirical Meth-ods in Natural Language Processing , pages 7019– 7042. Zhenhua Xu, Xubin Yue, Zhebo Wang, Qichen Liu, Xixiang Zhao, Jingxuan Zhang, Wenjun Zeng, Weng-peng Xing, Dezhang Kong, Changting Lin, and Meng Han. 2025b. Copyright Protection for Large Lan-guage Models: A Survey of Methods, Challenges, and Trends. Preprint , arXiv:2508.11548. Zhenhua Xu, Xixiang Zhao, Xubin Yue, Shengwei Tian, Changting Lin, and Meng Han. 2025c. Ctcc: A robust and stealthy fingerprinting framework for large language models via cross-turn contextual correlation backdoor. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing ,pages 6978–7000. Prateek Yadav, Derek Tam, Leshem Choshen, Colin Raffel, and Mohit Bansal. 2023. Ties-merging: Re-solving interference when merging models. In Ad-vances in Neural Information Processing Systems (NeurIPS) .Enneng Yang, Li Shen, Guibing Guo, Xingwei Wang, Xiaochun Cao, Jie Zhang, and Dacheng Tao. 2024. Model merging in LLMs, MLLMs, and beyond: Methods, theories, applications and opportunities. 
+
+arXiv preprint arXiv:2408.07666 .Xiaofan Yang, Yuxin Zhao, Sheng Li, Zhenxing Qian, and Xinpeng Zhang. 2025. Towards the resistance of neural network watermarking to fine-tuning. arXiv preprint arXiv:2505.01007 .Zhiguang Yang and Hanzhou Wu. 2024. A Fin-gerprint for Large Language Models. Preprint ,arXiv:2407.01235. Le Yu, Bowen Yu, Haiyang Yu, Fei Huang, and Yongbin Li. 2024. Language models are super mario: Absorb-ing abilities from homologous models as a free lunch. In Proceedings of the 41st International Conference on Machine Learning , volume 235 of Proceedings of Machine Learning Research , pages 57911–57932. PMLR. Boyi Zeng, Lizheng Wang, Yuncong Hu, Yi Xu, Chenghu Zhou, Xinbing Wang, Yu Yu, and Zhouhan Lin. 2024. HuRef: HUman-REadable fingerprint for large language models. In Advances in Neural Information Processing Systems (NeurIPS) .Jie Zhang, Dongrui Liu, Chen Qian, Linfeng Zhang, Yong Liu, Yu Qiao, and Jing Shao. 2024. REEF: Representation encoding fingerprints for large lan-guage models. arXiv preprint arXiv:2410.14273 .
+
+11 Jie Zhang, Dongrui Liu, Chen Qian, Linfeng Zhang, Yong Liu, Yu Qiao, and Jing Shao. 2025a. Scalable fingerprinting of large language models. In Interna-tional Conference on Learning Representations .Jingxuan Zhang, Zhenhua Xu, Rui Hu, Wenpeng Xing, Xuhong Zhang, and Meng Han. 2025b. MEraser: An effective fingerprint erasure approach for large language models. arXiv preprint arXiv:2506.12551 .Ruisi Zhang and Farinaz Koushanfar. 2024. Emmark: Robust watermarks for ip protection of embedded quantized large language models. In Proceedings of the 61st ACM/IEEE Design Automation Conference ,pages 1–6. 
+
+12 A Theoretical Guarantees of A TTN DIFF 
+
+We provide a theoretical analysis of ATTN -DIFF centered on the centered linear CKA similarity. Our goal is to justify: (i) why centered linear CKA is suitable for comparing A TTN DIFF fingerprints even when the feature dimensions differ ( D̸ = D′); and (ii) why common post-training transformations often preserve high similarity for related models. 
+
+Roadmap. 
+
+• CKA preliminaries (Sec. A.1). We summa-rize the definition of centered linear CKA and its key invariance properties. • Compatibility of ATTN DIFF with CKA (Sec. A.2). We discuss why the A TTN -DIFF extraction procedure aligns with these invariances and is typically stable under com-mon post-training transformations. • Perturbation stability (Sec. A.3). We give a coarse bound showing that CKA remains close to 1 when the centered probe-wise Gram matrices are close. Together, these results clarify why CKA is suit-able for comparing A TTN DIFF fingerprints across heterogeneous feature dimensions. 
+
+A.1 Centered linear CKA: preliminaries Objects. Let F ∈ RM ×D and F ′ ∈ RM ×D′
+
+be fin-gerprint matrices computed on the same M probes. We compare fingerprints through Gram matrices 
+
+K = F F ⊤ and K′ = F ′F ′⊤ ∈ RM ×M , which only require matching M while allowing D̸ = D′.
+
+Definition (Centered linear CKA). Let H =
+
+I − 1 
+
+> M
+
+11 ⊤ be the centering matrix and define the centered Gram matrices ¯K = HKH and 
+
+¯K′ = HK ′H. The (biased) HSIC and centered linear CKA are 
+
+HSIC( K, K ′) := 1(M −1) 2 tr( ¯K ¯K′),
+
+CKA( F, F ′) := HSIC( K,K ′)
+
+√HSIC( K,K ) HSIC( K′,K ′)
+
+= ⟨ ¯K, ¯K′⟩F    
+
+> ∥¯K∥F∥¯K′∥F
+
+,
+
+where ⟨A, B ⟩F := tr( A⊤B) denotes the Frobe-nius inner product. 
+
+Proposition 1 (Invariance of centered linear CKA). For any permutation matrix S (simultane-ous probe/row permutation), any permutation ma-trices P, P ′ (column permutations), any orthogonal matrices Q, Q ′ (feature rotations), and any scalars 
+
+α, β > 0, centered linear CKA satisfies 
+
+CKA( F, F ′) = CKA( F P, F ′P ′)= CKA( F Q, F ′Q′)= CKA( αF, βF ′)= CKA( SF, SF ′).
+
+Proof. Centered linear CKA depends on F only through the centered Gram matrix ¯K = HF F ⊤H
+
+(and likewise F ′ through ¯K′ = HF ′F ′⊤ H). (i) Probe permutations. Let S be any M × M
+
+permutation matrix. Since S1 = 1, we have 
+
+SHS ⊤ = H. Moreover, the Gram matrix becomes 
+
+KS = ( SF )( SF )⊤ = SKS ⊤, so the centered Gram matrix satisfies 
+
+¯KS = HK S H
+
+= HSKS ⊤H
+
+= ( SHS ⊤)( SKS ⊤)( SHS ⊤)= S(HKH )S⊤
+
+= S ¯KS ⊤,
+
+and similarly ¯K′ 
+
+> S
+
+= S ¯K′S⊤. Because Frobenius inner products and norms are invariant under simul-taneous conjugation by a permutation matrix, we get 
+
+⟨ ¯KS , ¯K′ 
+
+> S
+
+⟩F
+
+∥ ¯KS ∥F ∥ ¯K′ 
+
+> S
+
+∥F
+
+= ⟨ ¯K, ¯K′⟩F
+
+∥ ¯K∥F ∥ ¯K′∥F
+
+,
+
+which implies CKA( F, F ′) = CKA( SF, SF ′).
+
+(ii) Orthogonal transforms. Let R be any orthogonal matrix (so RR ⊤ = I; this in-cludes permutations and rotations). Then 
+
+(F R )( F R )⊤ = F RR ⊤F ⊤ = F F ⊤, so K (and hence ¯K = HKH ) is unchanged. Applying the same argument to F ′ yields CKA( F, F ′) = CKA( F R, F ′R′), which covers the equalities for 
+
+P, P ′ and Q, Q ′. (iii) Isotropic scaling. For α > 0,
+
+(αF )( αF )⊤ = α2F F ⊤, hence H(α2K)H =
+
+α2HKH = α2 ¯K by linearity of centering; simi-larly ¯K′ scales to β2 ¯K′. Plugging into the normal-ized inner-product form of CKA gives 
+
+CKA( αF, βF ′) = α2β2⟨ ¯K, ¯K′⟩F
+
+α2β2∥ ¯K∥F ∥ ¯K′∥F
+
+= CKA( F, F ′).
+
+Remark. The invariance above holds for isotropic (global) scaling and orthogonal transforms (includ-ing permutations as a special case). It does not gen-erally extend to arbitrary feature-wise re-scaling or general invertible linear transforms. 13 A.2 Robustness of AttnDiff fingerprint extraction 
+
+We give a theoretical rationale for why AttnDiff fingerprints tend to be robust under common model transformations. AttnDiff maps a model to a probe-indexed fingerprint matrix F ∈ RM ×D through three key design choices: (i) differential attention 
+
+∆A = ˜A−A to suppress prompt-specific baselines, (ii) compact spectral descriptors via TopK (σ) from SVD to summarize the dominant re-routing struc-ture, and (iii) similarity in centered Gram space via linear CKA. 
+
+(1) Differential cancellation. For a fixed probe pair, attention maps can be decomposed into a prompt-dependent baseline component plus a conflict-induced re-routing component. Subtract-ing origin/corrupted attentions cancels much of the shared baseline, yielding a fingerprint more tied to the model’s routing response rather than superficial prompt statistics. This mechanism reduces sensi-tivity to domain drift introduced by adaptation. 
+
+(2) Spectral summarization and invariances. 
+
+The SVD-based descriptor depends on ∆A through its singular values, which are invariant to orthog-onal changes of basis in token space and capture the dominant energy distribution of the differential attention map. Under transformations that approxi-mately preserve the routing subspace (up to near-orthogonal re-parameterization and/or global mag-nitude scaling), the resulting descriptors—and thus the fingerprint matrix F —are expected to change mostly by rotations/permutations and isotropic scal-ing in feature space. Proposition 1 shows that such changes do not affect centered linear CKA. 
+
+(3) Visualization (definition of the heatmaps). 
+
+For a single probe pair, AttnDiff computes, for each layer l ∈ { 1, . . . , L } and head h ∈ { 1, . . . , H },a rank-K spectral descriptor given by the top-K
+
+singular values of the differential attention map, yielding a tensor T ∈ RL×H×K (with K = 3 in our experiments). To visualize a single-sample fingerprint as a 2D heatmap, we aggregate the K-dimensional vector at each (l, h ) by its ℓ2 norm, i.e., we plot El,h = ∥Tl,h, :∥2, resulting in an L ×
+
+H matrix. Fig. 3 shows representative examples of these single-sample L × H heatmaps across different model transformations. 
+
+(4) From fingerprint perturbation to Gram per-turbation. Since AttnDiff compares models via probe-wise Gram matrices K = F F ⊤ and K′ =
+
+F ′F ′⊤ , a small fingerprint perturbation implies a small Gram perturbation. Concretely, 
+
+∥K − K′∥F = ∥F F ⊤ − F ′F ′⊤ ∥F
+
+≤ ∥ (F − F ′)F ⊤∥F
+
++ ∥F ′(F − F ′)⊤∥F
+
+≤ ∥ F − F ′∥F ∥F ∥F
+
++ ∥F ′∥F ∥F − F ′∥F
+
+= ∥F − F ′∥F (∥F ∥F + ∥F ′∥F ).
+
+Moreover, centering is non-expansive in Frobenius norm: with ¯K = HKH and ¯K′ = HK ′H, we have 
+
+∥ ¯K − ¯K′∥F = ∥H(K − K′)H∥F
+
+≤ ∥ K − K′∥F ,
+
+since H is an orthogonal projection and ∥H∥2 = 1 .The next subsection formalizes how such Gram perturbations control the corresponding drop in centered linear CKA. 
+
+A.3 Stability of CKA under Gram perturbations 
+
+Proposition 1 characterizes exact invariances (e.g., global scaling and orthogonal feature re-parameterizations). In practice, post-training trans-formations may still induce residual changes in the probe-wise geometry encoded by centered Gram matrices. The following perturbation bound (Propo-sition 2) explicitly characterizes the corresponding CKA drop as a function of the relative Gram per-turbation magnitude. In particular, centered linear CKA remains close to 1 when the centered Gram matrices are close in Frobenius norm. To connect with the experimental protocol, we measure the relative centered Gram perturbation by 
+
+ε := ∥ ¯K − ¯K′∥F /∥ ¯K∥F ,
+
+where ¯K = HKH and ¯K′ = HK ′H are the centered probe-wise Gram matrices. 
+
+Proposition 2 (A coarse CKA perturbation bound). Assume ¯K̸ = 0 and ¯K′̸ = 0 . If for some ε ∈ (0 , 1) ,
+
+∥ ¯K − ¯K′∥F ≤ ε ∥ ¯K∥F ,
+
+then 
+
+1 − CKA( F, F ′) ≤ 2ε2.
+
+Proof. Let a = vec( ¯K) ∈ RM 2
+
+and b =vec( ¯K′) ∈ RM 2
+
+. Define unit vectors u = a/ ∥a∥2
+
+and v = b/ ∥b∥2, so that CKA( F, F ′) = ⟨u, v ⟩.14 Figure 3: Visualization of single-sample layer–head fingerprint heatmaps ( L×H) under fine-tuning, pruning, merging, and distillation. 
+
+The assumption implies 
+
+∥a − b∥2 = ∥ ¯K − ¯K′∥F
+
+≤ ε∥ ¯K∥F
+
+= ε∥a∥2.
+
+Since ε < 1 and a̸ = 0 , this also implies b̸ = 0 .We bound the distance between normalized vectors as 
+
+∥u − v∥2 = a
+
+∥a∥2
+
+− b
+
+∥b∥2 2
+
+≤ ∥a − b∥2
+
+∥a∥2
+
++ ∥b∥2
+
+1
+
+∥a∥2
+
+− 1
+
+∥b∥2
+
+= ∥a − b∥2
+
+∥a∥2
+
++ ∥b∥2 − ∥ a∥2
+
+∥a∥2
+
+≤ 2∥a − b∥2
+
+∥a∥2
+
+≤ 2ε. 
+
+Finally, since ∥u∥2 = ∥v∥2 = 1 , we have 
+
+∥u − v∥22 = 2 − 2⟨u, v ⟩,
+
+1 − CKA( F, F ′) = 1 − ⟨ u, v ⟩ = 12 ∥u − v∥22
+
+≤ 2ε2.
+
+Quantitative illustration. We report representa-tive ε values computed from the centered probe-wise Gram matrices in Table 6. Related derivatives typically yield small ε, whereas unrelated model families yield ε close to 1, matching the separation behavior predicted by Proposition 2. 
+
+Summary. Putting the above together yields a coherent robustness rationale for A TTN DIFF . The differential mechanism suppresses prompt-specific baselines, and the spectral descriptor emphasizes dominant routing structure that is compatible with near-orthogonal re-parameterizations and global magnitude scaling in feature space. By Proposi-tion 1, such transformations do not affect centered linear CKA. For the remaining residual drift, Propo-sition 2 shows that when the centered probe-wise Gram matrices are close (small ε), CKA( F, F ′)
+
+stays close to 1; Table 6 illustrates this regime for related derivatives. Conversely, unrelated model families yield ε near 1 and thus low CKA, provid-ing a strong margin that mitigates false positives. This theoretical perspective motivates the imple-mentation choices detailed next in Sec. B. 
+
+B Details of A TTN DIFF 
+
+This section provides implementation details neces-sary to reproduce A TTN DIFF . We first summarize the end-to-end workflow in Alg. 1 and report the default hyperparameters in Table 7. We then detail the probe construction pipeline (Sec. B.1) and the fingerprint extraction mechanism (Sec. B.2), which implement the workflow in Sec. 4.2 and Sec. 4.2.2. 
+
+Algorithm 1 ATTN DIFF Workflow 
+
+PHASE1: PROBE GENERATION Input: probe prompts 
+
+Input: pivot rule 
+
+Output: origin/corrupted prompt pairs  
+
+> 1:
+
+for i ← 1 to M do  
+
+> 2:
+
+Generate ˜pi from pi using the pivot rule  
+
+> 3:
+
+Apply lightweight length control (text-level) to keep token lengths comparable for pooling  
+
+> 4:
+
+end for PHASE2: FINGERPRINT EXTRACTION Input: models f and f ′
+
+Input: probe pairs 
+
+Input: layers L, heads H, rank K
+
+Output: fingerprints for f and f ′ 
+
+> 5:
+
+for g ∈ { f, f ′} do  
+
+> 6:
+
+for i ← 1 to M do  
+
+> 7:
+
+for l ← 1 to L do  
+
+> 8:
+
+for h ← 1 to H do  
+
+> 9:
+
+Compute differential attention between pi and ˜pi 
+
+> 10:
+
+Extract rank-K spectral de-scriptor  
+
+> 11:
+
+end for  
+
+> 12:
+
+end for  
+
+> 13:
+
+Concatenate descriptors across lay-ers/heads  
+
+> 14:
+
+end for  
+
+> 15:
+
+Stack descriptors to form the fingerprint  
+
+> 16:
+
+end for PHASE3: SIMILARITY COMPUTATION Input: fingerprints of f and f ′
+
+Output: CKA similarity score  
+
+> 17:
+
+Compute CKA similarity score s 
+
+> 18:
+
+return s
+
+15 Transformation Type Model Example CKA Score 1−CKA ε 2ε2 (bound) Bound Validity                                                                                                                  
+
+> Fine-tuning Llama-2-7B →WizardMath-7B 0.9985 0.0015 0.0777 0.0121 Valid Llama-2-7B →Llemma-7B 0.9856 0.0144 0.1771 0.0627 Valid Llama-2-7B →CodeLLaMA-7B 0.9890 0.0110 0.1625 0.0528 Valid Model Merging Llama-2-7B →Breadcrumbs-Llama-2-7B 0.9992 0.0008 0.0564 0.0064 Valid Llama-2-7B →Breadcrumbs+Ties-Llama-2-7B 0.9992 0.0008 0.0564 0.0064 Valid Llama-2-7B →Della-Llama-2-7B 0.9986 0.0014 0.0774 0.0120 Valid Llama-2-7B →Task-Llama-2-7B 0.9996 0.0004 0.0406 0.0033 Valid Pruning Llama-2-7B →Sheared-llama-1.3b-pruned 0.9879 0.0121 0.0972 0.0189 Valid Llama-2-7B →Sheared-llama-1.3b 0.9938 0.0062 0.0866 0.0150 Valid Llama-2-7B →Sheared-llama-2.7b-pruned 0.9929 0.0071 0.0758 0.0115 Valid Llama-2-7B →Sheared-llama-2.7b 0.9952 0.0048 0.0697 0.0097 Valid Distillation Qwen2.5-7B →Qwen2.5-7B-Open-R1-Distill 0.9873 0.0127 0.1138 0.0259 Valid Llama-2-7B →logit-watermark-distill 0.9998 0.0002 0.0395 0.0031 Valid Unrelated Llama-2-7B →gemma-2-2b 0.2154 0.7846 0.9984 1.9936 Valid Llama-2-7B →Qwen2.5-14B 0.1052 0.8948 0.9757 1.9020 Valid Llama-2-7B →Llama3-8B 0.2299 0.7701 0.9856 1.9434 Valid
+
+Table 6: Representative ε values under different model transformations, where ε := ∥ ¯K − ¯K′∥F /∥ ¯K∥F is computed from centered probe-wise Gram matrices. Related models exhibit small ε while unrelated models yield ε ≈ 1,which explains the large margin in CKA and reduces false positives in provenance decisions.                      
+
+> Symbol Meaning Setting
+> M# probe pairs 60
+> L# transformer layers all layers (model-dependent)
+> H# attention heads per layer all heads (model-dependent)
+> Kspectral rank (top singular values)
+> 3(Table 10)
+> N, ˜Ntoken lengths of p, ˜pvariable; controlled but not forced equal
+> N∗pooling resolution min( N, ˜N)
+
+Table 7: Default hyperparameters for AttnDiff. 
+
+B.1 Probe Construction Pipeline 
+
+We construct probes through three stages: source selection, filtering, and pivot injection. 
+
+Source Selection. We curate prompts from domain-specific sources: • Math / Economics / Medicine: Sentences are extracted from standard textbooks, Wikipedia “Fact” sections (Lhoest et al., 2021), and authoritative reviews (e.g., CDC guidelines, 
+
+Principles of Economics (Mankiw, 2020)). • Code: We source snippets from Python of-ficial documentation and high-voted Stack Overflow answers, focusing on boolean logic and control flow. • Daily QA: Common sense questions are se-lected from Natural Questions (Kwiatkowski et al., 2019) and TruthfulQA (Lin et al., 2022). • Safe Alignment: Safety probes are de-rived from Constitutional AI principles (Bai et al., 2022) and Anthropic’s red-teaming datasets (Ganguli et al., 2022). 
+
+Filtering. We filter for declarative sentences (ex-cluding interrogatives) that express truth values, subjective sentiment, or normative judgments. To reduce length-induced variation before pooling, we constrain the word count to be within ±5 of a target length ℓ (in words). This step serves as a relaxed pre-alignment: it does not enforce exact token-length equality ( N = ˜N ), but instead aims to keep the tokenizer-induced lengths N and ˜N (to-ken counts under the model tokenizer) in a similar range so that the subsequent pooling operates under comparable resolutions. Concretely, we implement pivot rules as minimal lexical edits (e.g., a single-word substitution without adding or deleting spans) and discard pairs with excessive tokenizer-induced mismatch (e.g., large relative differences between 
+
+N and ˜N ). Any remaining mismatch is resolved by the pooling alignment in Sec. B.2. 
+
+Pivot Injection. For each filtered origin prompt 
+
+p, we apply a domain-specific Pivot Rule to gen-erate a corrupted prompt ˜p. The pivot substitutes a key token to invert semantic intent while preserv-ing surface form. Table 8 lists representative pivot rules and templates across domains. 
+
+Ablation on Probe Length. We investigate the impact of probe length ℓ (in words) on fingerprint robustness. We select representative models from both related and unrelated groups in Table 4 to com-pute the average CKA similarity for each group re-spectively. As shown in Table 9, we evaluate three representative lengths: Short ( ℓ = 10 ), Medium (ℓ = 30 ), and Long ( ℓ = 60 ). 16 Domain Pivot Pair (Semantic Flip) Example Prompt Template                                                                      
+
+> Math never ↔always In Euclidean geometry, two distinct parallel lines {never/always} intersect, no matter how far they are extended.
+> convergent ↔divergent The infinite series formed by summing 1 over n2is mathematically {convergent/divergent} as n→ ∞ .Code True ↔False In Python, the boolean expression (len([1,2,3]) > 2) evaluates to {True/False} when executed.
+> return ↔yield This function uses a {return/yield} statement inside a loop to send back values one at a time. Economics increases ↔decreases According to microeconomic theory, when consumer demand rises, market price typically {increases/decreases} .
+> supply ↔demand A persistent shortage in the market occurs when {supply/demand} consistently exceeds the other side. Medicine effective ↔ineffective Clinical trials have shown that mRNA vaccines are highly {effective/ineffective} in preventing severe outcomes.
+> benign ↔malignant After biopsy analysis, the tumor was classified as {benign/malignant} , indicating whether it poses a cancer risk. Daily QA true ↔false The statement that Earth orbits the Sun is scientifically {true/false} according to modern astronomy.
+> yes ↔no When baking soda is combined with vinegar, a fizzing reaction occurs. Is this a chemical change? {yes/no} .Safe Alignment help ↔hurt I genuinely want to {help/hurt} my elderly neighbor by assisting them with groceries or causing harm.
+> save ↔kill The special forces team’s primary objective is to {save/kill} the innocent hostage held in the building.
+
+Table 8: Representative examples of domain-specific Pivot Rules and constructed prompt templates. The pivots invert semantic intent or safety alignment while maintaining minimal edit distance. Note that this table only displays a subset of the full rule set. 
+
+Target Length ℓ Sentence Type Avg. CKA Related Unrelated 
+
+10 Short (Phrase) 0.9587 0.3417 30 Medium (Sentence) 0.9937 0.1647 60 Long (Paragraph) 0.9941 0.1633 
+
+Table 9: Ablation study on probe length ℓ (in words). Medium-length probes ( ℓ ≈ 30 ) provide a favorable trade-off between semantic context and attention stabil-ity. 
+
+B.2 Fingerprint Extraction Mechanism Alignment Strategy (Pooling). When the to-ken lengths of an origin/corrupted pair differ (i.e., 
+
+˜N̸ = N ), we employ 2D Adaptive Average Pool-ing to align attention matrices to a common res-olution N ∗ = min( N, ˜N ) (avoiding any increase in resolution) before computing differential finger-prints. Fig. 4 illustrates the binning-and-averaging procedure. Let X ∈ Ra×b denote an attention ma-trix (e.g., A(i)
+
+l,h or ˜A(i)
+
+l,h ) and let (m, n ) be the target size. Adaptive average pooling defines an output matrix Y ∈ Rm×n by partitioning the input indices into m × n bins and averaging within each bin: 
+
+Yu,v = 1
+
+|Iu| | Jv|
+
+X
+
+r∈Iu
+
+X
+
+c∈Jv
+
+Xr,c ,u ∈ { 0, . . . , m − 1}, v ∈ { 0, . . . , n − 1}.
+
+We define the corresponding row/column index ranges as 
+
+Iu = { r | ⌊ ua/m ⌋ ≤ r < ⌊(u + 1) a/m ⌋ } ,Jv = { c | ⌊ vb/n ⌋ ≤ c < ⌊(v + 1) b/n ⌋ } ,
+
+which map input rows/columns to the (u, v )-th out-put bin. In our setting, we set (m, n ) = ( N ∗, N ∗)
+
+and apply the operator to each head/layer matrix so that both origin and corrupted attention maps are brought to a shared token topology prior to subtraction. In preliminary experiments, this strat-egy outperforms alternatives such as zero-padding or truncation, as it preserves coarse-grained mass distribution without introducing boundary artifacts and helps the differential fingerprint focus on se-mantic shifts rather than length-mismatch noise. 
+
+Spectral Descriptor and Concatenation. For each probe pair, we compute a differential atten-tion map for every layer and head, and summarize its structure via singular values. Specifically, we apply SVD and retain the top-K singular values 
+
+(σ1, . . . , σ K ) as a compact spectral descriptor. Con-catenating these descriptors across all layers and heads yields a fingerprint vector fi ∈ RD for the 
+
+i-th probe pair, where D = L × H × K. Stack-ing all M probe pairs forms the fingerprint matrix 
+
+F ∈ RM ×D.
+
+Ablation on Spectral Rank K. The rank K con-trols the information capacity of the spectral de-scriptor. We conduct an ablation study to determine the optimal K, balancing signal retention against noise rejection. We evaluate a range of spectral ranks on the same representative related and unre-lated model groups as in Table 4, and report the average CKA over these two groups in Table 10. The results show that even very low ranks (e.g., 
+
+K ≤ 10 ) already achieve high similarity for related models while substantially suppressing similarity for unrelated ones. As shown in Table 10, K = 3 
+
+provides the most favorable trade-off in our set-ting, and we therefore adopt K = 3 in the main experiments. 
+
+B.3 Metric Analysis 
+
+We use layer-wise similarity diagnostics to moti-vate our global fingerprint comparison. Figure 5 shows that fine-tuned and pruned sus-pects largely preserve diagonal similarity across layers, whereas unrelated models remain low-similarity throughout. To quantify these patterns, we use centered lin-ear CKA as our primary similarity metric. The 17 Figure 4: Visualization of the 2D adaptive average pooling used to align origin/corrupted attention matrices to a shared resolution N ∗ = min( N, ˜N ) before computing ∆A.
+
+## Rank K Avg. CKA Related Unrelated 
+
+## 1 0.9928 0.2708 2 0.9941 0.2413 3 0.9937 0.1647 5 0.9854 0.1544 10 0.9711 0.1476 
+
+Table 10: Ablation study on spectral rank K. We select 
+
+K = 3 as it provides the best trade-off in our setting. 
+
+definition and key invariance properties used in our analysis (e.g., invariance to orthogonal feature transforms and global scaling) are summarized in  
+
+> (a) Fine-Tune Models (b) Pruned Models
+> (c) Unrelated Models
+
+Figure 5: Layer-wise CKA similarity matrices for repre-sentative fine-tuned, pruned, and unrelated model pairs. Related pairs exhibit strong diagonal structure, while unrelated pairs show uniformly low similarity. 
+
+Appendix A.1. For reference, CCA aligns two representation sets by maximizing correlation be-tween linear projections (Hotelling, 1936), while SVCCA first compresses representations with SVD and then applies CCA (Raghu et al., 2017). Empiri-cally, prior work reports that CKA provides a more reliable similarity signal than CCA/SVCCA when comparing neural representations across random initializations and architectures (Kornblith et al., 2019). In our implementation, we compute CKA once 
+
+on the concatenated fingerprint matrices F ∈
+
+RM ×D and F ′ ∈ RM ×D′
+
+, rather than averaging layer-wise CKA scores. Because CKA operates on inter-sample Gram matrices in RM ×M , it only requires the same number of samples M while al-lowing the feature dimensions D and D′ to differ. This enables direct comparison between models with different depths ( L̸ = L′) or head counts with-out explicit layer-index alignment. Layer-wise similarities can exhibit localized drops under pruning or heavy alignment even when the overall routing strategy is preserved. We there-fore aggregate all layers and heads into a single fingerprint and report a single global CKA score for forensic decisions. Figure 6 illustrates these layer-wise trends and the stabilizing effect of global aggregation. 18 Figure 6: Layer-wise similarity trends for representative related, pruned, and unrelated model pairs under our CKA-based fingerprinting. 
+
+C Probe-aware Suppression Attack 
+
+We discuss an adaptive evasion scenario where the attacker has obtained a partial subset of the de-fender’s probe pairs and is aware of the AttnDiff extraction procedure. The attacker then performs probe-aware training to suppress the differential attention signal on the leaked probes, e.g., by ex-plicitly penalizing the differential attention maps 
+
+∆A and/or their spectral descriptors (such as the ℓ2
+
+norm of TopK (σ)), so that the resulting fingerprints become less informative under these probes. 
+
+Mitigation. A practical mitigation is to maintain a larger private probe pool and refresh probes over time. In verification, the defender can evaluate on held-out probes that were not exposed to the attacker and periodically introduce new contradic-tion templates and domains. Under such probe refresh, suppression tuned to a fixed leaked subset is unlikely to generalize to the full and evolving probe distribution, and the held-out probes provide a direct check against probe-specific overfitting. 
+
+D Details of Baselines 
+
+D.1 Baseline Descriptions Parameter Cosine Similarity (PCS). PCS is a parameter-space baseline that compares two mod-els directly in weight space. We compute similarity as the cosine similarity between aligned parameter vectors; implementation details (including our han-dling of structured and unstructured pruning) are provided in the following subsection. 
+
+Invariant Cosine Similarity (ICS). Invariant Cosine Similarity (ICS) follows Li et al. (Li et al., 2024b) and is instantiated for large language model fingerprinting in HuRef (Zeng et al., 2024). We follow the authors’ released workflow to construct an invariant-terms tensor for each model. Concretely, for each model we use its tok-enizer to compute token-frequency statistics on an English Wikipedia dump (March 2022 snapshot; 
+
+wikipedia/20220301.en (Lhoest et al., 2021)) and select a fixed subset of T = 4096 token IDs from the tail of the frequency-sorted list, follow-ing the reference implementation. This dump is only used to determine the token subset; subse-quent ICS computation does not require additional prompts. Let E ∈ R|V|× d denote the token embed-ding matrix and X = E[S] ∈ RT ×d the selected token embeddings. From the last two Transformer blocks, we extract the attention projection matrices 
+
+(W Q, W K , W V , W O) and the MLP projection ma-trices (up/down, and gate when applicable). We then construct second-order correlation terms via bilinear forms anchored on X, including an atten-tion Q–K term, an attention V–O term, and an MLP term. Stacking these terms across the se-lected layers yields the invariant-terms tensor T (θ)
+
+used for similarity computation, as specified in Ap-pendix D.2. 
+
+Logits Fingerprint. The Logits baseline oper-ates on pre-softmax outputs from the final layer and assesses whether a suspect model’s logits can be expressed as a linear combination of a victim 19 model’s logits over the same dataset. Concretely, we first run each model on the same N prompts from TruthfulQA (Lin et al., 2022) and save the resulting logit matrix L ∈ RN ×V , where V is the vocabulary size. For a fixed victim model, we con-struct a logit basis W = L⊤ 
+
+> v
+
+∈ RV ×N and truncate it to the first V ′ = 32000 vocabulary entries to obtain W ∈ RV ′×N . For each suspect model, we load its logits Ls ∈ RN ×V , standardize each vo-cabulary dimension across prompts (zero mean and unit variance), and apply the same truncation to obtain Y ∈ RN ×V ′
+
+. This representation treats the victim logits as a dataset-specific linear subspace, and similarity is measured by how well the suspect logits lie in (or near) that subspace. 
+
+ProFlingo. ProFlingo (Jin et al., 2024) is an adversarial-example-based, black-box fingerprint-ing method that learns a short textual trigger prefix 
+
+r to induce a pre-specified target response t on be-nign queries q. As illustrated in Figure 7, it first prepares question–target pairs (q, t ) and optimizes 
+
+r on a surrogate model via gradient-based adversar-ial text generation. The prefix is iteratively updated so that the trigger-augmented queries reliably elicit 
+
+t, while unrelated models do not. In our implementation, we evaluate similarity using the target response rate (TRR) over a fixed set of 50 trigger-augmented queries, defined as the fraction of queries for which the suspect produces the target response. We additionally require that the optimized trigger achieves 100% TRR on the base (victim) model over the same 50-query set. We use the suspect’s TRR as the ProFlingo similarity score in our evaluation. ProFlingo can be highly discrimi-native under black-box access, but its effectiveness depends on the stability of the adversarial triggers and may be reduced by input preprocessing, safety filters, or moderate prompt perturbations. 
+
+LLMMap. LLMMap (Pasquini et al., 2025) is a text-based provenance baseline that extracts seman-tic fingerprints from model-generated responses. In our implementation, we follow the authors’ re-leased pipeline to reproduce LLMMap fingerprints and report its native similarity score (cosine simi-larity in the fingerprint-embedding space). Because this baseline operates on surface-form text, it can be sensitive to post-hoc paraphrasing or style-transfer attacks that preserve meaning while altering lexical or stylistic cues (see Appendix E.9). 
+
+REEF. REEF (Zhang et al., 2024) is a white-box, representation-based baseline that fingerprints mod-els using intermediate hidden-state activations. In our implementation, we follow the standard work-flow of extracting per-layer activations on the Truth-fulQA dataset (with optional downsampling for efficiency). For each input statement, we run a for-ward pass and record the hidden state of the last token at each Transformer layer, producing an ac-tivation matrix Xl ∈ RN ×Dl for layer l, where N
+
+is the number of samples and Dl is the hidden di-mension. We then compare the victim and suspect models layer-wise using CKA on these activation matrices, and aggregate the layer-wise similarities into a single REEF score. 
+
+D.2 Similarity Metric Implementations 
+
+In this section, we specify the similarity compu-tation protocol for each baseline to ensure a fair comparison. • PCS: Given two models with parameter tensors {θkA}Kk=1 and {θkB }Kk=1 that can be aligned by layer index and parameter name, we vectorize and concatenate all matched ten-sors to obtain θA, θ B ∈ Rd, and compute 
+
+PCS( θA, θ B ) = ⟨θA, θ B ⟩∥θA∥2 ∥θB ∥2
+
+.
+
+For unstructured pruning (sparsity with pre-served tensor shapes), we densify pruned weights (filling missing entries with zeros if stored sparsely) and apply the same definition. For structured pruning or other transforma-tions that change dimensionality (e.g., chan-nel/head pruning or layer removal), we use a best-effort matching strategy: when prun-ing masks or indices are available, we restore the original tensor shape by inserting zeros at pruned positions and then align by layer and parameter name; when masks are unavailable, we truncate both tensors to the common prefix along the affected dimension and drop tensors that cannot be meaningfully aligned. • ICS: We load the saved invariant-terms ten-sors T (θA) and T (θB ), apply row-wise stan-dardization to each matrix slice, flatten the resulting tensors into vectors tA and tB , and report ICS( A, B ) = ⟨tA,t B ⟩∥tA∥2 ∥tB ∥2 .• Logits: For each prompt i, let yi ∈ RV ′
+
+denote the suspect logit vector (a row of 
+
+Y ). We solve a least-squares reconstruc-tion x∗ 
+
+> i
+
+= arg min x∈RN ∥W x − yi∥22. Us-ing ˆyi = W x ∗ 
+
+> i
+
+and residual ri = ˆyi −
+
+20 Figure 7: ProFlingo workflow. A short trigger prefix is optimized to induce a target response; a suspect model is then evaluated by its target response rate (TRR) over the query set. 
+
+yi, we compute the coefficient of determi-nation R2 
+
+> i
+
+= 1 −    
+
+> P
+> jr2
+> i,j P
+> j(yi,j −¯yi)2
+
+, and report 
+
+mean _R2 = 1
+
+> N
+
+P 
+
+> i
+
+R2 
+
+> i
+
+as the primary sim-ilarity. We additionally report (i) an error-threshold ratio 1
+
+> N
+
+P 
+
+> i
+
+I[∥ri∥2 < ϵ ] over sev-eral ϵ values, and (ii) a normalized similarity 
+
+mean _R2/base _R2, where base _R2 is com-puted by reconstructing the victim logits from its own basis. • REEF: For each layer l, we load activation matrices Xl ∈ RN ×Dx (victim) and Yl ∈
+
+RN ×Dy (suspect). We optionally center and scale each feature dimension across samples (zero mean and unit variance) before com-puting similarity. We then compute CKA via centered Gram matrices K = XlX⊤ 
+
+> l
+
+and 
+
+L = YlY ⊤ 
+
+> l
+
+∈ RN ×N and HSIC normaliza-tion. Since CKA is computed in Gram space, it only requires matching N (same dataset and downsampling), while allowing Dx̸ = Dy. Fi-nally, we aggregate layer-wise CKA scores (e.g., by averaging across layers) to obtain a single REEF similarity score. • ProFlingo: We report the target response rate (TRR) on a fixed set of 50 trigger-augmented queries whose TRR on the base (victim) model is 100%. For each suspect model, 
+
+TRR = # target responses 50 .• LLMMap: We follow the authors’ released pipeline and compute similarity using cosine similarity between the victim and suspect fin-gerprint embeddings. 
+
+E Supplementary Materials 
+
+Figure 8 provides an aggregate view of robustness across deployment transformations. Beyond the main-text results for supervised fine-tuning, model merging, and pruning, the Supplementary Mate-rials report additional studies spanning: a pilot analysis of attention re-allocation statistics (Ap-pendix E.1); robustness under preference optimiza-tion (Appendix E.2), diverse merge recipes (Ap-pendix E.3), and additional pruning configurations (Appendix E.4); cross-family and cross-scale sta-bility (Appendix E.5); robustness under distillation (Appendix E.6), MoE architectures (Appendix E.7), and quantization (Appendix E.8); as well as a stress test of text-based provenance under post-hoc rewrit-ing attacks (Appendix E.9). Model repository references for the models used in this paper are consolidated in Appendix F (Ta-ble A11). Unless otherwise specified, supplementary ex-periments use the same probe construction, fin-gerprint extraction, and scoring configurations as in the main experiments. Accordingly, the experimental-setup descriptions below primarily specify model selection. 21 Figure 8: Radar comparison of AttnDiff and baseline fingerprinting methods across deployment transformations. Each axis shows the average similarity score of each method on that transformation dimension (averaged over all suspects); larger radii indicate stronger robustness. 
+
+E.1 Pilot Study: Attention Re-allocation 
+
+This pilot study directly inspired AttnDiff. It began as a practical question raised by the post-hoc set-ting: if a suspect model has been heavily modified, what internal signal could remain both stable for true derivatives and distinct for unrelated models under the same probing protocol? While testing small, controlled probe sets, we found that seman-tic contradictions provide a reliable “stress test” that forces the model to re-route information rather than merely replaying prompt-specific attention baselines. We report the pilot study in two stages that mirror how the idea emerged. (i) Discovery: 
+
+we first compared Qwen2.5-7B against Llama-2-7B and several representative Llama-2-7B deriva-tives, and observed a strikingly repeatable pattern: derivatives shared highly consistent attention re-allocation structure under controlled semantic con-flicts, whereas Qwen2.5-7B followed a systemati-cally different regime. (ii) Qualitative validation: 
+
+we then expanded to a broader checkpoint set and visualized descriptor-based fingerprints in a low-dimensional space, where models from different sources occupied separated regions (Figure 11). The discovery stage uses interpretable structural statistics (e.g., concentration, entropy, locality) to reveal and quantify the re-allocation phenomenon, and the plots in this section follow that analy-sis. However, directly adopting these hand-crafted statistics as the final fingerprint is undesirable: it requires manual metric selection, can miss comple-mentary structure in ∆A, and yields heterogeneous scales that complicate a unified similarity space. We therefore proceeded in two steps. We first es-tablished the phenomenon using these interpretable statistics. Afterward, to turn the discovery into a unified and model-agnostic descriptor space, we represent each differential attention map ∆A by the top-K singular values from SVD (Sec. 4.2.2). This spectrum is compact and length-invariant, sub-sumes several discovery metrics (e.g., ∥∆A∥F and effective-rank-style quantities), and yields a princi-pled feature space for similarity computation. Con-sequently, the PCA visualization in Figure 11 is performed on fingerprints constructed from these SVD-based singular-value descriptors, rather than on the hand-crafted routing statistics. This visual-ization is intended as a qualitative sanity-check for cross-family separation, not as a robustness evalua-tion. 
+
+Setup. We construct minimally edited ori-gin/corrupted prompt pairs that preserve surface form while flipping semantics via a single-word lexical pivot (e.g., negation or contradiction). For each pair, we extract per-layer, per-head atten-tion maps and form a differential attention matrix 
+
+∆A = ˜A − A after aligning token lengths as de-scribed in Sec. 4.2.2. 
+
+Model selection. Discovery set. Unless other-wise specified, the metric plots and statistics ta-ble in this section are computed on five models: Llama-2-7B, CodeLlama-7b-hf, WizardMath-7B-V1.0, llemma_7b, and Qwen2.5-7B. Validation set. Separately, for a qualitative visualization in de-scriptor space, we include a broader set of models (across families, scales, and transformed variants) and apply PCA on their fingerprint matrices; the in-cluded models are listed in the legend of Figure 11. 22 Metrics. We analyze ∆A using structural statis-tics that characterize “how” attention changes (be-yond “how much” it changes), matching the com-putations in our analysis code. These statistics are intended for analysis and ablation. Nota-tion. Let A, ˜A ∈ RT ×T denote the attention ma-trices for the original and corrupted prompt in a fixed layer/head after token-length alignment, and 
+
+∆A = ˜A − A. Here, T is the aligned token length (the same common resolution as N ∗ in Sec. 4.2.2). Let σ1 ≥ · · · ≥ σn be the singular values of ∆A
+
+with n = min( T, T ) = T . We use the natural logarithm. 
+
+Magnitude (overall change). Measures the total energy of attention re-allocation. 
+
+∥∆A∥F =
+
+vuut TX
+
+> i=1
+> T
+
+X
+
+> j=1
+
+(∆ Aij )2.
+
+Interpretation: larger values indicate stronger over-all redistribution; this metric is sensitive to “how much” changes and less to “how” it changes. Rec-ommended use: as a sanity-check for change mag-nitude before comparing finer-grained structure metrics. 
+
+Spectral ratio (dominant-mode concentration). 
+
+Quantifies whether ∆A is dominated by a single principal pattern. 
+
+ρ(∆ A) = σ21Pnk=1 σ2
+
+> k
+
+.
+
+Interpretation: values closer to 1 suggest a more concentrated (effectively lower-rank) re-allocation structure. Recommended use: to detect whether re-routing is driven by a single stable mode versus multiple competing patterns. 
+
+Effective rank (spectral diversity). Exponenti-ated entropy of the normalized singular-value spec-trum. 
+
+pk = σk
+
+Pnj=1 σj
+
+,reff (∆ A) = exp 
+
+
+
+−
+
+> n
+
+X
+
+> k=1
+
+pk log pk
+
+
+
+.
+
+Interpretation: larger values indicate a more dif-fuse, multi-mode re-allocation pattern; smaller val-ues indicate concentration in a few modes. Rec-ommended use: to compare how “complex” the attention-change structure is across models or lay-ers. 
+
+Column/row Gini (token-level concentration). 
+
+Measures how unevenly the change energy is dis-tributed across tokens as receivers (columns) or senders (rows). Let x denote the sorted version of 
+
+u ∈ { c, r } in non-increasing order. 
+
+cj = ∥∆A:,j ∥2, ri = ∥∆Ai, :∥2, m = T, x(1) ≥ · · · ≥ x(m),s =
+
+> m
+
+X
+
+> i=1
+
+x(i),G(u) = 1 − 2 Pmi=1 (i − 1) x(i) + sm s .
+
+Gini col = G(c), Gini row = G(r).
+
+Interpretation: higher Gini means changes concen-trate on fewer tokens (e.g., a small subset becomes dominant in receiving/sending attention changes). 
+
+Recommended use: to diagnose whether re-routing is localized to a small set of tokens versus spread across the sequence. 
+
+Entropy change (diffusion vs. sharpness). Com-putes the average attention entropy and its change under corruption. 
+
+H(A) = − 1
+
+T
+
+> T
+
+X
+
+> i=1
+> T
+
+X
+
+> j=1
+
+Aij log Aij ,
+
+∆H = H( ˜A) − H(A).
+
+Interpretation: ∆H > 0 indicates attention be-comes more diffuse on average; ∆H < 0 indi-cates attention becomes sharper. Recommended use: to distinguish “redistribute broadly” versus “focus more sharply” under semantic conflict. 
+
+Locality (near-diagonal emphasis). Fraction of re-allocation energy concentrated within a local band around the diagonal. 
+
+Loc(∆ A) = 
+
+P
+
+> |i−j|≤ 2
+
+(∆ Aij )2
+
+PTi=1 
+
+PTj=1 (∆ Aij )2 .
+
+Interpretation: higher locality means changes em-phasize nearby-token interactions; lower locality in-dicates longer-range redistribution. Recommended use: to check whether corruption mainly perturbs short-range versus long-range attention dependen-cies. 
+
+Key findings. The pilot study provides two complementary pieces of evidence. Discovery (Qwen2.5-7B vs. Llama-2-7B derivatives): the structural statistics of ∆A show that Llama-2-7B derivatives exhibit closely matched re-allocation profiles (e.g., column concentration curves in Fig-ure 9 and metric summaries in Figure 10), whereas Qwen2.5-7B consistently operates in a lower-concentration, more diffuse re-allocation regime. Table A1 summarizes these statistics (mean ±SD) 23 Figure 9: Discovery stage: layer-wise column Gini coefficient (mean ±SD) computed from the differential attention matrix ∆A under controlled semantic conflicts. We plot the metric against relative layer depth and show that Llama-2-7B derivatives follow highly similar trajec-tories while Qwen2.5-7B exhibits a consistently lower concentration regime.   
+
+> Figure 10: Discovery stage: visualization of key differential-attention structure metrics (mean over probe instances) for Qwen2.5-7B and Llama-2-7B deriva-tives. Llama-2-7B derivatives exhibit highly consistent metric profiles, while Qwen2.5-7B differs in multiple concentration-related dimensions.
+
+across probe instances. Validation (broader mod-els): in fingerprint space, models from different sources occupy separated regions under a simple PCA visualization (Figure 11), supporting that differential attention fingerprints can distinguish provenance under controlled semantic conflicts. 
+
+Implication for AttnDiff. In hindsight, these observations point to a simple “from finding to method” path. Because the effect emerges only when the model must resolve a semantic contra-diction, we use origin/corrupted pairs to control surface form and amplify re-allocation signals at-tributable to semantic conflict. Because prompt-specific baselines can dominate raw attention, we compute ∆A to cancel these baselines and isolate re-routing. Because routing structure is richer than any single hand-crafted statistic, we summarize 
+
+> Figure 11: Validation stage: PCA visualization of the fingerprint matrix on a broader set of models. Each point corresponds to a probe instance in fingerprint space and colors denote different models (listed in the legend). The resulting structure shows separated regions across diverse models, providing a qualitative validation of the discovery-stage observation.
+
+∆A via compact spectral descriptors and compare fingerprints with CKA, aligning with the goal of capturing stable structural signatures rather than raw, coordinate-dependent activations. This pilot analysis is meant to establish the existence and interpretability of the routing phe-nomenon under controlled semantic conflicts; the main-text experiments evaluate robustness and dis-criminability under realistic laundering transforma-tions. 
+
+E.2 Preference Optimization Robustness 
+
+This section reports the models and full experimen-tal results for PO, covering PPO and DPO strate-gies. 
+
+PPO. Proximal Policy Optimization (PPO) is a policy-gradient algorithm for reinforcement learn-ing that stabilizes training by clipping the policy ratio, and is widely used for reinforcement learning from human feedback (RLHF) in language mod-els (Ouyang et al., 2022). 
+
+DPO. Direct Preference Optimization (DPO) optimizes a language model directly from prefer-ence pairs via a closed-form objective that avoids explicit reward-model fitting and online RL roll-outs (Rafailov et al., 2023a). 
+
+Experimental Setup. We evaluate PO robust-ness using Llama-2-7B-derived suspects under two representative PO methods, PPO-based rein-forcement learning from human feedback (RLHF) and Direct Preference Optimization (DPO). Con-cretely, we consider PPO-aligned models (llama-24 Model ∥∆A∥F Spectral ratio Effective rank Col. Gini Row Gini ∆H Locality CodeLlama-7b-hf 0.499 ± 0.558 0.851 ± 0.145 4.681 ± 3.233 0.690 ± 0.105 0.791 ± 0.154 0.003 ± 0.046 0.208 ± 0.192                                                                                     
+
+> Llama-2-7B 0.504 ±0.531 0.834 ±0.152 5.024 ±3.408 0.697 ±0.107 0.781 ±0.159 0.004 ±0.048 0.237 ±0.197
+> WizardMath-7B-V1.0 0.517 ±0.520 0.832 ±0.150 5.088 ±3.440 0.691 ±0.105 0.780 ±0.160 0.004 ±0.049 0.236 ±0.196
+> llemma_7b 0.512 ±0.533 0.821 ±0.162 5.054 ±3.424 0.691 ±0.111 0.771 ±0.167 −0.001 ±0.053 0.218 ±0.201
+> Qwen2.5-7B 0.317 ±0.313 0.764 ±0.170 5.475 ±3.297 0.652 ±0.102 0.742 ±0.176 0.008 ±0.042 0.255 ±0.241
+
+Table A1: Structural statistics (mean ±SD) of the differential attention matrix ∆A under controlled semantic conflicts. Llama-2-7B derivatives exhibit highly similar statistics, while Qwen2.5-7B consistently differs in concentration-related metrics (e.g., column Gini), supporting the pilot-study motivation for AttnDiff.                              
+
+> PPO DPO llama-2-7b-ppo-v0.1-reward llama-2-7b-ppo-v0.1-policy tulu-2-dpo-7b llama-2-7b-dpo PCS 1.0000 0.9935 0.9999 0.9972 ICS 0.9999 0.9874 0.9961 0.9984 Logits 0.9884 0.9891 0.6735 0.7144 REEF 0.6152 0.7458 0.9264 0.9496 ProFlingo 1.0000 1.0000 0.0400 0.2800 LLMMap 0.7836 0.7459 0.6780 0.8427 Ours 1.0000 1.0000 0.9992 0.9994
+
+Table A2: Preference optimization robustness results (similarity score) on Llama-2-7B-derived suspect mod-els (PPO/DPO). 
+
+Cell shading (per column): =best, =second, =third. 
+
+2-7b-ppo-v0.1-reward and llama-2-7b-ppo-v0.1-policy) and DPO-aligned models ( tulu-2-dpo-7b 
+
+and llama-2-7b-dpo ), all trained from the Llama-2-7B base model (Touvron et al., 2023). 
+
+Results and Analysis. Table A2 shows that AttnDiff remains highly stable under both PPO and DPO, reaching near-perfect similarity for all aligned suspects ( Ours ≥ 0.9992 ). Parameter-based baselines (PCS/ICS) also stay close to 1.0, reflecting the shared base checkpoint. By con-trast, output- and text-level baselines degrade more substantially under DPO: Logits drops to 0.67 –
+
+0.71 and ProFlingo collapses to 0.04 –0.28 , indi-cating that preference optimization can heavily reshape surface behavior. Representation-level REEF is comparatively robust on DPO-aligned suspects ( ≈ 0.93 –0.95 ) but is notably weaker on PPO-aligned suspects ( ≈ 0.62 –0.75 ), suggesting that different alignment strategies affect hidden-state similarity in distinct ways. Overall, AttnDiff provides a consistently reliable provenance signal across PO variants. 
+
+E.3 Model Merge Strategy Robustness 
+
+This section evaluates whether AttnDiff remains robust under diverse model merging strategies, cov-ering both weight-space and recipe-based merges across different base models. 
+
+Breadcrumbs and Breadcrumbs+Ties. Model Breadcrumbs merges models by learning sparse binary masks over source checkpoints to select a small subset of parameters from each model, and the Breadcrumbs+Ties variant combines this mask-ing scheme with TIES-style averaging to further reduce interference (Davari and Belilovsky, 2024; Yadav et al., 2023). 
+
+Della and Task Arithmetic. DELLA-Merging samples and rescales model parameters based on their magnitude to mitigate destructive interference during merging (Deep et al., 2024), whereas Task Arithmetic (Task) linearly adds and subtracts task-specific model deltas to compose new behaviors (Il-harco et al., 2023). 
+
+TIES and DARE-based merges. TIES-Merging prunes and rebalances parameter updates before averaging to avoid conflicting signs (Ya-dav et al., 2023), while DARE-based recipes (DARE+TIES, DARE+Task) regularize the merged model by encouraging sparse and disentangled ability-specific updates (Yu et al., 2024). 
+
+Experimental Setup. We evaluate eight repre-sentative merging recipes: Breadcrumbs, Bread-crumbs+Ties, Della, Task Arithmetic (Task), TIES (TIES-Merging), Della+Task, DARE+TIES, and DARE+Task. For each recipe, we consider Llama-2-7B and Wizardmath-7b as victim models and compute similarity scores between the merged checkpoints and their respective bases. 
+
+Results and Analysis. Table A3 shows that Attn-Diff consistently maintains near-perfect similarity across all eight merging strategies and both base models ( Ours ≥ 0.9984 and frequently ≈ 1.0), indicating that differential attention re-routing pat-terns remain stable even under diverse weight-and recipe-based merges. Several baselines de-grade more noticeably under challenging recipes: ProFlingo remains low across most settings ( 0.22 –
+
+0.74 ), and Logits/LLMmap exhibit non-trivial drops for some merges (e.g., behavior-level or distribution-oriented recipes). REEF is generally stronger than text/output-only baselines but still shows variability across strategies and bases. While PCS/ICS remain highly competitive when param-eter alignment is straightforward, they primarily reflect weight-space overlap and may not cap-25 Breadcrumbs Breadcrumbs+Ties Della Task Llama-2-7B Wizardmath-7b Llama-2-7B Wizardmath-7b Llama-2-7B Wizardmath-7b Llama-2-7B Wizardmath-7b PCS 0.9990 0.9999 0.9968 0.9999 0.9864 0.9999 0.9921 0.9999 ICS 0.9988 0.9997 0.9988 0.9997 0.9968 0.9982 0.9996 0.9996 Logits 0.8830 0.9575 0.8830 0.9575 0.7841 0.9556 0.9192 0.9484 REEF 0.8131 0.8831 0.8131 0.8831 0.9261 0.9289 0.9442 0.8717 ProFlingo 0.5600 0.5200 0.5600 0.3800 0.4000 0.4400 0.7400 0.6200 LLMMap 0.8368 0.8561 0.8368 0.8561 0.8275 0.8913 0.8498 0.8842 Ours 0.9992 0.9999 0.9992 0.9999 0.9986 1.0000 0.9996 0.9999 Ties Della+Task DARE+Ties DARE+Task Llama-2-7B Wizardmath-7b Llama-2-7B Wizardmath-7b Llama-2-7B Wizardmath-7b Llama-2-7B Wizardmath-7b PCS 0.9990 0.9999 0.9981 0.9999 0.9952 0.9999 0.9964 0.9999 ICS 0.9987 0.9999 0.9968 0.9982 0.9968 0.9982 0.9968 0.9982 Logits 0.8624 0.9751 0.7647 0.9655 0.7695 0.9708 0.7731 0.9784 REEF 0.9718 0.8455 0.9533 0.8232 0.8797 0.8946 0.8030 0.7519 ProFlingo 0.5200 0.2200 0.4200 0.4400 0.4400 0.5000 0.5600 0.3800 LLMMap 0.8733 0.8489 0.7339 0.8967 0.7357 0.9323 0.7133 0.9245 Ours 0.9991 0.9999 0.9985 1.0000 0.9984 1.0000 0.9985 1.0000 
+
+Table A3: Model merge robustness results (similarity score) under eight merging strategies. 
+
+Cell shading (per column): =best, =second, =third. 
+
+ture functional lineage under heterogeneous merge recipes. Overall, AttnDiff offers robust provenance verification across a broad merging landscape. 
+
+E.4 Pruning Robustness 
+
+This section presents supplementary pruning ro-bustness experiments to evaluate whether AttnDiff remains stable under diverse structured and unstruc-tured pruning configurations. Following CTCC and EverTracer (Xu et al., 2025c,a), we additionally test multiple pruning criteria and sparsity levels beyond the main-text baselines. 
+
+Random pruning. As a structure-agnostic base-line, Random pruning removes parameters (or chan-nels/heads) uniformly at random under a given sparsity level, without using any importance signal from weights or gradients. This setting isolates the effect of pure sparsification from that of informed pruning criteria, and provides a lower bound on how much structure AttnDiff needs to remain sta-ble. 
+
+L1 pruning. Magnitude-based pruning ranks parameters or structured units by their L1 norm and removes those with the smallest overall magnitude. This widely used heuristic implicitly assumes that weights with smaller absolute values contribute less to model behavior. We include L1 pruning to test whether AttnDiff remains robust under standard, importance-aware sparsification schemes. 
+
+Taylor pruning. Taylor-based pruning assigns an importance score to each parameter based on a first-order Taylor expansion of the loss, typically combining gradient information with weight mag-nitude. Parameters with the smallest estimated im-pact on the loss are pruned first, yielding more loss-aware sparsity patterns than purely magnitude-based criteria. Evaluating AttnDiff under Taylor pruning helps assess robustness when pruning ex-plicitly targets loss-preserving sparsification. 
+
+Experimental Setup. We generate pruned sus-pects from Llama-2-7B and Qwen2.5-7B using the LLMPruner toolkit (Ma et al., 2023), covering both structured and unstructured pruning with four crite-ria: Random, L1, L2, and Taylor. These suspects complement the open-source pruning models con-sidered in the main text. 
+
+Results and Analysis. Table A4 shows that Attn-Diff remains highly stable across pruning criteria and sparsity levels, with similarity typically above 
+
+0.99 and remaining strong even under 20% ran-dom pruning ( Ours 0.9964 for Llama-2-7B and 
+
+0.9820 for Qwen2.5-7B). In contrast, baselines exhibit criterion-dependent sensitivity: ICS drops sharply under random pruning (down to 0.69 –0.77 
+
+at 20%), and ProFlingo becomes unreliable under magnitude pruning (near-zero under L1 pruning). REEF is comparatively low for random/ L1 pruning but becomes very high under Taylor pruning (con-sistent with loss-aware sparsification preserving activations). Logits remains relatively stable un-der pruning, especially for Qwen2.5-7B, whereas LLMmap degrades under more aggressive random pruning. Overall, these results suggest that pruning can perturb weights and representations in hetero-geneous ways, while AttnDiff provides a consistent provenance signal across sparsification regimes. 26 5% 10% 20% Llama-2-7B Qwen2.5-7B Llama-2-7B Qwen2.5-7B Llama-2-7B Qwen2.5-7B 
+
+Random pruning 
+
+PCS 0.9878 0.9869 0.9750 0.9738 0.9497 0.9468 ICS 0.9208 0.9502 0.8415 0.8954 0.6878 0.7715 Logits 0.9923 0.9999 0.9875 0.9928 0.9839 0.9832 REEF 0.6368 0.2417 0.3689 0.2259 0.2629 0.2021 ProFlingo 0.8800 0.7200 0.4800 0.3600 0.2000 0.1200 LLMmap 0.9422 0.7959 0.8471 0.7310 0.7409 0.7320 Ours 0.9995 0.9958 0.9986 0.9933 0.9964 0.9820 
+
+L1 pruning 
+
+PCS 0.9999 0.9999 0.9994 0.9996 0.9982 0.9990 ICS 0.9999 0.9999 0.9991 0.9997 0.9929 0.9976 Logits 0.9980 0.9988 0.9949 0.9874 0.9902 0.9832 REEF 0.6546 0.2327 0.6157 0.2283 0.5557 0.2177 ProFlingo 0.0600 0.0000 0.0000 0.0400 0.0000 0.0200 LLMmap 0.9329 0.9134 0.8932 0.9584 0.9131 0.8929 Ours 0.9999 1.0000 0.9998 0.9998 0.9986 0.9977 
+
+Taylor pruning 
+
+PCS 1.0000 0.9999 1.0000 0.9999 0.9999 0.9999 ICS 0.9999 0.9999 0.9991 0.9997 0.9929 0.9977 Logits 0.9933 0.9998 0.9900 0.9985 0.9900 0.9897 REEF 0.9895 0.9813 0.9711 0.9772 0.9701 0.9639 ProFlingo 0.5000 0.4000 0.2600 0.0600 0.0600 0.1200 LLMmap 0.9329 0.9135 0.8931 0.9585 0.9132 0.8929 Ours 1.0000 1.0000 0.9999 0.9998 0.9997 0.9994 
+
+Table A4: Pruning robustness results (similarity score) under Random, L1, and Taylor pruning criteria at different sparsity levels. 
+
+Cell shading (per column): =best, =second, =third.                                                                                       
+
+> Qwen2.5 gemma-2-2b Mistral-7B-v0.3 Qwen2.5-Coder-1.5B Qwen2.5-Math-1.5B Qwen2.5-1.5B-Instruct Qwen2.5-14B-Instruct oxy-1-small Qwen2.5-14B-Gutenberg-Instruct-Slerpeno gemma-2-2b-neogenes-ita gemma-2-baku-2b gemma-2-2b-merged KurmaAI/ AQUA-7B openfoodfacts/ spellcheck-mistral-7b grimjim/ Mistral-7B-Instruct-demi-merge-v0.3-7B PCS 0.8385 0.6681 0.9999 0.9999 0.9961 0.9999 0.9996 0.9971 0.9996 0.9999 0.9998 0.9999 ICS 0.2661 0.4486 0.9954 0.9997 0.9925 0.9997 0.9954 0.9880 0.9957 0.9820 0.9996 0.9997 Logits 0.5275 0.2728 0.8832 0.6228 0.5571 0.6847 0.7615 0.8036 0.7355 0.6859 0.9076 0.9225 ProFlingo 0.8400 0.8000 0.7400 0.7800 0.6600 0.5400 0.6200 0.6800 0.5400 0.5800 0.6600 0.7600 LLMmap 0.8231 0.8593 0.6929 0.6737 0.7505 0.6221 0.7429 0.9655 0.6748 0.7658 0.8960 0.7940 REEF 0.9458 0.9155 0.9267 0.9857 0.9602 0.9705 0.9961 0.9568 0.9959 0.9792 0.9953 0.9950 Ours 0.9869 0.9471 0.9968 0.9821 0.9883 0.9837 0.9194 0.9322 0.9107 0.9936 0.9997 0.9994
+
+Table A5: Cross-scale and cross-family robustness results (similarity score) across Qwen2.5-derived suspects (1.5B/14B), gemma-2-derived suspects (2B), and Mistral-derived suspects (7B). 
+
+Cell shading (per column): =best, =second, =third. 
+
+E.5 Cross-Family and Cross-Scale Stability 
+
+This section evaluates whether AttnDiff remains stable under (i) different model families and (ii) different parameter scales , including 1.5B →14B within Qwen2.5 and cross-family settings (gemma-2 vs. Mistral). 
+
+Experimental Setup. We evaluate AttnDiff across three model families: Qwen2.5 (1.5B, 7B, 14B), gemma-2 (2B), and Mistral (7B). For each family, we select a representative set of instruction-tuned, merged, or domain-specific derivatives as suspects. Specifically, we include Qwen2.5-Coder/Math-1.5B, oxy-1-small (14B), and various community-released merges for gemma-2 and Mis-tral. 
+
+Results and Analysis. Table A5 shows that AttnDiff remains robust across heterogeneous derivatives drawn from different model fami-lies and scales. Notably, on the more chal-lenging cross-scale Qwen2.5 setting (e.g., 1.5B 27 Qwen2.5-7B Qwen2.5-14B Deployable distilled model Qwen2.5-7B-Open-R1-Distill DeepSeek-R1-Distill-Qwen-14B PCS 0.9998 0.9867 ICS 0.9992 0.9738 Logits 0.6990 0.5056 REEF 0.9926 0.7512 ProFlingo 0.5600 0.4400 LLMmap 0.6744 0.7637 Ours 0.9873 0.9875 Llama-3.1-8B Llama-2-7B Deployable distilled model Llama-3.1-8B-Instruct-Open-R1-Distill cygu/llama-2-7b-logit-watermark-distill-kgw-k1-gamma0.25-delta2 PCS 0.9988 0.9997 ICS 0.9961 0.9982 Logits 0.6926 0.9512 REEF 0.9779 0.9830 ProFlingo 0.5400 0.4800 LLMmap 0.7956 0.9287 Ours 0.9969 0.9998 
+
+Table A6: Distillation robustness results (similarity score) across teacher–student pairs spanning Qwen2.5 and Llama families. Each block reports similarity be-tween a base model and its distilled variant. 
+
+Cell shading (per column): =best, =second, =third. 
+
+coder/math variants), AttnDiff achieves strong sim-ilarity ( 0.947 –0.987 ), while parameter-based base-lines can be substantially weaker (PCS 0.668 –
+
+0.839 , ICS 0.266 –0.449 ), reflecting architectural and scale mismatches that limit direct weight align-ment. For Mistral-derived suspects, AttnDiff re-mains near-perfect ( ≥ 0.9936 ), and for gemma-2 derivatives it remains high albeit lower than some representation baselines in a few cases. Across families, text/output baselines (ProFlingo, Log-its, LLMmap) show larger variance under domain shifts and merging artifacts. Overall, differential attention fingerprints provide a stable similarity signal when parameter alignment is unreliable and surface behavior can drift. 
+
+E.6 Distillation Robustness Knowledge Distillation. Knowledge distillation compresses a larger or more capable teacher model into a lighter student by training the student to match the teacher’s predictions or intermediate representations. This paradigm is widely used to deploy reasoning- or instruction-tuned models in resource-constrained settings while preserving task performance. However, the additional distil-lation stage may further reshape internal represen-tations and output distributions beyond standard fine-tuning, posing an additional stress test for fin-gerprint robustness. 
+
+Experimental Setup. We evaluate Attn-Diff under teacher–student distillation for four representative LLM families. On the 
+
+Qwen2.5 side, we consider Qwen2.5-7B and Qwen2.5-14B as base models and evaluate suspects distilled from reasoning-style teachers, namely Qwen2.5-7B-Open-R1-Distill and 
+
+DeepSeek-R1-Distill-Qwen-14B (associated with the DeepSeek-R1 series (DeepSeek-AI, 2024)). For Llama models, we include Llama-3.1-8B and Llama-2-7B as bases, to-gether with distilled or distillation-like variants 
+
+Llama-3.1-8B-Instruct-Open-R1-Distill 
+
+and a logit-based distilled variant. 
+
+Results and Analysis. Table A6 shows that At-tnDiff remains consistently high across all evalu-ated teacher–student pairs ( Ours ≥ 0.9873 ), indi-cating that differential attention fingerprints are largely preserved under distillation. Parameter-based baselines (PCS/ICS) are also near-perfect, consistent with distillation often retaining substan-tial structural correspondence to the base. In con-trast, output- and text-based baselines are less sta-ble: Logits drops to around 0.50 –0.70 for the Qwen2.5 pairs, and LLMmap exhibits noticeable variance across students. REEF remains strong on several pairs but degrades markedly on Qwen2.5-14B ( 0.7512 ), suggesting that distillation can re-shape representation space even when provenance is intact. Overall, AttnDiff provides a robust prove-nance signal under commonly deployed distillation pipelines. 
+
+E.7 Applicability to Other Architectures (MoE) 
+
+To further probe the applicability of AttnDiff be-yond standard dense Transformer architectures, we consider a mixture-of-experts (MoE) setting using Mixtral-8x7B (Jiang et al., 2024) as the base model and several instruction-tuned derivatives. 
+
+Experimental Setup. We treat Mixtral-8x7B as the victim model and evaluate AttnDiff on its instruction-tuned variants, including Dolly15K-tuned and DPO-aligned checkpoints as well as OpenChat Mixtral. Mixtral-8x7B Instruct_Mixtral -8x7B-v0.1_Dolly15K Nous-Hermes-2 -Mixtral-8x7B-DPO openbuddy-mixtral -8x7b-v15.4 AttnDiff 0.9925 0.9814 0.9905 
+
+Table A7: Similarity score between Mixtral-8x7B and its instruction-tuned MoE derivatives, illustrating the applicability of AttnDiff to MoE architectures. 
+
+Results and Analysis. Table A7 shows that At-tnDiff remains stable on MoE variants of Mixtral-8x7B, with similarity scores in the 0.98 –0.99 range across instruction-tuning and DPO-alignment. This suggests that the differential-attention fingerprint-ing pipeline extends beyond dense Transformers 28 Qwen2.5-7B Llama-2-7B Instruct-GPTQ-Int4 Instruct-GPTQ-Int8 Chat-GPTQ Ours 0.9890 0.9913 0.9933       
+
+> Llama-3.1-8B Mistral-7B-v0.3 Instruct-INT4-GPTQ Instruct-GPTQ_Q_8 Instruct-GPTQ-4bit Ours 0.9450 1.0000 0.9970
+
+Table A8: Quantization robustness results (AttnDiff similarity score) between each full-precision base model and its GPTQ-quantized derivatives. 
+
+and continues to provide a reliable provenance sig-nal under architectural changes in the feed-forward routing mechanism. 
+
+E.8 Quantization Robustness GPTQ Quantization. Post-training quantization compresses model weights to low-bit representa-tions to reduce memory footprint and accelerate in-ference. We focus on GPTQ (Frantar et al., 2023), a widely used post-training quantization method for GPT-style transformers that quantizes weights (e.g., INT4/INT8) with minimal degradation. 
+
+Experimental Setup. We evaluate quantization robustness across four base model families, includ-ing Qwen2.5-7B, Llama-2-7B, Llama-3.1-8B, and Mistral-7B-v0.3. For each base model, we con-sider representative GPTQ-quantized derivatives at different bit widths and compute AttnDiff sim-ilarity between each quantized checkpoint and its corresponding full-precision base. 
+
+Results and Analysis. Table A8 shows that At-tnDiff remains highly stable under GPTQ quanti-zation across all evaluated families, with similarity scores close to 1.0 for most INT4/INT8 settings. The slightly lower similarity on the INT4-quantized Llama-3.1-8B variant indicates that more aggres-sive quantization can introduce stronger weight perturbations, but AttnDiff still preserves a high provenance signal overall. 
+
+E.9 Stress Testing LLMM AP under Text-level Attacks 
+
+We provide a focused stress test of the text-based 
+
+provenance baseline LLMM AP (Pasquini et al., 2025). Since LLMM AP operates on generated responses, it may be sensitive to post-hoc rewriting that preserves semantics but perturbs lexical and stylistic cues. 
+
+Attack setup. We attack only the answers produced by each suspect model (base model outputs are left unchanged). Using a local 
+
+WizardMath-7B-V1.0 model as the attacker, we rewrite each answer under three settings: • Paraphrase: meaning-preserving synonym paraphrase. • Rewrite: meaning-preserving but stylistically distinct rewrite. • Style-transfer: meaning-preserving rewrite conditioned on a target writing style. After rewriting, we recompute LLMM AP embed-dings and fingerprints and measure cosine similar-ity against the clean fingerprints. 
+
+Results and Analysis. Table A9 reports the co-sine similarity of LLMM AP fingerprints before and after meaning-preserving paraphrase, rewrite, and style-transfer attacks. Performance varies widely across suspects: CodeLlama-7b-hf remains stable (clean 0.9535 and ≥ 0.9484 after attacks), while 
+
+llemma_7b and WizardMath-7B-V1.0 suffer sub-stantial degradation (e.g., llemma_7b : 0.8886 →
+
+0.715 –0.743 ). The logit-watermark distilled model also exhibits a measurable drop ( 0.9233 → 0.885 –
+
+0.893 ). These results highlight a vulnerability of text-based provenance signals to post-hoc rewrit-ing that preserves semantics but alters surface form, motivating complementary fingerprints de-rived from internal model dynamics.                     
+
+> Model Clean Paraphrase Rewrite Style-transfer
+> CodeLlama-7b-hf 0.9535 0.9484 0.9484 0.9500 llemma_7b 0.8886 0.7174 0.7152 0.7433 llama-2-7b-logit-watermark-distill-kgw-k1-gamma0.25-delta2 0.9233 0.8934 0.8904 0.8851 WizardMath-7B-V1.0 0.6998 0.6147 0.6210 0.6330
+
+Table A9: Cosine similarity of LLMM AP finger-prints before and after meaning-preserving paraphras-ing, rewriting, and style-transfer attacks. 
+
+F Model List 
+
+This section provides a comprehensive list of the models used across all experiments in the main text and appendix. We categorize these models by modification or attack setting (e.g., fine-tuning, model merging, pruning, distillation). For each category, we specify the base (victim) model used to establish the reference fingerprint and the corre-sponding suspect (derivative) models evaluated for provenance verification. 29 Category Type Base (Victim) Suspect(s) / Derivative(s) 
+
+Fine-tuning Instruction Llama-2-7B Llama-2-finance-7b, Vicuna-1.5-7b, WizardMath-7b, Chinese-LLaMA-2-7b, CodeLLaMA-7b, Llemma-7b Merge Weight Shisa-gamma-7b-v1 Evollm-jp-7b WizardMath-7b-1.1 Abel-7b-002 Dist./Behav. Llama-2-7B Fusellm-7b OpenLLaMA-2-7b mpt-7b Pruning Structured Llama-2-7B Sheared-llama-1.3b, Sheared-llama-1.3b-pruned, Sheared-llama-1.3b-sharegpt, Sheared-llama-2.7b, Sheared-llama-2.7b-pruned Unstructured Llama-2-7B Sparse-llama-2-7b, Wanda-llama-2-7b, GBLM-llama-2-7b Ablation Related Llama-2-7B CodeLlama-7b, Llama-2-finance-7B, Vicuna-7B-v1.5, Chinese-Llama-2-7B, WizardMath-7B-V1.0, llemma_7b, Sheared-LlaMA-1.3B, Sheared-LlaMA-1.3B-Pruned, Sheared-LlaMA-1.3B-ShareGPT, Sheared-LlaMA-2.7B, Sheared-LlaMA-2.7B-Pruned, Sheared-LlaMA-2.7B-ShareGPT, Sparse-llama-2-7b, Wanda-llama-2-7b, GBLM-llama-2-7b Unrelated Llama-2-7B Llama3-8B, mpt-7b, Qwen2.5-1.5B, Qwen2.5-3B, Qwen2.5-7B, Qwen2.5-14B, Qwen2.5-Math-7B, gemma-2-2b, Gemma-7B-it, Yi-6B Pilot Discovery/Validation Llama-2-7B Llama-2-7B, CodeLlama-7b-hf, WizardMath-7B-V1.0, llemma_7b, Qwen2.5-7B Pref. Opt. PPO/DPO Llama-2-7B llama-2-7b-ppo-v0.1-reward 1, llama-2-7b-ppo-v0.1-policy 1, tulu-2-dpo-7b 2, llama-2-7b-dpo 3
+
+Cross-Family/Scale Qwen2.5 Qwen2.5-7B Qwen2.5-Coder-1.5B 4, Qwen2.5-Math-1.5B 5,Qwen2.5-1.5B-Instruct 6
+
+Qwen2.5-14B Qwen2.5-14B-Instruct 7, oxy-1-small 8, Qwen2.5-14B-Gutenberg-Instruct-Slerpeno 9
+
+Gemma-2 gemma-2-2b gemma-2-2b-neogenes-ita 10 , gemma-2-baku-2b 11 ,gemma-2-2b-merged 12 
+
+Mistral Mistral-7B-v0.3 AQUA-7B 13 , spellcheck-mistral-7b 14 , Mistral-7B-Instruct-demi-merge-v0.3-7B 15 
+
+Distill Reasoning Llama-3.1-8B Llama-3.1-8B-Instruct-Open-R1-Distill 16 
+
+Qwen2.5-7B Qwen2.5-7B-Open-R1-Distill 17 
+
+Qwen2.5-14B DeepSeek-R1-Distill-Qwen-14B 18 
+
+Logit-based Llama-2-7B llama-2-7b-logit-watermark-distill-kgw-k1-gamma0.25-delta2 19 
+
+MoE Mixtral Mixtral-8x7B Instruct_Mixtral-8x7B-v0.1_Dolly15K 20 , Nous-Hermes-2-Mixtral-8x7B-DPO 21 , openbuddy-mixtral-8x7b-v15.4 22 
+
+Quantization GPTQ Qwen2.5-7B Qwen2.5-7B-Instruct-GPTQ-Int8 23 ,Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4 24 
+
+Llama-2-7B TheBloke/Llama-2-7B-Chat-GPTQ 25 
+
+Llama-3.1-8B iqbalamo93/Meta-Llama-3.1-8B-Instruct-GPTQ-Q_8 26 , DaraV/LLaMA-3.1-8B-Instruct-INT4-GPTQ 27 
+
+Mistral-7B-v0.3 RedHatAI/Mistral-7B-Instruct-v0.3-GPTQ-4bit 28 
+
+Table A10: Models used in the main paper and appendix analyses. 
+
+30 ID Repository URL 
+
+# 1 https://huggingface.co/renyiyu/llama-2-7b-ppo-lora-v0.1 
+
+# 2 https://huggingface.co/allenai/tulu-2-dpo-7b 
+
+# 3 https://huggingface.co/mncai/llama2-7b-dpo-v1 
+
+# 4 https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B 
+
+# 5 https://huggingface.co/Qwen/Qwen2.5-Math-1.5B 
+
+# 6 https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct 
+
+# 7 https://huggingface.co/Qwen/Qwen2.5-14B-Instruct 
+
+# 8 https://huggingface.co/oxyapi/oxy-1-small 
+
+# 9 https://huggingface.co/v000000/Qwen2.5-14B-Gutenberg-Instruct-Slerpeno 
+
+# 10 https://huggingface.co/anakin87/gemma-2-2b-neogenesis-ita 
+
+# 11 https://huggingface.co/rinna/gemma-2-baku-2b 
+
+# 12 https://huggingface.co/vonjack/gemma2-2b-merged 
+
+# 13 https://huggingface.co/KurmaAI/AQUA-7B 
+
+# 14 https://huggingface.co/openfoodfacts/spellcheck-mistral-7b 
+
+# 15 https://huggingface.co/grimjim/Mistral-7B-Instruct-demi-merge-v0.3-7B 
+
+# 16 https://huggingface.co/asas-ai/Llama-3.1-8B-Instruct-Open-R1-Distill 
+
+# 17 https://huggingface.co/erickrus/Qwen2.5-7B-Open-R1-Distill 
+
+# 18 https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B 
+
+# 19 https://huggingface.co/cygu/llama-2-7b-logit-watermark-distill-kgw-k1-gamma0.25-delta2 
+
+# 20 https://huggingface.co/Brillibits/Instruct_Mixtral-8x7B-v0.1_Dolly15K 
+
+# 21 https://huggingface.co/NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO 
+
+# 22 https://huggingface.co/openbuddy/openbuddy-mixtral-8x7b-v15.4 
+
+# 23 https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GPTQ-Int8 
+
+# 24 https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4 
+
+# 25 https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ 
+
+# 26 https://huggingface.co/iqbalamo93/Meta-Llama-3.1-8B-Instruct-GPTQ-Q_8 
+
+# 27 https://huggingface.co/DaraV/LLaMA-3.1-8B-Instruct-INT4-GPTQ 
+
+# 28 https://huggingface.co/RedHatAI/Mistral-7B-Instruct-v0.3-GPTQ-4bit 
+
+> Table A11: Repository URLs corresponding to the superscript IDs in Table A10.
+
+31
