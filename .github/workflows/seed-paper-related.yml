@@ -1,0 +1,156 @@
+name: seed-paper-related
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Seed paper request id"
+        required: true
+      request_path:
+        description: "Repo path to request JSON"
+        required: true
+      seed_mode:
+        description: "Requested read mode: skim/deep/both"
+        required: false
+        default: "skim"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seed-paper-related-${{ github.event.inputs.request_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deps (skip sqlite3)
+        run: |
+          python3 - <<'PY'
+          import re
+          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
+          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\b", l)]
+          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
+          PY
+          python3 -m pip install --upgrade pip
+          python3 -m pip install uv
+          uv pip install --system -r /tmp/req.txt
+
+      - name: Validate request inputs
+        env:
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+          REQUEST_PATH: ${{ github.event.inputs.request_path }}
+          SEED_MODE: ${{ github.event.inputs.seed_mode }}
+        run: |
+          set -euo pipefail
+          export REQUEST_ID REQUEST_PATH SEED_MODE
+          python3 - <<'PY'
+          import importlib.util
+          import json
+          import os
+          import re
+          from pathlib import Path, PurePosixPath
+
+          request_id = (os.environ.get("REQUEST_ID") or "").strip()
+          request_path = (os.environ.get("REQUEST_PATH") or "").strip()
+          seed_mode = (os.environ.get("SEED_MODE") or "skim").strip()
+
+          if not request_id:
+            raise SystemExit("Missing request_id")
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", request_id):
+            raise SystemExit(f"Unexpected request_id: {request_id}")
+          if not request_path:
+            raise SystemExit("Missing request_path")
+
+          expected_request_path = f"requests/seed_papers/{request_id}/request.json"
+          if request_path != expected_request_path:
+            raise SystemExit(f"Unexpected request path: {request_path}")
+          if Path(request_path).parts != tuple(expected_request_path.split("/")):
+            raise SystemExit(f"Unexpected request path: {request_path}")
+          if seed_mode not in {"skim", "deep", "both"}:
+            raise SystemExit(f"Unsupported seed mode: {seed_mode}")
+          if not Path(request_path).is_file():
+            raise SystemExit(f"Missing request payload: {request_path}")
+
+          module_path = Path("src/seed_paper_processor.py")
+          spec = importlib.util.spec_from_file_location("seed_paper_processor_validation", module_path)
+          if not spec or not spec.loader:
+            raise SystemExit(f"Unable to load validation module: {module_path}")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          source_path = ((json.loads(Path(request_path).read_text(encoding="utf-8")) or {}).get("source_path") or "").strip()
+          relative_pdf_path = module._validate_source_path(source_path, request_id)
+          resolved_source_path = Path(*PurePosixPath(relative_pdf_path).parts)
+          if not resolved_source_path.is_file():
+            raise SystemExit(f"Missing seed PDF: {source_path}")
+          if resolved_source_path.stat().st_size > 50 * 1024 * 1024:
+            raise SystemExit(f"Seed PDF too large: {source_path}")
+          pdf_header = resolved_source_path.read_bytes()[:5]
+          if pdf_header != b"%PDF-":
+            raise SystemExit(f"Invalid PDF signature: {source_path}")
+          PY
+
+      - name: Inspect request payload
+        env:
+          REQUEST_PATH: ${{ github.event.inputs.request_path }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          request_path = Path(os.environ["REQUEST_PATH"])
+          data = json.loads(request_path.read_text(encoding="utf-8"))
+          print("Loaded seed paper request:")
+          print(json.dumps({
+              "file_name": data.get("file_name"),
+              "source_path": data.get("source_path"),
+              "related_count": data.get("related_count"),
+              "mode": data.get("mode"),
+              "selected_tags": data.get("selected_tags"),
+          }, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Process seed paper request
+        env:
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+          REQUEST_PATH: ${{ github.event.inputs.request_path }}
+          SEED_MODE: ${{ github.event.inputs.seed_mode }}
+        run: |
+          set -euo pipefail
+          python3 src/seed_paper_processor.py \
+            --request-path "$REQUEST_PATH" \
+            --request-id "$REQUEST_ID" \
+            --seed-mode "$SEED_MODE"
+
+      - name: Commit generated seed docs
+        env:
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "docs/seed-papers/${REQUEST_ID}" "docs/README.md" "docs/_sidebar.md"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "feat: process seed paper request ${REQUEST_ID}"
+          git push

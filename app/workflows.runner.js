@@ -24,6 +24,12 @@ window.DPRWorkflowRunner = (function () {
       name: '重置 content（docs + archive）',
       desc: '将 docs 恢复为 docs_init 基线，并清空 archive。该操作为危险操作。',
     },
+    {
+      key: 'seed-paper-related',
+      id: 'seed-paper-related.yml',
+      name: '上传论文关联发现',
+      desc: '触发 seed-paper-related 工作流（上传种子论文请求 → 关联论文处理）。',
+    },
   ];
 
   const QUICK_FETCH_PRESETS = {
@@ -85,24 +91,18 @@ window.DPRWorkflowRunner = (function () {
   };
 
   const loadGithubToken = () => {
+    // Workflow dispatches intentionally use the session-only PAT source.
+    // Do not reintroduce any persisted localStorage fallback here.
     try {
-      const secret = window.decoded_secret_private || {};
-      if (secret.github && secret.github.token) {
-        return String(secret.github.token || '').trim();
+      const session = window.DPRSecretSession || {};
+      if (typeof session.getGithubToken === 'function') {
+        const token = String(session.getGithubToken() || '').trim();
+        if (token) return token;
       }
     } catch {
       // ignore
     }
-    try {
-      const raw = window.localStorage
-        ? window.localStorage.getItem('github_token_data')
-        : '';
-      if (!raw) return '';
-      const obj = JSON.parse(raw);
-      return String((obj && obj.token) || '').trim();
-    } catch {
-      return '';
-    }
+    return '';
   };
 
   const resolveRepoFromUrl = async (token) => {
@@ -206,6 +206,11 @@ window.DPRWorkflowRunner = (function () {
     if (run.inputs && typeof run.inputs === 'object') return 'daily-now';
     await resolveWorkflowRunInputs(owner, repo, token, run.id);
     return 'daily-now';
+  };
+
+  const shouldStartPollingForRun = (runId) => {
+    const stateKey = String(lastRunStateById[String(runId)] || '');
+    return !stateKey.startsWith('completed/');
   };
 
   const setStatus = (text, color, options = {}) => {
@@ -410,10 +415,12 @@ window.DPRWorkflowRunner = (function () {
         selectedRun = { owner, repo, runId, token: loadGithubToken() };
         setStatus(`正在加载运行详情：run_id=${runId}`, '#666', { waiting: true });
         await refreshRun(owner, repo, runId);
-        refreshTimer = setInterval(() => {
-          if (!selectedRun) return;
-          refreshRun(selectedRun.owner, selectedRun.repo, selectedRun.runId);
-        }, 5000);
+        if (shouldStartPollingForRun(runId)) {
+          refreshTimer = setInterval(() => {
+            if (!selectedRun) return;
+            refreshRun(selectedRun.owner, selectedRun.repo, selectedRun.runId);
+          }, 5000);
+        }
       });
     });
   };
@@ -653,11 +660,13 @@ window.DPRWorkflowRunner = (function () {
       setStatus(`运行已创建：run_id=${run.id}，开始拉取进度...`, '#080', { waiting: true });
       await refreshRun(owner, repo, run.id);
 
-      refreshTimer = setInterval(() => {
-        const r = selectedRun || activeRun;
-        if (!r) return;
-        refreshRun(r.owner, r.repo, r.runId);
-      }, 5000);
+      if (shouldStartPollingForRun(run.id)) {
+        refreshTimer = setInterval(() => {
+          const r = selectedRun || activeRun;
+          if (!r) return;
+          refreshRun(r.owner, r.repo, r.runId);
+        }, 5000);
+      }
 
       // 触发后刷新最近运行列表
       loadRecentRuns();
@@ -823,9 +832,20 @@ window.DPRWorkflowRunner = (function () {
     return runWorkflowByKey(preset.key, mergedInputs);
   };
 
+  const runSeedPaperWorkflow = async (requestInfo, extraInputs) => {
+    const info = requestInfo && typeof requestInfo === 'object' ? requestInfo : {};
+    const mergedInputs = combineInputs({
+      request_id: info.requestId,
+      request_path: info.requestPath,
+      seed_mode: info.seedMode,
+    }, extraInputs);
+    return runWorkflowByKey('seed-paper-related', mergedInputs);
+  };
+
   return {
     open,
     runWorkflowByKey,
     runQuickFetchByDays,
+    runSeedPaperWorkflow,
   };
 })();
