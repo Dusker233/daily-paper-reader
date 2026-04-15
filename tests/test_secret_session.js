@@ -1,16 +1,24 @@
 const assert = require('node:assert/strict');
 
 global.window = global.window || {};
+global.window.__DPR_ENABLE_SECRET_SESSION_TESTS__ = true;
 global.window.location = global.window.location || {
   hostname: 'localhost',
   href: 'http://localhost/',
 };
+const localStorageState = {};
 global.window.localStorage = global.window.localStorage || {
-  getItem() {
-    return null;
+  getItem(key) {
+    return Object.prototype.hasOwnProperty.call(localStorageState, key)
+      ? localStorageState[key]
+      : null;
   },
-  setItem() {},
-  removeItem() {},
+  setItem(key, value) {
+    localStorageState[key] = String(value);
+  },
+  removeItem(key) {
+    delete localStorageState[key];
+  },
 };
 global.window.crypto = global.window.crypto || {
   getRandomValues(array) {
@@ -69,7 +77,22 @@ const {
   buildPingEntriesFromProviderDraft,
   resolveRerankSyncState,
   buildSecretSyncOperations,
+  verifyGithubTokenForSetup,
+  loadSavedPassword,
+  savePassword,
+  clearPassword,
+  clearRuntimeGithubToken,
+  loadGithubTokenForSession,
+  buildSessionSecretState,
+  applySessionSecretState,
+  enforceGuestMode,
 } = global.window.DPRSecretSession.__test;
+
+function resetSecretSessionState() {
+  applySessionSecretState({});
+  clearRuntimeGithubToken();
+  clearPassword();
+}
 
 function testBuildPingEntriesIncludesIndependentRerank() {
   const entries = buildPingEntriesFromProviderDraft({
@@ -207,11 +230,172 @@ function testBuildSecretSyncOperationsKeepsRerankSecretsWhenConfigured() {
   ]);
 }
 
-testBuildPingEntriesIncludesIndependentRerank();
-testBuildPingEntriesDedupesWorkflowAndRerankOverlap();
-testResolveRerankSyncStateDisablesIncompleteConfig();
-testBuildSecretSyncOperationsClearsRerankSecretsWhenSkipped();
-testBuildSecretSyncOperationsClearsIncompleteRerankSecrets();
-testBuildSecretSyncOperationsKeepsRerankSecretsWhenConfigured();
+function testPasswordStateStaysInSessionMemoryOnly() {
+  localStorageState.dpr_secret_password_v1 = 'legacy-persisted-password';
+  clearPassword();
 
-console.log('secret session tests passed');
+  assert.equal(loadSavedPassword(), '');
+  assert.equal(localStorageState.dpr_secret_password_v1, undefined);
+
+  savePassword('Session#Pass1');
+  assert.equal(loadSavedPassword(), 'Session#Pass1');
+  assert.equal(localStorageState.dpr_secret_password_v1, undefined);
+
+  clearPassword();
+  assert.equal(loadSavedPassword(), '');
+  assert.equal(localStorageState.dpr_secret_password_v1, undefined);
+}
+
+function testEnforceGuestModeClearsDecryptedSecretAndRuntimeToken() {
+  global.window.decoded_secret_private = { github: { token: 'ghp_secret' } };
+  global.window.DPRSecretSession.setSessionGithubToken('ghp_runtime_demo');
+  savePassword('Session#Pass1');
+
+  enforceGuestMode(null, 'test_guest');
+
+  assert.equal(global.window.DPR_ACCESS_MODE, 'guest');
+  assert.equal(global.window.decoded_secret_private, undefined);
+  assert.equal(global.window.DPR_RUNTIME_GITHUB_TOKEN, undefined);
+  assert.equal(loadGithubTokenForSession(), '');
+  assert.equal(loadSavedPassword(), '');
+}
+
+function testClearRuntimeGithubTokenRemovesGlobalToken() {
+  global.window.DPRSecretSession.setSessionGithubToken('ghp_runtime_demo');
+  clearRuntimeGithubToken();
+  assert.equal(global.window.DPR_RUNTIME_GITHUB_TOKEN, undefined);
+  assert.equal(loadGithubTokenForSession(), '');
+}
+
+function testBuildSessionSecretStateStripsGithubTokenFromDecodedSecret() {
+  const state = buildSessionSecretState({
+    github: {
+      token: 'ghp_secret',
+      login: 'dusker',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+    },
+  });
+
+  assert.deepEqual(state.decodedSecret, {
+    github: {
+      login: 'dusker',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+    },
+  });
+  assert.equal(state.githubToken, 'ghp_secret');
+}
+
+function testApplySessionSecretStateMovesGithubTokenToSessionAccessor() {
+  global.window.DPRSecretSession.setSessionGithubToken('ghp_runtime_old');
+  global.window.decoded_secret_private = {};
+
+  const decodedSecret = applySessionSecretState({
+    github: {
+      token: 'ghp_session_secret',
+      login: 'dusker',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+    },
+  });
+
+  assert.deepEqual(decodedSecret, {
+    github: {
+      login: 'dusker',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+    },
+  });
+  assert.equal(global.window.decoded_secret_private.github.token, undefined);
+  assert.equal(global.window.DPR_RUNTIME_GITHUB_TOKEN, undefined);
+  assert.equal(loadGithubTokenForSession(), 'ghp_session_secret');
+  assert.equal(global.window.DPRSecretSession.getGithubToken(), 'ghp_session_secret');
+}
+
+async function testVerifyGithubTokenForSetupStoresRuntimeTokenForCurrentSession() {
+  resetSecretSessionState();
+  const responses = [];
+  global.fetch = async (url, options = {}) => {
+    responses.push({ url, options });
+    if (url === 'https://api.github.com/user') {
+      return new Response(JSON.stringify({ login: 'dusker' }), {
+        status: 200,
+        headers: { 'X-OAuth-Scopes': 'repo,workflow,gist' },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  clearRuntimeGithubToken();
+
+  const result = await verifyGithubTokenForSetup('ghp_runtime_demo');
+
+  assert.equal(global.window.DPR_RUNTIME_GITHUB_TOKEN, undefined);
+  assert.equal(loadGithubTokenForSession(), 'ghp_runtime_demo');
+  assert.equal(result.ok, true);
+  assert.equal(result.color, '#28a745');
+  assert.match(result.text, /验证成功/);
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].options.headers.Authorization, 'token ghp_runtime_demo');
+}
+
+async function testVerifyGithubTokenForSetupClearsRuntimeTokenOnFailure() {
+  resetSecretSessionState();
+  global.fetch = async () => new Response('denied', {
+    status: 401,
+    headers: { 'X-OAuth-Scopes': 'repo,workflow,gist' },
+  });
+
+  global.window.DPRSecretSession.setSessionGithubToken('ghp_stale');
+
+  await assert.rejects(
+    () => verifyGithubTokenForSetup('ghp_bad_demo'),
+    /HTTP 401/,
+  );
+  assert.equal(global.window.DPR_RUNTIME_GITHUB_TOKEN, undefined);
+  assert.equal(loadGithubTokenForSession(), '');
+}
+
+async function testVerifyGithubTokenForSetupClearsRuntimeTokenWhenScopeMissing() {
+  resetSecretSessionState();
+  global.fetch = async () => new Response(JSON.stringify({ login: 'dusker' }), {
+    status: 200,
+    headers: { 'X-OAuth-Scopes': 'repo,gist' },
+  });
+
+  global.window.DPRSecretSession.setSessionGithubToken('ghp_stale');
+
+  await assert.rejects(
+    () => verifyGithubTokenForSetup('ghp_missing_scope'),
+    /Token 权限不足/,
+  );
+  assert.equal(global.window.DPR_RUNTIME_GITHUB_TOKEN, undefined);
+  assert.equal(loadGithubTokenForSession(), '');
+}
+
+(async () => {
+  testBuildPingEntriesIncludesIndependentRerank();
+  testBuildPingEntriesDedupesWorkflowAndRerankOverlap();
+  testResolveRerankSyncStateDisablesIncompleteConfig();
+  testBuildSecretSyncOperationsClearsRerankSecretsWhenSkipped();
+  testBuildSecretSyncOperationsClearsIncompleteRerankSecrets();
+  testBuildSecretSyncOperationsKeepsRerankSecretsWhenConfigured();
+  testPasswordStateStaysInSessionMemoryOnly();
+  testEnforceGuestModeClearsDecryptedSecretAndRuntimeToken();
+  testClearRuntimeGithubTokenRemovesGlobalToken();
+  testBuildSessionSecretStateStripsGithubTokenFromDecodedSecret();
+  testApplySessionSecretStateMovesGithubTokenToSessionAccessor();
+  await testVerifyGithubTokenForSetupStoresRuntimeTokenForCurrentSession();
+  await testVerifyGithubTokenForSetupClearsRuntimeTokenOnFailure();
+  await testVerifyGithubTokenForSetupClearsRuntimeTokenWhenScopeMissing();
+
+  console.log('secret session tests passed');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

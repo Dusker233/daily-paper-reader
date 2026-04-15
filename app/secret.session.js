@@ -1,11 +1,14 @@
 // 全局密钥会话管理：负责首次进入时的密码解锁 / 游客模式
 (function () {
   const STORAGE_KEY_MODE = 'dpr_secret_access_mode_v1'; // 已不再使用，仅保留兼容
-  const STORAGE_KEY_PASS = 'dpr_secret_password_v1';
+  const STORAGE_KEY_PASS = 'dpr_secret_password_v1'; // 旧版 localStorage 密码键，仅用于升级清理
   const SECRET_FILE_URL = 'secret.private';
   const SECRET_OVERLAY_ANIMATION_MS = 280;
   const FORCE_GUEST_DOMAIN_TOKEN = 'ziwenhahaha';
   let secretOverlayHideTimer = null;
+  let sessionPassword = '';
+  let activeSecretGithubToken = '';
+  let activeSessionGithubToken = '';
   const isForceGuestDomain = (host) => {
     const normalized = String(host || '').toLowerCase();
     return normalized.includes(FORCE_GUEST_DOMAIN_TOKEN);
@@ -24,8 +27,87 @@
     }
   };
 
-  const enforceGuestMode = (overlayEl) => {
-    setAccessMode('guest', { mode: 'guest', reason: 'domain_force_guest' });
+  const clearRuntimeGithubToken = () => {
+    activeSessionGithubToken = '';
+    try {
+      delete window.DPR_RUNTIME_GITHUB_TOKEN;
+    } catch {
+      window.DPR_RUNTIME_GITHUB_TOKEN = '';
+    }
+  };
+
+  const saveRuntimeGithubToken = (token) => {
+    const normalized = String(token || '').trim();
+    if (!normalized) {
+      clearRuntimeGithubToken();
+      return;
+    }
+    activeSessionGithubToken = normalized;
+    try {
+      delete window.DPR_RUNTIME_GITHUB_TOKEN;
+    } catch {
+      window.DPR_RUNTIME_GITHUB_TOKEN = '';
+    }
+  };
+
+  const clearDecodedSecret = () => {
+    activeSecretGithubToken = '';
+    try {
+      delete window.decoded_secret_private;
+    } catch {
+      window.decoded_secret_private = undefined;
+    }
+  };
+
+  const loadGithubTokenForSession = () => {
+    const sessionToken = String(activeSessionGithubToken || '').trim();
+    if (sessionToken) return sessionToken;
+    return String(activeSecretGithubToken || '').trim();
+  };
+
+  const buildSessionSecretState = (secret) => {
+    const safeSecret = secret && typeof secret === 'object' ? secret : {};
+    let clonedSecret = {};
+    try {
+      clonedSecret = JSON.parse(JSON.stringify(safeSecret));
+    } catch {
+      clonedSecret = { ...safeSecret };
+    }
+
+    const githubConfig = clonedSecret.github && typeof clonedSecret.github === 'object'
+      ? clonedSecret.github
+      : null;
+    const githubToken = githubConfig ? String(githubConfig.token || '').trim() : '';
+
+    if (githubConfig) {
+      const sanitizedGithub = { ...githubConfig };
+      delete sanitizedGithub.token;
+      if (Object.keys(sanitizedGithub).length > 0) {
+        clonedSecret.github = sanitizedGithub;
+      } else {
+        delete clonedSecret.github;
+      }
+    }
+
+    return {
+      decodedSecret: clonedSecret,
+      githubToken,
+    };
+  };
+
+  const applySessionSecretState = (secret) => {
+    const state = buildSessionSecretState(secret);
+    activeSecretGithubToken = state.githubToken;
+    clearRuntimeGithubToken();
+    window.decoded_secret_private = state.decodedSecret;
+    return state.decodedSecret;
+  };
+
+  const enforceGuestMode = (overlayEl, reason) => {
+    clearPassword();
+    clearRuntimeGithubToken();
+    clearDecodedSecret();
+    setAccessMode('guest', { mode: 'guest', reason: reason || 'domain_force_guest' });
     if (overlayEl) {
       try {
         overlayEl.classList.remove('show');
@@ -92,31 +174,28 @@
     }
   }
 
-  function loadSavedPassword() {
-    try {
-      if (!window.localStorage) return '';
-      return window.localStorage.getItem(STORAGE_KEY_PASS) || '';
-    } catch {
-      return '';
-    }
-  }
-
-  function savePassword(pwd) {
-    try {
-      if (!window.localStorage) return;
-      window.localStorage.setItem(STORAGE_KEY_PASS, pwd);
-    } catch {
-      // ignore
-    }
-  }
-
-  function clearPassword() {
+  function clearLegacySavedPassword() {
     try {
       if (!window.localStorage) return;
       window.localStorage.removeItem(STORAGE_KEY_PASS);
     } catch {
       // ignore
     }
+  }
+
+  function loadSavedPassword() {
+    clearLegacySavedPassword();
+    return sessionPassword || '';
+  }
+
+  function savePassword(pwd) {
+    sessionPassword = String(pwd || '').trim();
+    clearLegacySavedPassword();
+  }
+
+  function clearPassword() {
+    sessionPassword = '';
+    clearLegacySavedPassword();
   }
 
   const getLLMUtils = () => window.DPRLLMConfigUtils || {};
@@ -267,6 +346,47 @@
     }
     return null;
   };
+  const verifyGithubTokenForSetup = async (token) => {
+    const normalizedToken = normalizeText(token);
+    if (!normalizedToken) {
+      clearRuntimeGithubToken();
+      throw new Error('请先输入 GitHub Token。');
+    }
+    try {
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `token ${normalizedToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const scopesHeader = res.headers.get('X-OAuth-Scopes') || '';
+      const scopeList = scopesHeader
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const requiredScopes = ['repo', 'workflow', 'gist'];
+      const missing = requiredScopes.filter((scope) => !scopeList.includes(scope));
+      if (missing.length) {
+        throw new Error(
+          `Token 权限不足，缺少：${missing.join(', ')}。请在 GitHub 中重新生成 PAT。`,
+        );
+      }
+      const userData = await res.json().catch(() => ({}));
+      saveRuntimeGithubToken(normalizedToken);
+      return {
+        ok: true,
+        text: `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}。Gist 分享：已开启。`,
+        color: '#28a745',
+      };
+    } catch (error) {
+      clearRuntimeGithubToken();
+      throw error;
+    }
+  };
+
   const buildConnectivityTestPayload = (baseUrl, model) => {
     const utils = getLLMUtils();
     if (typeof utils.buildConnectivityTestPayload === 'function') {
@@ -1047,7 +1167,7 @@
 
       // 游客模式：不解密，不加载密钥，仅浏览 & 阅读
       guestBtn.addEventListener('click', () => {
-        setMode('guest');
+        enforceGuestMode(overlay, 'unlock_guest');
         hide();
       });
 
@@ -1074,8 +1194,8 @@
           }
           const payload = await resp.json();
           const secret = await decryptSecret(pwd, payload);
-          // 将解密后的配置保存在内存中，不落盘，同时记住密码以便下次自动解锁
-          window.decoded_secret_private = secret;
+          // 将解密后的配置保存在当前会话内存中，GitHub PAT 单独保存在会话态，不挂在通用配置对象上
+          applySessionSecretState(secret);
           savePassword(pwd);
           setMode('full');
           hide();
@@ -1135,9 +1255,7 @@
         },
       ];
 
-      const initialGithubToken = normalizeText(
-        currentSecret.github && currentSecret.github.token,
-      );
+      const initialGithubToken = normalizeText(loadGithubTokenForSession());
       const initialApiKey = normalizeText(currentWorkflowLLM.apiKey || '');
       const initialCustomApiKey =
         currentProviderType === 'openai-compatible'
@@ -1496,6 +1614,7 @@
 
       const resetGithubStatus = () => {
         githubOk = false;
+        clearRuntimeGithubToken();
         githubStatusEl.innerHTML = '需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。';
         githubStatusEl.style.color = '#999';
       };
@@ -1712,10 +1831,12 @@
       });
 
       backBtn.addEventListener('click', () => {
+        resetGithubStatus();
         renderInitStep1();
       });
 
       closeBtn.addEventListener('click', () => {
+        resetGithubStatus();
         hide();
       });
 
@@ -1731,34 +1852,14 @@
         githubStatusEl.textContent = '正在验证 GitHub Token...';
         githubStatusEl.style.color = '#666';
         try {
-          const res = await fetch('https://api.github.com/user', {
-            headers: {
-              Authorization: `token ${token}`,
-              Accept: 'application/vnd.github.v3+json',
-            },
-          });
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`);
-          }
-          const scopesHeader = res.headers.get('X-OAuth-Scopes') || '';
-          const scopeList = scopesHeader
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
-          const requiredScopes = ['repo', 'workflow', 'gist'];
-          const missing = requiredScopes.filter((scope) => !scopeList.includes(scope));
-          if (missing.length) {
-            throw new Error(
-              `Token 权限不足，缺少：${missing.join(', ')}。请在 GitHub 中重新生成 PAT。`,
-            );
-          }
-          const userData = await res.json().catch(() => ({}));
-          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}<br>Gist 分享：已开启。`;
-          githubStatusEl.style.color = '#28a745';
-          githubOk = true;
+          const result = await verifyGithubTokenForSetup(token);
+          githubStatusEl.textContent = result.text;
+          githubStatusEl.style.color = result.color;
+          githubOk = result.ok === true;
         } catch (e) {
           githubStatusEl.textContent = `❌ 验证失败：${e.message || e}`;
           githubStatusEl.style.color = '#c00';
+          clearRuntimeGithubToken();
           githubOk = false;
         } finally {
           githubVerifyBtn.disabled = false;
@@ -1901,6 +2002,7 @@
         try {
           setErrorText('正在准备写入 GitHub Secrets...', '#666');
           genBtn.disabled = true;
+          savePassword(password);
 
           const secretsOk = await saveSummarizeSecretsToGithub(
             githubToken,
@@ -1930,7 +2032,7 @@
 
           setErrorText('GitHub Secrets 上传完成，正在生成加密配置 secret.private...', '#666');
           const payload = await createEncryptedSecret(password, plainConfig);
-          window.decoded_secret_private = plainConfig;
+          applySessionSecretState(plainConfig);
           setMode('full');
 
           const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -1956,6 +2058,7 @@
             );
           }
 
+          clearRuntimeGithubToken();
           hide();
 
           try {
@@ -2019,7 +2122,7 @@
           style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:6px; font-size:13px;"
         />
         <div id="secret-setup-error" style="min-height:18px; font-size:12px; color:#666; margin-bottom:8px;">
-          密码至少 8 位，且必须包含数字、小写字母、大写字母和特殊符号。密码仅保存在浏览器本地，用于解锁密钥。
+          密码至少 8 位，且必须包含数字、小写字母、大写字母和特殊符号。密码仅保存在当前页面会话内存中，用于解锁密钥。
         </div>
         <div class="secret-gate-actions">
           <button id="secret-setup-guest" type="button" class="secret-gate-btn secondary">
@@ -2042,7 +2145,7 @@
       if (!pwdInput || !pwdConfirmInput || !guestBtn || !nextBtn) return;
 
       guestBtn.addEventListener('click', () => {
-        setMode('guest');
+        enforceGuestMode(overlay, 'setup_guest');
         hide();
       });
 
@@ -2087,10 +2190,10 @@
         openSecretOverlay(overlay);
         // 确保浮层可见
         if (!savedPwd) {
-          // 没有保存密码：从第 1 步开始完整向导
+          // 当前会话内没有解锁密码：从第 1 步开始完整向导
           renderInitStep1();
         } else {
-          // 已保存密码：直接进入第 2 步配置向导
+          // 当前会话内已有解锁密码：直接进入第 2 步配置向导
           renderInitStep2(savedPwd);
         }
       };
@@ -2108,6 +2211,7 @@
   }
 
   function init() {
+    clearLegacySavedPassword();
     const overlay = document.getElementById('secret-gate-overlay');
     const registerGuestOnlySecretSetup = () => {
       window.DPRSecretSetup = window.DPRSecretSetup || {};
@@ -2150,7 +2254,7 @@
         window.DPR_ACCESS_MODE = 'locked';
 
         if (hasSecret) {
-          // 已存在 secret.private：若浏览器保存了密码，先尝试自动解锁；
+          // 已存在 secret.private：若当前会话内还保留了解锁密码，先尝试自动解锁；
           // 成功则直接进入页面；失败或无密码则展示解锁/游客界面。
           const savedPwd = loadSavedPassword();
           if (savedPwd) {
@@ -2165,7 +2269,7 @@
               }
               const payload = await resp2.json();
               const secret = await decryptSecret(savedPwd, payload);
-              window.decoded_secret_private = secret;
+              applySessionSecretState(secret);
               // 这里不在 setupOverlay 作用域内，直接标记全局访问模式为 full 并广播事件
               try {
                 setAccessMode('full', { mode: 'full' });
@@ -2189,7 +2293,7 @@
               clearPassword();
             }
           }
-          // 没有保存的密码或自动解锁失败：展示解锁/游客界面
+          // 当前会话内没有可用密码或自动解锁失败：展示解锁/游客界面
           setupOverlay(true);
           openSecretOverlay(overlay);
         } else {
@@ -2207,16 +2311,33 @@
   }
 
   window.DPRSecretSession = window.DPRSecretSession || {};
-  window.DPRSecretSession.__test = Object.assign(
-    {},
-    window.DPRSecretSession.__test || {},
-    {
-      dedupePingEntries,
-      buildPingEntriesFromProviderDraft,
-      resolveRerankSyncState,
-      buildSecretSyncOperations,
-    },
-  );
+  window.DPRSecretSession.getGithubToken = function () {
+    return loadGithubTokenForSession();
+  };
+  window.DPRSecretSession.setSessionGithubToken = function (token) {
+    saveRuntimeGithubToken(token);
+  };
+  if (typeof window !== 'undefined' && window.__DPR_ENABLE_SECRET_SESSION_TESTS__ === true) {
+    window.DPRSecretSession.__test = Object.assign(
+      {},
+      window.DPRSecretSession.__test || {},
+      {
+        dedupePingEntries,
+        buildPingEntriesFromProviderDraft,
+        resolveRerankSyncState,
+        buildSecretSyncOperations,
+        verifyGithubTokenForSetup,
+        loadSavedPassword,
+        savePassword,
+        clearPassword,
+        clearRuntimeGithubToken,
+        loadGithubTokenForSession,
+        buildSessionSecretState,
+        applySessionSecretState,
+        enforceGuestMode,
+      },
+    );
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

@@ -1858,24 +1858,15 @@ window.$docsify = {
       // ---------- Share to GitHub Gist ----------
       const loadGithubTokenForGist = () => {
         try {
-          const secret = window.decoded_secret_private || {};
-          if (secret.github && secret.github.token) {
-            const t = String(secret.github.token || '').trim();
-            if (t) return t;
+          const session = window.DPRSecretSession || {};
+          if (typeof session.getGithubToken === 'function') {
+            const token = String(session.getGithubToken() || '').trim();
+            if (token) return token;
           }
         } catch {
           // ignore
         }
-        try {
-          if (!window.localStorage) return null;
-          const raw = window.localStorage.getItem('github_token_data');
-          if (!raw) return null;
-          const obj = JSON.parse(raw) || {};
-          const t = String(obj.token || '').trim();
-          return t || null;
-        } catch {
-          return null;
-        }
+        return null;
       };
 
       const joinUrlPath = (a, b) => {
@@ -3580,7 +3571,7 @@ window.$docsify = {
           return parsed
             .filter((item) => item && typeof item === 'object')
             .map((item, index) => ({
-              url: String(item.url || '').trim(),
+              url: resolveDocsAssetUrl(item.url),
               caption: String(item.caption || '').trim(),
               page: Number(item.page || 0),
               index: Number(item.index || index + 1),
@@ -3593,15 +3584,26 @@ window.$docsify = {
         }
       };
 
-      const resolveDocsAssetUrl = (value) => {
+      const ALLOWED_REMOTE_URL_RE = /^https:\/\//i;
+      const ALLOWED_RELATIVE_DOCS_ASSET_RE = /^(?:docs\/)?assets\/[a-z0-9/_\-.]+$/i;
+
+      const normalizeSafeUrl = (value, { allowRelativeDocsAsset = false, allowRemote = true } = {}) => {
         const url = String(value || '').trim();
         if (!url) return '';
-        if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:')) return url;
+        if (allowRemote && ALLOWED_REMOTE_URL_RE.test(url)) return url;
+        if (!allowRelativeDocsAsset) return '';
+        const normalized = url.replace(/^\/+/, '');
+        if (!ALLOWED_RELATIVE_DOCS_ASSET_RE.test(normalized)) return '';
         const basePath = (window.$docsify && window.$docsify.basePath) || 'docs/';
         const safeBase = /\/$/.test(basePath) ? basePath : `${basePath}/`;
-        if (url.startsWith('docs/')) return url;
-        return `${safeBase}${url.replace(/^\/+/, '')}`;
+        if (normalized.startsWith('docs/')) return normalized;
+        return `${safeBase}${normalized}`;
       };
+
+      const resolveDocsAssetUrl = (value) => normalizeSafeUrl(value, {
+        allowRelativeDocsAsset: true,
+        allowRemote: false,
+      });
 
       const renderFigureCarousel = (figures) => {
         if (!figures || !figures.length) return '';
@@ -3742,9 +3744,10 @@ window.$docsify = {
           lines.push(`<p><strong>Source</strong>: ${escapeHtml(meta.source)}</p>`);
         }
         lines.push(`<p><strong>Date</strong>: ${escapeHtml(meta.date || 'Unknown')}</p>`);
-        if (meta.pdf) {
+        const safePdfUrl = normalizeSafeUrl(meta.pdf);
+        if (safePdfUrl) {
           lines.push(
-            `<p class="paper-meta-link-row"><span class="paper-meta-link-label"><strong>PDF</strong>:</span> <a class="paper-meta-link" href="${escapeHtml(meta.pdf)}" target="_blank">${escapeHtml(meta.pdf)}</a></p>`
+            `<p class="paper-meta-link-row"><span class="paper-meta-link-label"><strong>PDF</strong>:</span> <a class="paper-meta-link" href="${escapeHtml(safePdfUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(safePdfUrl)}</a></p>`
           );
         }
         if (meta.tags && meta.tags.length) {
@@ -3801,6 +3804,17 @@ window.$docsify = {
 
         return lines.join('\n');
       };
+
+      if (typeof window !== 'undefined' && window.__DPR_ENABLE_DOCSIFY_PLUGIN_TESTS__ === true) {
+        window.DPRDocsifyPluginTest = {
+          normalizeSafeUrl,
+          resolveDocsAssetUrl,
+          parseFiguresMeta,
+          renderPaperFromMeta,
+          parseFrontMatter,
+          loadGithubTokenForGist,
+        };
+      }
 
       // --- Docsify beforeEach 钩子：解析 front matter ---
       hook.beforeEach(function (content) {

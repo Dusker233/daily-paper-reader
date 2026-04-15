@@ -42,9 +42,10 @@ global.window.jsyaml = {
 };
 global.window.jsYaml = global.window.jsyaml;
 global.window.jsYAML = global.window.jsyaml;
-global.window.decoded_secret_private = {
-  github: {
-    token: 'ghp_demo',
+global.window.decoded_secret_private = {};
+global.window.DPRSecretSession = {
+  getGithubToken() {
+    return 'ghp_demo';
   },
 };
 global.atob = global.atob || ((value) => Buffer.from(value, 'base64').toString('binary'));
@@ -59,7 +60,9 @@ global.fetch = async () => {
 require('../app/subscriptions.github-token.js');
 
 const {
+  init,
   updateConfig,
+  loadGithubToken,
   __test,
 } = global.window.SubscriptionsGithubToken;
 
@@ -123,9 +126,215 @@ function testIsShaConflictResponseRecognizesGitHub409() {
   assert.equal(__test.isShaConflictResponse(500, 'internal error'), false);
 }
 
+async function testWriteRepoFileEncodesUtf8TextAndHonorsPath() {
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === 'https://api.github.com/user') {
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { permissions: { push: true } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json') {
+      return createJsonResponse(200, { content: { sha: 'sha-request' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  await global.window.SubscriptionsGithubToken.writeRepoFile({
+    path: 'requests/seed_papers/demo/request.json',
+    contentText: '{"title":"论文"}',
+    commitMessage: 'test write request',
+  });
+
+  const putCall = calls.find((entry) => entry.options && entry.options.method === 'PUT');
+  assert.ok(putCall, 'should issue PUT request');
+  const body = JSON.parse(putCall.options.body);
+  assert.equal(body.message, 'test write request');
+  assert.equal(Buffer.from(body.content, 'base64').toString('utf8'), '{"title":"论文"}');
+}
+
+async function testWriteRepoFileUsesSecretSessionGithubToken() {
+  const calls = [];
+  global.window.decoded_secret_private = {};
+  global.window.DPR_RUNTIME_GITHUB_TOKEN = '';
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'ghp_secret_session';
+    },
+  };
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === 'https://api.github.com/user') {
+      assert.equal(options.headers.Authorization, 'token ghp_secret_session');
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { permissions: { push: true } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json') {
+      return createJsonResponse(200, { content: { sha: 'sha-request' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  await global.window.SubscriptionsGithubToken.writeRepoFile({
+    path: 'requests/seed_papers/demo/request.json',
+    contentText: '{"title":"session"}',
+    commitMessage: 'test secret session token',
+  });
+
+  const putCall = calls.find((entry) => entry.options && entry.options.method === 'PUT');
+  assert.ok(putCall, 'should issue PUT request');
+  assert.equal(putCall.options.headers.Authorization, 'token ghp_secret_session');
+}
+
+
+function testBuildSeedPaperRequestPathNormalizesSegments() {
+  const result = __test.buildSeedPaperRequestPath({
+    requestId: '  Demo Run  ',
+    fileName: 'My Seed Paper.PDF',
+  });
+
+  assert.equal(result.requestId, 'demo-run');
+  assert.equal(result.dirPath, 'requests/seed_papers/demo-run');
+  assert.equal(result.requestPath, 'requests/seed_papers/demo-run/request.json');
+  assert.equal(result.filePath, 'requests/seed_papers/demo-run/my-seed-paper.pdf');
+}
+
+function testLoadGithubTokenDropsPersistedPatAndKeepsMetadata() {
+  const calls = [];
+  global.window.localStorage = {
+    getItem(key) {
+      calls.push(['get', key]);
+      return JSON.stringify({
+        token: 'ghp_should_not_persist',
+        verified: true,
+        login: 'dusker',
+        repo: 'dusker/daily-paper-reader',
+        scopes: ['repo', 'workflow', 'gist'],
+        savedAt: '2026-04-15T00:00:00.000Z',
+      });
+    },
+    setItem(key, value) {
+      calls.push(['set', key, JSON.parse(value)]);
+    },
+    removeItem(key) {
+      calls.push(['remove', key]);
+    },
+  };
+  global.localStorage = global.window.localStorage;
+
+  const data = loadGithubToken();
+
+  assert.equal(data.token, undefined);
+  assert.equal(data.verified, true);
+  assert.equal(data.login, 'dusker');
+  const setCall = calls.find((entry) => entry[0] === 'set');
+  assert.ok(setCall, 'should rewrite legacy localStorage payload');
+  assert.equal('token' in setCall[2], false);
+}
+
+function testInitRequiresLiveSessionTokenForSuccessButton() {
+  global.window.localStorage = {
+    getItem() {
+      return JSON.stringify({
+        verified: true,
+        login: 'dusker',
+        repo: 'dusker/daily-paper-reader',
+        scopes: ['repo', 'workflow', 'gist'],
+        savedAt: '2026-04-15T00:00:00.000Z',
+      });
+    },
+    setItem() {},
+    removeItem() {},
+  };
+  global.localStorage = global.window.localStorage;
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return '';
+    },
+  };
+
+  const githubAuthBtn = {
+    textContent: '',
+    style: {},
+    addEventListener() {},
+  };
+
+  init({
+    githubAuthBtn,
+    githubTokenSection: { style: { display: 'none' } },
+    githubTokenInput: { value: '', type: 'password' },
+    githubTokenToggleBtn: null,
+    githubTokenVerifyBtn: null,
+    githubTokenClearBtn: null,
+    githubTokenMessage: null,
+    githubTokenInfo: null,
+    githubUserName: null,
+    githubRepoName: null,
+  });
+
+  assert.equal(githubAuthBtn.textContent, '需重新验证');
+  assert.equal(githubAuthBtn.style.background, '#fd7e14');
+  assert.equal(githubAuthBtn.style.color, 'white');
+}
+
+function testInitShowsSuccessButtonWhenSessionTokenExists() {
+  global.window.localStorage = {
+    getItem() {
+      return JSON.stringify({
+        verified: true,
+        login: 'dusker',
+        repo: 'dusker/daily-paper-reader',
+        scopes: ['repo', 'workflow', 'gist'],
+        savedAt: '2026-04-15T00:00:00.000Z',
+      });
+    },
+    setItem() {},
+    removeItem() {},
+  };
+  global.localStorage = global.window.localStorage;
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'ghp_live_session';
+    },
+  };
+
+  const githubAuthBtn = {
+    textContent: '',
+    style: {},
+    addEventListener() {},
+  };
+
+  init({
+    githubAuthBtn,
+    githubTokenSection: { style: { display: 'none' } },
+    githubTokenInput: { value: '', type: 'password' },
+    githubTokenToggleBtn: null,
+    githubTokenVerifyBtn: null,
+    githubTokenClearBtn: null,
+    githubTokenMessage: null,
+    githubTokenInfo: null,
+    githubUserName: null,
+    githubRepoName: null,
+  });
+
+  assert.equal(githubAuthBtn.textContent, '登录成功');
+  assert.equal(githubAuthBtn.style.background, '#28a745');
+  assert.equal(githubAuthBtn.style.color, 'white');
+}
+
 (async () => {
   await testUpdateConfigReloadsAndRetriesOnShaConflict();
   testIsShaConflictResponseRecognizesGitHub409();
+  await testWriteRepoFileEncodesUtf8TextAndHonorsPath();
+  await testWriteRepoFileUsesSecretSessionGithubToken();
+  testBuildSeedPaperRequestPathNormalizesSegments();
+  testLoadGithubTokenDropsPersistedPatAndKeepsMetadata();
+  testInitRequiresLiveSessionTokenForSuccessButton();
+  testInitShowsSuccessButtonWhenSessionTokenExists();
   console.log('subscriptions github token tests passed');
 })().catch((error) => {
   console.error(error);
