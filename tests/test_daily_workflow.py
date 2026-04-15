@@ -14,19 +14,19 @@ class DailyWorkflowConfigTest(unittest.TestCase):
         cls.on_block = cls.workflow.get("on") or cls.workflow.get(True) or {}
         cls.inputs = (((cls.on_block.get("workflow_dispatch") or {}).get("inputs")) or {})
 
-    def test_workflow_dispatch_exposes_runner_type_choice(self):
-        runner_type = self.inputs.get("runner_type") or {}
-        self.assertEqual(runner_type.get("default"), "hosted")
-        self.assertEqual(runner_type.get("type"), "choice")
-        self.assertEqual(runner_type.get("options"), ["hosted", "gpu"])
+    def test_workflow_dispatch_does_not_expose_gpu_runner_choice(self):
+        self.assertNotIn("runner_type", self.inputs)
 
-    def test_runs_on_uses_fixed_allowlisted_runner_sets(self):
-        run_job = ((self.workflow.get("jobs") or {}).get("run") or {})
+    def test_run_job_uses_hosted_ubuntu_runner(self):
+        jobs = self.workflow.get("jobs") or {}
+        run_job = jobs.get("run") or {}
         runs_on = run_job.get("runs-on") or ""
-        self.assertIn("runner_type == 'gpu'", runs_on)
-        self.assertIn('["self-hosted","linux","x64","gpu"]', runs_on)
-        self.assertIn('["ubuntu-latest"]', runs_on)
-        self.assertIn("fromJSON", runs_on)
+        self.assertIn("ubuntu", runs_on)
+        self.assertNotIn("self-hosted", runs_on)
+        self.assertEqual((self.workflow.get("permissions") or {}).get("contents"), "read")
+        self.assertEqual(((run_job.get("permissions") or {}).get("contents")), "write")
+        self.assertNotIn("validate_gpu_runner", jobs)
+        self.assertNotIn("GPU_LARGER_RUNNER_GROUP", self.text)
 
     def test_schedule_defaults_rerank_to_none_and_dispatch_defaults_to_blt(self):
         self.assertIn(
@@ -40,12 +40,13 @@ class DailyWorkflowConfigTest(unittest.TestCase):
         )
         self.assertIn('REQUESTED_RERANK_PROVIDER="blt"', self.text)
 
-    def test_local_rerank_runtime_detects_and_exports_device(self):
-        self.assertIn('torch.cuda.is_available()', self.text)
+    def test_local_rerank_runtime_forces_and_exports_cpu_device(self):
+        self.assertIn('device = "cpu"', self.text)
+        self.assertIn('hosted workflow forces local rerank device={device}', self.text)
         self.assertIn('fh.write(f"RERANK_LOCAL_DEVICE={device}\\n")', self.text)
         self.assertIn('fh.write(f"DPR_RERANK_DEVICE={device}\\n")', self.text)
 
-    def test_local_smoke_test_does_not_force_cpu(self):
+    def test_local_smoke_test_reads_runtime_device_without_overriding_client(self):
         self.assertNotIn('client.device = "cpu"', self.text)
 
 
