@@ -833,6 +833,33 @@ def rank_related_papers(
     return ordered
 
 
+def _load_ranked_related_fixture(fixture_path: str) -> list[dict[str, Any]]:
+    payload = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError(f"Expected ranked related fixture list: {fixture_path}")
+    ranked_related: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError(f"Expected ranked related fixture item dict: {fixture_path}")
+        paper_id = _normalize_text(item.get("id"))
+        paper_title = _normalize_text(item.get("title"))
+        if not paper_id or not paper_title:
+            raise ValueError(f"Expected ranked related fixture item with id/title: {fixture_path}")
+        llm_tags = item.get("llm_tags") if isinstance(item.get("llm_tags"), list) else []
+        llm_score = item.get("llm_score")
+        ranked_related.append(
+            {
+                "id": paper_id,
+                "title": paper_title,
+                "abstract": _normalize_text(item.get("abstract")),
+                "link": _validate_related_link(item.get("link")),
+                "llm_tags": [_normalize_text(tag) for tag in llm_tags if _normalize_text(tag)],
+                "llm_score": llm_score,
+            }
+        )
+    return ranked_related
+
+
 def process_request(
     request_path: str,
     *,
@@ -843,6 +870,7 @@ def process_request(
     generate_docs_module: Any | None = None,
     retrieve_related: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     reranker: Any | None = None,
+    ranked_related: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     request = load_request(request_path, root_dir=root_dir)
     if _normalize_text(request_id):
@@ -859,13 +887,13 @@ def process_request(
 
     docs_module = generate_docs_module or _load_generate_docs_module()
     seed_text = _extract_seed_text(request, docs_module)
-    ranked_related = rank_related_papers(
+    resolved_ranked_related = list(ranked_related) if ranked_related is not None else rank_related_papers(
         request,
         seed_text,
         retrieve_related=retrieve_related,
         reranker=reranker,
     )
-    selection = select_related_outputs(ranked_related, mode=request["mode"], related_count=request["related_count"])
+    selection = select_related_outputs(resolved_ranked_related, mode=request["mode"], related_count=request["related_count"])
     written = render_seed_workspace(
         request,
         seed_text=seed_text,
@@ -892,7 +920,16 @@ def main() -> None:
     parser.add_argument("--root-dir", default="", help="Optional repository root override")
     parser.add_argument("--docs-dir", default="", help="Optional docs output directory override")
     parser.add_argument("--seed-mode", default="", help="Optional mode override: skim/deep/both")
+    parser.add_argument(
+        "--ranked-related-fixture",
+        default="",
+        help="Optional JSON file containing a ranked related-paper list to bypass live retrieval/rerank",
+    )
     args = parser.parse_args()
+
+    ranked_related = None
+    if args.ranked_related_fixture:
+        ranked_related = _load_ranked_related_fixture(args.ranked_related_fixture)
 
     result = process_request(
         args.request_path,
@@ -900,6 +937,7 @@ def main() -> None:
         root_dir=args.root_dir or None,
         docs_dir=args.docs_dir or None,
         seed_mode=args.seed_mode or None,
+        ranked_related=ranked_related,
     )
     print(
         json.dumps(

@@ -687,6 +687,91 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertEqual(reranker.calls[0]["top_n"], 2)
             self.assertEqual(result["related_page_paths"], ["related/paper-2.md", "related/paper-1.md"])
 
+    def test_process_request_accepts_ranked_related_fixture_bypass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            request_path, pdf_path = self._write_request(
+                root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": ["RL"],
+                    "mode": "both",
+                    "notes": "",
+                },
+            )
+            pdf_path.write_bytes(b"%PDF-1.4\nseed")
+            (docs_dir / "README.md").write_text("# Home\n", encoding="utf-8")
+            (docs_dir / "_sidebar.md").write_text("* Home\n", encoding="utf-8")
+
+            result = self.mod.process_request(
+                str(request_path),
+                request_id="demo-request",
+                root_dir=str(root),
+                docs_dir=str(docs_dir),
+                generate_docs_module=_StubGenerateDocs,
+                ranked_related=[
+                    {
+                        "id": "paper-9",
+                        "title": "Fixture Related One",
+                        "abstract": "fixture abstract one",
+                        "link": "https://arxiv.org/abs/1234.5678",
+                        "llm_tags": ["query:RL"],
+                        "llm_score": 0.95,
+                    },
+                    {
+                        "id": "paper-8",
+                        "title": "Fixture Related Two",
+                        "abstract": "fixture abstract two",
+                        "link": "https://openreview.net/forum?id=test-paper",
+                        "llm_tags": ["query:RL"],
+                        "llm_score": 0.88,
+                    },
+                ],
+            )
+
+            workspace = docs_dir / "seed-papers" / "demo-request"
+            related_files = sorted((workspace / "related").glob("*.md"))
+            self.assertEqual([path.name for path in related_files], ["paper-8.md", "paper-9.md"])
+            self.assertEqual(result["related_page_paths"], ["related/paper-9.md", "related/paper-8.md"])
+            self.assertIn("Fixture Related One", (workspace / "index.md").read_text(encoding="utf-8"))
+
+    def test_load_ranked_related_fixture_parses_list_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_path = Path(tmp) / "ranked-related.json"
+            fixture_path.write_text(
+                json.dumps([
+                    {"id": "paper-1", "title": "Fixture A", "link": "https://arxiv.org/abs/1111.1111"},
+                    {"id": "paper-2", "title": "Fixture B", "llm_tags": ["query:test"]},
+                ]),
+                encoding="utf-8",
+            )
+
+            ranked = self.mod._load_ranked_related_fixture(str(fixture_path))
+
+            self.assertEqual([item["id"] for item in ranked], ["paper-1", "paper-2"])
+            self.assertEqual(ranked[0]["link"], "https://arxiv.org/abs/1111.1111")
+            self.assertEqual(ranked[1]["llm_tags"], ["query:test"])
+
+    def test_load_ranked_related_fixture_rejects_non_list_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_path = Path(tmp) / "ranked-related.json"
+            fixture_path.write_text(json.dumps({"id": "paper-1"}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "Expected ranked related fixture list"):
+                self.mod._load_ranked_related_fixture(str(fixture_path))
+
+    def test_load_ranked_related_fixture_rejects_missing_id_or_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_path = Path(tmp) / "ranked-related.json"
+            fixture_path.write_text(json.dumps([{"id": "paper-1"}]), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "Expected ranked related fixture item with id/title"):
+                self.mod._load_ranked_related_fixture(str(fixture_path))
+
 
 if __name__ == "__main__":
     unittest.main()

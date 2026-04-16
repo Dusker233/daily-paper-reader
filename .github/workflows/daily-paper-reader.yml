@@ -33,6 +33,10 @@ on:
         description: "(Optional) Allowed local rerank model when rerank_provider=local"
         required: false
         default: "BAAI/bge-reranker-v2-m3"
+      seed_smoke:
+        description: "Run seed paper smoke validation on hosted Actions"
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -43,6 +47,7 @@ concurrency:
 
 jobs:
   run:
+    if: github.event.inputs.seed_smoke != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -52,7 +57,6 @@ jobs:
       PYTHONUNBUFFERED: "1"
       RERANK_PROVIDER: ${{ github.event.inputs.rerank_provider || '' }}
       RERANK_MODEL: ${{ github.event.inputs.rerank_model || '' }}
-
     steps:
       - name: Random delay to spread scheduled runs
         if: github.event_name == 'schedule'
@@ -356,3 +360,126 @@ jobs:
           git fetch origin "$branch"
           git rebase -X theirs "origin/$branch"
           git push origin HEAD:"$branch"
+
+  seed_smoke:
+    if: github.event.inputs.seed_smoke == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deps (skip sqlite3)
+        run: |
+          python - <<'PY'
+          import re
+          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
+          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\\b", l)]
+          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
+          PY
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system -r /tmp/req.txt
+
+      - name: Run seed paper processor unit tests
+        run: |
+          python -m unittest tests.test_seed_paper_processor tests.test_daily_workflow
+
+      - name: Create seed smoke fixtures
+        run: |
+          set -euo pipefail
+          REQUEST_ID="seed-smoke-request"
+          REQUEST_DIR="requests/seed_papers/${REQUEST_ID}"
+          mkdir -p "$REQUEST_DIR"
+          python - <<'PY'
+          import fitz
+          from pathlib import Path
+
+          request_dir = Path("requests/seed_papers/seed-smoke-request")
+          pdf_path = request_dir / "seed-paper.pdf"
+          doc = fitz.open()
+          page = doc.new_page()
+          page.insert_text((72, 72), "Seed smoke paper for hosted CI validation")
+          doc.save(pdf_path)
+          doc.close()
+          PY
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          request_dir = Path("requests/seed_papers/seed-smoke-request")
+          request_path = request_dir / "request.json"
+          request_path.write_text(
+              json.dumps(
+                  {
+                      "file_name": "seed-paper.pdf",
+                      "source_path": "requests/seed_papers/seed-smoke-request/seed-paper.pdf",
+                      "related_count": 2,
+                      "selected_tags": ["seed", "smoke"],
+                      "mode": "both",
+                      "notes": "Hosted GitHub Actions seed smoke validation",
+                  },
+                  ensure_ascii=False,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          fixture_path = request_dir / "ranked-related.json"
+          fixture_path.write_text(
+              json.dumps(
+                  [
+                      {
+                          "id": "fixture-related-1",
+                          "title": "Fixture Related One",
+                          "abstract": "First hosted fixture abstract.",
+                          "link": "https://arxiv.org/abs/2401.00001",
+                          "llm_tags": ["query:seed", "query:smoke"],
+                          "llm_score": 0.95,
+                      },
+                      {
+                          "id": "fixture-related-2",
+                          "title": "Fixture Related Two",
+                          "abstract": "Second hosted fixture abstract.",
+                          "link": "https://openreview.net/forum?id=seed-smoke-fixture",
+                          "llm_tags": ["query:seed", "query:smoke"],
+                          "llm_score": 0.88,
+                      },
+                  ],
+                  ensure_ascii=False,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run seed paper smoke flow
+        run: |
+          set -euo pipefail
+          REQUEST_ID="seed-smoke-request"
+          REQUEST_PATH="requests/seed_papers/${REQUEST_ID}/request.json"
+          FIXTURE_PATH="requests/seed_papers/${REQUEST_ID}/ranked-related.json"
+          python src/seed_paper_processor.py \
+            --request-path "$REQUEST_PATH" \
+            --request-id "$REQUEST_ID" \
+            --seed-mode both \
+            --ranked-related-fixture "$FIXTURE_PATH"
+          test -f "docs/seed-papers/${REQUEST_ID}/index.md"
+          test -f "docs/seed-papers/${REQUEST_ID}/seed-paper.md"
+          test -f "docs/README.md"
+          test -f "docs/_sidebar.md"
+
+      - name: Upload seed smoke docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: seed-smoke-docs
+          path: |
+            docs/seed-papers/seed-smoke-request
+            docs/README.md
+            docs/_sidebar.md
