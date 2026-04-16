@@ -950,9 +950,14 @@ class BltClient(LLMClient):
                 response.raise_for_status()
                 try:
                     response_data = response.json()
-                except ValueError:
-                    print("Rerank 响应无法解析为 JSON，原始文本预览:", response.text[:500])
-                    raise
+                except ValueError as exc:
+                    response_preview = str(getattr(response, "text", "") or "")[:500]
+                    content_type = str((getattr(response, "headers", {}) or {}).get("content-type") or "").strip()
+                    print("Rerank 响应无法解析为 JSON，原始文本预览:", response_preview)
+                    raise requests.exceptions.HTTPError(
+                        f"Non-JSON rerank response from {request_url} (content-type={content_type or 'unknown'})",
+                        response=response,
+                    ) from exc
 
                 if isinstance(response_data, dict) and 'error' in response_data:
                     err = response_data.get('error') or {}

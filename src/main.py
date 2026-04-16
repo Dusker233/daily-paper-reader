@@ -982,13 +982,26 @@ def main() -> None:
             f"[INFO] Step 3 - Rerank 已跳过：{rerank_reason}",
             flush=True,
         )
-        prepare_rerank_fallback(rrf_path, rerank_path)
+        if not prepare_rerank_fallback(rrf_path, rerank_path):
+            raise RuntimeError(
+                f"Step 3 fallback 生成失败：{rrf_path} -> {rerank_path}"
+            )
     else:
-        run_step(
-            "Step 3 - Rerank",
-            [python, os.path.join(SRC_DIR, "3.rank_papers.py")],
-            env=rerank_step_env,
-        )
+        try:
+            run_step(
+                "Step 3 - Rerank",
+                [python, os.path.join(SRC_DIR, "3.rank_papers.py")],
+                env=rerank_step_env,
+            )
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"[WARN] Step 3 - Rerank 失败，将回退到 sim_scores 兜底结果: {exc}",
+                flush=True,
+            )
+            if not prepare_rerank_fallback(rrf_path, rerank_path):
+                raise RuntimeError(
+                    f"Step 3 - Rerank 失败且 fallback 生成失败：{rrf_path} -> {rerank_path}"
+                ) from exc
     if trace_ids:
         print_trace_retrieval("RERANK", rerank_path, trace_ids)
     step4_args = [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")]
