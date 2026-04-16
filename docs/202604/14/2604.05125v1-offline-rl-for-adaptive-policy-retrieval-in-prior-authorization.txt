@@ -1,0 +1,531 @@
+Title: Offline RL for Adaptive Policy Retrieval in Prior Authorization
+
+URL Source: https://arxiv.org/pdf/2604.05125v1
+
+Published Time: Wed, 08 Apr 2026 00:09:43 GMT
+
+Number of Pages: 9
+
+Markdown Content:
+# Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+Ruslan Sharifullin 1 Maxim Gorshkov 1 Hannah Clay 1
+
+Abstract 
+
+Prior authorization (PA) requires interpretation of complex and fragmented coverage policies, yet ex-isting retrieval-augmented systems rely on static top-K strategies with fixed numbers of retrieved sections. Such fixed retrieval can be inefficient and gather irrelevant or insufficient information. We model policy retrieval for PA as a sequential decision-making problem, formulating adaptive retrieval as a Markov Decision Process (MDP). In our system, an agent iteratively selects policy chunks from a top-K candidate set or chooses to stop and issue a decision. The reward balances decision correctness against retrieval cost, captur-ing the trade-off between accuracy and efficiency. We train policies using Conservative Q-Learning (CQL), Implicit Q-Learning (IQL), and Direct Preference Optimization (DPO) in an offline RL setting on logged trajectories generated from base-line retrieval strategies over synthetic PA requests derived from publicly available CMS coverage data. On a corpus of 186 policy chunks spanning 10 CMS procedures, CQL achieves 92% decision accuracy (+30 percentage points over the best fixed-K baseline) via exhaustive retrieval, while IQL matches the best baseline accuracy using 44% fewer retrieval steps and achieves the only posi-tive episodic return among all policies. Transition-level DPO matches CQL’s 92% accuracy while using 47% fewer retrieval steps (10.6 vs. 20.0), occupying a “selective-accurate” region on the Pareto frontier that dominates both CQL and BC. A behavioral cloning baseline matches CQL, con-firming that advantage-weighted or preference-based policy extraction is needed to learn selec-tive retrieval. Lambda ablation over step costs 
+
+λ ∈ {0.05 , 0.1, 0.2} reveals a clear accuracy-efficiency inflection: only at λ = 0 .2 does CQL transition from exhaustive to selective retrieval.        
+
+> 1Stanford University. Correspondence to: Ruslan Shar-ifullin <rshar@stanford.edu >,Maxim Gorshkov <maxim-gor@stanford.edu >, Hannah Clay <hclay116@stanford.edu >.
+
+1. Introduction 
+
+Prior authorization (PA) describes the requirement that cer-tain medical procedures be approved as medically necessary to receive coverage by insurance. These decisions require interpretation of complex policies often using information distributed across multiple documents. Existing retrieval-augmented approaches typically rely on static top-K strate-gies, retrieving a fixed number of policy sections/chunks (Lewis et al., 2020). Such fixed retrieval is fundamentally misaligned with the sequential nature of evidence gathering: it may retrieve unnecessary content, incur avoidable latency and cost, and still miss decisive but lower-ranked sections. We frame policy retrieval for PA as a sequential decision-making problem (Nogueira & Cho, 2017). We argue for adaptive retrieval, learning both which section to retrieve next and when to stop, to improve efficiency while main-taining accuracy. We model adaptive policy retrieval as a Markov Decision Process (MDP) in which the agent ob-serves the prior authorization request and its retrieval history, selects a candidate policy chunk from a top-K set, or chooses to terminate and issue a determination (approve, deny, or pend). The reward function balances decision correctness against retrieval cost, thus capturing the trade-off between accuracy and efficiency. To ensure safety and reproducibil-ity, we train policies using Conservative Q-Learning (CQL) (Kumar et al., 2020), Implicit Q-Learning (IQL) (Kostrikov et al., 2022), and Direct Preference Optimization (DPO) (Rafailov et al., 2023) in an offline reinforcement learning setting (Levine et al., 2020), leveraging logged trajectories generated from baseline retrieval strategies over synthetic PA requests derived from publicly available CMS coverage data. This formulation enables the system to learn cost-aware, sequential retrieval strategies while avoiding unsafe exploration in a healthcare context. 
+
+2. Related Work 
+
+Retrieval-augmented generation (RAG) couples parametric models with non-parametric document retrieval, typically retrieving a fixed top-K set of passages before downstream reasoning (Lewis et al., 2020). While dense retrieval and passage ranking methods have substantially improved per-formance on knowledge-intensive tasks, retrieval depth is generally treated as a static hyperparameter rather than an 
+
+> arXiv:2604.05125v1 [cs.IR] 6 Apr 2026
+
+Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+adaptive decision. Recent work has begun to address this limitation: Self-RAG (Asai et al., 2024) trains a language model to generate reflection tokens that decide whether to retrieve on-demand; FLARE (Jiang et al., 2023) monitors token-level confidence during generation and triggers re-trieval when confidence drops; and Adaptive-RAG (Jeong et al., 2024) trains a classifier to route queries to different retrieval tiers based on complexity. However, these ap-proaches rely on supervised signals or heuristic thresholds rather than learned cost-aware stopping policies, and none target safety-critical domains where online exploration is impermissible. Previous work has explored RL for infor-mation retrieval and document selection, modeling retrieval as a sequential process that can refine queries or select ev-idence over multiple steps (Nogueira & Cho, 2017). Our work builds on this perspective by explicitly incorporating a stopping decision and optimizing for cost-aware evidence gathering in the healthcare domain using offline RL. Our training framework draws from offline RL (Levine et al., 2020) where policies are learned from fixed datasets without environment interaction. Conservative Q-Learning (CQL) penalizes Q-values for out-of-distribution actions, addressing distributional shift (Kumar et al., 2020). Direct Preference Optimization (DPO) offers an alternative that directly optimizes the policy using preference comparisons (Rafailov et al., 2023), originally for language model align-ment but adaptable to sequential MDPs via per-transition preference pairs. Within healthcare, prior authorization has primarily been addressed through workflow standardization and interop-erability initiatives. The HL7 Da Vinci Burden Reduction implementation guides (HL7 International, 2024) define FHIR-based APIs for automating PA submission and adju-dication, but do not address how a system should consult underlying policy text to gather evidence for a coverage determination. Our work is complementary: we frame pol-icy consultation itself as a learned, cost-aware sequential decision process. 
+
+3. Approach 
+
+Figure 1 shows the system architecture. At each step t,the agent observes state st (request embedding ⊕ retrieval history), selects a chunk from the top-K candidates or stops, and receives a step cost −λ or terminal reward ±1.
+
+3.1. Data & Simulator 
+
+• Policy Corpus & Retrieval. We constructed a corpus of 186 policy chunks from the CMS Medicare Cover-age Database (MCD), spanning 10 medical procedures (Table 1). Source documents include Local Coverage Determinations (LCD), National Coverage Determi-              
+
+> PA Request
+> CPT, ICD-10, age
+> S-BERT Encoder
+> all-MiniLM-L6-v2
+> ereq
+> 384-d ¯ehist
+> 384-d
+> State st= [ ereq ;¯ehist ]
+> 768-dim vector
+> Policy πθ
+> MLP: 768 →256 →256 →11
+> CQL IQL DPO BC
+> Action at
+> Corpus
+> 186 chunks
+> Retrieve
+> at∈ { 0-9}STOP
+> at= 10
+> Update ¯ehist
+> rt=−λ
+> Oracle
+> R∈{+1 ,−1}
+> top-K
+> st+1
+> concatenate
+
+Figure 1. System architecture. The agent iteratively retrieves pol-icy chunks from a Sentence-BERT-indexed corpus and decides when to stop. The oracle evaluates the PA request using only re-trieved chunks. 
+
+nations (NCD), and Local Coverage Articles (LCA), parsed into paragraph-level chunks. Each chunk is encoded into a 384-dimensional vector using Sentence-BERT ( all-MiniLM-L6-v2 ). At the corpus level, 31% of chunks are shared across procedures, and billing doc-umentation from one procedure can rank higher than coverage-specific chunks for another due to shared ad-ministrative terminology. This cross-procedure seman-tic interference creates a realistic retrieval challenge. The simulator returns the top-K chunks by cosine sim-ilarity not yet selected. • Synthetic Request Generation. A rule-based gener-ator creates synthetic PA requests for 10 CMS proce-dures (Table 1). For each procedure, it samples a diag-nosis code from the procedure’s ICD-10 set, a patient age from a clinically plausible range, and a ground-truth outcome (approve, deny, or pend) with balanced distribution. These fields are encoded via Sentence-BERT to produce the query vector eq . Procedures span a range of retrieval difficulty: easy ones (Colonoscopy, Mammography) have distinctive terminology, while hard ones (CT Head, MRI Lumbar) suffer from cross-procedure interference. • Oracle & Evaluation. A rule-based oracle establishes ground truth by evaluating each request against the full corpus. When the agent stops, the oracle re-evaluates using only retrieved chunks. The agent succeeds if it Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+retrieved sufficient evidence for the oracle to reach the correct decision. 
+
+Concrete episode walkthrough. Consider a PA request for MRI Lumbar Spine (CPT 72148) for a 55-year-old pa-tient with diagnosis L54 (dorsalgia). The request genera-tor produces structured metadata (procedure code, diagno-sis, age, prior treatments), which the retriever encodes via Sentence-BERT and scores against all 186 corpus chunks by cosine similarity. The agent observes the initial state s0
+
+(request embedding ⊕ zero vector) and iteratively selects chunks. Suppose the agent retrieves 3 chunks: a coverage-criteria chunk referencing indications for lumbar MRI, a documentation-requirements chunk listing clinical prereq-uisites, and a billing-article chunk on CPT 72148 coding. After each retrieval step, the state updates via mean-pooling, incurring cost −λ. The agent then selects the stop action (a = K). The oracle evaluates the request using only these 3 retrieved chunks : it checks whether the retrieved evidence contains a matching diagnosis code and coverage criteria. If the oracle’s decision (e.g. “approve”) matches the ground-truth oracle decision (computed using the full corpus), the agent receives rT = +1 ; otherwise rT = −1. The total return for this episode is G = +1 − 3λ.
+
+Corpus composition. Table 1 summarizes per-procedure statistics. By type: 107 coverage-criteria, 71 billing, and 8 exclusion chunks. Shared-chunk ratios range from 0% (Colonoscopy, Speech-Language) to 77–100% (imaging procedures), driving the cross-procedure interference that makes imaging procedures hardest (Figure 7). 
+
+Dataset splits. We generated 2,000 training and 200 test episodes, stratified across procedures. Ground-truth deci-sions: 37.6% approve, 11.9% deny, 50.5% pend.                                                    
+
+> Table 1. Corpus and dataset composition per procedure. Shared =chunks appearing in multiple procedures’ retrieval pools. PROCEDURE CHUNKS SHARED TRAIN TEST
+> 45378 (C OLONOSCOPY )30 0201 23 70450 (CT H EAD )56 54 195 27 70486 (CT M AXFAC .) 43 43 199 19 70553 (MRI B RAIN )54 54 208 28 71260 (CT C HEST )44 42 205 20 72148 (MRI L UMBAR )55 49 178 20 74177 (CT A BDOMEN )46 42 193 12 77067 (M AMMOGRAPHY )41 31 191 18 92507 (S PEECH -L ANG .) 48 0217 13 92550 (T YMPANOMETRY )58 31 213 20
+> TOTAL 186 57 2000 200
+
+3.2. MDP Formulation 
+
+We formulate adaptive policy retrieval as a finite-horizon Markov Decision Process (S, A, P, R, γ, ρ 0), where S is the state space, A the action space, P (s′|s, a ) the transition ker-nel, R(s, a ) the reward function, γ the discount factor, and 
+
+ρ0 the initial state distribution over PA requests. Episodes run for at most H = 20 steps. • States. The state st ∈ R768 concatenates two 384-dimensional components: (1) a request embedding from the PA request text via a sentence-transformer encoder, and (2) the element-wise mean of all chunk embeddings retrieved so far (zero if none). This cap-tures both what the agent is looking for and what it knows so far , maintaining constant dimensionality and Markovianity. • Actions. The agent selects from A = {0, 1, . . . , K }:actions 0 through K −1 select the corresponding can-didate from a top-K list ranked by cosine similarity (action semantics are state-dependent), and action K
+
+stops retrieval. We use K = 10 .• Transitions. Deterministic: selecting a ∈ { 0, . . . , K −
+
+1} appends the chunk, updates the state via mean-pooling, and refreshes the candidate list. The stop action or reaching H terminates the episode. • Rewards. Each retrieval incurs cost rt = −λ (λ > 0,ablated over {0.05 , 0.1, 0.2}). Upon stopping, the ora-cle evaluates using only retrieved chunks; the terminal reward is rT = +1 if the decision matches ground truth, −1 otherwise. Total return: G = rT − λ · n. We use γ = 1 .0, directly trading off correctness against cumulative retrieval cost. 
+
+3.3. Conservative Q-Learning 
+
+All algorithms are implemented from scratch in PyTorch without external RL libraries. We train the retrieval policy using Conservative Q-Learning (Kumar et al., 2020), an offline reinforcement learning algorithm. Offline RL is necessary because we cannot deploy untrained agents in a healthcare setting to collect online data; instead, we train on a fixed dataset of episodes collected by behavior policies (uniform random, fixed-K retrieval, and a heuristic policy). 
+
+Q-Network. We approximate the action-value function 
+
+Q(s, a ) with a 3-layer multi-layer perceptron: 768 (input) to 256 (ReLU) to 256 (ReLU) to 11 (output, no activation). The network has 265,483 trainable parameters. We maintain two copies of the network: a main network updated at every training step, and a target network synchronized every 10 epochs via hard update for stable Bellman targets. 
+
+Loss Function. The Conservative Q-Learning loss consists of two components: 
+
+L = LT D + α · Lcons (1) Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+The temporal difference loss minimizes the squared Bellman error: 
+
+LT D = E(s,a,r,s ′)∼D [( Q(s, a )
+
+− (r + γ max  
+
+> a′
+
+Qtarget (s′, a ′))) 2] (2) The conservative penalty discourages overestimation of out-of-distribution actions: 
+
+Lcons = Es∼D
+
+h
+
+log X
+
+> a
+
+exp( Q(s, a )) 
+
+− Ea∼D [Q(s, a )] 
+
+i (3) The coefficient α controls the degree of conservatism. We use α = 1.0 as the initial default and sweep over 
+
+{0.1, 0.5, 1.0}. This penalty is critical in our setting be-cause the offline dataset covers only a small fraction of the continuous state space, making standard Q-learning prone to overestimating Q-values for state-action pairs not seen during data collection. 
+
+Training. We train using Adam (learning rate 3 × 10 −4)with gradient clipping (max norm 1.0) for 200 epochs. Each epoch samples a batch of 256 transitions uniformly from the replay buffer. We use an undiscounted formulation (γ = 1 .0) because episodes are short (at most 20 steps). Training metrics (loss, TD error, conservative penalty, mean Q-values) are logged for convergence monitoring. The total loss converges from 2.62 to 1.71 over training. 
+
+3.4. Implicit Q-Learning 
+
+As a second offline RL algorithm, we train the retrieval pol-icy using Implicit Q-Learning (IQL) (Kostrikov et al., 2022). While CQL addresses distributional shift by explicitly pe-nalizing Q-values for out-of-distribution actions, IQL takes a different approach: it avoids querying the value of unseen actions altogether. Instead of computing max a′ Q(s′, a ′)
+
+in the Bellman target, IQL learns a separate state-value function V (s) that approximates the value of good actions through expectile regression. This makes training more sta-ble because the Q-network never needs to evaluate actions outside the dataset. Including IQL alongside CQL lets us compare two philosophically different strategies for offline RL on the same retrieval task. 
+
+Architecture. IQL maintains four networks (768 →256 →256): Q-network Qθ (11 outputs), tar-get Q¯θ (hard update every 10 epochs), value network Vψ
+
+(scalar), and policy πϕ (action logits). 
+
+Loss Functions. IQL training consists of three coupled losses. The value network is trained via asymmetric expec-tile regression: 
+
+LV = E(s,a )∼D [Lτ 
+
+> 2
+
+(Q¯θ (s, a ) − Vψ (s))] (4) where Lτ 
+
+> 2
+
+(u) = |τ − 1(u < 0) | · u2 is the asymmetric squared loss. Setting τ > 0.5 biases V toward the upper expectile of Q, so V learns to approximate the value of better-than-average actions without ever maximizing over unseen actions. We use τ = 0 .9.The Q-network is updated via standard TD learning, but uses 
+
+V (s′) instead of max a′ Q(s′, a ′) as the bootstrap target: 
+
+LQ = E(s,a,r,s ′)∼D
+
+h
+
+(Qθ (s, a ) − (r + γV ψ (s′))) 2i
+
+(5) This avoids the maximization step that causes overestima-tion in standard offline Q-learning. Finally, the policy is extracted through advantage-weighted behavioral cloning: 
+
+Lπ = −E(s,a )∼D [exp( β · A(s, a )) · log πϕ(a | s)] (6) where A(s, a ) = Q¯θ (s, a ) − Vψ (s) is the advantage and 
+
+β is an inverse temperature that controls how strongly the policy concentrates on high-advantage actions. Actions with positive advantage receive exponentially higher weight in the supervised loss, while low-advantage actions are effec-tively down-weighted. The advantage weights are clamped at 100.0 to prevent numerical overflow. 
+
+Training. All three networks are trained jointly using Adam (learning rate 10 −3) with gradient clipping (max norm 1.0) for 1000 epochs. Each epoch samples a batch of 256 tran-sitions from the shared replay buffer. We use τ = 0 .9 and 
+
+β = 10 .0, empirically tuned for the PA retrieval environ-ment; the Kostrikov et al. defaults ( τ = 0 .7, β = 3 .0, 200 epochs) underperform on this corpus. At inference time, the learned policy network πϕ selects the action with the highest logit, with invalid actions masked out. 
+
+3.5. Behavioral Cloning Baseline 
+
+We include a behavioral cloning (BC) baseline (Pomerleau, 1991) to test whether RL adds value beyond imitation. BC minimizes cross-entropy LBC = −E(s,a )∼D [log πϕ(a | s)] 
+
+using no reward information, no bootstrapping, and no tem-poral difference learning. It reuses the same MLP archi-tecture (768 →256 →256 →11) and is trained with Adam (lr 
+
+10 −3) for 100 epochs. 
+
+3.6. Direct Preference Optimization 
+
+As a fourth training algorithm, we adapt Direct Preference Optimization (DPO) (Rafailov et al., 2023) from language model alignment to our sequential MDP. DPO sidesteps reward modeling by directly optimizing the policy on pref-erence pairs: given two behaviors, the policy learns to as-sign higher probability to the preferred one. In our setting, preference pairs are constructed from the offline dataset by comparing episodes with different returns. Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+Transition-level formulation. Standard DPO operates at the trajectory level, comparing full-episode log-probabilities. We found that trajectory-level DPO cannot extrapolate be-yond the episode lengths present in the training data (3–8 steps), which is critical because evaluation runs for up to 20 steps. We therefore adopt a transition-level formulation analogous to token-level DPO in language models: prefer-ence pairs are constructed per retrieval step rather than per episode. Given a winner episode (higher return) and a loser episode (lower return), we pair their actions at each shared retrieval depth t, producing state-action preference tuples 
+
+(swt , a wt , s lt, a lt). This preserves gradient signal at each step and enables generalization to longer episodes at evaluation time. 
+
+Loss function. The DPO objective minimizes: 
+
+LDP O = −E(sw ,a w ,s l,a l) [log σ (β · ∆)] (7) where ∆ = log πθ (aw |sw )    
+
+> πref (aw|sw)
+
+− log πθ (al|sl)  
+
+> πref (al|sl)
+
+compares the log-probability ratios between the learned policy πθ and a frozen reference policy πref , and β controls the strength of the KL constraint. 
+
+Reference policy and BC warmup. The reference policy 
+
+πref is initialized via behavioral cloning for 200 epochs on the offline buffer, then frozen. A well-converged reference is critical: if πref is near-random, the KL constraint car-ries no useful information and DPO fine-tuning degrades. We verified BC warmup convergence (loss plateau at 0.88) before freezing. 
+
+Architecture and training. DPO reuses the same 3-layer MLP (768 →256 →256 →11) as CQL, IQL, and BC, main-taining two copies: the trainable policy πθ (initialized from 
+
+πref ) and the frozen reference πref . DPO is trained with Adam (lr 10 −4) for 2,000 epochs with β = 3 .0, gradient clipping at 1.0, and batch size 256. Hyperparameters were selected via a sweep over β ∈ { 0.5, 1.0, 3.0} (Section 4.4). 
+
+4. Experiments & Results 
+
+4.1. Experimental Setup 
+
+We train all agents on 2,000 offline episodes (8,352 transi-tions) from a mixture of behavior policies: FixedK( k ∈{3, 5}), Heuristic(0.8), and two epsilon-greedy variants. Each policy is evaluated on 200 held-out episodes. 
+
+4.2. Main Results 
+
+Table 2 presents on-policy evaluation results on the 186-chunk corpus with 10 CMS procedures. CQL achieves 92.0% accuracy, a 30 percentage-point im-provement over the best fixed baseline FixedK( k = 5 ) at 62.0%. However, CQL achieves this by exhaustively retriev-                           
+
+> Table 2. On-policy evaluation (200 episodes, 186 chunks) POLICY ACCURACY RETURN STEPS
+> DPO ( TRANSITION )92.0% −0.12 10.6
+> CQL 92.0% −1.06 20.0 BC ( IMITATION )92.0% −1.06 20.0 IQL 62.5% +0 .01 3.4 FIXED K( k= 5 )62.0% −0.26 6.0 FIXED K( k= 3 )54.0% −0.22 4.0 HEURISTIC (0.8) 51.0% −0.22 3.4
+
+ing all 20 steps in every episode, resulting in the highest retrieval cost and a negative return of −1.06 .IQL presents a contrasting strategy: it achieves 62.5% ac-curacy (matching FixedK( k = 5 )) in only 3.4 retrieval steps, 44% fewer steps than the baseline’s 6.0. IQL is the only policy with positive episodic return ( +0 .01 ), meaning it is the only policy where correct decisions outweigh retrieval costs. Transition-level DPO matches CQL’s 92.0% accuracy while using only 10.6 retrieval steps, a 47% reduction. Its return of 
+
+−0.12 is 89% better than CQL’s −1.06 , establishing DPO as the strongest overall policy: it achieves maximum accuracy with near-minimal retrieval cost. The per-step formulation enables DPO to generalize from the training data’s 3–8 step episodes to 20-step evaluation episodes, unlike trajectory-level DPO which is bounded by the episode lengths observed during training (see Section 3.6). Behavioral cloning (BC) exactly matches CQL at 92.0% accuracy and 20.0 steps. Since BC learns to imitate the behavior policy without any reward signal, this shows that CQL’s conservative penalty reinforces the exhaustive re-trieval pattern already present in the training data rather than discovering a novel strategy. IQL and DPO are the only algorithms that learn qualitatively different (selective) retrieval strategies: IQL through advantage-weighted pol-icy extraction, and DPO through per-transition preference learning. 
+
+4.3. Lambda Ablation 
+
+Table 3 shows the effect of varying the step cost λ on CQL training.              
+
+> Table 3. CQL lambda ablation (200 episodes)
+> λACCURACY STEPS BEHAVIOR
+> 0.05 92.0% 20.0 EXHAUSTIVE
+> 0.1 ( DEFAULT )92.0% 20.0 EXHAUSTIVE
+> 0.2 91.5% 14.9 SELECTIVE
+
+At λ = 0 .05 and λ = 0 .1, the step cost is insufficient to overcome the accuracy benefit of exhaustive retrieval: Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+the penalty for 20 steps ( −20 λ = −1.0 at λ = 0 .05 ) is out-weighed by the +1 .0 terminal reward from correct decisions. At λ = 0 .2, the penalty per step doubles, making exhaus-tive retrieval too expensive. CQL learns selective retrieval, reducing steps from 20.0 to 14.9 while losing only 0.5 per-centage points of accuracy. Each lambda value requires a separately collected offline dataset because the reward sig-nal (including step cost) is baked into the replay buffer at collection time. 0.05 0.1 0.2        
+
+> Step Cost ( )
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Accuracy (%)
+> 92.0% 92.0% 91.5%
+> Accuracy
+> 0.05 0.1 0.2
+> Step Cost ( )
+> 0
+> 5
+> 10
+> 15
+> 20
+> Mean Steps
+> 20.0 20.0
+> 14.9
+> Mean Retrieval Steps
+> 0.05 0.1 0.2
+> Step Cost ( )
+> 2.5
+> 2.0
+> 1.5
+> 1.0
+> 0.5
+> 0.0
+> Mean Return
+> -0.11
+> -1.06
+> -1.96
+> Mean Episodic Return
+> CQL Performance Across Step Cost ( ) Values
+
+Figure 2. Lambda ablation: accuracy, mean steps, and mean return for CQL across step cost values λ ∈ { 0.05 , 0.1, 0.2}. At λ = 0 .2,CQL transitions from exhaustive to selective retrieval. 
+
+4.4. DPO Beta Ablation 
+
+Table 4 shows the effect of β (the KL constraint strength) on DPO’s accuracy-efficiency tradeoff. All configurations use transition-level DPO with 200 BC warmup epochs. 
+
+Table 4. DPO beta ablation (200 episodes, transition-level) 
+
+β EPOCHS ACCURACY RETURN STEPS 
+
+0.5 500 79.5% −0.45 11.4 1.0 1000 85.5% −0.31 11.2 
+
+3.0 2000 92.0% −0.12 10.6 
+
+Unlike CQL’s lambda ablation, which trades accuracy for ef-ficiency, DPO’s beta sweep reveals monotonic improvement: higher β improves both accuracy and return simultaneously while maintaining stable retrieval depth ( ≈11 steps). This is because higher β strengthens the KL constraint, keeping the policy closer to the well-converged BC reference and preventing distribution collapse. At β = 3 .0, DPO matches CQL’s 92% accuracy while using roughly half the retrieval steps. 
+
+4.5. Convergence Analysis 
+
+Both CQL and IQL training converge successfully with no NaN or divergence detected. CQL total loss decreases from 2.62 to 1.71 (35% reduction over 200 epochs). The conservative penalty decreases from 2.38 to 1.21 (49% re-duction), while TD loss increases from 0.24 to 0.49; this is expected behavior, as the conservative penalty shifts Bell-man targets. IQL Q-network TD loss converges from 0.24 to 0.01 (95% reduction over 1000 epochs), and policy loss from 2.06 to 0.94 (55% reduction). DPO converges in two phases: BC warmup loss from 2.38 to 0.88 (63% reduction over 200 epochs), followed by DPO loss from 0.69 to 0.35 (49% reduction over 2000 epochs) with preference accuracy increasing from 28% to 85%. 0 25 50 75 100 125 150 175 200                   
+
+> Epoch
+> 1.6
+> 1.8
+> 2.0
+> 2.2
+> 2.4
+> 2.6
+> CQL: Total Loss
+> CQL (2k corpus)
+> 0200 400 600 800 1000
+> Epoch
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> IQL: Q-Network TD Loss
+> IQL (2k corpus)
+> 025 50 75 100 125 150 175 200
+> Epoch
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> CQL: TD Loss
+> CQL (2k corpus)
+> 0200 400 600 800 1000
+> Epoch
+> 0
+> 2
+> 4
+> 6
+> 8
+> IQL: Policy Loss (AWR)
+> IQL (2k corpus)
+> Training Curves: CQL and IQL Primary Runs
+
+Figure 3. Training curves for CQL (200 epochs) and IQL (1000 epochs). Left: CQL total loss and TD loss. Right: IQL Q-network TD loss and policy loss. All metrics converge without divergence. 0 50 100 150 200     
+
+> Epoch
+> 0.75
+> 1.00
+> 1.25
+> 1.50
+> 1.75
+> 2.00
+> 2.25
+> BC Loss
+> (a) BC Warmup
+> Cross-entropy loss
+> 0500 1000 1500 2000
+> Epoch
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> DPO Loss
+> (b) DPO Fine-tuning
+> DPO loss
+> Pref. accuracy
+> 20
+> 40
+> 60
+> 80
+> 100
+> Preference Accuracy (%)
+
+Figure 4. DPO training curves. Left: BC warmup cross-entropy loss (200 epochs), converging from 2.38 to 0.88. Right: DPO loss (blue) and preference accuracy (red) over 2000 epochs. Preference accuracy reaches 85%, indicating the policy reliably assigns higher probability to preferred actions. 
+
+4.6. Off-Policy Evaluation 
+
+We evaluate all four trained policies using Weighted Im-portance Sampling (WIS, ratios clipped to [0 .01 , 100] ) and Fitted Q-Evaluation (FQE, 200 epochs per policy) on the training buffer. IQL achieves the best FQE estimate (least negative ˆQ), con-sistent with its positive on-policy return. DPO achieves the best WIS estimate ( −0.012 ) and second-best FQE ( −0.34 ), Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+Table 5. Off-policy evaluation estimates POLICY WIS FQE M EAN ˆQ
+
+CQL −0.055 −2.22 
+
+DPO −0.012 −0.34 
+
+IQL −0.021 −0.17 
+
+BC −0.084 −2.41 
+
+reflecting its combination of high accuracy and moderate re-trieval cost. CQL and BC show similar off-policy estimates (≈ − 2.3 FQE), reinforcing the finding that CQL’s policy is behaviorally equivalent to imitation. The rank ordering across OPE methods agrees with on-policy evaluation. 
+
+4.7. Statistical Significance 
+
+We perform paired t-tests on per-episode correctness in-dicators between policies (Table 6). DPO and CQL both significantly outperform all baselines at p < 0.001 , but DPO vs. CQL shows no significant accuracy difference (p = 1 .0), with DPO achieving the same accuracy at sub-stantially lower retrieval cost. 
+
+Table 6. Statistical significance: pairwise comparisons COMPARISON ∆ ACC p-VALUE 95% CI DPO VS CQL 0.0 PP – [0.0, 0.0] DPO VS IQL +29.5 PP 8.1 × 10 −17 [23.5, 36.0] DPO VS BC 0.0 PP – [0.0, 0.0] CQL VS IQL +29.5 PP 8.1 × 10 −17 [23.5, 36.0] CQL VS BC 0.0 PP – [0.0, 0.0] CQL VS FIXED K(3) +38.0 PP 2.0 × 10 −22 [31.5, 45.0] CQL VS FIXED K(5) +30.0 PP 3.9 × 10 −17 [23.5, 36.5] CQL VS HEURISTIC +41.0 PP 1.4 × 10 −24 [34.0, 48.0] 
+
+4.8. Accuracy-Efficiency Tradeoff 
+
+Figure 5 presents the Pareto frontier over all seven policies. CQL and BC occupy the top-right corner (high accuracy, high cost), while IQL sits on the Pareto frontier alongside FixedK( k = 5 ) but achieves the same accuracy in 44% fewer steps. DPO occupies a “selective-accurate” region of the frontier at (10.6, 92%), achieving the same accuracy as CQL/BC with 47% fewer retrieval steps. This position dom-inates both CQL and BC (same accuracy, lower cost), mak-ing them Pareto-suboptimal. The three-point Pareto frontier (IQL, DPO, and the origin) demonstrates that preference-based and advantage-weighted methods can learn retrieval strategies that value-based methods cannot. 
+
+4.9. Per-Procedure Analysis 
+
+Figure 7 reveals that aggregate accuracy masks substantial per-procedure variation. CQL, BC, and DPO all achieve 4 6 8 10 12      
+
+> 50
+> 60
+> 70
+> 80
+> 90
+> 100
+> Accuracy (%)
+> IQL
+> FixedK(3)
+> FixedK(5)
+> Heuristic(0.8)
+> DPO
+> CQL
+> IQL
+> BC
+> FixedK(3)
+> FixedK(5)
+> Heuristic(0.8)
+> DPO
+> Pareto frontier
+> 19.0 19.5 20.0 20.5 21.0
+> CQL BC
+> Mean Retrieval Steps
+> Accuracy vs Retrieval Efficiency
+
+Figure 5. Accuracy vs. retrieval steps for all seven policies. DPO achieves (10.6, 92%) on the Pareto frontier, dominating CQL and BC at (20, 92%). IQL achieves (3.4, 62.5%). 
+
+100% accuracy on 7 of 10 procedures, with the three hardest procedures – CT Head (70450), CT Maxillofacial (70486), and MRI Brain (70553) – driving their overall rates. These hard procedures share high cross-procedure semantic inter-ference, where billing and administrative chunks from other procedures crowd out coverage-specific evidence. DPO matches CQL and BC on every procedure (75%, 60%, and 74% on the hard three) while using fewer retrieval steps, con-firming that its selective strategy sacrifices no per-procedure accuracy. IQL accuracy drops most sharply on these same hard pro-cedures (10%, 33%, 16% respectively), confirming that aggressive early stopping is most vulnerable to corpus com-plexity. On easy procedures (Colonoscopy, Mammography, Speech-Language), all policies achieve 100%. 
+
+5. Discussion & Conclusion 
+
+Three distinct operating modes emerge from the same MDP formulation. CQL maximizes accuracy through exhaustive retrieval (92%, 20 steps). IQL maximizes cost-efficiency through learned stopping (62.5%, 3.4 steps). DPO bridges these two regimes, achieving CQL-level accuracy (92%) with moderate retrieval depth (10.6 steps), yielding the best accuracy-efficiency tradeoff. The CQL–IQL divergence has an algorithmic explanation: CQL’s conservative penalty pushes down Q-values for out-of-distribution actions, and the stop action ( a = K) appears only once per episode in the offline data while retrieval actions appear multiple times, so CQL suppresses stopping as out-of-distribution. IQL’s advantage-weighted policy extraction ( β = 10 .0) greedily selects the highest-return behavior from the dataset, and Offline RL for Adaptive Policy Retrieval in Prior Authorization CQL DPO IQL BC                               
+
+> Policy
+> 45378 (17 chunks)
+> 70450 (25 chunks)
+> 70486 (7 chunks)
+> 70553 (4 chunks)
+> 71260 (10 chunks)
+> 72148 (27 chunks)
+> 74177 (3 chunks)
+> 77067 (11 chunks)
+> 92507 (13 chunks)
+> 92550 (14 chunks)
+> Procedure Code
+> 2.2 1.0 0.2 2.2
+> 5.2 3.3 0.6 5.2
+> 0.5 0.3 0.1 0.5
+> 0.1 0.1 0.0 0.1
+> 0.3 0.0 0.0 0.3
+> 7.1 4.1 0.7 7.1
+> 0.3 0.2 0.0 0.3
+> 1.8 0.5 0.3 1.8
+> 0.9 0.1 0.0 0.9
+> 1.6 0.5 0.3 1.6
+> Procedure-level retrieval frequency
+> (mean chunks retrieved per episode)
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> 7
+> Mean chunks retrieved per episode
+
+Figure 6. Procedure-level retrieval frequency (mean chunks re-trieved per episode). CQL/BC retrieve broadly across all proce-dures; DPO retrieves selectively while maintaining CQL-level ac-curacy; IQL retrieves sparsely, focusing on high-relevance chunks. Colonoscopy, Diagn...       
+
+> (45378, n=20)
+> CT Head without Co...
+> (70450, n=20)
+> CT Maxillofacial w...
+> (70486, n=15)
+> MRI Brain with and...
+> (70553, n=19)
+> CT Chest with Cont...
+> (71260, n=18)
+> MRI Lumbar Spine
+> (72148, n=18)
+> CT Abdomen and Pel...
+> (74177, n=21)
+> Screening Mammogra...
+> (77067, n=27)
+> Speech-Language Pa...
+> (92507, n=17)
+> Tympanometry and R...
+> (92550, n=25)
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Accuracy (%)
+> Per-Procedure Accuracy Breakdown (All Policies)
+> CQL IQL BC FixedK(3) FixedK(5) Heuristic(0.8) DPO
+
+Figure 7. Per-procedure accuracy breakdown for all seven policies. CQL, BC, and DPO achieve 100% on 7/10 procedures; three imag-ing procedures with high cross-procedure semantic interference remain challenging for all policies. 
+
+under λ = 0 .1 with symmetric ±1 correctness rewards, stopping early at 62.5% accuracy yields higher expected return than exhaustive retrieval at 92%. Reducing λ to 0.05 partially mitigates this: IQL trained on the λ = 0 .05 
+
+buffer achieves 82% accuracy in 9.0 steps, but still falls short of DPO’s 92% accuracy in 10.6 steps, confirming that the preference-based approach addresses this tradeoff more effectively than reward tuning alone. Which mode is preferable depends on the deployment context: high-stakes decisions may warrant CQL’s thoroughness, high-volume settings benefit from IQL’s efficiency, and DPO offers a practical middle ground where both accuracy and cost matter. The BC-CQL equivalence confirms that CQL’s conservative penalty reinforces exhaustive retrieval present in the data rather than learning new strategies. DPO avoids this by oper-ating in policy space, learning when to stop naturally. A key methodological finding is that adapting DPO to sequential MDPs requires transition-level rather than trajectory-level optimization (Section 3.6), paralleling the difference be-tween sequence-level and token-level objectives in language modeling. Per-procedure analysis (Section 4.9) reveals that nearly all errors concentrate on three imaging procedures with high cross-procedure semantic interference from shared billing terminology. 
+
+Limitations. Our corpus uses synthetic CMS-derived re-quests and a rule-based oracle, which may not capture the full complexity of real PA decisions. The offline dataset is collected from relatively simple behavior policies, and richer behavior data may yield better offline RL perfor-mance. DPO’s transition-level formulation assumes that good per-step actions in winning episodes are independently preferable, which may not hold in all MDPs. 
+
+Future work. We plan to evaluate on production payer poli-cies with real clinical data, explore curriculum-based data collection strategies to improve coverage of hard procedures, and investigate whether DPO’s selective-accurate operat-ing mode transfers to other retrieval-augmented decision-making domains. A promising extension is quality-aware step rewards of the form rt = −λ + α · sim (eq , e at ), where the agent is rewarded for retrieving high-relevance chunks rather than treating all retrievals equally. 
+
+Author Contributions 
+
+• Ruslan Sharifullin: MDP formulation, CQL / IQL / DPO implementation, training pipeline, convergence analysis, lambda ablation, experimental evaluation, off-policy evaluation (WIS, FQE), statistical significance test, per-procedure analysis, poster, figure generation. • Maxim Gorshkov: data pipeline, PA simulator, corpus construction, oracle design, offline dataset generation, test suite. • Hannah Clay: related work, introduction, discussion, conclusion, abstract, poster design, evaluation harness and metrics. 
+
+Source Code 
+
+Source code, evaluation data, and the offline dataset are available at https://github.com/rl-team/ rl-adaptive-policy-retrieval .Offline RL for Adaptive Policy Retrieval in Prior Authorization 
+
+References 
+
+Asai, A., Wu, Z., Wang, Y., Sil, A., and Hajishirzi, H. Self-RAG: Learning to retrieve, generate, and critique through self-reflection. In International Conference on Learning Representations (ICLR) , 2024. HL7 International. Da Vinci Burden Reduction implemen-tation guides: CRD, DTR, PAS. https://hl7.org/ fhir/us/davinci-pas/ , 2024. Accessed: 2026-03-13. Jeong, S., Baek, J., Cho, S., Hwang, S. J., and Park, J. C. Adaptive-RAG: Learning to adapt retrieval-augmented large language models through question complexity. In 
+
+Proceedings of NAACL , 2024. Jiang, Z., Xu, F. F., Gao, L., Sun, Z., Liu, Q., Dwivedi-Yu, J., Yang, Y., Callan, J., and Neubig, G. Active retrieval augmented generation. In Proceedings of EMNLP , 2023. Kostrikov, I., Nair, A., and Levine, S. Offline reinforce-ment learning with implicit Q-learning. In International Conference on Learning Representations (ICLR) , 2022. Kumar, A., Zhou, A., Tucker, G., and Levine, S. Con-servative q-learning for offline reinforcement learning. In Advances in Neural Information Processing Systems (NeurIPS) , 2020. Levine, S., Kumar, A., Tucker, G., and Fu, J. Offline re-inforcement learning: Tutorial, review, and perspectives. 
+
+arXiv preprint arXiv:2005.01643 , 2020. Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., K ¨uttler, H., Lewis, M., Yih, W.-t., Rockt ¨aschel, T., Riedel, S., and Kiela, D. Retrieval-augmented genera-tion for knowledge-intensive NLP tasks. In Advances in Neural Information Processing Systems (NeurIPS) , 2020. Nogueira, R. and Cho, K. Task-oriented query reformulation with reinforcement learning. In Proceedings of EMNLP ,2017. Pomerleau, D. A. Efficient training of artificial neural net-works for autonomous navigation. volume 3, pp. 88–97, 1991. Rafailov, R., Sharma, A., Mitchell, E., Ermon, S., Manning, C. D., and Finn, C. Direct preference optimization: Your language model is secretly a reward model. In Advances in Neural Information Processing Systems (NeurIPS) ,2023.

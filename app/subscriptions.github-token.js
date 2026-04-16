@@ -2,13 +2,72 @@
 // 负责：本地存储 Token、验证权限、更新按钮与信息区状态
 
 window.SubscriptionsGithubToken = (function () {
-  // 从本地存储加载 GitHub Token 数据
+  const GITHUB_TOKEN_STORAGE_KEY = 'github_token_data';
+
+  const sanitizeGithubTokenData = (data) => {
+    if (!data || typeof data !== 'object') {
+      return null;
+    }
+    const sanitized = {
+      verified: data.verified === true,
+      login: String(data.login || '').trim(),
+      name: String(data.name || '').trim(),
+      repo: String(data.repo || '').trim(),
+      scopes: Array.isArray(data.scopes)
+        ? data.scopes.map((item) => String(item || '').trim()).filter(Boolean)
+        : [],
+      savedAt: String(data.savedAt || '').trim(),
+    };
+    if (!sanitized.verified && !sanitized.login && !sanitized.name && !sanitized.repo && !sanitized.scopes.length && !sanitized.savedAt) {
+      return null;
+    }
+    return sanitized;
+  };
+
+  const loadSessionGithubToken = () => {
+    try {
+      const session = window.DPRSecretSession || {};
+      if (typeof session.getGithubToken === 'function') {
+        const token = String(session.getGithubToken() || '').trim();
+        return token || null;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  const saveSessionGithubToken = (token) => {
+    const normalized = String(token || '').trim();
+    try {
+      const session = window.DPRSecretSession || {};
+      if (typeof session.setSessionGithubToken === 'function') {
+        session.setSessionGithubToken(normalized);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const clearSessionGithubToken = () => {
+    saveSessionGithubToken('');
+  };
+
+  // 从本地存储加载 GitHub Token 验证结果（不再持久化原始 PAT）
   const loadGithubToken = () => {
     try {
-      const tokenData = localStorage.getItem('github_token_data');
+      const tokenData = localStorage.getItem(GITHUB_TOKEN_STORAGE_KEY);
       if (tokenData) {
         const data = JSON.parse(tokenData);
-        return data;
+        const sanitized = sanitizeGithubTokenData(data);
+        if (!sanitized) {
+          localStorage.removeItem(GITHUB_TOKEN_STORAGE_KEY);
+          return null;
+        }
+        if (Object.prototype.hasOwnProperty.call(data, 'token')) {
+          localStorage.setItem(GITHUB_TOKEN_STORAGE_KEY, JSON.stringify(sanitized));
+        }
+        return sanitized;
       }
     } catch (e) {
       console.error('Failed to load GitHub token:', e);
@@ -16,10 +75,15 @@ window.SubscriptionsGithubToken = (function () {
     return null;
   };
 
-  // 保存 GitHub Token 数据到本地存储
+  // 保存 GitHub Token 验证结果到本地存储（仅保存非敏感元数据）
   const saveGithubToken = (data) => {
     try {
-      localStorage.setItem('github_token_data', JSON.stringify(data));
+      const sanitized = sanitizeGithubTokenData(data);
+      if (!sanitized) {
+        localStorage.removeItem(GITHUB_TOKEN_STORAGE_KEY);
+        return;
+      }
+      localStorage.setItem(GITHUB_TOKEN_STORAGE_KEY, JSON.stringify(sanitized));
     } catch (e) {
       console.error('Failed to save GitHub token:', e);
     }
@@ -27,8 +91,9 @@ window.SubscriptionsGithubToken = (function () {
 
   // 清除 GitHub Token 数据
   const clearGithubToken = () => {
+    clearSessionGithubToken();
     try {
-      localStorage.removeItem('github_token_data');
+      localStorage.removeItem(GITHUB_TOKEN_STORAGE_KEY);
     } catch (e) {
       console.error('Failed to clear GitHub token:', e);
     }
@@ -183,18 +248,18 @@ window.SubscriptionsGithubToken = (function () {
     }
   };
 
-  // 优先从密钥配置（secret.private 解密后的 decoded_secret_private）中获取 GitHub Token；
-  // 若不存在，则回退到旧的本地存储 Token。
+  // 优先使用密钥会话模块提供的 GitHub Token；旧验证 UI 也通过同一会话 accessor 落到内存态。
   const getTokenForConfig = () => {
-    const secret = window.decoded_secret_private || {};
-    if (secret.github && secret.github.token) {
-      return String(secret.github.token || '').trim();
+    try {
+      const session = window.DPRSecretSession || {};
+      if (typeof session.getGithubToken === 'function') {
+        const token = String(session.getGithubToken() || '').trim();
+        if (token) return token;
+      }
+    } catch {
+      // ignore
     }
-    const tokenData = loadGithubToken();
-    if (tokenData && tokenData.token) {
-      return String(tokenData.token || '').trim();
-    }
-    return null;
+    return loadSessionGithubToken();
   };
 
   // 基于 Token 推断仓库 owner/name（复用 verifyGithubToken 的逻辑）
@@ -307,6 +372,138 @@ window.SubscriptionsGithubToken = (function () {
       return /sha|blob|latest|expected/.test(message);
     }
     return false;
+  };
+
+  const toPathSlug = (value, fallback = 'item') => {
+    const slug = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return slug || fallback;
+  };
+
+  const normalizeRepoWritePath = (value) => String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+/g, '/');
+
+  const isAllowedRepoWritePath = (value) => {
+    const normalized = normalizeRepoWritePath(value);
+    return /^requests\/seed_papers\/[a-z0-9][a-z0-9-]*\/(?:request\.json|[a-z0-9][a-z0-9-]*\.pdf)$/i.test(normalized);
+  };
+
+  const buildSeedPaperRequestPath = ({ requestId, fileName } = {}) => {
+    const normalizedRequestId = toPathSlug(requestId, 'seed-paper-request');
+    const rawFileName = String(fileName || 'seed-paper.pdf')
+      .trim()
+      .replace(/\\/g, '/')
+      .split('/')
+      .pop() || 'seed-paper.pdf';
+    const extensionMatch = rawFileName.match(/\.([a-z0-9]+)$/i);
+    const extension = extensionMatch ? extensionMatch[1].toLowerCase() : 'pdf';
+    const stem = rawFileName.replace(/\.[^.]+$/, '');
+    const normalizedFileName = `${toPathSlug(stem, 'seed-paper')}.${extension}`;
+    const dirPath = `requests/seed_papers/${normalizedRequestId}`;
+    return {
+      requestId: normalizedRequestId,
+      dirPath,
+      requestPath: `${dirPath}/request.json`,
+      filePath: `${dirPath}/${normalizedFileName}`,
+    };
+  };
+
+  const bytesToBase64 = (value) => {
+    const bytes = value instanceof Uint8Array
+      ? value
+      : (value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(0));
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      const chunk = bytes.subarray(offset, offset + 0x8000);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  };
+
+  const utf8ToBase64 = (value) => {
+    const text = String(value || '');
+    if (window.TextEncoder) {
+      return bytesToBase64(new TextEncoder().encode(text));
+    }
+    return btoa(unescape(encodeURIComponent(text)));
+  };
+
+  const writeRepoFile = async ({
+    owner,
+    repo,
+    token,
+    path,
+    contentText,
+    contentBase64,
+    contentBytes,
+    sha,
+    commitMessage,
+  } = {}) => {
+    const normalizedPath = normalizeRepoWritePath(path);
+    if (!isAllowedRepoWritePath(normalizedPath)) {
+      throw new Error(`不允许写入该仓库路径：${normalizedPath || '<empty>'}`);
+    }
+    const effectiveToken = token || getTokenForConfig();
+    if (!effectiveToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const repoInfo = owner && repo
+      ? { owner, repo, token: effectiveToken }
+      : await resolveRepoInfoFromToken(effectiveToken, false);
+
+    let encodedContent = '';
+    if (typeof contentBase64 === 'string' && contentBase64.trim()) {
+      encodedContent = contentBase64.trim();
+    } else if (typeof contentText === 'string') {
+      encodedContent = utf8ToBase64(contentText);
+    } else if (contentBytes instanceof ArrayBuffer) {
+      encodedContent = bytesToBase64(contentBytes);
+    } else if (ArrayBuffer.isView(contentBytes)) {
+      encodedContent = bytesToBase64(
+        new Uint8Array(contentBytes.buffer, contentBytes.byteOffset, contentBytes.byteLength),
+      );
+    } else {
+      throw new Error('写入仓库文件失败：缺少文件内容。');
+    }
+
+    const body = {
+      message: String(commitMessage || `chore: add ${normalizedPath}`),
+      content: encodedContent,
+    };
+    if (sha) {
+      body.sha = sha;
+    }
+
+    const encodedPath = normalizedPath.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    const res = await fetch(
+      `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/contents/${encodedPath}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `token ${repoInfo.token}`,
+          Accept: 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      if (isShaConflictResponse(res.status, text)) {
+        const error = new Error(`写入 ${normalizedPath} 失败：${res.status} ${res.statusText} - ${text}`);
+        error.isShaConflict = true;
+        throw error;
+      }
+      throw new Error(`写入 ${normalizedPath} 失败：${res.status} ${res.statusText} - ${text}`);
+    }
+    return res.json();
   };
 
   const writeConfigToGithub = async ({ owner, repo, token, contentObject, sha, commitMessage }) => {
@@ -432,33 +629,55 @@ window.SubscriptionsGithubToken = (function () {
     } = dom;
 
     // 公共：渲染“验证成功”提示信息
-    const renderSuccessMessage = (data) => {
+    const setTokenMessage = (lines, color = '#666', { boldFirstLine = false } = {}) => {
       if (!githubTokenMessage) return;
+      githubTokenMessage.textContent = '';
+      const container = document.createElement('div');
+      container.style.color = color;
+      container.style.fontSize = '12px';
+      container.style.lineHeight = '1.6';
+      (Array.isArray(lines) ? lines : [lines]).filter((line) => line !== null && line !== undefined && String(line).trim()).forEach((line, index, arr) => {
+        const row = document.createElement(index === 0 && boldFirstLine ? 'strong' : 'span');
+        row.textContent = String(line);
+        container.appendChild(row);
+        if (index < arr.length - 1) {
+          container.appendChild(document.createElement('br'));
+        }
+      });
+      githubTokenMessage.replaceChildren(container);
+    };
+
+    const renderSuccessMessage = (data) => {
       const scopes = Array.isArray(data.scopes) ? data.scopes : [];
-      githubTokenMessage.innerHTML = `
-        <div style="color:#28a745; font-size:12px; line-height:1.6;">
-          <strong>✅ 验证成功！</strong><br>
-          用户: ${data.login || ''}<br>
-          仓库: ${data.repo || ''}<br>
-          权限: ${scopes.join(', ')}<br>
-          Gist 分享: 已开启
-        </div>
-      `;
+      setTokenMessage([
+        '✅ 验证成功！',
+        `用户: ${data.login || ''}`,
+        `仓库: ${data.repo || ''}`,
+        `权限: ${scopes.join(', ')}`,
+        'Gist 分享: 已开启',
+      ], '#28a745', { boldFirstLine: true });
     };
 
     // 更新登录按钮状态（兼容旧逻辑；若没有按钮则直接忽略）
     const updateAuthButtonStatus = () => {
       if (!githubAuthBtn) return;
       const tokenData = loadGithubToken();
-      if (tokenData && tokenData.token && tokenData.verified) {
+      const sessionToken = loadSessionGithubToken();
+      if (tokenData && tokenData.verified && sessionToken) {
         githubAuthBtn.textContent = '登录成功';
         githubAuthBtn.style.background = '#28a745';
         githubAuthBtn.style.color = 'white';
-      } else {
-        githubAuthBtn.textContent = '未登录';
-        githubAuthBtn.style.background = '#6c757d';
-        githubAuthBtn.style.color = 'white';
+        return;
       }
+      if (tokenData && tokenData.verified) {
+        githubAuthBtn.textContent = '需重新验证';
+        githubAuthBtn.style.background = '#fd7e14';
+        githubAuthBtn.style.color = 'white';
+        return;
+      }
+      githubAuthBtn.textContent = '未登录';
+      githubAuthBtn.style.background = '#6c757d';
+      githubAuthBtn.style.color = 'white';
     };
 
     // 显示 Token 信息
@@ -485,12 +704,18 @@ window.SubscriptionsGithubToken = (function () {
           githubTokenSection.style.display = 'block';
 
           const tokenData = loadGithubToken();
+          const sessionToken = loadSessionGithubToken();
           if (tokenData && tokenData.verified) {
             if (githubTokenInput) {
-              githubTokenInput.value = tokenData.token || '';
+              githubTokenInput.value = '';
             }
-            renderSuccessMessage(tokenData);
-            showTokenInfo(tokenData);
+            if (sessionToken) {
+              renderSuccessMessage(tokenData);
+              showTokenInfo(tokenData);
+            } else {
+              hideTokenInfo();
+              setTokenMessage('当前浏览器会话里没有可用的 GitHub Token，请重新验证。', '#fd7e14');
+            }
           }
         } else {
           githubTokenSection.style.display = 'none';
@@ -519,22 +744,19 @@ window.SubscriptionsGithubToken = (function () {
         const token = githubTokenInput.value.trim();
 
         if (!token) {
-          githubTokenMessage.innerHTML =
-            '<span style="color:#dc3545;">❌ 请输入 GitHub Token</span>';
+          setTokenMessage('❌ 请输入 GitHub Token', '#dc3545');
           return;
         }
 
         githubTokenVerifyBtn.disabled = true;
         githubTokenVerifyBtn.textContent = '验证中...';
-        githubTokenMessage.innerHTML =
-          '<span style="color:#666;">正在验证 Token...</span>';
+        setTokenMessage('正在验证 Token...', '#666');
         hideTokenInfo();
 
         const result = await verifyGithubToken(token);
 
         if (result.valid) {
           const tokenData = {
-            token: token,
             verified: true,
             login: result.login,
             name: result.name,
@@ -544,6 +766,7 @@ window.SubscriptionsGithubToken = (function () {
           };
 
           saveGithubToken(tokenData);
+          saveSessionGithubToken(token);
 
           renderSuccessMessage(tokenData);
 
@@ -551,21 +774,18 @@ window.SubscriptionsGithubToken = (function () {
           updateAuthButtonStatus();
           githubTokenInput.value = '';
         } else {
-          const userText =
-            result.login && typeof result.login === 'string'
-              ? `用户: ${result.login}<br>`
-              : '';
-          const scopesText =
+          const lines = [];
+          if (result.login && typeof result.login === 'string') {
+            lines.push(`用户: ${result.login}`);
+          }
+          lines.push(
             result.scopes && result.scopes.length
-              ? `现有权限: ${result.scopes.join(', ')}<br>`
-              : '现有权限: （无）<br>';
-          const gistHint = '当前配置要求使用 Classic PAT，并同时具备 repo、workflow、gist 权限。<br>';
-          githubTokenMessage.innerHTML = `
-            <div style="font-size:12px; line-height:1.6;">
-              ${userText}${scopesText}${gistHint}
-              <span style="color:#dc3545;">❌ ${result.error}</span>
-            </div>
-          `;
+              ? `现有权限: ${result.scopes.join(', ')}`
+              : '现有权限: （无）',
+          );
+          lines.push('当前配置要求使用 Classic PAT，并同时具备 repo、workflow、gist 权限。');
+          lines.push(`❌ ${result.error}`);
+          setTokenMessage(lines, '#dc3545');
           hideTokenInfo();
 
           // 验证失败时，如果有顶部按钮，则将其状态改为「验证失败」红色按钮
@@ -575,7 +795,7 @@ window.SubscriptionsGithubToken = (function () {
             githubAuthBtn.style.color = 'white';
           }
 
-          // 同时清除本地已保存的 Token，避免刷新后仍显示“登录成功”
+          // 同时清除本地已保存的验证结果，避免刷新后仍显示“登录成功”
           clearGithubToken();
         }
 
@@ -591,8 +811,7 @@ window.SubscriptionsGithubToken = (function () {
         if (confirm('确定要清除保存的 GitHub Token 吗？')) {
           clearGithubToken();
           githubTokenInput.value = '';
-          githubTokenMessage.innerHTML =
-            '<span style="color:#666;">Token 已清除</span>';
+          setTokenMessage('Token 已清除', '#666');
           hideTokenInfo();
           updateAuthButtonStatus();
         }
@@ -608,8 +827,13 @@ window.SubscriptionsGithubToken = (function () {
     loadConfig,
     updateConfig,
     saveConfig,
+    writeRepoFile,
+    buildSeedPaperRequestPath,
     __test: {
       isShaConflictResponse,
+      buildSeedPaperRequestPath,
+      isAllowedRepoWritePath,
+      normalizeRepoWritePath,
     },
   };
 })();

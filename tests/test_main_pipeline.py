@@ -918,6 +918,111 @@ class MainPipelineTest(unittest.TestCase):
         self.assertTrue(skip)
         self.assertEqual(reason, "RERANK_ENABLED=false")
 
+    def test_main_falls_back_when_rerank_step_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src_dir = root / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            token = "20260310"
+            self._write_rrf_input(root, token)
+            calls = []
+            fallback_calls = []
+
+            def fake_run_step(label, args, env=None):
+                calls.append((label, args, env))
+                if label == "Step 3 - Rerank":
+                    raise self.mod.subprocess.CalledProcessError(1, args)
+
+            def fake_prepare_rerank_fallback(input_path, output_path):
+                fallback_calls.append((input_path, output_path))
+                return True
+
+            with patch.object(self.mod, "ROOT_DIR", str(root)), patch.object(
+                self.mod, "SRC_DIR", str(src_dir)
+            ), patch.object(
+                self.mod, "resolve_run_date_token", return_value=token
+            ), patch.object(
+                self.mod, "resolve_sidebar_date_label", return_value=None
+            ), patch.object(
+                self.mod, "parse_trace_ids", return_value=[]
+            ), patch.object(
+                self.mod, "run_step", side_effect=fake_run_step
+            ), patch.object(
+                self.mod, "prepare_rerank_fallback", side_effect=fake_prepare_rerank_fallback
+            ), patch.object(
+                sys, "argv", ["main.py"]
+            ), patch.dict(
+                os.environ,
+                {
+                    "WORKFLOW_LLM_API_KEY": "workflow-key",
+                    "WORKFLOW_LLM_BASE_URL": "https://api.openai.com/v1",
+                    "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                    "RERANK_ENABLED": "true",
+                    "RERANK_API_KEY": "rerank-key",
+                    "RERANK_BASE_URL": "https://rerank.example.com/v1",
+                    "RERANK_MODEL": "qwen3-reranker-4b",
+                },
+                clear=True,
+            ):
+                self.mod.main()
+
+            labels = [item[0] for item in calls]
+            self.assertIn("Step 3 - Rerank", labels)
+            self.assertIn("Step 4 - LLM refine", labels)
+            self.assertEqual(len(fallback_calls), 1)
+            rerank_input, rerank_output = fallback_calls[0]
+            self.assertTrue(rerank_input.endswith(f"archive/{token}/filtered/arxiv_papers_{token}.json"))
+            self.assertTrue(rerank_output.endswith(f"archive/{token}/rank/arxiv_papers_{token}.json"))
+
+    def test_main_raises_when_rerank_fallback_generation_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src_dir = root / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            token = "20260310"
+            self._write_rrf_input(root, token)
+            calls = []
+
+            def fake_run_step(label, args, env=None):
+                calls.append((label, args, env))
+                if label == "Step 3 - Rerank":
+                    raise self.mod.subprocess.CalledProcessError(1, args)
+
+            with patch.object(self.mod, "ROOT_DIR", str(root)), patch.object(
+                self.mod, "SRC_DIR", str(src_dir)
+            ), patch.object(
+                self.mod, "resolve_run_date_token", return_value=token
+            ), patch.object(
+                self.mod, "resolve_sidebar_date_label", return_value=None
+            ), patch.object(
+                self.mod, "parse_trace_ids", return_value=[]
+            ), patch.object(
+                self.mod, "run_step", side_effect=fake_run_step
+            ), patch.object(
+                self.mod, "prepare_rerank_fallback", return_value=False
+            ), patch.object(
+                sys, "argv", ["main.py"]
+            ), patch.dict(
+                os.environ,
+                {
+                    "WORKFLOW_LLM_API_KEY": "workflow-key",
+                    "WORKFLOW_LLM_BASE_URL": "https://api.openai.com/v1",
+                    "WORKFLOW_LLM_MODEL": "gpt-4.1-mini",
+                    "RERANK_ENABLED": "true",
+                    "RERANK_API_KEY": "rerank-key",
+                    "RERANK_BASE_URL": "https://rerank.example.com/v1",
+                    "RERANK_MODEL": "qwen3-reranker-4b",
+                },
+                clear=True,
+            ):
+                with self.assertRaises(RuntimeError) as cm:
+                    self.mod.main()
+
+            self.assertIn("fallback 生成失败", str(cm.exception))
+            labels = [item[0] for item in calls]
+            self.assertIn("Step 3 - Rerank", labels)
+            self.assertNotIn("Step 4 - LLM refine", labels)
+
     def test_main_does_not_build_fallback_when_local_rerank_executes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

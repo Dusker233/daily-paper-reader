@@ -13,6 +13,11 @@ const {
   normalizeSubscriptions,
   mergeDraftConfigOntoLatest,
   applyQuickRunRerankDispatchInputs,
+  buildSeedPaperRequestPayload,
+  isPdfFile,
+  hasPdfSignature,
+  getMaxSeedPaperBytes,
+  setSeedSubmissionStateForTest,
 } = manager.__test;
 
 function buildJsonResponse(status, body, statusText = '') {
@@ -211,35 +216,274 @@ function testRunProfileQuickFetchIncludesCustomDaysInTipOptions() {
   assert.equal(calls[0].options.dispatchInputs.rerank_model, 'BAAI/bge-reranker-v2-m3');
 }
 
-function testWorkflowRunnerFallbackPreservesFetchModeForCustomDays() {
-  global.window.decoded_secret_private = { github: { token: 'demo-token' } };
-  global.window.localStorage = {
-    getItem() {
-      return '';
+function testBuildSeedPaperRequestPayloadNormalizesFields() {
+  const payload = buildSeedPaperRequestPayload({
+    fileName: '  Test Paper.pdf ',
+    relatedCount: '0',
+    selectedTags: [' GENE ', '', 'GENE', 'MATH '],
+    mode: 'DEEP',
+    notes: '  focus on methods  ',
+    sourcePath: 'requests/seed_papers/demo/seed.pdf',
+  });
+
+  assert.equal(payload.file_name, 'Test Paper.pdf');
+  assert.equal(payload.related_count, 1);
+  assert.deepEqual(payload.selected_tags, ['GENE', 'MATH']);
+  assert.equal(payload.mode, 'deep');
+  assert.equal(payload.notes, 'focus on methods');
+  assert.equal(payload.source_path, 'requests/seed_papers/demo/seed.pdf');
+}
+
+function testBuildSeedPaperRequestPayloadDefaultsToSkimAndMaxCap() {
+  const payload = buildSeedPaperRequestPayload({
+    fileName: 'seed.pdf',
+    relatedCount: '999',
+    selectedTags: 'GENE',
+    mode: 'weird',
+  });
+
+  assert.equal(payload.related_count, 20);
+  assert.deepEqual(payload.selected_tags, ['GENE']);
+  assert.equal(payload.mode, 'skim');
+}
+
+function testIsPdfFileRequiresPdfExtension() {
+  assert.equal(isPdfFile({ name: 'paper.pdf', type: '' }), true);
+  assert.equal(isPdfFile({ name: 'paper.pdf', type: 'application/pdf' }), true);
+  assert.equal(isPdfFile({ name: 'paper.tmp', type: 'application/pdf' }), false);
+  assert.equal(isPdfFile({ name: 'paper.txt', type: 'text/plain' }), false);
+}
+
+function testHasPdfSignatureRequiresPdfMagicBytes() {
+  assert.equal(hasPdfSignature(Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31])), true);
+  assert.equal(hasPdfSignature(new ArrayBuffer(0)), false);
+  assert.equal(hasPdfSignature(Uint8Array.from([0x50, 0x44, 0x46, 0x2d])), false);
+  assert.equal(hasPdfSignature(Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x20])), false);
+}
+
+async function testRunSeedPaperDiscoveryRejectsDuplicateSubmission() {
+  setSeedSubmissionStateForTest(true);
+  global.window.DPRWorkflowRunner = {
+    runSeedPaperWorkflow() {
+      throw new Error('should not run while submission is locked');
     },
   };
-  global.window.location = {
-    href: 'https://example.com',
+  global.window.SubscriptionsGithubToken = {
+    buildSeedPaperRequestPath() {
+      throw new Error('should not build path while submission is locked');
+    },
+    writeRepoFile() {
+      throw new Error('should not write while submission is locked');
+    },
   };
-  const elementMap = {};
-  const createDomNode = (id = '') => ({
-    id,
-    innerHTML: '',
-    textContent: '',
-    style: {},
-    classList: {
-      add() {},
-      remove() {},
-      toggle() {},
+
+  try {
+    const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+      file: { name: 'paper.pdf', type: 'application/pdf', arrayBuffer: async () => new ArrayBuffer(0) },
+    });
+    assert.equal(ok, false);
+  } finally {
+    setSeedSubmissionStateForTest(false);
+  }
+}
+
+async function testRunSeedPaperDiscoveryRejectsNonPdfFileBeforeUpload() {
+  let writeAttempts = 0;
+  global.window.SubscriptionsGithubToken = {
+    buildSeedPaperRequestPath() {
+      throw new Error('should not derive repo path for non-pdf file');
     },
-    addEventListener() {},
-    querySelector() {
-      return null;
+    async writeRepoFile() {
+      writeAttempts += 1;
     },
-    querySelectorAll() {
-      return [];
+  };
+  global.window.DPRWorkflowRunner = {
+    async runSeedPaperWorkflow() {
+      throw new Error('should not dispatch workflow for non-pdf file');
+    },
+  };
+
+  const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+    file: {
+      name: 'notes.txt',
+      type: 'text/plain',
+      async arrayBuffer() {
+        return new ArrayBuffer(4);
+      },
     },
   });
+
+  assert.equal(ok, false);
+  assert.equal(writeAttempts, 0);
+}
+
+async function testRunSeedPaperDiscoveryRejectsOversizedPdfBeforeUpload() {
+  let writeAttempts = 0;
+  global.window.SubscriptionsGithubToken = {
+    buildSeedPaperRequestPath() {
+      throw new Error('should not derive repo path for oversized pdf');
+    },
+    async writeRepoFile() {
+      writeAttempts += 1;
+    },
+  };
+  global.window.DPRWorkflowRunner = {
+    async runSeedPaperWorkflow() {
+      throw new Error('should not dispatch workflow for oversized pdf');
+    },
+  };
+
+  const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+    file: {
+      name: 'paper.pdf',
+      type: 'application/pdf',
+      size: getMaxSeedPaperBytes() + 1,
+      async arrayBuffer() {
+        return Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d]).buffer;
+      },
+    },
+  });
+
+  assert.equal(ok, false);
+  assert.equal(writeAttempts, 0);
+}
+
+async function testRunSeedPaperDiscoveryRejectsFakePdfBytesBeforeUpload() {
+  let writeAttempts = 0;
+  global.window.SubscriptionsGithubToken = {
+    buildSeedPaperRequestPath() {
+      return {
+        requestId: 'demo-request',
+        requestPath: 'requests/seed_papers/demo-request/request.json',
+        filePath: 'requests/seed_papers/demo-request/paper.pdf',
+      };
+    },
+    async writeRepoFile() {
+      writeAttempts += 1;
+    },
+  };
+  global.window.DPRWorkflowRunner = {
+    async runSeedPaperWorkflow() {
+      throw new Error('should not dispatch workflow for fake pdf bytes');
+    },
+  };
+
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+      file: {
+        name: 'paper.pdf',
+        type: 'application/pdf',
+        async arrayBuffer() {
+          return Uint8Array.from([0x6e, 0x6f, 0x74, 0x2d, 0x70, 0x64, 0x66]).buffer;
+        },
+      },
+    });
+
+    assert.equal(ok, false);
+    assert.equal(writeAttempts, 0);
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
+function setupWorkflowRunnerDom() {
+  const elementMap = {};
+  const createClassList = (initial = []) => {
+    const classes = new Set(initial);
+    return {
+      add(...names) {
+        names.filter(Boolean).forEach((name) => classes.add(name));
+      },
+      remove(...names) {
+        names.filter(Boolean).forEach((name) => classes.delete(name));
+      },
+      toggle(name, force) {
+        if (!name) return false;
+        if (force === true) {
+          classes.add(name);
+          return true;
+        }
+        if (force === false) {
+          classes.delete(name);
+          return false;
+        }
+        if (classes.has(name)) {
+          classes.delete(name);
+          return false;
+        }
+        classes.add(name);
+        return true;
+      },
+      contains(name) {
+        return classes.has(name);
+      },
+    };
+  };
+  const createDomNode = (id = '', attributes = {}) => {
+    let innerHTML = '';
+    const listeners = {};
+    const attrs = { ...attributes };
+    const node = {
+      id,
+      textContent: '',
+      style: {},
+      _recentButtons: [],
+      _bound: false,
+      classList: createClassList(),
+      addEventListener(type, handler) {
+        listeners[type] = handler;
+      },
+      async click() {
+        if (typeof listeners.click === 'function') {
+          return listeners.click();
+        }
+        return undefined;
+      },
+      getAttribute(name) {
+        return attrs[name] || '';
+      },
+      setAttribute(name, value) {
+        attrs[name] = String(value);
+      },
+      querySelector(selector) {
+        if (selector === '.dpr-wf-recent-block') {
+          return innerHTML.includes('dpr-wf-recent-block') ? {} : null;
+        }
+        return null;
+      },
+      querySelectorAll(selector) {
+        if (selector === '.dpr-wf-recent-item') {
+          return node._recentButtons;
+        }
+        if (selector === '.dpr-wf-recent-item.is-active') {
+          return node._recentButtons.filter((button) => button.classList.contains('is-active'));
+        }
+        return [];
+      },
+    };
+    Object.defineProperty(node, 'innerHTML', {
+      get() {
+        return innerHTML;
+      },
+      set(value) {
+        innerHTML = String(value || '');
+        if (id !== 'dpr-workflow-recent') {
+          return;
+        }
+        const matches = Array.from(
+          innerHTML.matchAll(/<button class="([^"]*dpr-wf-recent-item[^"]*)" data-run-id="([^"]+)"/g),
+        );
+        node._recentButtons = matches.map((match) => {
+          const button = createDomNode('', { 'data-run-id': match[2] });
+          match[1].split(/\s+/).filter(Boolean).forEach((name) => button.classList.add(name));
+          return button;
+        });
+      },
+    });
+    return node;
+  };
   global.document = {
     getElementById(id) {
       return elementMap[id] || null;
@@ -258,6 +502,259 @@ function testWorkflowRunnerFallbackPreservesFetchModeForCustomDays() {
     },
   };
   global.requestAnimationFrame = (cb) => cb();
+  return elementMap;
+}
+
+function createWorkflowRunnerFetchStub(calls, options = {}) {
+  const {
+    runId = 123,
+    runStatus = 'completed',
+    runConclusion = 'success',
+    recentRunStatus = runStatus,
+    recentRunConclusion = runConclusion,
+  } = options;
+  return async (url, init = {}) => {
+    calls.push({ url, init });
+    if (url === 'https://api.github.com/user') {
+      return buildJsonResponse(200, { login: 'demo-user' });
+    }
+    if (url === 'https://api.github.com/repos/demo-user/daily-paper-reader') {
+      return buildJsonResponse(200, { fork: true, default_branch: 'main' });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?per_page=5')) {
+      return buildJsonResponse(200, { workflow_runs: [] });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?per_page=12')) {
+      return buildJsonResponse(200, {
+        workflow_runs: [
+          {
+            id: runId,
+            run_number: 45,
+            status: recentRunStatus,
+            conclusion: recentRunConclusion,
+            created_at: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (url.includes('/dispatches')) {
+      return new Response('', { status: 200, statusText: 'OK' });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?event=workflow_dispatch&per_page=10')) {
+      return buildJsonResponse(200, {
+        workflow_runs: [
+          {
+            id: runId,
+            run_number: 45,
+            status: recentRunStatus,
+            conclusion: recentRunConclusion,
+            created_at: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (url.includes(`/actions/runs/${runId}/jobs?per_page=100`)) {
+      return buildJsonResponse(200, { jobs: [] });
+    }
+    if (url.includes(`/actions/runs/${runId}`)) {
+      return buildJsonResponse(200, {
+        id: runId,
+        run_number: 45,
+        status: runStatus,
+        conclusion: runConclusion,
+        created_at: new Date().toISOString(),
+      });
+    }
+    return buildJsonResponse(200, {});
+  };
+}
+
+async function withWorkflowRunnerIntervalCapture(run) {
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  const intervalCalls = [];
+  global.setInterval = (...args) => {
+    intervalCalls.push(args);
+    return { fake: true };
+  };
+  global.clearInterval = () => {};
+  try {
+    await run(intervalCalls);
+  } finally {
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+  }
+  return intervalCalls;
+}
+
+async function flushAsyncWork(iterations = 3) {
+  for (let i = 0; i < iterations; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+async function testWorkflowRunnerDoesNotStartPollingForCompletedRun() {
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'demo-token';
+    },
+  };
+  global.window.localStorage = {
+    getItem() {
+      return '';
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  setupWorkflowRunnerDom();
+
+  const calls = [];
+  global.fetch = createWorkflowRunnerFetchStub(calls, 123);
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  const intervalCalls = await withWorkflowRunnerIntervalCapture(async () => {
+    await global.window.DPRWorkflowRunner.runQuickFetchByDays(17, {
+      fetchMode: 'standard',
+      dispatchInputs: {
+        profile_tag: 'GENE',
+      },
+    });
+  });
+
+  assert.equal(intervalCalls.length, 0);
+}
+
+async function setupWorkflowRunnerWithRecentRun(fetchOptions = {}) {
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'demo-token';
+    },
+  };
+  global.window.localStorage = {
+    getItem() {
+      return '';
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  const dom = setupWorkflowRunnerDom();
+
+  const calls = [];
+  global.fetch = createWorkflowRunnerFetchStub(calls, fetchOptions);
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  await withWorkflowRunnerIntervalCapture(async () => {
+    await global.window.DPRWorkflowRunner.runQuickFetchByDays(17, {
+      fetchMode: 'standard',
+      dispatchInputs: {
+        profile_tag: 'GENE',
+      },
+    });
+  });
+  await flushAsyncWork();
+
+  const recentEl = dom['dpr-workflow-recent'];
+  const recentButtons = recentEl.querySelectorAll('.dpr-wf-recent-item');
+  assert.ok(recentButtons.length > 0, 'should render recent workflow buttons');
+
+  return {
+    dom,
+    calls,
+    recentButtons,
+  };
+}
+
+async function testWorkflowRunnerDoesNotStartPollingWhenSelectingCompletedRecentRun() {
+  const { recentButtons } = await setupWorkflowRunnerWithRecentRun({ runId: 321 });
+
+  const intervalCalls = await withWorkflowRunnerIntervalCapture(async () => {
+    await recentButtons[0].click();
+  });
+
+  assert.equal(intervalCalls.length, 0);
+}
+
+async function testWorkflowRunnerStartsPollingForActiveDispatchRun() {
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'demo-token';
+    },
+  };
+  global.window.localStorage = {
+    getItem() {
+      return '';
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  setupWorkflowRunnerDom();
+
+  const calls = [];
+  global.fetch = createWorkflowRunnerFetchStub(calls, {
+    runId: 456,
+    runStatus: 'in_progress',
+    runConclusion: '',
+    recentRunStatus: 'in_progress',
+    recentRunConclusion: '',
+  });
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  const intervalCalls = await withWorkflowRunnerIntervalCapture(async () => {
+    await global.window.DPRWorkflowRunner.runQuickFetchByDays(17, {
+      fetchMode: 'standard',
+      dispatchInputs: {
+        profile_tag: 'GENE',
+      },
+    });
+  });
+
+  assert.equal(intervalCalls.length, 1);
+}
+
+async function testWorkflowRunnerStartsPollingWhenSelectingActiveRecentRun() {
+  const { recentButtons } = await setupWorkflowRunnerWithRecentRun({
+    runId: 654,
+    runStatus: 'in_progress',
+    runConclusion: '',
+    recentRunStatus: 'in_progress',
+    recentRunConclusion: '',
+  });
+
+  const intervalCalls = await withWorkflowRunnerIntervalCapture(async () => {
+    await recentButtons[0].click();
+  });
+
+  assert.equal(intervalCalls.length, 1);
+}
+
+function testWorkflowRunnerFallbackPreservesFetchModeForCustomDays() {
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'demo-token';
+    },
+  };
+  global.window.localStorage = {
+    getItem() {
+      return '';
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  setupWorkflowRunnerDom();
 
   const calls = [];
   global.fetch = async (url, init = {}) => {
@@ -320,6 +817,102 @@ function testWorkflowRunnerFallbackPreservesFetchModeForCustomDays() {
     assert.equal(body.inputs.profile_tag, 'GENE');
   });
 }
+
+async function testWorkflowRunnerIgnoresPersistedPatFallback() {
+  let localStorageReads = 0;
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return '';
+    },
+  };
+  global.window.DPR_RUNTIME_GITHUB_TOKEN = '';
+  global.window.localStorage = {
+    getItem() {
+      localStorageReads += 1;
+      return JSON.stringify({ token: 'ghp_legacy_should_not_be_used' });
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  setupWorkflowRunnerDom();
+
+  const calls = [];
+  global.fetch = async (url, init = {}) => {
+    calls.push({ url, init });
+    return buildJsonResponse(200, {});
+  };
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  await global.window.DPRWorkflowRunner.runQuickFetchByDays(17, {
+    fetchMode: 'standard',
+    dispatchInputs: {
+      profile_tag: 'GENE',
+    },
+  });
+
+  assert.equal(localStorageReads, 0);
+  assert.equal(calls.length, 0);
+}
+
+function testWorkflowRunnerUsesSecretSessionGithubToken() {
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'ghp_secret_session';
+    },
+  };
+  global.window.DPR_RUNTIME_GITHUB_TOKEN = '';
+  global.window.localStorage = {
+    getItem() {
+      throw new Error('should not read localStorage fallback');
+    },
+  };
+  global.window.location = {
+    href: 'https://example.com',
+  };
+  setupWorkflowRunnerDom();
+
+  const calls = [];
+  global.fetch = async (url, init = {}) => {
+    calls.push({ url, init });
+    if (url === 'https://api.github.com/user') {
+      assert.equal(init.headers.Authorization, 'token ghp_secret_session');
+      return buildJsonResponse(200, { login: 'demo-user' });
+    }
+    if (url === 'https://api.github.com/repos/demo-user/daily-paper-reader') {
+      return buildJsonResponse(200, { fork: true, default_branch: 'main' });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?per_page=5')) {
+      return buildJsonResponse(200, { workflow_runs: [] });
+    }
+    if (url.includes('/dispatches')) {
+      return new Response('', { status: 200, statusText: 'OK' });
+    }
+    if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?event=workflow_dispatch&per_page=10')) {
+      return buildJsonResponse(200, { workflow_runs: [] });
+    }
+    return buildJsonResponse(200, {});
+  };
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  return global.window.DPRWorkflowRunner.runQuickFetchByDays(17, {
+    fetchMode: 'standard',
+    dispatchInputs: {
+      profile_tag: 'GENE',
+    },
+  }).then(() => {
+    const dispatchCall = calls.find((entry) => entry.url.includes('/dispatches'));
+    assert.ok(dispatchCall, 'should dispatch workflow with secret session token');
+    assert.equal(dispatchCall.init.headers.Authorization, 'token ghp_secret_session');
+  });
+}
+
 
 function testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache() {
   const base = buildBaseConfig();
@@ -558,13 +1151,27 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
 (async () => {
   testNormalizeSubscriptionsAddsBiorxivBackend();
   testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
+  await testWorkflowRunnerDoesNotStartPollingForCompletedRun();
+  await testWorkflowRunnerDoesNotStartPollingWhenSelectingCompletedRecentRun();
+  await testWorkflowRunnerStartsPollingForActiveDispatchRun();
+  await testWorkflowRunnerStartsPollingWhenSelectingActiveRecentRun();
   testRunProfileQuickFetchPassesProfileTagToWorkflow();
   testRunProfileQuickFetchPreservesExplicitFilterConcurrency();
   testApplyQuickRunRerankDispatchInputsDefaultsLocalModel();
   testApplyQuickRunRerankDispatchInputsStripsModelForNonLocalProvider();
   testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderAndModel();
   testRunProfileQuickFetchIncludesCustomDaysInTipOptions();
+  testBuildSeedPaperRequestPayloadNormalizesFields();
+  testBuildSeedPaperRequestPayloadDefaultsToSkimAndMaxCap();
+  testIsPdfFileRequiresPdfExtension();
+  testHasPdfSignatureRequiresPdfMagicBytes();
+  await testRunSeedPaperDiscoveryRejectsDuplicateSubmission();
+  await testRunSeedPaperDiscoveryRejectsNonPdfFileBeforeUpload();
+  await testRunSeedPaperDiscoveryRejectsOversizedPdfBeforeUpload();
+  await testRunSeedPaperDiscoveryRejectsFakePdfBytesBeforeUpload();
   await testWorkflowRunnerFallbackPreservesFetchModeForCustomDays();
+  await testWorkflowRunnerIgnoresPersistedPatFallback();
+  await testWorkflowRunnerUsesSecretSessionGithubToken();
   testMergeDraftConfigOntoLatestPreservesRemoteOnlyProfilesAndLatestCache();
   testMergeDraftConfigOntoLatestRespectsLocalProfileDeletion();
   testMergeDraftConfigOntoLatestKeepsLatestOnlyItemsWithinProfile();

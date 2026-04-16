@@ -17,6 +17,12 @@ window.SubscriptionsManager = (function () {
   let quickRunRerankSelect = null;
   let quickRunRunBtn = null;
   let quickRunOpenWorkflowPanelBtn = null;
+  let quickRunSeedFileInput = null;
+  let quickRunSeedCountInput = null;
+  let quickRunSeedModeSelect = null;
+  let quickRunSeedTagsInput = null;
+  let quickRunSeedNotesInput = null;
+  let quickRunSeedRunBtn = null;
   let quickRunConferenceBtn = null;
   let quickRunYearSelect = null;
   let quickRunConferenceSelect = null;
@@ -28,6 +34,7 @@ window.SubscriptionsManager = (function () {
   let loadedBaseConfig = null;
   let hasUnsavedChanges = false;
   let isSavingDraftConfig = false;
+  let isSubmittingSeedPaper = false;
 
   const defaultPromptTemplate = [
     'You are a retrieval planning assistant.',
@@ -86,6 +93,8 @@ window.SubscriptionsManager = (function () {
   const QUICK_RUN_DEFAULT_DAYS = '10';
   const QUICK_RUN_DEFAULT_FETCH_MODE = 'skims';
   const QUICK_RUN_DEFAULT_RERANK_PROVIDER = 'blt';
+  const SEED_PAPER_DEFAULT_RELATED_COUNT = 5;
+  const SEED_PAPER_MAX_RELATED_COUNT = 20;
 
   const normalizeText = (v) => String(v || '').trim();
   const normalizeSourceKey = (v) => normalizeText(v).toLowerCase();
@@ -486,7 +495,13 @@ window.SubscriptionsManager = (function () {
 
   const refreshQuickRunButtons = () => {
     const blocked = hasUnsavedChanges;
-    [quickRunDaysSelect, quickRunModeSelect, quickRunRerankSelect, quickRunRunBtn].forEach((control) => {
+    const seedBlocked = blocked || isSubmittingSeedPaper;
+    [
+      quickRunDaysSelect,
+      quickRunModeSelect,
+      quickRunRerankSelect,
+      quickRunRunBtn,
+    ].forEach((control) => {
       if (!control) return;
       control.disabled = blocked;
       if (control.classList && typeof control.classList.toggle === 'function') {
@@ -495,6 +510,25 @@ window.SubscriptionsManager = (function () {
       control.title = blocked
         ? '请先点击“保存”后再发起快速抓取。'
         : (control.getAttribute('data-default-title') || control.textContent || '');
+    });
+    [
+      quickRunSeedFileInput,
+      quickRunSeedCountInput,
+      quickRunSeedModeSelect,
+      quickRunSeedTagsInput,
+      quickRunSeedNotesInput,
+      quickRunSeedRunBtn,
+    ].forEach((control) => {
+      if (!control) return;
+      control.disabled = seedBlocked;
+      if (control.classList && typeof control.classList.toggle === 'function') {
+        control.classList.toggle('chat-quick-run-item--disabled', seedBlocked);
+      }
+      control.title = blocked
+        ? '请先点击“保存”后再上传种子论文。'
+        : (isSubmittingSeedPaper
+          ? '种子论文请求提交中，请稍候。'
+          : (control.getAttribute('data-default-title') || control.textContent || ''));
     });
     if (blocked && quickRunMsgEl) {
       quickRunMsgEl.textContent = '检测到未保存修改，请先保存后再发起快速抓取。';
@@ -560,6 +594,176 @@ window.SubscriptionsManager = (function () {
       delete options.dispatchInputs.rerank_model;
     }
     return options;
+  };
+
+  const normalizeSeedPaperRelatedCount = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) {
+      return SEED_PAPER_DEFAULT_RELATED_COUNT;
+    }
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      return SEED_PAPER_DEFAULT_RELATED_COUNT;
+    }
+    return Math.min(SEED_PAPER_MAX_RELATED_COUNT, Math.max(1, parsed));
+  };
+
+  const normalizeSeedPaperMode = (value) => {
+    const mode = normalizeText(value).toLowerCase();
+    if (mode === 'skim' || mode === 'deep' || mode === 'both') {
+      return mode;
+    }
+    return 'skim';
+  };
+
+  const PDF_MAGIC_BYTES = [0x25, 0x50, 0x44, 0x46, 0x2d];
+  const MAX_SEED_PAPER_BYTES = 50 * 1024 * 1024;
+
+  const isPdfFile = (file) => {
+    if (!file || typeof file !== 'object') {
+      return false;
+    }
+    const fileName = normalizeText(file.name || '').toLowerCase();
+    if (!fileName.endsWith('.pdf')) {
+      return false;
+    }
+    const fileType = normalizeText(file.type || '').toLowerCase();
+    return !fileType || fileType === 'application/pdf';
+  };
+
+  const hasPdfSignature = (bufferLike) => {
+    if (!bufferLike || typeof bufferLike !== 'object') {
+      return false;
+    }
+    const view = bufferLike instanceof Uint8Array
+      ? bufferLike
+      : bufferLike instanceof ArrayBuffer
+        ? new Uint8Array(bufferLike)
+        : ArrayBuffer.isView(bufferLike)
+          ? new Uint8Array(bufferLike.buffer, bufferLike.byteOffset, bufferLike.byteLength)
+          : null;
+    if (!view || view.length < PDF_MAGIC_BYTES.length) {
+      return false;
+    }
+    return PDF_MAGIC_BYTES.every((byte, index) => view[index] === byte);
+  };
+
+  const normalizeSeedPaperTags = (value) => {
+    const items = Array.isArray(value)
+      ? value
+      : String(value || '').split(/[,\n]/);
+    const seen = new Set();
+    const out = [];
+    items.forEach((item) => {
+      const normalized = normalizeText(item);
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      out.push(normalized);
+    });
+    return out;
+  };
+
+  const buildSeedPaperRequestPayload = (requestOptions) => {
+    const options = isPlainObject(requestOptions) ? cloneDeep(requestOptions) : {};
+    return {
+      file_name: normalizeText(options.fileName || options.file_name || ''),
+      source_path: normalizeText(options.sourcePath || options.source_path || ''),
+      related_count: normalizeSeedPaperRelatedCount(options.relatedCount || options.related_count),
+      selected_tags: normalizeSeedPaperTags(options.selectedTags || options.selected_tags),
+      mode: normalizeSeedPaperMode(options.mode),
+      notes: normalizeText(options.notes || ''),
+      created_at: normalizeText(options.createdAt || options.created_at) || new Date().toISOString(),
+    };
+  };
+
+  const runSeedPaperDiscovery = async (requestOptions, msgEl) => {
+    if (isSubmittingSeedPaper) {
+      setQuickRunMessage('种子论文请求正在提交中，请勿重复点击。', '#666');
+      return false;
+    }
+    if (hasUnsavedChanges) {
+      const text = '检测到未保存修改，请先点击“保存”后再上传种子论文。';
+      setQuickRunMessage(text, '#c00');
+      return false;
+    }
+    if (!window.SubscriptionsGithubToken || typeof window.SubscriptionsGithubToken.buildSeedPaperRequestPath !== 'function' || typeof window.SubscriptionsGithubToken.writeRepoFile !== 'function') {
+      setQuickRunMessage('GitHub 仓库写入能力未加载，无法提交种子论文请求。', '#c00');
+      return false;
+    }
+    if (!window.DPRWorkflowRunner || typeof window.DPRWorkflowRunner.runSeedPaperWorkflow !== 'function') {
+      setQuickRunMessage('工作流触发器未加载到当前页面。', '#c00');
+      return false;
+    }
+
+    const file = requestOptions && requestOptions.file;
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      setQuickRunMessage('请先选择要上传的 PDF 文件。', '#c00');
+      return false;
+    }
+    if (!isPdfFile(file)) {
+      setQuickRunMessage('仅支持上传 PDF 文件，请重新选择。', '#c00');
+      return false;
+    }
+    if (Number(file.size || 0) > MAX_SEED_PAPER_BYTES) {
+      setQuickRunMessage('上传的 PDF 过大，请控制在 50MB 以内。', '#c00');
+      return false;
+    }
+
+    const pathInfo = window.SubscriptionsGithubToken.buildSeedPaperRequestPath({
+      requestId: requestOptions.requestId || `${Date.now()}`,
+      fileName: file.name || 'seed-paper.pdf',
+    });
+    const payload = buildSeedPaperRequestPayload({
+      ...requestOptions,
+      fileName: file.name,
+      sourcePath: pathInfo.filePath,
+    });
+
+    try {
+      isSubmittingSeedPaper = true;
+      if (quickRunSeedRunBtn) {
+        quickRunSeedRunBtn.disabled = true;
+      }
+      setQuickRunMessage('正在上传种子论文请求...', '#666');
+      const fileBuffer = await file.arrayBuffer();
+      if (!hasPdfSignature(fileBuffer)) {
+        throw new Error('上传文件内容不是有效的 PDF。');
+      }
+      await window.SubscriptionsGithubToken.writeRepoFile({
+        path: pathInfo.filePath,
+        contentBytes: fileBuffer,
+        commitMessage: `chore: add seed paper upload ${pathInfo.requestId}`,
+      });
+      await window.SubscriptionsGithubToken.writeRepoFile({
+        path: pathInfo.requestPath,
+        contentText: JSON.stringify(payload, null, 2),
+        commitMessage: `chore: add seed paper request ${pathInfo.requestId}`,
+      });
+      await window.DPRWorkflowRunner.runSeedPaperWorkflow({
+        requestId: pathInfo.requestId,
+        requestPath: pathInfo.requestPath,
+        seedMode: payload.mode,
+      });
+      const finalTip = `已提交种子论文请求（${payload.related_count} 篇，模式：${payload.mode}）。`;
+      if (msgEl) {
+        msgEl.textContent = finalTip;
+        msgEl.style.color = '#080';
+      }
+      setQuickRunMessage(finalTip, '#080');
+      return true;
+    } catch (error) {
+      console.error(error);
+      const text = `提交种子论文请求失败：${error && error.message ? error.message : '未知错误'}`;
+      if (msgEl) {
+        msgEl.textContent = text;
+        msgEl.style.color = '#c00';
+      }
+      setQuickRunMessage(text, '#c00');
+      return false;
+    } finally {
+      isSubmittingSeedPaper = false;
+      refreshQuickRunButtons();
+    }
   };
 
   const runQuickFetch = (days, msgEl, tipText, runOptions) => {
@@ -1045,6 +1249,33 @@ window.SubscriptionsManager = (function () {
             </div>
             <button id="arxiv-admin-quick-run-run-btn" class="chat-quick-run-run-btn" type="button">立即运行</button>
             <div class="chat-quick-run-divider" aria-hidden="true"></div>
+            <div class="chat-quick-run-title">上传论文关联发现（v1）</div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-seed-paper-file-input">种子论文 PDF</label>
+              <input id="arxiv-admin-seed-paper-file-input" type="file" accept="application/pdf" />
+            </div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-seed-paper-count-input">关联篇数</label>
+              <input id="arxiv-admin-seed-paper-count-input" type="number" min="1" max="20" value="5" />
+            </div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-seed-paper-mode-select">阅读模式</label>
+              <select id="arxiv-admin-seed-paper-mode-select">
+                <option value="skim" selected>仅速览</option>
+                <option value="deep">仅精读</option>
+                <option value="both">速览 + 精读</option>
+              </select>
+            </div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-seed-paper-tags-input">关联标签</label>
+              <input id="arxiv-admin-seed-paper-tags-input" type="text" placeholder="例如：LLM, Agents" />
+            </div>
+            <div class="chat-quick-run-row">
+              <label for="arxiv-admin-seed-paper-notes-input">备注</label>
+              <textarea id="arxiv-admin-seed-paper-notes-input" rows="3" placeholder="可选：补充关注方向"></textarea>
+            </div>
+            <button id="arxiv-admin-seed-paper-run-btn" class="chat-quick-run-run-btn" type="button">上传并运行</button>
+            <div class="chat-quick-run-divider" aria-hidden="true"></div>
             <div class="chat-quick-run-title">会议论文（暂未接入）</div>
             <div class="chat-quick-run-row">
               <label for="arxiv-admin-quick-run-year-select">年份</label>
@@ -1274,6 +1505,12 @@ window.SubscriptionsManager = (function () {
     quickRunRerankSelect = document.getElementById('arxiv-admin-quick-run-rerank-select');
     quickRunRunBtn = document.getElementById('arxiv-admin-quick-run-run-btn');
     quickRunOpenWorkflowPanelBtn = document.getElementById('arxiv-admin-open-workflow-panel-btn');
+    quickRunSeedFileInput = document.getElementById('arxiv-admin-seed-paper-file-input');
+    quickRunSeedCountInput = document.getElementById('arxiv-admin-seed-paper-count-input');
+    quickRunSeedModeSelect = document.getElementById('arxiv-admin-seed-paper-mode-select');
+    quickRunSeedTagsInput = document.getElementById('arxiv-admin-seed-paper-tags-input');
+    quickRunSeedNotesInput = document.getElementById('arxiv-admin-seed-paper-notes-input');
+    quickRunSeedRunBtn = document.getElementById('arxiv-admin-seed-paper-run-btn');
     quickRunConferenceBtn = document.getElementById(
       'arxiv-admin-quick-run-conference-run-btn',
     );
@@ -1296,10 +1533,21 @@ window.SubscriptionsManager = (function () {
       quickRunConferenceBtn.title = '会议论文抓取功能暂未接入';
     }
     fillQuickRunOptions(quickRunYearSelect, quickRunConferenceSelect);
-    [quickRunDaysSelect, quickRunModeSelect, quickRunRerankSelect, quickRunRunBtn].forEach((control) => {
+    [
+      quickRunDaysSelect,
+      quickRunModeSelect,
+      quickRunRerankSelect,
+      quickRunRunBtn,
+      quickRunSeedFileInput,
+      quickRunSeedCountInput,
+      quickRunSeedModeSelect,
+      quickRunSeedTagsInput,
+      quickRunSeedNotesInput,
+      quickRunSeedRunBtn,
+    ].forEach((control) => {
       if (!control) return;
       if (!control.dataset.defaultTitle) {
-        control.setAttribute('data-default-title', control.textContent || '');
+        control.setAttribute('data-default-title', control.textContent || control.getAttribute('placeholder') || '');
       }
     });
     refreshQuickRunButtons();
@@ -1335,6 +1583,22 @@ window.SubscriptionsManager = (function () {
           quickRunMsgEl.textContent = '工作流触发面板未加载，请刷新页面后重试。';
           quickRunMsgEl.style.color = '#c00';
         }
+      });
+    }
+
+    if (quickRunSeedRunBtn && !quickRunSeedRunBtn._bound) {
+      quickRunSeedRunBtn._bound = true;
+      quickRunSeedRunBtn.addEventListener('click', () => {
+        const file = quickRunSeedFileInput && quickRunSeedFileInput.files && quickRunSeedFileInput.files[0]
+          ? quickRunSeedFileInput.files[0]
+          : null;
+        runSeedPaperDiscovery({
+          file,
+          relatedCount: quickRunSeedCountInput && quickRunSeedCountInput.value,
+          mode: quickRunSeedModeSelect && quickRunSeedModeSelect.value,
+          selectedTags: quickRunSeedTagsInput && quickRunSeedTagsInput.value,
+          notes: quickRunSeedNotesInput && quickRunSeedNotesInput.value,
+        }, quickRunMsgEl);
       });
     }
 
@@ -1400,6 +1664,7 @@ window.SubscriptionsManager = (function () {
     getDraftConfig: () => cloneDeep(draftConfig || {}),
     validateDraftConfig: () => validateIntentProfiles(draftConfig || {}),
     runProfileQuickFetch: (profileTag, days, runOptions) => runProfileQuickFetch(profileTag, days, runOptions),
+    runSeedPaperDiscovery: (requestOptions, targetMsgEl) => runSeedPaperDiscovery(requestOptions, targetMsgEl),
     __test: {
       normalizeSubscriptions: (config) => normalizeSubscriptions(config),
       normalizeDraftConfig: (config) => normalizeDraftConfig(config),
@@ -1408,6 +1673,13 @@ window.SubscriptionsManager = (function () {
       normalizePaperSources: (values, options) => normalizePaperSources(values, options),
       mergeDraftConfigOntoLatest: (latestConfig, draftConfigValue, baseConfigValue) => mergeDraftConfigOntoLatest(latestConfig, draftConfigValue, baseConfigValue),
       applyQuickRunRerankDispatchInputs: (runOptions) => applyQuickRunRerankDispatchInputs(runOptions),
+      buildSeedPaperRequestPayload: (requestOptions) => buildSeedPaperRequestPayload(requestOptions),
+      isPdfFile: (file) => isPdfFile(file),
+      hasPdfSignature: (bufferLike) => hasPdfSignature(bufferLike),
+      getMaxSeedPaperBytes: () => MAX_SEED_PAPER_BYTES,
+      setSeedSubmissionStateForTest: (value) => {
+        isSubmittingSeedPaper = !!value;
+      },
       saveDraftConfig: () => saveDraftConfig(),
       getLoadedBaseConfig: () => cloneDeep(loadedBaseConfig || {}),
     },

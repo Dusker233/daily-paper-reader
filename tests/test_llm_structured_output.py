@@ -9,7 +9,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from llm import LLMClient
+from llm import BltClient, LLMClient
 
 
 class LlmStructuredOutputTest(unittest.TestCase):
@@ -133,6 +133,32 @@ class LlmStructuredOutputTest(unittest.TestCase):
         )
         self.assertIsNone(result["parsed"])
         self.assertIsNone(result["parse_error"])
+
+
+    @patch("llm.requests.post")
+    def test_blt_rerank_raises_http_error_with_non_json_response_preview(self, mock_post):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.text = "<!doctype html><html><body>bad gateway</body></html>"
+        resp.headers = {"content-type": "text/html"}
+        resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", resp.text, 0)
+        mock_post.return_value = resp
+
+        client = BltClient(
+            api_key="test-key",
+            model="qwen3-reranker-4b",
+            base_url="https://rerank.example.com/v1",
+        )
+
+        with self.assertRaises(requests.exceptions.HTTPError) as cm:
+            client.rerank(
+                query="test query",
+                documents=["doc a", "doc b"],
+                top_n=2,
+            )
+
+        self.assertIn("Non-JSON rerank response", str(cm.exception))
+        self.assertIs(cm.exception.response, resp)
 
 
 if __name__ == "__main__":

@@ -131,7 +131,200 @@
   });
 })();
 
-// 3. 自定义订阅管理入口按钮脚本（左下角 📚）
+// 3. 全局主题：夜间模式切换 + 本地持久化
+(function() {
+  var THEME_STORAGE_KEY = 'dpr-theme-preference-v1';
+  var THEME_LIGHT = 'light';
+  var THEME_DARK = 'dark';
+  var themeMediaListenerInstalled = false;
+
+  function normalizeThemePreference(value) {
+    var normalized = String(value || '').trim().toLowerCase();
+    if (normalized === THEME_DARK || normalized === THEME_LIGHT) {
+      return normalized;
+    }
+    return '';
+  }
+
+  function readStoredThemePreference() {
+    try {
+      if (!window.localStorage || typeof window.localStorage.getItem !== 'function') {
+        return '';
+      }
+      return normalizeThemePreference(window.localStorage.getItem(THEME_STORAGE_KEY));
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function writeStoredThemePreference(theme) {
+    var normalized = normalizeThemePreference(theme);
+    try {
+      if (!window.localStorage) return;
+      if (!normalized) {
+        if (typeof window.localStorage.removeItem === 'function') {
+          window.localStorage.removeItem(THEME_STORAGE_KEY);
+        }
+        return;
+      }
+      if (typeof window.localStorage.setItem === 'function') {
+        window.localStorage.setItem(THEME_STORAGE_KEY, normalized);
+      }
+    } catch (error) {
+    }
+  }
+
+  function getThemeMediaQuery() {
+    try {
+      if (typeof window.matchMedia === 'function') {
+        return window.matchMedia('(prefers-color-scheme: dark)');
+      }
+    } catch (error) {
+    }
+    return null;
+  }
+
+  function resolveTheme(preferredTheme) {
+    var explicitTheme = normalizeThemePreference(preferredTheme) || readStoredThemePreference();
+    if (explicitTheme) {
+      return explicitTheme;
+    }
+    var mediaQuery = getThemeMediaQuery();
+    if (mediaQuery && mediaQuery.matches) {
+      return THEME_DARK;
+    }
+    return THEME_LIGHT;
+  }
+
+  function applyTheme(theme) {
+    var resolved = normalizeThemePreference(theme) || THEME_LIGHT;
+    var root = document.documentElement;
+    if (!root) {
+      return resolved;
+    }
+    if (typeof root.setAttribute === 'function') {
+      root.setAttribute('data-theme', resolved);
+    }
+    if (root.dataset) {
+      root.dataset.theme = resolved;
+    }
+    if (!root.style) {
+      root.style = {};
+    }
+    root.style.colorScheme = resolved;
+    return resolved;
+  }
+
+  function updateThemeToggleButton(theme) {
+    var btn = document.getElementById('custom-theme-toggle-btn');
+    if (!btn) return;
+    var resolved = normalizeThemePreference(theme) || resolveTheme();
+    var nextIsDark = resolved !== THEME_DARK;
+    btn.innerHTML = resolved === THEME_DARK ? '☀️' : '🌙';
+    btn.title = nextIsDark ? '切换到夜间模式' : '切换到浅色模式';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('data-theme-mode', resolved);
+  }
+
+  function syncTheme(preferredTheme) {
+    var resolved = resolveTheme(preferredTheme);
+    applyTheme(resolved);
+    updateThemeToggleButton(resolved);
+    return resolved;
+  }
+
+  function toggleThemePreference() {
+    var nextTheme = resolveTheme() === THEME_DARK ? THEME_LIGHT : THEME_DARK;
+    writeStoredThemePreference(nextTheme);
+    return syncTheme(nextTheme);
+  }
+
+  function handleThemeMediaChange() {
+    if (readStoredThemePreference()) {
+      return;
+    }
+    syncTheme('');
+  }
+
+  function installThemeMediaListener() {
+    if (themeMediaListenerInstalled) {
+      return;
+    }
+    var mediaQuery = getThemeMediaQuery();
+    if (!mediaQuery) {
+      return;
+    }
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleThemeMediaChange);
+      themeMediaListenerInstalled = true;
+      return;
+    }
+    if (typeof mediaQuery.addListener === 'function') {
+      mediaQuery.addListener(handleThemeMediaChange);
+      themeMediaListenerInstalled = true;
+    }
+  }
+
+  function createThemeToggleButton() {
+    if (document.getElementById('custom-theme-toggle-btn')) return;
+
+    var btn = document.createElement('button');
+    btn.id = 'custom-theme-toggle-btn';
+    btn.className = 'custom-theme-toggle-btn';
+    btn.type = 'button';
+    btn.innerHTML = '🌙';
+    btn.title = '切换到夜间模式';
+    btn.setAttribute('aria-label', btn.title);
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleThemePreference();
+    });
+
+    document.body.appendChild(btn);
+    updateThemeToggleButton(resolveTheme());
+  }
+
+  function initThemeToggleButton() {
+    if (!document.body || typeof document.body.appendChild !== 'function') {
+      setTimeout(initThemeToggleButton, 100);
+      return;
+    }
+    createThemeToggleButton();
+    syncTheme();
+    installThemeMediaListener();
+  }
+
+  syncTheme();
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initThemeToggleButton);
+  } else {
+    initThemeToggleButton();
+  }
+
+  if (typeof window !== 'undefined' && window.__DPR_ENABLE_UI_LAYOUT_TESTS__ === true) {
+    window.DPRUILayoutTest = {
+      normalizeThemePreference: normalizeThemePreference,
+      readStoredThemePreference: readStoredThemePreference,
+      writeStoredThemePreference: writeStoredThemePreference,
+      resolveTheme: resolveTheme,
+      applyTheme: applyTheme,
+      syncTheme: syncTheme,
+      toggleThemePreference: toggleThemePreference,
+      handleThemeMediaChange: handleThemeMediaChange,
+      createThemeToggleButton: createThemeToggleButton,
+      updateThemeToggleButton: updateThemeToggleButton,
+      getThemeMediaQuery: getThemeMediaQuery,
+      THEME_STORAGE_KEY: THEME_STORAGE_KEY,
+      THEME_LIGHT: THEME_LIGHT,
+      THEME_DARK: THEME_DARK,
+    };
+  }
+})();
+
+// 4. 自定义订阅管理入口按钮脚本（左下角 📚）
 (function() {
   function createCustomButton() {
     if (document.getElementById('custom-toggle-btn')) return;
