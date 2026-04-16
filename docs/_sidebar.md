@@ -151,3 +151,8 @@
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/20260331-20260409/2604.00235v1-mac-attention-a-match-amend-complete-scheme-for-fast-and-accurate-attention-computation" data-sidebar-item="{&quot;title&quot;: &quot;MAC-Attention: a Match-Amend-Complete Scheme for Fast and Accurate Attention Computation&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2604.00235v1-mac-attention-a-match-amend-complete-scheme-for-fast-and-accurate-attention-computation&quot;, &quot;score&quot;: &quot;6.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;q2&quot;}], &quot;evidence&quot;: &quot;\bLLM注意力机制加速方法&quot;}">MAC-Attention: a Match-Amend-Complete Scheme for Fast and Accurate Attention Computation</a>
   * 2017-06-12
     * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/201706/12/1706.03762v1-attention-is-all-you-need" data-sidebar-item="{&quot;title&quot;: &quot;Attention Is All You Need&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/1706.03762v1&quot;, &quot;score&quot;: &quot;10.0&quot;, &quot;evidence&quot;: &quot;提出Transformer纯注意力架构，显著提升并行化与翻译质量。&quot;, &quot;selection_source&quot;: &quot;fresh_fetch&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;sr&quot;}, {&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;attention&quot;}]}">Attention Is All You Need</a>
+
+<!--dpr-seed-papers:start-->
+* Seed Papers
+  * [Wan et al.   2025   CATO End to end optimization of ML based traffic analysis pipelines](#/seed-papers/1776356624350/index)
+<!--dpr-seed-papers:end-->
