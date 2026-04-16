@@ -1,0 +1,1362 @@
+Title: AlertStar: Path-Aware Alert Prediction on Hyper-Relational Knowledge Graphs
+
+URL Source: https://arxiv.org/pdf/2604.03104v1
+
+Published Time: Mon, 06 Apr 2026 00:53:29 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+> 1
+
+# AlertStar: Path-Aware Alert Prediction on Hyper-Relational Knowledge Graphs 
+
+Zahra Makki Nayeri, Mohsen Rezvani 
+
+Abstract —Cyber-attacks continue to grow in scale and sophistication, yet existing network intrusion detection approaches lack the semantic depth required for path reasoning over attacker–victim interactions. We address this by first modelling network alerts as a knowledge graph, then formulating hyper-relational alert prediction as a hyper-relational knowledge graph completion (HR-KGC) problem, representing each network alert as a qualified statement (h, r, t, Q), where h and t are source and destination IPs, r denotes the attack type, and Q encodes flow-level metadata such as timestamps, ports, protocols, and attack intensity, going beyond standard KGC binary triples (h, r, t ) that would discard this contextual richness. We introduce five models across three contributions: first, Hyper-relational Neural Bellman–Ford (HR-NBFNet) extends Neural Bellman–Ford Networks to the hyper-relational setting with qualifier-aware multi-hop path reasoning, while its multi-task variant MT-HR-NBFNet jointly predicts tail, relation, and qualifier-value within a single traversal pass; second, AlertStar fuses qualifier context and structural path information entirely in embedding space via cross-attention and learned path composition, and its multi-task extension MT-AlertStar eliminates the overhead of full knowledge graph propagation; third, HR-NBFNet-CQ extends qualifier-aware representations to answer complex first-order logic queries, including one-hop, two-hop chain, two-anchor intersection, and union, enabling multi-condition threat reasoning over the alert knowledge graph. Evaluated inductively on the Warden and UNSW-NB15 benchmarks across three qualifier-density regimes, AlertStar and MT-AlertStar achieve superior MR, MRR, and Hits@k, demonstrating that local qualifier fusion is both sufficient and more efficient than global path propagation for hyper-relational alert prediction. 
+
+Index Terms —Hyper-relational knowledge graphs, knowledge graph completion, qualifier prediction, Neural Bellman-Ford, alert prediction, network intrusion detection. 
+
+✦
+
+1 INTRODUCTION 
+
+Cyber-attacks continue to grow in scale and sophistication, rendering purely reactive defences insufficient for mod-ern network security. Operational intrusion detection sys-tems (IDSs) are highly sensitive by design, routinely gener-ating tens of thousands of alerts per day [1], yet the most dangerous threats — advanced persistent threat (APT) cam-paigns — are rarely revealed by any single alert. APT actors deliberately decompose their campaigns into individually innocuous steps: reconnaissance, initial compromise, lateral movement, and data exfiltration, each generating only a low-priority alert that may be dismissed in isolation [1]. The central challenge facing Security Operations Centers (SOCs) and Computer Emergency Response Teams (CERTs) is reasoning across sequences of alerts distributed over time and across different host pairs to reconstruct the underlying campaign [2]. Consider a representative scenario: a denial-of-service alert at 02:14, a reconnaissance alert on a different source IP at 03:47, and a data exfiltration alert on a third IP pair at 06:22 — each assessed as medium priority in isolation, yet collectively the signature of a coordinated lateral-movement campaign. A CERT team that could have predicted the second and third alerts from the first could have intervened before exfiltration. This is the problem of alert prediction : given the observed alert history, infer which IP will be targeted next, under which attack type, and via which propagation path. 
+
+• Zahra Makki Nayeri, Faculty of Computer Engineering at Shahrood Uni-versity of Technology, Shahrood, Iran. E-mail: zmakki@shahroodut.ac.ir 
+
+• Mohsen Rezvani, Faculty of Computer Engineering at Shahrood Univer-sity of Technology, Shahrood, Iran. E-mail: mrezvani@shahroodut.ac.ir 
+
+Knowledge graphs (KGs) offer a principled solution by representing attacker–victim interactions as relational triples 
+
+(h, r, t ), enabling heterogeneous, semantically rich reason-ing over unseen entities — a critical capability for inductive alert prediction. However, standard KGC models are limited to binary triples, which cannot encode the auxiliary flow-level metadata that distinguishes network alerts of the same type. Two alerts sharing the same source IP, attack type, and destination IP may represent fundamentally different threat scenarios depending on their timestamp, port, protocol, and flow intensity. This motivates hyper-relational knowl-edge graphs, where each alert is represented as a qualified statement (h, r, t, Q) with Q encoding auxiliary key–value pairs beyond the core triple. Existing hyper-relational KGC models (StarE [3], StarQE [4], HyNT [5]) are predominantly transductive, limiting their applicability when new IP addresses unseen during training must be reasoned about at inference time. Neural Bellman– Ford Networks (NBFNet) [6] address inductive link predic-tion via path-based message passing, but operate on binary triples with no mechanism for qualifier context. In this work, we model network alerts as a hyper-relational knowledge graph and formulate alert prediction as an HR-KGC problem. We introduce five models across three paradigms: qualifier-aware path propagation, embedding-based fusion, and complex query answering over alert graphs. The main contributions are:  
+
+> •
+
+HR-KGC alert benchmarks. We formulate alert pre-
+
+> arXiv:2604.03104v1 [cs.CR] 3 Apr 2026 2
+
+diction as HR-KGC and construct inductive bench-marks from Warden and UNSW-NB15 across three qualifier-density regimes (Q33, Q66, Q100), retaining 33%, 66%, and 100% of qualifier pairs respectively, to study robustness to metadata availability.  
+
+> •
+
+HR-NBFNet and MT-HR-NBFNet. HR-NBFNet ex-tends NBFNet to the hyper-relational setting by in-jecting qualifier context at every message-passing step. MT-HR-NBFNet augments this backbone with joint prediction of tail, relation, and qualifier-value objectives within a single Bellman–Ford pass at no additional graph-traversal cost.  
+
+> •
+
+AlertStar and MT-AlertStar. AlertStar fuses qualifier-aware multi-head cross-attention with alearned path-composition branch via a trainable scalar gate, operating entirely in embedding space without graph traversal, yielding more stable optimisation on sparse, inductive alert graphs than HR-NBFNet. MT-AlertStar extends this with joint prediction from a shared Transformer encoder, completing a symmetric multi-task design across paradigms with stronger qualifier supervision than graph-propagation alternatives.  
+
+> •
+
+HR-NBFNet-CQ. HR-NBFNet-CQ extends qualifier-aware representations to answer four first-order logic query types — one-hop (1p), two-hop chain (2p), two-anchor intersection (2i), and two-anchor union (2u) — enabling complex multi-condition threat investigations directly over the alert knowledge graph.  
+
+> •
+
+Comprehensive evaluation. We evaluate all five models against state-of-the-art HR-KGC baselines under inductive settings, with complexity analysis showing AlertStar achieves up to 50 × per-epoch speedup over HR-NBFNet, and four ablation stud-ies (A1–A4) dissecting component contributions and qualifier-density sensitivity. The remainder of this paper is organised as follows. Sec-tion 2 introduces background on hyper-relational KGs and the threat model. Section 3 formalises the problem and presents the five models. Section 4 describes experiments and evaluation. Section 5 reviews related work. Section 6 analyses results. Section 7 concludes and outlines future work. 
+
+2 PRELIMINARIES AND THREAT MODEL 
+
+This section introduces the formal background required for the remainder of the paper, and defines the operational threat model and assumptions under which the proposed models are evaluated. 
+
+2.1 Knowledge Graphs 
+
+Definition 2.1 (Knowledge Graph) . A knowledge graph is a directed, labeled multigraph G = ( E, R, T ), where E is a finite set of entities, R is a finite set of relation types, and T ⊆ E × R × E 
+
+is a set of facts, each represented as a triple (h, r, t ) with head entity h ∈ E , relation r ∈ R , and tail entity t ∈ E .
+
+In the network alert setting, E is the set of observed IP addresses, R is the set of attack categories (e.g., Recon, DoS, DDoS, Anomaly), and each triple (h, r, t ) ∈ T records that source IP h launched an attack of type r against destination IP t.
+
+Definition 2.2 (Knowledge Graph Completion) . Given a knowledge graph G, the knowledge graph completion (KGC) task is to score and rank candidate tail entities t′ for an incomplete query (h, r, ?) , or equivalently candidate head entities h′ for a query (? , r, t ), using a scoring function f : E × R × E → R.
+
+Applied to alert prediction, the KGC task answers: given that source IP h is conducting an attack of type r, which destination IP t′ is the most likely next target. 
+
+2.2 Hyper-Relational Knowledge Graphs 
+
+Standard KGs represent each alert as a binary triple (h, r, t ),discarding the flow-level metadata that accompanies every alert record. Hyper-relational knowledge graphs (HR-KGs) extend this representation to incorporate predicate-scoped contextual attributes known as qualifiers [3]. 
+
+Definition 2.3 (Hyper-Relational Knowledge Graph) . Ahyper-relational knowledge graph is a set of qualified statements 
+
+G+ = {(h, r, t, Q)}, where (h, r, t ) ∈ E × R × E is the main triple and Q = {(qik, q iv )}ni=1 is a set of qualifier pairs with 
+
+qik ∈ R (qualifier relations) and qiv ∈ E (qualifier entities). 
+
+StarE: StarE [3] is a message-passing GNN designed for representation learning over HR-KGs. It augments each main relation embedding with a qualifier vector computed by composing and aggregating all qualifier pairs of a given fact: 
+
+hq = Wq
+
+X  
+
+> (qk, q v)∈Q
+
+ϕq (hqk , hqv ), (1) where Wq is a learned projection matrix and ϕq is a compo-sition function such as DistMult or RotatE [7]. The qualifier vector is then merged with the main relation embedding hr
+
+via: 
+
+γ(hr , hq ) = α ⊙ hr + (1 − α) ⊙ hq , (2) where α ∈ [0 , 1] is a hyperparameter controlling the flow of qualifier information into the relation representation. Node embeddings are then updated by message passing: 
+
+hv = f
+
+ X 
+
+> (u,r )∈N (v)
+
+Wλ(r) ϕr (hu, γ (hr , hq )vu )
+
+ , (3) where ϕr is a relation composition function, Wλ(r) is a direction-specific weight matrix for incoming, outgoing, and self-loop edges, and N (v) denotes the set of incoming edges to v.
+
+2.3 Neural Bellman-Ford Networks 
+
+Path-based knowledge graph completion methods reason over multi-hop paths between a query source entity and candidate answer entities. Neural Bellman-Ford Networks (NBFNet) [6] provide a principled and general framework for this by casting link prediction as a pair representation learning problem. 
+
+Definition 2.4 (Pair Representation) . For a query (u, q, ?) , the pair representation hq (u, v ) is defined as the generalised sum of all path representations between u and v, where each path repre-sentation is the generalised product of the edge representations along the path: 3
+
+hq (u, v ) = M 
+
+> P∈P uv
+
+hq (P ), (4) 
+
+hq (P = ( e1, . . . , e |P |)) =  
+
+> |P|
+
+O
+
+> i=1
+
+wq (ei). (5) 
+
+where ⊕ and ⊗ denote a commutative summation operator and a (not necessarily commutative) multiplication operator, respec-tively, and wq (e) is the representation of edge e under query relation q.
+
+This formulation subsumes several classical link-prediction heuristics as special cases: Katz index uses ⊕=+ and ⊗=×;graph distance uses ⊕= min and ⊗=+ ; widest path uses 
+
+⊕= max and ⊗= min [6]. Generalised Bellman-Ford Algorithm.: Directly computing Equations (4)–(5) is intractable, because the number of paths grows exponentially with path length. When ⟨⊕ , ⊗⟩ satisfy a 
+
+semiring [6], the pair representation can instead be computed efficiently via the generalised Bellman-Ford algorithm. Let-ting ⊮q and ⊬q denote the multiplication and summation identities of the semiring, the algorithm initialises 
+
+h(0)  
+
+> q
+
+(u, v ) ← ⊮q (u = v), (6) and iterates 
+
+h(t) 
+
+> q
+
+(u, v ) ←
+
+ M
+
+> (x,r,v )∈E (v)
+
+h(t−1)  
+
+> q
+
+(u, x ) ⊗ wq (x, r, v )
+
+
+
+⊕ h(0)  
+
+> q
+
+(u, v ),
+
+(7) where the residual connection to h(0)  
+
+> q
+
+(u, v ) preserves the boundary condition at every layer. The algorithm computes 
+
+hq (u, v ) for a fixed source u, a fixed query relation q, and all 
+
+v ∈ V in parallel, exploiting the distributive property of ⊗
+
+over ⊕ to avoid explicit path enumeration. Setting ⊕= min 
+
+and ⊗=+ recovers the original Bellman-Ford shortest-path algorithm [8]. Neural Bellman-Ford Networks: NBFNet relaxes the semir-ing assumption and replaces the hand-crafted operators with three learned neural components: 1) INDICATOR replaces the boundary condition 
+
+⊮q (u=v). In practice it is instantiated as 1(u=v) · eq ,where eq ∈ Rd is a learned query-relation embed-ding. 2) MESSAGE replaces the binary multiplication op-erator ⊗. It is instantiated using relational oper-ators from knowledge-graph embeddings [7], e.g. translation ( h + wq ) or element-wise multiplication (h ⊙ wq ). 3) AGGREGATE replaces the n-ary summation oper-ator L. It is a permutation-invariant set aggregation function, e.g. sum, mean, max, or PNA, followed by a linear transformation and a non-linear activation. Substituting these functions into Equations (6)–(7) gives the NBFNet update, where (x, r, v ) ∈ E (v) denotes the set of incoming edges to node v:
+
+h(0)  
+
+> v
+
+← INDICATOR (u, v, q ), (8) 
+
+h(t) 
+
+> v
+
+← AGGREGATE (t)n 
+
+MESSAGE (t)
+
+h(t−1)  
+
+> x
+
+, wq (x, r, v )
+
+o 
+
+∪
+
+n
+
+h(0) 
+
+> v
+
+o 
+
+.
+
+After L propagation steps the pair representation h(L) 
+
+> v
+
+is scored by a shallow MLP: 
+
+f (u, q, v ) = σ
+
+
+
+MLP 
+
+
+
+h(L)
+
+> v
+
+ 
+
+. (9) 
+
+2.4 Threat Model and Assumptions 
+
+We adopt a bounded adversarial model tailored to the prop-erties of the evaluated datasets. The following assumptions define the operational threat context. 
+
+A1 — External and Internal Adversaries. The adversary may originate from outside or within the network perimeter. Both attacker positions are handled uniformly: source and destination IPs are entities in E regardless of their network location. 
+
+A2 — Limited-Knowledge Adversary. The adversary has no knowledge of the alert prediction model, its parameters, or its outputs, ensuring that observed patterns reflect gen-uine attacker behavior [2]. 
+
+A3 — Unidirectional Attack Interactions. Each alert rep-resents a unidirectional flow from a source (attacker) IP to a destination (victim) IP. A victim may subsequently launch a counter-attack toward the original attacker, but such interactions are captured as separate alert events in a different time window, rather than modeled as a single simultaneous bidirectional exchange [9]. 
+
+A4 — Role Disjointness per Interaction. Within a single alert, an IP plays exactly one role: attacker ( h) or victim ( t). An IP may switch roles across alerts but not within the same event. 
+
+A5 — Closed-World Attack Taxonomy. Predicted attack categories are limited to those annotated in the training data. While our inductive approach generalizes to unseen entities at test time, it can only predict whether an interaction exists between previously unseen IPs — it cannot infer the attack type for categories not observed during training. Zero-day or novel attack taxonomies therefore remain outside the current scope. 
+
+3 METHODOLOGY 
+
+Figure 1 illustrates the three representational levels moti-vating this work. Triple-based facts (A) cannot distinguish two attacks sharing the same (h, r, t ) structure. Hyper-relational facts (B) solve this ambiguity by attaching flow-level qualifiers, protocol, port, flow count, and detect time, to each alert. Path-based hyper-relational reasoning (C) further captures multi-hop attacker pivoting that qualifier-enriched node representations alone cannot detect. These three levels motivate a three-paradigm investigation. 
+
+Paradigm I: Graph Propagation. HR-NBFNet extends NBFNet [6] to the hyper-relational setting by injecting qualifier context at every message-passing step via per-edge DistMult embeddings. MT-HR-NBFNet augments 4Source IP 1  Target IP 1 Target IP 2     
+
+> DDos DDos
+> Source IP 1 Target IP 1 Target IP 2
+> DDos DDos
+> Protocol: TCP
+> Flow Count: 1175
+> Port: 22
+> Time: 2019-03-11T02:06:55Z
+> Protocol: TCP
+> Flow Count: 1571
+> Port: 80
+> Time: 2019-03-11T01:03:25Z
+> A. Triple-based facts
+> B. Hyper-relational facts
+> Source IP 1 Target IP 1 Target IP 2
+> DDos DDos
+> Attack A
+> Protocol: TCP
+> Flow Count: 1175
+> Port: 22
+> Time: 2019-03-11T02:06:55Z
+> Protocol: TCP
+> Flow Count: 1175
+> Port: 22
+> Time: 2019-03-11T02:06:55Z
+> Target IP 3
+> Target IP 4
+> C. Path-based Hyper-relational facts
+> Source IP 2
+> Attack B Attack A
+
+Fig. 1: Three representational levels: (A) triple-based facts, (B) hyper-relational facts, (C) path-based hyper-relational reasoning. this backbone with three auxiliary tasks, tail, attack type, and qualifier-value prediction, sharing a single Bellman– Ford pass at no additional graph-traversal cost. However, Bellman–Ford propagation has a known scalability limita-tion: O(|T | Qmax d) per query, with path counts growing exponentially with graph diameter. In dense alert graphs where a single attacker IP interacts with hundreds of vic-tims, this overhead becomes prohibitive and redundant traversals beyond moderate path lengths carry negligible signal [6]. 
+
+Paradigm II: Embedding-Based. AlertStar fuses qualifier context and structural path information entirely in embed-ding space via qualifier-aware multi-head cross-attention and a feed-forward path-composition branch, balanced by a trainable scalar gate, no graph traversal is performed. MT-AlertStar extends this with a Transformer encoder and the same three auxiliary tasks, completing a symmetric multi-task design across paradigms. The empirical comparison be-tween HR-NBFNet and AlertStar directly answers whether global path reasoning is worth its computational cost for alert prediction. 
+
+Paradigm III: HR-NBFNet-CQ. Answering complex first-order logic queries, one-hop, two-hop chain, two-anchor in-tersection, and two-anchor union, over the hyper-relational alert graph, enabling multi-condition threat investigations by SOC and CERT analysts. TABLE 1: Example alert records and their qualified-statement representation (h, r, t, Q). The qualifier set Q
+
+encodes detect time, flow count, port, and protocol.                                         
+
+> Detect Time Flow Count Source IP (h)Target IP (t)Port Protocol Category (r)
+> 2019-03-11 00:05 17,094 185.192.59.136 142.252.135.136 22 TCP Recon Scan 2019-03-12 00:45 5,113 78.234.46.141 142.252.32.63 443 TCP Availability DoS 2019-03-14 00:25 15 185.192.59.136 142.252.32.63 81 TCP Availability DDoS 2019-03-14 00:25 39 78.234.46.141 142.252.32.63 22 UDP Anomaly Traffic
+> Qualified-statement mapping for row 1:
+> h= 185.192.59.136, r= Recon Scan, t= 142.252.135.136
+> Q={detectTime: 2019-03-11 00:05, flowCount: 17094, port: 22, protocol: TCP }
+
+3.1 Alert Graph Representation 
+
+Table 1 illustrates the three representational levels applied to alert data. Each alert is first modeled as a binary triple 
+
+(h, r, t ) — source IP, attack category, and destination IP — forming G = ( E, R, T ). This captures who attacked whom, but treats all alerts of the same category between the same IP pair as equivalent, discarding flow-level context. To resolve this ambiguity, we extend to a hyper-relational KG G+ by attaching qualifier pairs Q encoding detect time, flow count, port, and protocol to each triple — for example, distinguish-ing the two DDoS alerts in Figure 1 by port and flow count. The StarE encoder [3] incorporates this context into mes-sage passing via Eqs. (1)–(3). However, qualifier-enriched node representations cannot detect how an attacker pivots across multiple victims via intermediate nodes (Figure 1(C)). NBFNet [6] addresses this by computing a pair representa-tion hq (u, v ) for each source–target pair via multi-hop path propagation (Eqs. (6)–(9)), enabling detection of coordinated multi-stage attacks and lateral movement patterns beyond what local neighbourhood aggregation can capture. 
+
+3.2 Paradigm I: Hyper-Relational NBFNet 
+
+HR-NBFNet extends NBFNet [6] to the hyper-relational set-ting by injecting qualifier context at every propagation step, in the query-conditioned initialisation and in each per-edge message. Notation and base formulation follow Section 2. 
+
+Qualifier vector. For each edge (u, r, v ), the qualifier vector is: 
+
+hq = Wq
+
+X
+
+(qk ,q v )∈Q rvu 
+
+hqk ⊙ hqv . (10) 
+
+Relation–qualifier merging. 
+
+γ(hr , hq ) = α ⊙ hr + (1 −α) ⊙ hq , (11) where α ∈ [0 , 1] is a learned scalar. 
+
+Qualifier-conditioned propagation. The hidden state h(t)
+
+uvqq ′
+
+encodes all qualifier-conditioned paths from source u to node v at layer t, where q′ denotes the query relation and q
+
+denotes the qualifier context Qq = {(qik, q iv )}ni=1 associated with the query. It is initialised at the source node as: 
+
+h(0) 
+
+uvqq ′ =
+
+(eqry 
+
+q′ + Wproj 
+
+P
+
+(qk ,q v )∈Q q eqry 
+
+qk ⊙ eqry 
+
+qv v = u, 
+
+0 otherwise, (12) where eqry 
+
+q′ is the query relation embedding and eqry 
+
+qk , eqry 
+
+qv
+
+are dedicated query-side qualifier embeddings. Wproj ∈
+
+Rd×d projects the qualifier context into relation embedding space. This extends NBFNet [6] at two levels: (i) the I NDI -
+
+CATOR boundary condition (Eq. 12) is conditioned on both the query relation q′ and the query-level qualifier context q;and (ii) the aggregation at each layer (Eq. 13) incorporates 5r qk1  qv1 qk2  qv2 O         
+
+> Protocol TCP Time 2019-03-11
+> T02:06:55Z DDos attack Target IP
+> ∅q∅q
+> ∑
+> wq
+> γ∅r
+> hq
+> wr∑S
+> Source IP
+> r1r1
+> r1
+> r2
+> r2
+> r2
+> r2
+> r3
+> r3
+> r3
+> r4
+> r4
+> r4
+> r1
+> Key 1, Value 1
+> K4, V 4
+> K3, V 3
+> K5, V 5
+> K2, V 2
+> DDos
+
+Fig. 2: HR-NBFNet combines StarE qualifier encoding [3] with NBFNet Bellman-Ford propagation [6]. Qualifier pairs are composed via ϕq , aggregated, projected by Wq , and merged with hr via γ, injecting flow-level context into the pair representation h(t) 
+
+> uvqq ′
+
+at every layer. Inverse edges 
+
+(t, r −1, h ) enable bidirectional propagation for both tail and head prediction. the edge-level qualifier vector hxrv q via γ(hr , hxrv q ), injecting flow-level metadata into every Bellman-Ford iteration. 
+
+a(t) 
+
+> v
+
+= X
+
+> (x,r,v )∈E (v)
+
+h(t−1)  
+
+> uxqq ′
+
++ γ(hr , hxrv q ), (13) 
+
+h(t) 
+
+> uvqq ′
+
+= Dropout(ReLU(LN( W(t)[h(t−1)  
+
+> uvqq ′
+
+∥a(t) 
+
+> v
+
+]))) + h(0)  
+
+> uvqq ′
+
+,
+
+(14) where the residual to h(0)  
+
+> uvqq ′
+
+preserves the query qualifier signal across all layers. 
+
+Scoring and training. After L layers, candidate tails are scored by: 
+
+fHR (h, q ′, t, Q) = MLP HR 
+
+
+
+[h(L) 
+
+> htqq ′
+
+∥eqry  
+
+> q′
+
+]
+
+
+
+, (15) trained with margin ranking loss. Since each (h, q ′) query requires one full Bellman–Ford pass, training groups triples by (h, q ′) and samples kmax tails per group. The complete procedure is given in Algorithm 1. 
+
+Time complexity. O(L |T | Qmax d + |E| d2) per query. 
+
+3.2.1 Multi-Task Hyper-NBFNet 
+
+MT-HR-NBFNet augments HR-NBFNet with two auxiliary tasks, relation and qualifier-value prediction, alongside tail prediction. All three tasks share a single Bellman-Ford pass, so multi-task supervision adds only three lightweight MLP heads with no extra graph-traversal cost. 
+
+Algorithm 1 HR-NBFNet: Inference 
+
+Require: source node h, query relation q′, query qualifiers 
+
+q = Qq = {(qik, q iv )}ni=1 , graph G+, #layers L
+
+Ensure: score vector s ∈ RN where s[v] = fHR (h, q ′, v, Qq )
+
+for all v ∈ V 
+
+▷ Boundary condition 
+
+1: H(0) ← 0N ×d
+
+2: ϕq ← P   
+
+> (qik,q iv)∈q
+
+eqry 
+
+> qik
+
+⊙ eqry 
+
+> qiv
+
+▷ encode q
+
+3: H(0) [h] ← eqry [q′] + Wproj ϕq (12) ▷ inject q′ and q
+
+4: H0res ← H(0) .clone() 
+
+▷ Bellman-Ford iteration 
+
+5: for t = 1 to L do 
+
+6: Compute hq per edge via Eq. (10) ▷ edge qualifier 
+
+7: Compute γ via Eq. (11) ▷ relation–qualifier merge 
+
+8: A(t) ← scatter add( H(t−1) [u] + γ, v) (13) 
+
+9: H(t) ← Dropout(ReLU(LN( W(t)[H(t−1) ∥A(t)])))+ 
+
+H0res (14) 
+
+10: end for 
+
+▷ Scoring 
+
+11: return s ← MLP HR ([ H(L)∥eqry [q′].expand( N, d )]) (15) 
+
+Algorithm 2 MT-HR-NBFNet: Training Step 
+
+Require: group (h, q ′), positives {t+ 
+
+> i
+
+}Bi=1 , qualifiers {Q i},graph G+, weights λt, λ q′ , λ qv , margin δ
+
+Ensure: updated Θ
+
+▷ Single shared BF pass 
+
+1: H(L) ← HR -Infer( h, q ′, Qrep , G+) Alg. 1 
+
+▷ Task 1: tail (margin ranking) 
+
+2: Lt ← 1
+
+> B
+
+P 
+
+> i
+
+max(0 , δ − ftail (t+ 
+
+> i
+
+) + ftail (t− 
+
+> i
+
+)) (16) 
+
+▷ Task 2: relation (cross-entropy) 
+
+3: Lq′ ← CE(MLP q′ (H(L)[h]) , q ′) (17) 
+
+▷ Task 3: qualifier-value (cross-entropy) 
+
+4: Lqv ← CE(ˆ yqv , q ∗ 
+
+> v
+
+) if Qrep ̸ = ∅, else 0 (18) 
+
+▷ Combined loss and update 
+
+5: Θ ← Adam( ∇Θ(λtLt + λq′ Lq′ + λqv Lqv ), clip=1 .0) 
+
+6: return Θ
+
+Three prediction heads. Using H(L) from Eqs. 12–14: 
+
+ftail (t) = MLP t
+
+
+
+[H(L)[t]∥eqry  
+
+> q′
+
+]
+
+
+
+, (16) 
+
+ˆyq′ = MLP q′
+
+
+
+H(L)[h]
+
+
+
+∈ R|R| , (17) 
+
+ˆyqv = MLP qv
+
+
+
+σ
+
+
+
+Wg [H(L)[h]∥Ehead  
+
+> qk
+
+[q∗
+
+> k
+
+]] 
+
+
+
+⊙ H(L)[h]
+
+
+
+,
+
+(18) where Ehead  
+
+> qk
+
+is a dedicated qualifier-key embedding table and q∗ 
+
+> k
+
+is the target qualifier key. The joint loss is: 
+
+LMT -HR = λt Lt + λq′ Lq′ + λqv Lqv , (19) where Lt is margin ranking, and Lq′ , Lqv are cross-entropy. 
+
+λq′ < λ t since propagated representations are already par-tially discriminative for relation type. 
+
+Time complexity. One step runs a single BF pass shared across all three tasks: O(L |T | Qmax d + |E| d2), asymptoti-cally identical to HR-NBFNet. 
+
+3.3 Paradigm II: AlertStar 
+
+As illustrated in Figure 3, AlertStar fuses qualifier context and structural path information entirely in embedding space for a single triple (h, r, Q), no graph traversal is performed. 6r qk1  qv1 qk2  qv2 O     
+
+> Protocol TCP Time 2019-03-11
+> T02:06:55Z DDos attack Target IP
+> uiui+1
+
+⊕    
+
+> Multi-head
+> attention
+> Relation enriched
+> Embedding
+> Attention branch
+> Gated Fusion
+> Path branch
+> Scoring
+> er
+> UQ
+> et
+> eheh
+> Qualifier Enrichment er
+> Layer Norm Feed Forward
+> Network
+> S
+> Source IP
+> eh
+> r
+> ~ attn
+> e
+> ~
+> p
+> r1r1
+> r1
+> r2
+> r2
+> r2
+> r2
+> r3
+> r3
+> r3
+> r4
+> r4
+> r4
+> r1
+> Key 1, Value 1
+> K4, V 4
+> K3, V 3
+> K5, V 5
+> K2, V 2
+> DDos
+> Kn, V n
+> The mechanism in which AlertStar encodes a hyper-relational fact
+
+Fig. 3: Architecture of AlertStar. Qualifier pairs are aggre-gated into UQ and used as key/value in MHA with er as query, producing ˜er . Two branches — cross-attention and path-composition — are fused via a trainable gate α = σ(g)
+
+into z, scored against candidate tails via dot product. It is orders of magnitude faster than HR-NBFNet while retaining full qualifier awareness. 
+
+Qualifier enrichment. Each qualifier pair is combined as 
+
+ui = eqik +eqiv , forming UQ ∈ Rn×d. The relation is enriched via Multi-head cross-attention (MHA): 
+
+˜er =
+
+(
+
+MHA( er , UQ, UQ) Q̸ = ∅,
+
+er otherwise. (20) 
+
+Cross-attention branch. Fuses eh with ˜er via residual con-nection, followed by Layer Normalisation (LN), preserving the attacker IP signal: 
+
+˜eattn  
+
+> r
+
+= LN( eh + ˜ er ). (21) 
+
+Path-composition branch. Models implicit compositional head–relation structure without graph traversal: 
+
+p = LN  eh + FFN path 
+
+ [eh∥˜eattn  
+
+> r
+
+] , (22) 
+
+Algorithm 3 AlertStar: Forward Pass 
+
+Require: head h, relation r, qualifiers Q, optional tail t+
+
+(training only) 
+
+Ensure: score f ∈ R or s ∈ RN
+
+▷ Qualifier enrichment 
+
+1: UQ ← [Eqk [qik] + Eqv [qiv ]] ni=1 
+
+2: ˜er ← MHA( er , UQ, UQ) if n > 0, else er (20) 
+
+▷ Cross-attention branch 
+
+3: ˜eattn  
+
+> r
+
+← LN( eh + ˜ er ) (21) 
+
+▷ Path-composition branch 
+
+4: p ← LN( eh + FFN path ([ eh∥˜eattn  
+
+> r
+
+])) (22) 
+
+▷ Gated fusion 
+
+5: z ← σ(g) ˜ eattn  
+
+> r
+
++ (1 −σ(g)) p (23) 
+
+▷ Scoring 
+
+6: if training then 
+
+7: return z⊤et+
+
+8: else 
+
+9: return z E⊤
+
+10: end if (24) where FFN path is a two-layer feed-forward network con-sisting of Linear(2 d→d), Layer Normalisation, ReLU acti-vation, Dropout, and Linear( d→d).
+
+Gated fusion and scoring. A trainable scalar gate g ∈ R
+
+(initialised to 0.5) balances both branches via sigmoid σ:
+
+α = σ(g), z = α ˜eattn  
+
+> r
+
++ (1 −α) p ∈ Rd, (23) where z is the fused alert representation. Candidate tails are scored via dot product against the entity embedding matrix 
+
+E ∈ RN ×d — note that t is not an input but a scoring target: 
+
+fAS (h, r, t, Q) = Dropout( z)⊤et, s = z E⊤ ∈ RN , (24) where et ∈ Rd is the embedding of candidate tail t and 
+
+N = |E| is the number of entities. 
+
+Time complexity. O(M nd + d2 + N d ) per triple — no graph traversal. Typically 10 3–10 4× faster per sample than HR-NBFNet on dense alert graphs. 
+
+3.3.1 MT-AlertStar: Multi-Task AlertStar 
+
+As illustrated in Figure 4, MT-AlertStar extends Alert-Star with a Transformer encoder [10], and three simul-taneous prediction objectives, tail, relation, and qualifier-value, mirroring MT-HR-NBFNet within the embedding-based paradigm. 
+
+Input and masking. For a qualified triple (h, r, t, Q) with 
+
+n = |Q| qualifier pairs, all components are embedded into 
+
+Rd and arranged into a token sequence X ∈ R(3+2 n)×d:
+
+X = [ eh, er , et, eq1 
+
+> k
+
+, eq1 
+
+> v
+
+, . . . , eqnk , eqnv ] ∈ R(3+2 n)×d,
+
+(25) where eqik , eqiv ∈ Rd are learned embeddings for the i-th qualifier key and value respectively. Task-specific mask-ing prevents target leakage: et ← 0 for tail prediction; 
+
+er ← 0 for relation prediction; qualifier pair j is removed for qualifier-value prediction. 
+
+Transformer encoder. The masked sequence is passed through a standard Transformer encoder [10]: H =TransformerEncoder( X) ∈ R(3+2 n)×d, where each layer applies multi-head self-attention, position-wise FFN, Layer-Norm, and residual connections. The relation-token output 
+
+hr = H[1] ∈ Rd — position 1 in the sequence — serves as 7r                  
+
+> DDos attack
+> S
+> Source IP
+> qk1 qv1qk2 qv2
+> Protocol TCP Time 2019-03-11
+> T02:06:55Z
+> Input Token Sequence
+> Task-Specific Masking
+> Task 1: Tail
+> Prediction
+> Task 2: Relation
+> Prediction
+> Task 3:
+> Qualifier value
+> Prediction
+> Zero e tZero e rRemove pair j
+> Transformer Encoder
+> Multi-Head Self Attention
+> Position-wise Feed Forward Network
+> LayerNorm + Residual
+> × L layers
+> Task 1 (Tail)
+> X = [e h, e r, [0], e qk1 ,
+> eqv1 , e qk2 , e qv2 ]
+> Task 2 (Relation)
+> X = [e h, [0], e t, e qk1 ,
+> eqv1 , e qk2 , e qv2 ]
+> Task 3 (Qualifier
+> value)
+> X = [e h, e r, e t, e qk1 ,
+> [0], e qk2 , e qv2 ]
+> scores over all
+> entities and Loss
+> tail
+> scores over attack
+> types and Loss
+> relation
+> scores over qualifier
+> values and Loss
+> qualifier value
+> LMT-AS = λ tLt+ λ q' L q' + λ qv Lqv
+> Adam Optimizer
+> Update weights (Θ)
+> r1r1
+> r1
+> r2
+> r2
+> r2
+> r2
+> r3
+> r3
+> r3
+> r4
+> r4
+> r4
+> r1
+> Key 1, Value 1
+> K4, V 4
+> K3, V 3
+> K5, V 5
+> K2, V 2
+> DDos
+> Kn, V n
+> The mechanism in which MT-AlertStar encodes a hyper-relational fact
+> Target IP
+> O
+
+Fig. 4: Architecture of MT-AlertStar. The masked token se-quence X is encoded by a Transformer, whose relation-token output hr = H[1] serves as shared context for three MLP heads predicting tail, relation, and qualifier value jointly. shared context for all three prediction heads, as it attends over all other tokens including the head entity, qualifier pairs, and masked target position. 
+
+Three prediction heads. All heads share the same architec-ture: two linear layers with LayerNorm, ReLU, and Dropout interleaved, mapping Rd → Rdout . Using the shared context 
+
+hr , each head produces a score vector over its prediction space: 
+
+ˆyt = MLP t(hr ) ∈ RN , (26) 
+
+ˆyq′ = MLP q′ (hr ) ∈ R|R| , (27) 
+
+ˆyqv = MLP qv (hr ) ∈ R|Q V |, (28) where ˆyt, ˆyq′ , and ˆyqv are the predicted score vectors over 
+
+Algorithm 4 MT-AlertStar: Training Step 
+
+Require: triple (h, r, t, Q), task τ ∈ { tail , rel , qval }
+
+Ensure: updated Θ
+
+▷ Build masked token sequence 
+
+1: xh, xr , xt ← E[h], E r [r], E [t]
+
+2: Mask: xt←0 if tail ; xr ←0 if rel ; remove pair j if 
+
+qval 
+
+3: X ← [xh; xr ; xt; eq1 
+
+> k
+
+; eq1 
+
+> v
+
+; . . . ] (25) 
+
+▷ Transformer encoder 
+
+4: hr ← TransformerEncoder( X)[1] 
+
+▷ Task-specific head and loss 
+
+5: ˆy ← MLP τ (hr ) (26)–(28) 
+
+6: Lτ ← λτ · CE(ˆ y, y ∗)
+
+▷ Update 
+
+7: Θ ← Adam( ∇ΘLτ , clip=1 .0) 
+
+8: return Θ
+
+N entities, |R| attack categories, and |Q V | qualifier values respectively. The three tasks are trained jointly: 
+
+LMT -AS = λt Lt + λq′ Lq′ + λqv Lqv , (29) where Lt, Lq′ , and Lqv are cross-entropy losses for tail, relation, and qualifier-value prediction respectively, and 
+
+λt, λ q′ , λ qv ∈ R+ are task-specific loss weights. 
+
+Time complexity. O(n2d+ ndF +N d ) per sample, no graph traversal. 
+
+3.4 Paradigm III: Complex Hyper-Relational 
+
+As illustrated in Figure 5, HR-NBFNet-CQ answers com-plex first-order logic queries over the hyper-relational alert graph, enabling richer threat intelligence beyond single-hop link prediction. 
+
+Query types. Four templates are supported, each grounded in a concrete threat scenario: 
+
+1p (? t. r(h, t, Q1)) — direct prediction. “Which IP was targeted by 185.192.59.136 via DDoS with flow count 17,094 over TCP on port 22?” 
+
+2p (? t. ∃y : r1(h, y, Q1) ∧ r2(y, t, Q2)) — lateral movement: attacker first compromises an intermediate host y, which then attacks t. y is inferred implicitly during propagation. 
+
+“185.192.59.136 performed a Recon Scan on y; y then launched a DoS — who was the final target?” 
+
+2i (? t. r 1(h1, t, Q1) ∧ r2(h2, t, Q2)) — coordinated attack: finds a shared victim targeted by two source IPs simultane-ously. “Which IP was hit by both 185.192.59.136 via DDoS and 78.234.46.141 via Recon Scan?” 
+
+2u (? t. r1(h1, t, Q1) ∨ r2(h2, t, Q2)) — campaign victim set: retrieves all IPs targeted by either attacker. Unlike StarQE [4], which restricts to conjunctive templates, we support this disjunctive query motivated by campaign-level co-targeting in Warden, where coordinated attacks against overlapping victim sets are operationally meaningful for CERT analysts. 
+
+Composition operator. All query types share the residual path-composition operator ϕNBF , which models one hop entirely in embedding space. Given a current node em-bedding x ∈ Rd, a relation r, qualifier set Q, and an 8T                        
+
+> S
+> TSTT
+> S
+> T
+> T
+> S
+> STSTTSTTT
+> S
+> S
+> S
+> hr-1p hr-2p hr-3p hr-2i hr-3i hr-2i-1p hr-1p-2i
+> Qualifier pairs SSource nodes TTarget nodes
+> Relations Hyper-Relations
+> S
+> S
+> r1r1
+> r1
+> r2r2
+> r2
+> r2
+> r3
+> r3
+> r3
+> r4
+> r4
+> r1
+> K4, V 4
+> K3, V 3
+> K5, V 5
+> K2, V 2
+> DDos
+> r4
+> r4r2
+> hr-1p-2i
+> K1, V 1
+
+Fig. 5: Hyper-relational query templates. Qualifier pairs on each edge may vary from 0 to n.anchor embedding x0 ∈ Rd (the source entity, preserved via residual): 
+
+ϕNBF (x, r, Q, x0) = x0 + FFN ϕ([ x∥˜er ]) , (30) where [·∥· ] denotes concatenation, ˜er is the qualifier-enriched relation embedding from Eq. 20, and FFN ϕ: R2d →
+
+Rd comprises two linear layers with LayerNorm, ReLU, and Dropout. 
+
+Query formulations. Each query type produces a query vector q ∈ Rd by composing ϕNBF in different structural patterns. For 2p, r1 and r2 are two sequential relations and 
+
+∅ denotes an empty qualifier set on the second hop. For 2i and 2u, h1 and h2 are two anchor source IPs with relations 
+
+r1 and r2:
+
+q1p = ϕNBF (eh, r, Q, eh), (31) 
+
+q2p = ϕNBF (ϕNBF (eh, r 1, Q, eh), r 2, ∅, eh), (32) 
+
+q2i = Wi[ϕNBF (eh1 , r 1, Q, eh1 )∥ϕNBF (eh2 , r 2, ∅, eh2 )] ,
+
+(33) 
+
+q2u = 12 (ϕNBF (eh1 , r 1, Q, eh1 ) + ϕNBF (eh2 , r 2, ∅, eh2 )) ,
+
+(34) where Wi ∈ Rd×2d is a learned projection for asymmetric in-tersection. All query types are scored by dot product against candidate entity embedding ee ∈ Rd: f = Dropout( q)⊤ee,with inference s = qE⊤ ∈ RN over all N entities costing 
+
+O(N d ).
+
+Time complexity. O(nd + d2 + N d ) per triple — same class as AlertStar, much cheaper than HR-NBFNet. 
+
+3.5 Shared Training Objective 
+
+All five models are trained with Adam, gradient clipping to unit norm, and model selection by best validation MRR. The shared margin ranking loss is: 
+
+Lmargin = X
+
+> (h,r,t, Q)
+
+max  0, δ − f (h, r, t, Q) + f (h, r, t −, Q) ,
+
+(35) where t− ∼ Uniform( E). MT-HR-NBFNet and MT-AlertStar use the joint objectives of Eqs. 19 and 29. HR-NBFNet-CQ averages the margin loss over active query types. Table 2 summarises per-sample inference complexity. 
+
+Algorithm 5 HR-NBFNet-CQ: Training Step 
+
+Require: triple (h, r, t +, Q), neighbour index Iout , anchor index Iin , margin δ
+
+Ensure: updated Θ
+
+▷ Qualifier enrichment  
+
+> 1:
+
+˜er ← QualEnrich( Er [r], Q) (20)  
+
+> 2:
+
+t− ← Uniform( E); A ← ∅ ; L ← 0
+
+▷ 1p (always)  
+
+> 3:
+
+q1p ← ϕNBF (E[h], r, Q, E [h]) (31)  
+
+> 4:
+
+L += max(0 , δ − q1p⊤E[t+] + q1p⊤E[t−]) ; A += {1p}
+
+▷ 2p (if chain exists)  
+
+> 5:
+
+if Iout [t+]̸ = ∅ then  
+
+> 6:
+
+Sample (r2, t 2); q2p ← ϕNBF (q1p, r 2, ∅, E [h]) (32)  
+
+> 7:
+
+L += max(0 , δ − q2p⊤E[t2] + q2p⊤E[t−]) ; A += 
+
+{2p} 
+
+> 8:
+
+end if 
+
+▷ 2i (if second anchor exists)  
+
+> 9:
+
+if ∃(h2, r 2) ∈ I in [t+], h 2̸ = h then  
+
+> 10:
+
+q2i ← Wi[q1p∥ϕNBF (E[h2], r 2, ∅, E [h2])] (33)  
+
+> 11:
+
+L += max(0 , δ − q2i⊤E[t+] + q2i⊤E[t−]) ; A += 
+
+{2i} 
+
+> 12:
+
+end if 
+
+▷ Average and update  
+
+> 13:
+
+Θ ← Adam( ∇Θ(L/|A| ), clip=1 .0)  
+
+> 14:
+
+return Θ
+
+TABLE 2: Per-sample inference complexity. N =|E| , E=|T | ,
+
+L=layers, Q=Qmax , n=|Q| , S=3+2 n, F =FFN width.                             
+
+> Model Complexity Graph Traversal?
+> AlertStar O(nd +d2+N d )No MT-AlertStar O(S2d+SdF +N d )No HR-NBFNet-CQ O(nd +d2+N d )No HR-NBFNet O(LEQd +N d 2)Yes MT-HR-NBFNet O(LEQd +N d 2)Yes
+
+4 EXPERIMENT 
+
+4.1 Experiment Setup 
+
+All models are implemented in PyTorch and trained on a single NVIDIA A100 GPU with 64 GB RAM. Shared hy-perparameters: d=200 , dropout 0.2, Adam with lr 5×10 −4,20 epochs, gradient clipping to unit norm, margin δ=1 .0,9
+
+TABLE 3: KGC results on the Warden Alert dataset using statements under inductive and transductive settings. 
+
+Inductive Transductive Model MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+Paradigm I: Graph Propagation 
+
+HR-NBFNet 4616.2 0.4666 0.4332 0.4791 0.5283 4182.4 0.4785 0.4408 0.4956 0.5465 MultiTask HR-NBFNet 5229.5 0.4729 0.4373 0.4849 0.5528 589.8 0.4134 0.3782 0.4171 0.4926 
+
+Paradigm II: Embedding-Based 
+
+AlertStar 2645.2 0.4280 0.3400 0.4900 0.5620 3083.1 0.4620 0.3980 0.5040 0.5640 
+
+MultiTask AlertStar 3016.4 0.5618 0.5160 0.5860 0.6460 3341.5 0.5384 0.5040 0.5480 0.6140 
+
+TABLE 4: KGC results on the Warden Alert dataset using statements under the inductive and transductive settings. 
+
+Inductive Transductive Model MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+33% 
+
+ShrinkE 2724.0 0.4665 0.4380 0.4760 0.5220 3087.2 0.5012 0.4820 0.5060 0.5400 StarE 2858.4 0.4205 0.3640 0.4520 0.5300 3262.7 0.4451 0.3940 0.4680 0.4940 
+
+AlertStar 2765.3 0.4371 0.3520 0. 5040 0.5840 3031.6 0.4627 0.3840 0.5280 0.5920 MultiTask AlertStar 2680.2 0.5860 0.5400 0.6100 0.6850 3174.2 0.5582 0.5200 0.5750 0.6350 
+
+66% 
+
+ShrinkE 2920.0 0.4683 0.4440 0.4760 0.5100 2692.4 0.5026 0.4860 0.5040 0.5360 StarE 3187.6 0.3209 0.2100 0.4080 0.5140 3098.7 0.3799 0.2720 0.4540 0.5340 
+
+AlertStar 3111.1 0.4153 0.3420 0.4600 0.5420 3088.3 0.4666 0.3920 0.5260 0.5900 MultiTask AlertStar 2532.5 0.5968 0.5600 0.6100 0.6850 3329.0 0.5328 0.5000 0.5550 0.5800 
+
+100% 
+
+ShrinkE 2784.8 0.4567 0.4380 0.4460 0.5220 2701.1 0.5104 0.4900 0.5180 0.5540 StarE 3522.9 0.4191 0.3360 0.4740 0.5480 3744.6 0.4227 0.3420 0.4840 0.5560 
+
+AlertStar 3289.9 0.4254 0.3260 0.5060 0.5860 3180.5 0.4797 0.4160 0.5220 0.5860 MultiTask AlertStar 2977.9 0.5838 0.5400 0.6050 0.6750 3307.0 0.5477 0.5150 0.5650 0.6100 
+
+TABLE 5: KGC results on the UNSW dataset using statements under the inductive and transductive settings. 
+
+Inductive Transductive Model MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+33% 
+
+ShrinkE 4.2680 0.4220 0.2200 0.5000 1.000 4.2880 0.4083 0.2020 0.4800 1.000 StarE 4.1460 0.4367 0.2280 0.5480 0.996 4.1560 0.4267 0.2160 0.5080 1.000 
+
+AlertStar 3.9300 0.4497 0.2240 0.5640 1.000 4.0140 0.4394 0.2260 0.5300 1.000 MultiTask AlertStar 3.9350 0.4490 0.2350 0.5400 1.000 3.9250 0.4626 0.2600 0.5500 1.000 
+
+66% 
+
+ShrinkE 4.1020 0.4483 0.2440 0.5500 1.000 4.1500 0.4241 0.2100 0.5100 1.000 StarE 4.2980 0.4296 0.2280 0.5280 0.996 4.0800 0.4404 0.2360 0.5060 1.000 
+
+AlertStar 4.0160 0.4575 0.2440 0.5740 1.000 4.0160 0.4575 0.2440 0.5740 1.000 MultiTask AlertStar 3.6800 0.5023 0.3200 0.5800 1.000 3.7900 0.4752 0.2750 0.5750 1.000 
+
+100% 
+
+ShrinkE 4.0120 0.4449 0.2360 0.5680 1.000 4.0680 0.4477 0.2440 0.5500 1.000 StarE 4.0020 0.4595 0.2460 0.5760 0.996 4.0460 0.4236 0.2040 0.5320 1.000 
+
+AlertStar 3.8540 0.4707 0.2620 0.5900 1.000 3.8440 0.4647 0.2520 0.5820 1.000 MultiTask AlertStar 3.6450 0.4809 0.2700 0.6050 1.000 4.0000 0.4641 0.2650 0.5550 1.000 
+
+TABLE 6: Ablation A4: Model performance across qualifier density levels (inductive). 
+
+Q33% Q66% Q100% Model MRR H@1 H@10 MRR H@1 H@10 MRR H@1 H@10 
+
+StarE 0.2783 0.0940 0.5140 0.3442 0.2180 0.5140 0.4051 0.3140 0.5340 AlertStar 0.4282 0.3380 0.5760 0.4167 0.3340 0.5440 0.4313 0.3420 0.5820 HyNT 0.5632 0.5140 0.6460 0.5726 0.5320 0.6440 0.5692 0.5280 0.6460 MultiTask AlertStar 0.5546 0.5040 0.6520 0.5663 0.5200 0.6540 0.5531 0.5060 0.6460 
+
+uniform negative sampling. For HR-NBFNet and MT-HR-NBFNet: L=3 layers, chunk size C=5 ,000 , kmax =8 tails per (h, q ′) group, Qmax =8 qualifier pairs per edge. For MT-AlertStar: 3 Transformer layers, 4 attention heads, FFN width F =800 . Batch sizes are 128 (AlertStar), 64 (MT-AlertStar), and 32 (HR-NBFNet variants), reflecting the higher memory cost of graph traversal. The code is available 
+
+1.
+
+4.2 Main Results 
+
+Paradigm comparison: Table 3 compares graph propagation and embedding-based paradigms on Warden. Contrary to the assumption that explicit path reasoning yields superior performance, MT-AlertStar achieves the best overall results in both settings (MRR 0.5618 inductive, 0.5384 transductive), outperforming MT-HR-NBFNet by 19% and 30% respec-
+
+1. https://gitfront.io/r/Zahra/pNhiE7GJ4P54/AlertStar/ 
+
+tively. Multi-task training strongly benefits the embedding-based paradigm (+0.1338 MRR inductively) but provides negligible gain or degrades graph propagation ( −0.0651 transductively), suggesting the Bellman-Ford backbone is less able to exploit auxiliary supervision. Although HR-NBFNet achieves lower MR transductively, AlertStar dom-inates on MRR and H@k — the operationally relevant metrics for CERT analysts inspecting top-ranked candidates. Hyper-relational baselines: Table 4 compares against StarE and ShrinkE across qualifier-coverage levels (33%, 66%, 100%). MT-AlertStar consistently outperforms ShrinkE by 25–28% relative MRR across all levels and both settings. StarE degrades with increasing qualifier density (MRR 0.4205 →0.4191 inductively), while MT-AlertStar remains stable, demonstrating robustness to partial qualifier avail-ability. AlertStar alone already outperforms StarE on H@3 and H@10 at all coverage levels. Similar trends hold on UNSW-NB15 (Table 5), confirming generalisation across 10 
+
+TABLE 7: KGC results on the Warden Alert dataset using triples under inductive and transductive settings.                                                                        
+
+> Inductive Transductive Model MR ↓MRR ↑H@1 ↑H@3 ↑H@10 ↑MR ↓MRR ↑H@1 ↑H@3 ↑H@10 ↑
+> ShrinkE 2699.4 0.4580 0.4140 0.4840 0.5320 2889.4 0.4998 0.4680 0.5180 0.5500 StarE 2760.9 0.4098 0.3400 0.4680 0.5300 3150.9 0.4503 0.4000 0.4860 0.5460 NBFNet 3616.5 0.4853 0.4481 0.5060 0.5480 4524.8 0.4818 0.4451 0.5019 0.5511
+> AlertStar 2561.0 0.4565 0.3720 0.5140 0.5920 2746.2 0.4862 0.4320 0.5140 0.5840 MultiTask AlertStar (Tail+Rel) 2430.0 0.5860 0.5450 0.6000 0.6750 3138.6 0.5762 0.5450 0.5900 0.6400
+
+TABLE 8: KGC results on the UNSW dataset using triples under inductive and transductive settings.                                                                        
+
+> Inductive Transductive Model MR ↓MRR ↑H@1 ↑H@3 ↑H@10 ↑MR ↓MRR ↑H@1 ↑H@3 ↑H@10 ↑
+> ShrinkE 4.1380 0.4405 0.2400 0.5320 1.000 4.1360 0.4305 0.2220 0.5140 1.000 StarE 4.1300 0.4445 0.2460 0.5240 0.996 4.1300 0.4163 0.1980 0.5120 1.000 NBFNet 4.2405 0.4288 0.2252 0.5120 1.000 4.2484 0.4279 0.2228 0.5142 1.000
+> AlertStar 4.0060 0.4469 0.2320 0.5480 1.000 4.0060 0.4355 0.2220 0.5320 1.000 MultiTask AlertStar (Tail+Rel) 3.9500 0.4409 0.2150 0.5850 1.000 3.9700 0.4519 0.2550 0.5200 1.000
+
+TABLE 9: Complex query answering results on the Warden Alert dataset under the inductive and transductive settings. 
+
+Inductive 33% 66% 100% Query MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+StarQE 
+
+1p 43.810 0.4875 0.460 0.475 0.555 79.305 0.4600 0.440 0.445 0.495 53.820 0.5103 0.4950 0.5050 0.5350 2p 100.66 0.0176 0.000 0.000 0.000 51.250 0.2611 0.250 0.250 0.250 34.545 0.6694 0.6363 0.7272 0.7272 2i 26.545 0.3584 0.005 0.685 0.715 31.965 0.3454 0.010 0.655 0.700 33.575 0.6835 0.6750 0.6750 0.6900 2u 50.260 0.4808 0.460 0.460 0.530 84.645 0.4503 0.435 0.440 0.465 60.715 0.4881 0.4600 0.4950 0.5300 
+
+HR-NBFNet-CQ 
+
+1p 32.080 0.4940 0.475 0.475 0.515 40.435 0.4461 0.415 0.430 0.500 33.115 0.4917 0.4600 0.4850 0.5450 2p 111.33 0.0232 0.000 0.000 0.000 139.250 0.0089 0.000 0.000 0.000 18.727 0.2565 0.0909 0.0909 0.7272 2i 17.850 0.7384 0.715 0.745 0.770 28.050 0.6399 0.620 0.635 0.670 25.985 0.6817 0.6450 0.6950 0.7300 
+
+2u 38.920 0.4818 0.455 0.475 0.515 48.165 0.4333 0.410 0.425 0.470 41.650 0.4782 0.4500 0.4700 0.5400 
+
+Transductive 33% 66% 100% Query MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+StarQE 
+
+1p 42.975 0.2782 0.02 0.500 0.555 42.255 0.5170 0.4950 0.5050 0.5750 55.500 0.4495 0.405 0.495 0.525 2p 6.750 0.3368 0.25 0.250 1.000 45.454 0.1977 0.0909 0.1818 0.4545 84.533 0.1092 0.000 0.267 0.400 2i 25.495 0.1219 0.00 0.015 0.770 22.145 0.4160 0.0850 0.7300 0.7500 27.720 0.6350 0.610 0.625 0.735 2u 51.210 0.2685 0.02 0.495 0.525 47.425 0.5122 0.4950 0.5000 0.5450 59.490 0.4572 0.405 0.485 0.520 
+
+HR-NBFNet-CQ 
+
+1p 29.955 0.5112 0.475 0.50 0.580 34.925 0.5658 0.540 0.565 0.605 36.960 0.4326 0.400 0.405 0.510 2p 12.250 0.1160 0.000 0.000 0.750 173.090 0.0068 0.000 0.000 0.000 59.400 0.0892 0.067 0.067 0.133 2i 19.390 0.6980 0.675 0.68 0.755 24.050 0.1637 0.015 0.015 0.730 18.725 0.6535 0.610 0.700 0.750 
+
+2u 37.405 0.4965 0.465 0.48 0.560 41.150 0.5573 0.535 0.560 0.590 44.315 0.4427 0.400 0.480 0.515 
+
+datasets. Effect of qualifier context: On Warden (Table 7), triple-only models outperform hyper-relational variants, while on UNSW-NB15 (Table 8) qualifiers consistently improve performance. We attribute this to Warden’s limited four-category attack taxonomy, where triples alone suffice, versus UNSW-NB15’s richer and more diverse taxonomy where qualifier attributes — port, protocol, flow count — are neces-sary to disambiguate identical (h, r, t ) structures. Qualifier context is beneficial when the graph is sufficiently com-plex, making UNSW-NB15 the more reliable benchmark for hyper-relational modelling. Multi-task auxiliary predictions.: Tables 11 and 12 report MT-AlertStar’s three heads. On UNSW-NB15, tail predic-tion achieves H@10 of 1.000 across all settings while MRR (0.44–0.50) reflects the difficulty of precise top-1 ranking. Relation prediction improves with qualifier density (H@3: 0.690 →0.755 inductively), confirming richer context aids at-tack category discrimination; accuracy (0.415–0.465) is lower than H@k as it measures exact top-1 match over a diverse taxonomy. Qualifier-value prediction achieves near-perfect performance (MRR >0.87, H@3 >0.99), confirming flow-level attributes are highly predictable. On Warden, all heads achieve near-perfect results due to its limited taxonomy, making UNSW-NB15 the more informative benchmark. Complex query answering.: Tables 9 and 10 evaluate HR-NBFNet-CQ against StarQE. StarQE leads on 1p and 2u across most settings. Two-hop queries (2p) are the hardest for both models, H@1 is near zero at low qualifier coverage, reflecting the sparsity of two-hop chains in alert graphs. HR-NBFNet-CQ outperforms StarQE on intersection queries (2i) on Warden (H@3: 0.745 vs 0.685 at 33%), the most opera-tionally critical query type for coordinated attack detection. Qualifier density consistently improves complex queries: HR-NBFNet-CQ reaches H@10 of 0.727 on 2p at 100% vs 0.000 at 33%. On UNSW-NB15, StarQE leads across all query types including 2i, though both models achieve H@10 of 1.000 on most types, confirming answers always rank within the top 10 regardless of query complexity. 
+
+4.3 Ablation Study 
+
+All ablations run on Warden unless stated otherwise. 11 
+
+TABLE 10: Complex query answering results on the UNSW dataset under the inductive and transductive settings. 
+
+Inductive 33% 66% 100% Query MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+StarQE 
+
+1p 3.125 0.5368 0.335 0.665 1.000 3.340 0.5026 0.290 0.615 1.000 3.000 0.5228 0.290 0.685 1.000 2p 1.950 0.6633 0.435 0.950 1.000 1.715 0.7399 0.560 0.960 1.000 1.775 0.7469 0.580 0.940 1.000 2i 3.385 0.5149 0.310 0.645 1.000 3.730 0.4627 0.250 0.550 1.000 3.395 0.4995 0.275 0.630 0.995 2u 3.230 0.4973 0.265 0.660 1.000 3.300 0.5092 0.300 0.620 1.000 3.145 0.5126 0.280 0.660 1.000 
+
+HR-NBFNet-CQ 
+
+1p 3.485 0.5004 0.295 0.620 0.995 3.985 0.4207 0.205 0.495 1.000 3.510 0.4920 0.280 0.615 1.000 2p 1.780 0.7460 0.570 0.945 0.995 1.995 0.6555 0.415 0.940 1.000 1.930 0.6773 0.450 0.950 1.000 2i 3.840 0.4862 0.305 0.575 1.000 4.215 0.4183 0.215 0.495 0.995 3.675 0.4559 0.240 0.565 1.000 2u 3.575 0.5001 0.290 0.630 1.000 4.250 0.3906 0.180 0.445 1.000 3.740 0.4818 0.280 0.585 1.000 
+
+Transductive 33% 66% 100% Query MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑ MR ↓ MRR ↑ H@1 ↑ H@3 ↑ H@10 ↑
+
+StarQE 
+
+1p 3.315 0.4962 0.280 0.610 1.000 3.390 0.4850 0.275 0.610 1.000 3.365 0.4721 0.240 0.620 0.995 2p 1.980 0.6982 0.525 0.840 1.000 2.245 0.6232 0.405 0.800 1.000 2.155 0.6210 0.395 0.870 1.000 2i 3.680 0.4448 0.205 0.595 1.000 3.570 0.4760 0.270 0.570 1.000 3.645 0.4740 0.285 0.555 1.000 2u 3.525 0.4947 0.300 0.590 0.990 3.535 0.4607 0.245 0.585 1.000 3.365 0.4774 0.235 0.625 1.000 
+
+HR-NBFNet-CQ 
+
+1p 3.395 0.4915 0.270 0.635 0.990 4.030 0.4135 0.195 0.505 1.000 3.925 0.4571 0.270 0.535 0.990 2p 2.125 0.6452 0.435 0.865 1.000 2.550 0.6143 0.400 0.805 0.980 2.135 0.6602 0.480 0.810 1.000 2i 3.830 0.4612 0.250 0.560 1.000 4.050 0.4195 0.210 0.480 1.000 3.730 0.4633 0.245 0.590 0.990 2u 3.540 0.4931 0.295 0.580 0.995 4.190 0.4061 0.200 0.485 0.995 4.135 0.4379 0.245 0.505 0.985 
+
+TABLE 11: MT-AlertStar on Warden.                                                                                                        
+
+> Inductive Transductive Metric 33% 66% 100% 33% 66% 100%
+> Tail Prediction
+> MR 2680.2 2532.5 2978.0 3174.2 3329.0 3307.0 MRR 0.5860 0.5968 0.5838 0.5582 0.5329 0.5477 H@1 0.5400 0.5600 0.5400 0.5200 0.5000 0.5150 H@3 0.6100 0.6100 0.6050 0.5750 0.5550 0.5650 H@10 0.6850 0.6850 0.6750 0.6350 0.5800 0.6100
+> Relation Prediction
+> MR 1.0 1.0 1.0 1.0 1.1 1.0 MRR 1.0000 0.9975 1.0000 0.9950 0.9725 0.9975 H@1 1.0000 0.9950 1.0000 0.9900 0.9450 0.9950 H@3 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000 H@10 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000 Acc 1.0000 0.9950 1.0000 0.9900 0.9450 0.9950
+> Qualifier Value
+> MR 1.0 1.0 1.0 1.0 1.0 1.0 MRR 0.9950 0.9900 0.9925 0.9975 0.9875 0.9875 H@1 0.9900 0.9800 0.9850 0.9950 0.9750 0.9750 H@3 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000 H@10 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000
+
+4.3.1 A1: AlertStar Component Ablation 
+
+Table 13 compares four variants: AS-NoQual (˜er = er ,no MHA), AS-NoPath (α=1 , attention branch only), AS-NoGate (fixed α=0 .5), and AS-Full (complete model). Re-moving qualifier enrichment causes the largest single drop, confirming qualifier context as the primary discriminative signal. Removing the path-composition branch produces a consistent but smaller drop, demonstrating that structural path information complements rather than substitutes quali-fier attention. Fixing the gate to α=0 .5 underperforms the learned gate, confirming that the optimal branch balance is query-dependent. 
+
+4.3.2 A2: Gate Value Trajectory 
+
+Figure 6 tracks αe = σ(ge) across training epochs. Both in-ductive ( 0.611 →0.835 ) and transductive ( 0.614 →0.832 ) set-tings follow nearly identical trajectories, converging within 12–14 epochs. Two key findings emerge: (i) AlertStar consis-tently favours the cross-attention branch ( α> 0.5), confirm-TABLE 12: MT-AlertStar on UNSW-NB15.                                                                                                        
+
+> Inductive Transductive Metric 33% 66% 100% 33% 66% 100%
+> Tail Prediction
+> MR 3.9 3.7 3.6 3.9 3.8 4.0 MRR 0.4491 0.5023 0.4810 0.4626 0.4753 0.4641 H@1 0.2350 0.3200 0.2700 0.2600 0.2750 0.2650 H@3 0.5400 0.5800 0.6050 0.5500 0.5750 0.5550 H@10 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000
+> Relation Prediction
+> MR 2.9 2.6 2.5 2.9 2.9 2.6 MRR 0.5912 0.6063 0.6366 0.5697 0.5780 0.6174 H@1 0.4150 0.4150 0.4650 0.3900 0.4000 0.4400 H@3 0.6900 0.7450 0.7550 0.6450 0.6700 0.7600 H@10 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000 Acc 0.4150 0.4150 0.4650 0.3900 0.4000 0.4400
+> Qualifier Value
+> MR 1.2 1.2 1.2 1.3 1.3 1.3 MRR 0.8992 0.8992 0.8958 0.8762 0.8896 0.8696 H@1 0.8050 0.8050 0.8000 0.7700 0.7950 0.7550 H@3 0.9900 1.0000 1.0000 0.9950 0.9950 0.9950 H@10 1.0000 1.0000 1.0000 1.0000 1.0000 1.0000
+
+2 4 6 8 10 12 14 16 18 20 
+
+Epoch 
+
+0.60 
+
+0.65 
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85   
+
+> Gate Value  = (g)
+> Inductive (0.611 0.835)
+> Transductive (0.614 0.832)
+
+Fig. 6: Gate value α = σ(g) over 20 epochs on Warden. ing that ˜er carries more discriminative signal than implicit path composition; (ii) the near-identical trajectories across settings show branch preference is driven by qualifier struc-ture rather than entity memorisation, supporting inductive generalisation. 12 
+
+TABLE 13: Ablation A1: AlertStar component ablation.                                         
+
+> Variant Qual Path Gate MR MRR H@1 H@3 H@10
+> AS-NoQual ✗✓learned 2712.7 0.4423 0.352 0.518 0.584 AS-NoPath ✓✗learned 2673.1 0.4454 0.354 0.508 0.590 AS-NoGate ✓✓fixed=0.5 2809.9 0.4445 0.358 0.500 0.580 AS-Full ✓✓learned 2615.2 0.4418 0.360 0.500 0.570
+
+4.3.3 A3: MT-AlertStar Auxiliary Tasks 
+
+Table 14 evaluates four MT-AlertStar variants: MT-Tail (Lt
+
+only), MT-Tail+Rel (+Lq′ ), MT-Tail+QV (+Lqv ), and MT-Full (all tasks, Eq. 29). All auxiliary tasks contribute pos-itively when added individually. MT-Full outperforms all single-auxiliary variants, confirming the tasks are comple-mentary rather than redundant. TABLE 14: Ablation A3: MultiTask auxiliary.                               
+
+> Variant Tasks MR MRR H@1 H@3 H@10
+> MT-TailOnly tail 3210.0 0.5607 0.512 0.594 0.650 MT-Tail+Rel tail, relation 2998.3 0.5604 0.514 0.586 0.646 MT-Tail+QualVal tail, qual value 2881.2 0.5633 0.516 0.600 0.648 MT-Full tail, relation, qual val 3100.6 0.5610 0.518 0.584 0.640
+
+4.3.4 A4: Qualifier Density Sensitivity 
+
+Table 6 reports MRR degradation across all models. MT-AlertStar is the most robust, with AlertStar and MT-AlertStar exhibiting the smallest relative drop among all models. StarE, despite sharing the same MHA qualifier en-richment as AlertStar, degrades more sharply under sparse qualifiers — confirming that the path-composition branch and trainable gate provide robustness that qualifier atten-tion alone cannot achieve. HR-NBFNet and MT-HR-NBFNet show the largest degradation, as missing qualifier noise accumulates across L=3 Bellman–Ford layers. 
+
+5 RELATED WORK 
+
+Alert prediction and dynamic graph learning: Graph-based approaches model attacker–victim interactions as evolving networks: Nayeri and Rezvani [11] introduce a dynamic graph deep learning framework using Temporal Graph Net-works (TGN) for binary link prediction over time-evolving attack graphs, achieving 10–18% improvement over static baselines. Nayeri and Resvani [12] extend this paradigm with TGNE and TGNE-TA, replacing standard TGN mes-sage aggregation with a Transformer-based aggregator and a Dual-Level Temporal Encoding mechanism to capture both global and local temporal dependencies, achieving over 90% accuracy in multiclass attack type prediction. While these methods advance temporal reasoning over alert streams, they operate on binary or standard relational graphs and discard flow-level metadata, port, protocol, flow count, and timestamps, that is essential for disambiguating alerts of the same type. Our framework addresses this gap by modelling alerts as hyper-relational qualified statements 
+
+(h, r, t, Q), enabling qualifier-conditioned prediction under both inductive and transductive settings. Hyper-relational knowledge graph completion: Standard KGC models represent facts as binary triples and cannot encode auxiliary context. StarE [3] extends GNN-based KGC to hyper-relational graphs by composing qualifier pairs into relation embeddings via message passing, while ShrinkE [9] represents hyper-relational facts as geometric transforma-tions in a shrinking entity space, achieving strong transduc-tive performance. HyNT [5] encodes qualifier pairs through a nested Transformer architecture, attending jointly over the main triple and its qualifiers. For complex query answering, StarQE [4] extends GNN-based query embeddings to hyper-relational graphs, supporting conjunctive query templates over qualified facts. Despite their expressive power, these models are predominantly transductive — requiring all entities to be present at training time — limiting their appli-cability to alert prediction where new IP addresses appear continuously. Our work extends NBFNet [6] to the hyper-relational setting, achieving strong inductive generalisation while incorporating qualifier context at every propagation step, and further supports disjunctive query templates ab-sent from existing benchmarks. 
+
+6 DISCUSSION 
+
+This work demonstrates that hyper-relational knowledge graph completion is a viable and effective framework for network alert prediction, with the embedding-based paradigm (AlertStar, MT-AlertStar) consistently outper-forming graph propagation (HR-NBFNet, MT-HR-NBFNet) in both accuracy and efficiency. The surprising dominance of embedding-based models suggests that for dense alert graphs with rich qualifier context, local compositional rea-soning in embedding space captures attack patterns more effectively than explicit multi-hop path traversal. This chal-lenges the prevailing assumption in KGC that path-based models are inherently superior for inductive settings. The qualifier density ablation (A4) reveals a dataset-dependent effect: qualifiers improve prediction on UNSW-NB15 but introduce noise on Warden, where the limited four-category taxonomy renders the triple structure sufficient. This finding highlights the importance of dataset diversity when bench-marking hyper-relational models and motivates the con-struction of richer alert datasets for future evaluation. The gate trajectory analysis (A2) provides interpretable evidence that AlertStar autonomously learns to favour qualifier con-text over structural composition, converging stably within 12–14 epochs regardless of the inductive or transductive set-ting. HR-NBFNet-CQ demonstrates that complex first-order logic queries are feasible over hyper-relational alert graphs, with intersection queries (2i) benefiting from Bellman-Ford propagation. However, two-hop queries remain challeng-ing at low qualifier coverage, pointing to the need for denser qualifier annotation and richer graph connectivity in future alert datasets. The current framework assumes a closed-world attack taxonomy and does not model tem-poral dynamics between alerts. AlertStar processes each triple independently, missing cross-alert correlations that propagation-based models can capture in principle. The inductive protocol evaluates generalisation to unseen IPs but not to entirely new attack categories. Several directions merit exploration. First, incorporating temporal ordering of alerts as qualifier context would enable time-aware predic-tion of attack progression. Second, extending the framework to open-set attack classification would address the closed-world limitation. Third, combining the efficiency of Alert-Star with the path-reasoning capacity of HR-NBFNet via a hybrid architecture — for instance, using AlertStar as a fast candidate ranker and HR-NBFNet-CQ for complex query verification — could yield both accuracy and scalability. Fi-13 
+
+nally, applying the framework to larger operational datasets from real CERT deployments would validate its practical utility beyond the Warden and UNSW-NB15 benchmarks. 
+
+7 CONCLUSION 
+
+We presented a hyper-relational knowledge graph frame-work for network alert prediction, modelling each alert as a qualified statement (h, r, t, Q) and formulating prediction as an HR-KGC task. Five models were proposed across three paradigms: HR-NBFNet and MT-HR-NBFNet for qualifier-aware Bellman-Ford path propagation, and AlertStar and MT-AlertStar for embedding-based gated attention and path fusion. HR-NBFNet-CQ extended the framework to com-plex first-order logic queries over the alert graph. Experi-ments on Warden and UNSW-NB15 across three qualifier-density regimes show that MT-AlertStar achieves state-of-the-art performance in both inductive and transduc-tive settings, outperforming HR-NBFNet by up to 30% in MRR while achieving up to 50 × per-epoch speedup. Multi-task supervision provides strong regularisation for the embedding-based paradigm but marginal benefit for graph propagation. Qualifier context improves prediction on diverse datasets but introduces noise on simpler tax-onomies, highlighting the importance of dataset complex-ity for hyper-relational modelling. HR-NBFNet-CQ demon-strates the feasibility of complex threat queries including lateral movement detection (2p), coordinated attack identi-fication (2i), and campaign victim set retrieval (2u). These results establish hyper-relational KGC as a principled and practical framework for proactive threat intelligence in SOC and CERT deployments. 
+
+REFERENCES 
+
+[1] M. Hus´ ak, V. Bartoˇ s, P. Sokol, and A. Gajdoˇ s, “Pre-dictive methods in cyber defense: Current experience and research challenges,” Future Generation Computer Systems , vol. 115, pp. 517–530, 2021. [2] T. Li, Y. Jiang, C. Lin, M. S. Obaidat, Y. Shen, and J. Ma, “DeepAG: Attack Graph Construction and Threats Prediction With Bi-Directional Deep Learning,” IEEE Transactions on Dependable and Secure Computing , vol. 20, no. 1, pp. 740–757, 2023. [3] M. Galkin, P. Trivedi, G. Maheshwari, R. Usbeck, and J. Lehmann, “Message passing for hyper-relational knowledge graphs,” in Proceedings of the 2020 confer-ence on empirical methods in natural language processing (EMNLP) , 2020, pp. 7346–7359. [4] D. Alivanistos, M. Berrendorf, M. Cochez, and M. Galkin, “Query embedding on hyper-relational knowledge graphs,” arXiv preprint arXiv:2106.08166 ,2021. [5] C. Chung, J. Lee, and J. J. Whang, “Representation learning on hyper-relational and numeric knowledge graphs with transformers,” in Proceedings of the 29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining , 2023, pp. 310–322. [6] Z. Zhu, Z. Zhang, L.-P. Xhonneux, and J. Tang, “Neu-ral bellman-ford networks: A general graph neural network framework for link prediction,” Advances in neural information processing systems , vol. 34, pp. 29 476– 29 490, 2021. [7] Z. Sun, Z.-H. Deng, J.-Y. Nie, and J. Tang, “Rotate: Knowledge graph embedding by relational rotation in complex space,” arXiv preprint arXiv:1902.10197 , 2019. [8] R. Bellman, “On a routing problem,” Quarterly of applied mathematics , vol. 16, no. 1, pp. 87–90, 1958. [9] B. Xiong, M. Nayyeri, S. Pan, and S. Staab, “Shrinking embeddings for hyper-relational knowledge graphs,” in Proceedings of the 61st Annual Meeting of the Associa-tion for Computational Linguistics (Volume 1: Long Papers) ,2023, pp. 13 306–13 320. [10] A. J. Varghese, A. Bora, M. Xu, and G. E. Karniadakis, “Transformerg2g: Adaptive time-stepping for learning temporal graph embeddings using transformers,” Neu-ral Networks , vol. 172, p. 106086, 2024. [11] Z. M. Nayeri and M. Rezvani, “Alert prediction in computer networks using deep graph learning,” in 
+
+2024 10th International Conference on Signal Processing and Intelligent Systems (ICSPIS) . IEEE, 2024, pp. 1–5. [12] ——, “Alert prediction in computer networks using transformer-based temporal graph neural networks: Identifying the next victim,” Journal of Network and Computer Applications , p. 104455, 2026.

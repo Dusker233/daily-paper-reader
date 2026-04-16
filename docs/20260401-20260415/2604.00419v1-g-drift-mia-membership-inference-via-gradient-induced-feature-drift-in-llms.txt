@@ -1,0 +1,399 @@
+Title: G-Drift MIA: Membership Inference via Gradient-Induced Feature Drift in LLMs
+
+URL Source: https://arxiv.org/pdf/2604.00419v1
+
+Published Time: Thu, 02 Apr 2026 00:28:03 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# G-D RIFT MIA: M EMBERSHIP INFERENCE VIA 
+
+# GRADIENT -I NDUCED FEATURE DRIFT IN LLM S
+
+Ravi Ranjan ∗
+
+Florida International University Miami, USA 
+
+rkuma031@fiu.edu 
+
+Utkarsh Grover University of South Florida Tampa, USA 
+
+utkarshgrover@usf.edu 
+
+Xiaomin Lin University of South Florida Tampa, USA 
+
+xlin2@usf.edu 
+
+Agoritsa Polyzou Florida International University Miami, USA 
+
+apolyzou@fiu.edu 
+
+# ABSTRACT 
+
+Large language models (LLMs) are trained on massive web-scale corpora, raising growing concerns about privacy and copyright. Membership inference attacks (MIAs) aim to determine whether a given example was used during training. Existing LLM MIAs largely rely on output probabilities or loss values and often perform only marginally better than random guessing when members and non-members are drawn from the same distribution. We introduce G-Drift MIA , a white-box membership inference method based on gradient-induced feature drift . Given a candidate (x, y ), we apply a single targeted gradient-ascent step that increases its loss and measure the resulting changes in internal representations, including logits, hidden-layer activations, and projections onto fixed feature directions, before and after the update. These drift signals are used to train a lightweight logistic classifier that effectively separates members from non-members. Across multiple transformer-based LLMs and datasets derived from realistic MIA benchmarks, G-Drift substantially outperforms confidence-based, perplexity-based, and reference-based attacks. We further show that memorized training samples systematically exhibit smaller and more structured feature drift than non-members, providing a mechanistic link between gradient geometry, representation stability, and memorization. In general, our results demonstrate that small, controlled gradient interventions offer a practical tool for auditing the membership of training-data and assessing privacy risks in LLMs. 
+
+# 1 Introduction 
+
+Large language models (LLMs) are trained on vast web-scale corpora, frequently collected without explicit consent from content creators. This practice has triggered growing legal, ethical, and regulatory scrutiny [ 1 , 2 ], exemplified by recent high-profile copyright lawsuits against major LLM providers, such as New York Times v. OpenAI and Microsoft 
+
+[3 ]. A central question emerges from these debates: given a specific data instance, can we determine whether it was used to train an LLM? This question formalizes the problem of distinguishing training samples ( members ) from unseen data ( non-members ), known as membership inference [4]. In the context of large generative models, answering this question is critical for privacy auditing, transparency, and accountability, enabling data owners and regulators to verify claims about training data usage [5]. Membership inference attacks (MIAs) have a long history in machine learning [ 4, 6 ], yet extending them to LLMs has proven surprisingly difficult [ 7, 8 ]. Most existing black-box MIAs rely on output-level signals, such as prediction confidence, likelihood, or loss, under the intuition that models are more confident on memorized examples. While this 
+
+> ∗
+
+Corresponding author. Accepted to the ICPR 2026 conference; to appear in the Springer LNCS proceedings. This version includes extended supplementary materials. Code: https://github.com/raviranjan-ai/GDrift-ICPR-2026 
+
+> arXiv:2604.00419v1 [cs.LG] 1 Apr 2026
+
+G-Drift: Membership Inference via Gradient-Induced Feature Drift intuition holds weakly, recent studies demonstrate that such attacks are highly sensitive to distributional artifacts between member and non-member datasets [ 9]. When evaluated under same-distribution conditions, many LLM MIAs degrade to near-random performance, highlighting the fundamental challenge of disentangling memorization from generalization in large generative models. Large-scale evaluations [10] have shown that even strong reference-based attacks, such as LiRA [ 11 ], achieve suboptimal performance on GPT-2–style models under realistic Chinchilla-optimal training. These results suggest a fundamental ambiguity: either modern LLMs expose only weak and unstable membership signals, or existing attacks fail to probe the internal mechanisms where memorization is encoded. We resolve this ambiguity by introducing G-Drift MIA , a white-box membership inference attack based on gradient-induced feature drift . We apply a single, controlled gradient-ascent step to locally increase the loss of a candidate example and measure the resulting changes in internal representations, including logits, hidden activations, and feature projections, to reveal robust membership signals. Our approach leverages the over-parameterized nature of LLMs and recent insights from mechanistic interpretability, which suggest that memorized samples occupy locally stable regions of representation space. Empirically, we observe that memorized training samples display consistently stronger and more structured feature drift than non-members, allowing reliable separation with a lightweight logistic classifier. Extensive experiments across transformer-based LLMs and realistic benchmarks demonstrate that G-Drift substantially outperforms confidence-based, perplexity-based, and reference-based MIAs. In summary, our contributions are threefold: (i) we introduce gradient-induced feature drift as a principled and effective signal for white-box membership inference in LLMs; (ii) we demonstrate consistent and substantial performance gains over prior MIAs across models and datasets; and (iii) we provide empirical evidence linking representation stability under gradient perturbations to memorization. Together, these results establish controlled gradient interventions as a practical tool for auditing data-membership and assessing privacy risks in LLMs. 
+
+# 2 Related Work 
+
+2.1 Membership Inference Attacks (MIAs) 
+
+Originally introduced by Shokri et al. [ 4], MIAs form the foundational framework for determining whether a data point was used during model training. Early research predominantly targeted classification models [ 12 , 13 ], relying on the assumption that models assign higher confidence to their training samples. Classical black-box membership inference attacks rely on output probabilities or entropy-based confidence thresholds [ 6]. Shadow modeling extends these ideas by training auxiliary models to approximate the target model’s behaviour under varying membership conditions [ 14 ], while ensemble-based and label-only formulations refine thresholding strategies under restricted access settings [ 15 ]. Complementing these approaches, label-only membership inference attacks operate without access to logits and instead depend solely on final predictions. PETAL [ 16 ] exemplifies this setting by leveraging token-level semantic similarity as a proxy for perplexity, demonstrating competitive performance among label-only strategies. As MIAs transitioned to generative models such as LLMs, output-based methods revealed significant limitations. Carlini et al. [ 17 ] demonstrated that membership detection for short GPT-2 sequences is ineffective unless the model strongly overfits. Further, Maini et al. [ 9 ] established that many previously reported gains were artifacts of temporal distribution shifts between member and non-member corpora; when these biases were eliminated, attack accuracy often collapsed to near-random performance [ 18 , 19 ]. These findings highlight the fragility of output-only MIAs and underscore the need for richer internal signals. Motivated by these challenges, recent research increasingly leverages internal model information through white-box MIAs. Perturbation-based approaches [ 20 ], neighborhood-comparison techniques [ 21 ], and self-prompt calibration [ 22 ]incorporate gradients or hidden-layer characteristics to improve membership detection. In CNNs and early deep networks, white-box attacks exploiting activations, gradients, or gradient-based memorization signals [ 23 , 24 , 3]consistently outperformed black-box alternatives, revealing that internal-state access provides substantially stronger membership cues. Nasr et al. [ 23 ] specifically showed that combining gradients with intermediate activations yields significant accuracy gains, while Leino and Fredrikson’s “Stolen Memories” [ 24 ] operationalized memorization as the gradient effort required to “forget” a sample. Despite leveraging internal model states, existing white-box membership inference attacks remain imperfect, often achieving only modest accuracy [10]. Complementary work studies memorization and extraction phenomena in LLMs, where models reproduce verbatim or near-verbatim segments of their training data [ 17 , 25 ], with the goal of characterizing and quantifying direct data leakage risks from generative outputs. Membership inference differs crucially: the goal is not to reconstruct content but to detect whether a sample influenced training dynamics by contrasting behaviour across members and non-members [ 4, 11 ]. This distinction is important for understanding why MIAs require more subtle indicators than direct memorization leakage. 2G-Drift: Membership Inference via Gradient-Induced Feature Drift In the context of LLMs, a range of recent heuristics attempt to exploit model behaviour beyond raw likelihoods. Methods such as Min-K% probability [ 26 ], Neighbor-MIA [ 27 ], and SPV-MIA [ 22 ] rely on distributional cues or prompt-level perturbations, yet their effectiveness is often inconsistent across domains and architectures. A more structured methodology is offered by LUMIA [ 28 ], which employs linear probes over intermediate transformer representations to infer membership. This line of work underscores a key observation: membership signals are distributed unevenly across layers, with deeper representations frequently exhibiting stronger separability. Our method contributes to this growing direction of looking inside the model and addresses the shortcomings of both black-box and probe-based white-box MIAs. Rather than analyzing static internal representations, we apply a targeted gradient-ascent perturbation that slightly “unlearns” a candidate sample and measure the induced gradient-induced feature drift . Unlike LUMIA, which trains many probes across layers, we rely on a single, lightweight gradient intervention and evaluate the model’s immediate reaction: If we nudge the model away from this sample, how strongly does it resist? This produces a compact, robust, and theoretically grounded white-box signal for membership inference. 
+
+2.2 Mechanistic Interpretability 
+
+Our use of internal feature directions builds on advances in mechanistic interpretability that examine how high-dimensional representations encode knowledge in LLMs. Elhage et al. [ 18 ] demonstrated that neural networks frequently represent multiple concepts within a single neuron through polysemanticity , meaning that activations often correspond to superpositions of unrelated features. This phenomenon complicates attempts to directly interpret individual activations or neurons. To address this challenge, Sparse Autoencoders (SAEs) have been proposed as a means to disentangle overlapping features and uncover more monosemantic, interpretable directions in activation space [29]. Moving beyond static analysis, Xu et al. [ 30 ] introduced SAE-Track , a method for tracing how interpretable features emerge, stabilize, and evolve across model training checkpoints. Their findings offer insight into how knowledge, including memorized information, is gradually embedded into internal representations. Gong et al. [ 31 ] explored the security implications of polysemantic features, enabling adversarial manipulation of model behaviour through targeted interventions in representation space. G-Drift leverages this interpretability perspective for diagnosis rather than manipulation. We exploit representation geometry to measure how internal features shift under a controlled gradient perturbation. This shift, captured as gradient-induced feature drift, provides a principled signal for identifying whether a sample was memorized during training. 
+
+# 3 Methodology 
+
+3.1 Problem Setup 
+
+We assume a target LLM with parameters θ (e.g., the weights of a multi-layer transformer), which has been trained on some dataset Dtrain . We do not initially know whether a particular sample x (with its ground-truth output y) was in 
+
+Dtrain . Our goal is to construct a membership classifier M that outputs a high probability if (x, y ) ∈ Dtrain (member) and low if not (non-member). We operate in a white-box scenario: we have access to θ and can perform forward and backward passes through the model. This setting is plausible in scenarios like a company auditing its own model or a regulator inspecting a model with cooperation from its owner (but without knowing the training data a priori). 
+
+3.2 Intuition 
+
+Our approach is motivated by the observation that a small gradient-ascent step used as a controlled “unlearning” perturbation elicits systematically different internal responses for memorized (member) versus unseen (non-member) samples, reflecting differences in how these examples are encoded in the model’s loss landscape and representation geometry. For a member sample (x, y ) ∈ Dtrain , training actively shapes the model parameters around (x, y ), creating localized, content-specific representations. Consequently, even a single ascent update produces a measurable change in the internal representation of member instances that is more noticeable compared to non-member instances. At the same time, we expect that any gradient ascent step will alter the representations of non-members in a more un-structured and random way than for non-members that are harder to unlearn in a single step. The next section formalizes this intuition by defining “feature projections” and quantifying their induced drift for membership classification. 3G-Drift: Membership Inference via Gradient-Induced Feature Drift 
+
+Figure 1: Approach overview: Gradient-Induced Feature Drift (G-Drift) Attack. 
+
+3.3 Proposed approach: G-Drift MIA 
+
+Our approach consists of measuring how the model’s predictions and internal representations for (x, y ) change when performing a single adversarial parameter update , aiming to increase the loss of (x, y ). We call this change feature drift . Figure 1 shows our proposed approach, G-Drift MIA, where we perform a forward pass of x to our target LLM, a gradient ascent nudge, and a post-nudge pass of x, while collecting relevant features. We then use the vector of these features, fx, to perform the final membership classification of x using a logistic regression model. For a given sample x,the steps of G-Drift MIA are as follows: 1. Forward Pass (Pre-Update): We input the prompt x into the target LLM model, parameterized by θ,
+
+fθ (x), typically an auto-regressive transformer, to predict the next token y. The model outputs a logit vector 
+
+z = fθ (x) ∈ RV , where V is the vocabulary size, and z represents the unnormalized scores for each possible token. We also record the final-layer hidden state h ∈ Rd, such as the residual stream activation at the position preceding y. This hidden state encapsulates the model’s internal representation of the context. We compute the following features. 
+
+(a) Pre-Update Loss ( L): We compute the cross-entropy loss: 
+
+L θ; x, y  = − log softmax  fθ (x)
+
+> y
+
+.
+
+This loss quantifies the model’s confidence in predicting y, with lower values indicating higher confidence. It serves as a basic feature for assessing the model’s pre-update performance on (x, y ).
+
+(b) Pre-Update Logit (zy ) : We extract zy , the logit corresponding to the true token y from the vector z. This raw score reflects the model’s unnormalized confidence in y before the softmax normalization, providing a direct measure of prediction strength for comparison post-update. 
+
+(c) Pre-Update Feature Projection ( α): To probe specific aspects of the model’s internal representation, we select a direction vector v ∈ Rd in the hidden state space, matching the dimensionality of h. In the simplest case, v is a random unit vector, though more informed choices (e.g., directions learned via probing for specific concepts) can enhance interpretability. We compute the scalar projection a = h⊤v, which measures the alignment of h with v, effectively quantifying the activation of the feature represented by v.2. Gradient Ascent Update: We compute the gradient of the cross-entropy loss with respect to the model parameters, ∇θ LCE (θ; x, y ), and perform a single-step update in the direction of increasing loss: 
+
+θ′ ← θ + η∇θ LCE (θ; x, y ),
+
+where η is the learning rate (e.g., 10 −2). This adversarial update, contrary to standard gradient descent, intentionally degrades the model’s performance on (x, y ), simulating an “unlearning” process. A small η
+
+ensures measurable changes without destabilizing the model, allowing us to study the impact of parameter perturbations. 4G-Drift: Membership Inference via Gradient-Induced Feature Drift 3. Forward Pass (Post-Update): Using the updated parameters θ′, we reprocess the input x to obtain new logits 
+
+z′ = fθ′ (x) ∈ RV and a new final-layer hidden state h′ ∈ Rd. This step captures the model’s altered behavior after the adversarial update, enabling a comparison with the pre-update state. We compute again the following changed feature values. 
+
+(a) Post-Update Loss ( L′) : After performing the single-step “unlearning”, we compute the cross-entropy loss the same way as in Pre-Updated Loss. 
+
+(b) Post-Update Logit (z′ 
+
+> y
+
+): We record z′ 
+
+> y
+
+, the logit for the correct token y in z′. When comparing z′ 
+
+> y
+
+with zy ,we observe the change in the model’s confidence in predicting y, reflecting the effect of the gradient ascent update. 
+
+(c) Post-Update Feature Projection ( α′): We compute α′ = h′⊤ v, the projection of the new hidden state h′
+
+onto the same direction v. The difference between α and α′ indicates how the adversarial update affects the activation of the feature represented by v, providing insight into changes in the model’s internal representation. 
+
+(d) Hidden State Drift ( ∆h): We measure the Euclidean distance between the pre- and post-update hidden states, ∆h = || h′ − h|| . This metric, termed hidden state drift , quantifies the overall shift in the model’s internal representation due to the update, capturing the broader impact beyond specific feature directions. 4. Classification: We use logistic regression to classify instance (x, y ) based on the three before- and four after-update features, including ∆h, collected in steps 1 and 3. Instance x is represented as the following feature vector: 
+
+fx = L, z y , α, L′, z ′ 
+
+> y
+
+, α ′, ∆h. (1) This feature vector characterizes the effect of the gradient intervention on the model for sample x. The classifier, M(fx), outputs a probability reflecting membership likelihood. Using a threshold, we can generate binary predictions and balance precision and recall as required. 
+
+3.4 Choice of Feature Direction 
+
+The direction v for projecting hidden states could be viewed as a hyperparameter in our method. While multiple directions or the full hidden state vector could be employed, a single random unit vector v suffices to detect significant differences between h and h′, where ∆a = ( h′ − h)⊤v captures the drift along a random axis [ 30 , 32 ]. Alternatively, 
+
+v can be selected strategically: one option is to align v with h to assess norm variations, while another involves using advanced techniques like SAE-Track [ 30 ] for sparse feature extraction to identify key directional bases, such as monosemantic vectors tied to specific concepts. Projecting onto such vectors might reveal membership signatures, particularly for content-relevant features in x. Our approach leverages the likelihood that a random projection will reflect substantial hidden state changes in any direction. Employing additional directions could enhance the characterization of drift at the expense of increased complexity. So, our experiments utilize a fixed random v for simplicity and consistency. The detailed pseudo-code for the proposed algorithm is provided in Appendix A. 
+
+# 4 Experimental Setup 
+
+4.1 Target LLM Models 
+
+We evaluate G-Drift across three transformer-based LLMs to assess robustness across architectures and training regimes while maintaining comparable model scale. LLaMA-3.2 1B is a compact variant of Meta’s LLaMA family [ 33 ], containing approximately 1.3 billion parameters and serving as our primary evaluation model due to its strong memorization capacity despite modest scale. GPT-Neo 2.7B is an open-source autoregressive transformer designed to replicate GPT-3-style training and architecture [ 34 ]. Its widespread adoption makes it a representative baseline for evaluating membership inference under realistic deployment conditions. Gemma-3 4B is Google’s lightweight yet high-performance open LLM [ 35 ], trained with modern instruction tuning and alignment techniques. Its inclusion allows us to assess the generality of gradient-induced feature drift across independently developed architectures and training pipelines. 
+
+4.2 Datasets (Members and Non-Members) 
+
+Constructing reliable member–non-member datasets for LLM MIAs requires that both classes come from the same underlying distribution to avoid trivial artifacts, a concern emphasized in recent MIA and unlearning work. We therefore use datasets where each instance is explicitly labeled as member or non-member and where both share the same textual format and domain. Using only the member instances, we fine-tune the target LLMs to induce strong memorization 5G-Drift: Membership Inference via Gradient-Induced Feature Drift of the corresponding facts. For all three datasets, non-members are drawn from the same underlying distributions as the member instances, using two mechanisms: (i) future facts , where questions are paired with correct answers about events or entities outside the model’s pre-training window, and (ii) counterfactual options , where answers are replaced with plausible but incorrect entities, ensuring the specific (question, answer) pair was not seen during fine-tuning. We conduct experiments on three commonly used datasets that have a Question-and-Answer (Q&A) format. From the original datasets, we sample 1000 instances (half members and half non-members). WikiMIA [ 36 ] provides Wikipedia-style factual content, which we convert into Q&A pairs (e.g., “Q: What is the capital of France? A: Paris”). World Facts [37 ] supplies factual Q&A instances with a similar structure. Real Authors 3 [37 ] consists of biography-style Q&A about real authors, following the TOFU format. 
+
+4.3 Data Splits 
+
+For each dataset, we construct balanced member and non-member sets and partition them into 70% training, 10% validation, and 20% test splits. Each split maintains an equal number of member and non-member examples to avoid class-imbalance artifacts in the attack classifier. Hyperparameters are selected on the validation set, and final performance is reported on the held-out test set using True Positive Rate (TPR), False Positive Rate (FPR), and Area Under the Receiver Operating Characteristic (ROC) curve (ROC-AUC, or simply AUC). 
+
+4.4 Competing Approaches 
+
+We compare G-Drift against a suite of strong membership inference baselines spanning black-box, reference-based, and label-only settings. 
+
+Shadow Model Attack (Neighbour-MIA). Neighbour-MIA [ 21 ] trains shadow models on auxiliary data to mimic the target, then infers membership by comparing the queried sample’s outputs to those seen during shadow training, representing the classical shadow-model–based threat model. Similarity-based Attack (SPV-MIA). SPV-MIA [ 38 ]assumes access to reference data from the same distribution and estimates membership by comparing the similarity between the target model’s output on the query and its outputs on the reference set, calibrating a decision threshold using known non-members. PETAL (Label-Only MIA). This model operates in a stricter label-only setting [ 16 ]. It leverages semantic similarity between model-predicted tokens and reference answers as a proxy for likelihood, and serves as a competitive baseline when logits are unavailable. Probability Threshold (Min-k%). This black-box attack uses the model’s prediction confidence for membership inference [ 26 ], computing the percentile rank of the true likelihood p(y | x) within a reference distribution and predicting membership when it exceeds a kth -percentile threshold. 
+
+Perplexity-Based Likelihood (Perplexity-PL) and Zlib. Following [ 17 ], Perplexity-PL treats sequence-level perplexity (negative log-likelihood) as the test statistic, while the Zlib variant combines perplexity with a compression-based score to flag unusually easy-to-predict or compressible samples as members. Please refer to Appendix B for the additional experimental settings. 
+
+# 5 Results 
+
+5.1 Overall Attack Performance 
+
+We first compare (in terms of AUC) our proposed method against six other competing approaches in Table 1. The results show that G-Drift consistently outperforms all existing MIA baselines across datasets and language models, Table 1: Main G-Drift membership inference results (AUC ↑) across datasets and LLMs. Best value in each column is shown in bold.                                                                           
+
+> WikiMIA World Facts Real Authors Methods Llama-3 Gemma-3 GPT-Neo-2 Llama-3 Gemma-3 GPT-Neo-2 Llama-3 Gemma-3 GPT-Neo-2 Neighbour-MIA [21] 0.6187 0.6092 0.6488 0.6040 0.5802 0.6518 0.6144 0.6490 0.6542 SPV-MIA [38] 0.4431 0.4642 0.4232 0.4022 0.4522 0.4142 0.4401 0.4844 0.4482 PETAL [16] 0.5200 0.5600 0.5600 0.5700 0.5880 0.5800 0.5600 0.5800 0.5800 Min-k% [26] 0.8444 0.8454 0.8474 0.8244 0.8998 0.8244 0.8328 0.8654 0.8820 Perplexity-PL [17] 0.5020 0.5580 0.6200 0.6122 0.5900 0.6220 0.5430 0.5820 0.6120 Zlib [17] 0.5210 0.5320 0.5800 0.5120 0.4900 0.5610 0.5200 0.5410 0.5182 G-Drift (ours) 0.9600 0.9990 0.9998 0.9392 0.8997 0.9983 0.9375 0.9950 0.9350
+
+6G-Drift: Membership Inference via Gradient-Induced Feature Drift 
+
+Figure 2: Comparison of ROC of Llama-3 & Gemma-3 models on WikiMIA dataset Table 2: Ablation study on WikiMIA dataset across three LLMs. Each row removes one or more features from G-Drift. Full feature set (“all”) provides the highest AUC. The lower the AUC, the more significant the feature(s) removed.                                           
+
+> Feature Set Llama-3 GPT-Neo-2 Gemma-3
+> all 0.9600 0.9998 0.9990 all but loss before 0.9597 0.9996 0.9987 all but logit before 0.9598 0.9997 0.9988 all but feat proj before 0.9596 0.9996 0.9986 all but loss after 0.9597 0.9996 0.9987 all but logit after 0.9598 0.9997 0.9988 all but feat proj after 0.9596 0.9996 0.9986 all but euclid drift 0.9508 0.9912 0.9920 all but group before 0.9342 0.9610 0.9686 all but group after 0.9502 0.9882 0.9910 all but loss 0.9462 0.9800 0.9782 all but logit 0.9468 0.9812 0.9790 all but feat proj 0.9040 0.9342 0.9382
+
+while also aligning with performance trends reported in prior work. As expected, ZLib, SPV-MIA, and PETAL remain the weakest methods, with AUC values hovering close to 0.5, indicating near-random behavior across all models. We also observe that Perplexity-based (PPL) attacks exhibit higher variance compared to Neighbour-MIA, whose scores remain relatively stable across settings. Among the competing approaches,Min-k% emerges as the second-best method overall, even achieving the top score in one configuration (with G-Drift closely behind), yet still falling notably short of the much higher and more consistent performance of G-Drift. Figure 2 shows the full ROC for Llama-3 and Gemma-3 models evaluated on the WikiMIA dataset. G-Drift achieves an area under the curve of 96% (on Llama-3) and 99 .90% (on Gemma-3), as its ROC curve is close to the ideal operating point at (0 , 1) , indicating strong separability between members and non-members. In contrast, Neighbour-MIA and SPV-MIA remain close to the diagonal, reflecting performance that is similar to random guessing. 
+
+5.2 Ablation Study 
+
+Table 2 reports an ablation analysis that quantifies the contribution of individual feature groups to G-Drift’s membership inference performance, measured by AUC on the WikiMIA dataset across three LLMs. We observe how our model 7G-Drift: Membership Inference via Gradient-Induced Feature Drift 
+
+Figure 3: Analysis of min-max normalized features drift ( (L′ − L ), (z′ 
+
+> y
+
+− zy ), (α′ − α), ∆h respectively) with Llama-3 model on the WikiMIA dataset performs when removing one or more features from fx. In general, removing informative features consistently degrades performance, with larger drops indicating a stronger reliance on the corresponding signals. We first perform a leave-one-out analysis (rows 2 to 9), removing a single feature at a time. While doing that, we do not observe a sharp drop in AUC, suggesting that the feature groups carry partially overlapping membership information. Among single-feature variants, the strongest standalone signal (with the sharpest decline in performance once removed) is the Euclidean hidden-state drift, which captures a broader, more general summary of the model’s behavior before and after the gradient-ascent nudge. We then study the temporal structure of features (row 10 & 11) by ablating an entire group of features collected before or after the gradient update. Removing the before-update feature group leads to a substantial performance decline (e.g., Llama-3 drops from 0.9600 to 0.9342), whereas removing only the after-update group causes a noticeably smaller reduction. This indicates that most membership information is already present in the model’s original state, while post-update features primarily refine the decision boundary. Finally, jointly removing the same feature type (row 12 to 14), both before and after the update, reveals that eliminating feature projections yields the most severe degradation across all models (down to 0.9040 on Llama-3), reinforcing their central role in G-Drift. Together, these results show that while all components contribute towards membership prediction, feature projections are the most critical signals driving membership inference performance. 
+
+5.3 Analysis of Features’ Drift 
+
+Figure 3 plots the cumulative distributions of the normalized changes induced by a single gradient-ascent nudge for four signals: loss (L′ − L ), logit (z′ 
+
+> y
+
+− zy ), feature projection (α′ − α), and hidden-space drift ( ∆h). On average, members exhibit marginally larger changes in loss and logits (members: μ=0 .302 vs. non-members: μ=0 .300 for loss; members: 
+
+μ=0 .551 vs. non-members: μ=0 .544 for logits), and also a slightly higher hidden drift, which captures the magnitude of representational change (members: μ=0 .722 vs. non-members: μ=0 .703 ). More interestingly, feature projection for members shows lower differences on average (members: μ=0 .332 vs. non-members: μ=0 .505 ), yielding a clearer separation between the two classes. ∆α measures alignment with a random direction, which we expect to be higher for non-members after the gradient ascent update, since they are not as well anchored as the member instances. The figure suggests that, while several drift signals change comparably across classes, the feature-projection drift provides the most distinctive membership cue in our setting. Overall, gradient-induced perturbations disproportionately affect internal representations associated with training (member) data, with feature projection drift providing the most discriminative signal. A comprehensive quantitative analysis of the G-Drift framework, including consistency evaluations across semantically equivalent prompts, is detailed in Appendix C. 
+
+# 6 Discussion 
+
+Our results suggest that membership signals in LLMs are more effectively exposed through controlled internal perturbations than through output confidence alone: by applying a single gradient-ascent step and measuring the 8G-Drift: Membership Inference via Gradient-Induced Feature Drift induced changes in logits, hidden states, and especially feature projections, G-Drift reveals a stronger mechanistic link between memorization, representation geometry, and feature-level stability. This perspective also aligns naturally with recent interpretability work on feature superposition and feature dynamics, which views model knowledge as encoded in evolving directions of representation space rather than in isolated neurons. At the same time, G-Drift remains a white-box method and its current evaluation is limited to specific datasets and Q&A-style settings, so broader validation across architectures, modalities, and privacy-preserving training regimes remains an important direction for future work. 
+
+6.1 Limitations 
+
+Although G-Drift demonstrates strong membership inference performance, it has several important limitations. First, it is inherently a white-box method that requires access to model parameters and gradients, and is therefore not applicable when only black-box query access is available [ 17 , 4]. Second, despite our careful experimental design, our evaluation is limited to specific datasets and Q&A-style formats. Broader empirical validation is needed to assess how well gradient-induced feature drift generalizes across diverse architectures, training regimes, data modalities, and preprocessing pipelines [ 38 , 39 ]. Finally, differential privacy (DP) provides a principled defense against memorization [ 40 ]. In DP-trained models, gradients for individual samples are intentionally noisy, reducing the separability between members and non-members in gradient-derived statistics and thereby weakening the effectiveness of our attack [11, 23]. 
+
+6.2 Future Work 
+
+Future work can extend G-Drift in several directions. One promising avenue is to replace random feature directions with more informative axes identified via interpretability methods, enabling stronger and more targeted drift signals. G-Drift can also be generalized to multi-modal models, where membership may be reflected in joint text–image representations. Finally, integrating G-Drift with dataset-level inference frameworks could allow aggregated drift evidence across many samples to support large-scale auditing tasks. 
+
+# 7 Conclusion 
+
+We introduce a novel membership inference attack on large language models using a single-step gradient ascent update. Our work combines the most significant insights from the existing works on MIA in LLMs, as well as other related works, i.e., superposition, interpretable feature directions, and unlearning in LLMs. By capturing the resulting feature drift of internal representations and output confidence, our method achieves significantly higher accuracy than prior approaches. Experiments demonstrate a strong generalization performance for unseen samples from the same distribution scenarios, where earlier attacks struggle. Our results further suggest that feature-projection drift can serve as a lightweight, model-internal signal for MIA. This work has practical implications for auditing and privacy: it enables reliable verification of whether specific data was used in training, aiding data creators and auditors in ensuring transparency. At the same time, it highlights a significant privacy risk, emphasizing the need for effective privacy protections during model development. 
+
+# References 
+
+[1] Antonia Karamolegkou, Jiaang Li, Li Zhou, and Anders Søgaard. Copyright Violations and Large Language Models. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing , pages 7403–7412, 2023. [2] Felix B. Mueller, Rebekka Görge, Anna K. Bernzen, Janna C. Pirk, and Maximilian Poretschkin. LLMs and Memorization: On Quality and Specificity of Copyright Compliance. Proceedings of the AAAI/ACM Conference on AI, Ethics, and Society , 7(1):984–996, 2024. [3] Joshua Freeman, Chloe Rippe, Edoardo Debenedetti, and Maksym Andriushchenko. Exploring Memorization and Copyright Violation in Frontier LLMs: A Study of the New York Times v. OpenAI 2023 Lawsuit, December 2024. [4] Reza Shokri, Marco Stronati, Congzheng Song, and Vitaly Shmatikov. Membership inference attacks against machine learning models. IEEE Symposium on Security and Privacy , pages 3–18, 2017. [5] Biwei Yan, Kun Li, Minghui Xu, Yueyan Dong, Yue Zhang, Zhaochun Ren, and Xiuzhen Cheng. On protecting the data privacy of large language models (llms): A survey. arXiv preprint arXiv:2403.05156 , 2024. [6] Samuel Yeom, Irene Giacomelli, Matt Fredrikson, and Somesh Jha. Privacy risk in machine learning: Analyzing the connection to overfitting. In IEEE Computer Security Foundations Symposium , 2018. 9G-Drift: Membership Inference via Gradient-Induced Feature Drift [7] Eric Aubinais, Philippe Formont, Pablo Piantanida, and Elisabeth Gassiat. Membership inference risks in quantized models: A theoretical and empirical study. arXiv preprint arXiv:2502.06567 , 2025. [8] Michael Duan, Anshuman Suri, Niloofar Mireshghallah, Sewon Min, Weijia Shi, Luke Zettlemoyer, Yulia Tsvetkov, Yejin Choi, David Evans, and Hannaneh Hajishirzi. Do membership inference attacks work on large language models? arXiv preprint arXiv:2402.07841 , 2024. [9] Shahbaz Rezaei and Xin Liu. On the difficulty of membership inference attacks. Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 7892–7900, 2021. [10] Jamie Hayes, Ilia Shumailov, Christopher A Choquette-Choo, Matthew Jagielski, Georgios Kaissis, Milad Nasr, Meenatchi Sundaram Muthu Selva Annamalai, Niloofar Mireshghallah, Igor Shilov, Matthieu Meeus, et al. Exploring the limits of strong membership inference attacks on large language models. In The 39th Annual Conference on Neural Information Processing Systems , 2025. [11] Nicholas Carlini, Steve Chien, Milad Nasr, Shuang Song, Andreas Terzis, and Florian Tramer. Membership inference attacks from first principles. In 2022 IEEE symposium on security and privacy (SP) , pages 1897–1914. IEEE, 2022. [12] Hongsheng Hu, Zoran Salcic, Lichao Sun, Gillian Dobbie, Philip S. Yu, and Xuyun Zhang. Membership Inference Attacks on Machine Learning: A Survey. ACM Computing Surveys (CSUR) , September 2022. [13] Jun Niu, Peng Liu, Xiaoyan Zhu, Kuo Shen, Yuecong Wang, Haotian Chi, Yulong Shen, Xiaohong Jiang, Jianfeng Ma, and Yuqing Zhang. A survey on membership inference attacks and defenses in machine learning. Journal of Information and Intelligence , 2(5):404–454, September 2024. [14] Shakila Mahjabin Tonni, Dinusha Vatsalan, Farhad Farokhi, Dali Kaafar, Zhigang Lu, and Gioacchino Tangari. Data and model dependencies of membership inference attack. arXiv preprint arXiv:2002.06856 , 2020. [15] Christopher A. Choquette-Choo, Florian Tramer, Nicholas Carlini, and Nicolas Papernot. Label-only membership inference attacks. International Conference on Machine Learning , 2021. [16] Yu He, Boheng Li, Liu Liu, Zhongjie Ba, Wei Dong, Yiming Li, Zhan Qin, Kui Ren, and Chun Chen. Towards label-only membership inference attack against pre-trained large language models. In USENIX Security , 2025. [17] Nicholas Carlini, Florian Tramer, Eric Wallace, Matthew Jagielski, Ariel Herbert-Voss, Katherine Lee, Adam Roberts, Tom Brown, Dawn Song, Ulfar Erlingsson, et al. Extracting training data from large language models. In 
+
+30th USENIX security symposium (USENIX Security 21) , pages 2633–2650, 2021. [18] Nelson Elhage, Neel Nanda, Catherine Olsson, Tom Henighan, Nicholas Joseph, Ben Mann, Amanda Askell, Yuntao Bai, Anna Chen, Tom Conerly, et al. Toy models of superposition. arXiv preprint arXiv:2209.10652 , 2022. [19] Matthieu Meeus, Igor Shilov, Shubham Jain, Manuel Faysse, Marek Rei, and Yves-Alexandre de Montjoye. SoK: Membership Inference Attacks on LLMs are Rushing Nowhere (and How to Fix It). In 2025 IEEE Conference on Secure and Trustworthy Machine Learning (SaTML) , pages 385–401, April 2025. [20] Xuan Shi, Linqi Song, and Lijun Qu. Membership inference attack against language models via model adaptation. In Findings of the Association for Computational Linguistics: ACL 2023 , pages 6105–6116. Association for Computational Linguistics, 2023. [21] Christoph Mattern, Sai Suman Kaundinya, Peter Kairouz, and Dawn Song. Membership inference attacks via neighbourhood analysis. arXiv preprint arXiv:2305.15885 , 2023. [22] Qian Fu, Haoyang Li, Xinyun Xu, Peizhi Li, Neil Zhenqiang Gong, Xinyu Zhang, and Dawn Xiaodong Song. Label-Only Membership Inference Attacks Against Large Language Models. In Proceedings of the 38th Annual Computer Security Applications Conference (ACSAC ’22) , pages 1096–1110, Austin, TX, 2022. ACM. [23] Milad Nasr, Reza Shokri, and Amir Houmansadr. Comprehensive privacy analysis of deep learning: Passive and active white-box inference attacks against centralized and federated learning. In IEEE Symposium on Security and Privacy , 2019. [24] Karl Leino and Matt Fredrikson. Stolen memories: Leveraging model memorization for calibrated white-box membership inference. In 29th USENIX Security Symposium , pages 1605–1622. USENIX Association, 2020. [25] Kushal Tirumala, Aram H. Markosyan, Luke Zettlemoyer, and Armen Aghajanyan. Memorization without overfitting: Analyzing the training dynamics of large language models. In Advances in Neural Information Processing Systems , 2022. [26] Weijia Shi, Anirudh Ajith, Mengzhou Xia, Yangsibo Huang, Daogao Liu, Terra Blevins, Danqi Chen, and Luke Zettlemoyer. Detecting pretraining data from large language models. In arXiv preprint arXiv:2310.16789 , 2023. [27] Daniel Mattern, Jonas Geiping, Micah Goldblum, and Tom Goldstein. Membership Inference Attacks and Defenses in the Wild. In International Conference on Learning Representations (ICLR) , 2023. 10 G-Drift: Membership Inference via Gradient-Induced Feature Drift [28] Luis Ibanez-Lissen, Lorena Gonzalez-Manzano, Jose Maria de Fuentes, Nicolas Anciaux, and Joaquin Garcia-Alfaro. LUMIA: Linear probing for unimodal and multimodal membership inference attacks leveraging internal llm states. In European Symposium on Research in Computer Security , pages 186–206. Springer, 2025. [29] Trenton Bricken, Adly Templeton, Joshua Batson, Brian Chen, Adam Jermyn, Tom Conerly, Nick Turner, Cem Anil, Carson Denison, Amanda Askell, et al. Towards monosemanticity: Decomposing language models with dictionary learning. Transformer Circuits Thread , 2, 2023. [30] Yang Xu, Yi Wang, Hengguan Huang, and Hao Wang. Tracking the feature dynamics in llm training: A mechanistic study. arXiv preprint arXiv:2412.17626 , 2024. [31] Neil Zhenqiang Gong, Yuheng Zhang, and Xinyun Chen. Exploiting polysemantic neurons for adversarial interventions in language models. IEEE Symposium on Security and Privacy , 2025. [32] Fabian Hinder, Valerie Vaquet, and Barbara Hammer. Suitability of different metric choices for concept drift detection. In International Symposium on Intelligent Data Analysis , pages 157–170. Springer, 2022. [33] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal Azhar, et al. Llama: Open and efficient foundation language models. arXiv preprint arXiv:2302.13971 , 2023. [34] Sidney Black et al. GPT-Neo: Large Scale Autoregressive Language Modeling with Mesh-Tensorflow. EleutherAI Blog , 2021. urlhttps://www.eleuther.ai/projects/gpt-neo/. [35] Gemma Team, Thomas Mesnard, Cassidy Hardin, Robert Dadashi, Surya Bhupatiraju, Shreya Pathak, Laurent Sifre, Morgane Rivière, Mihir Sanjay Kale, Juliette Love, et al. Gemma: Open models based on Gemini research and technology. arXiv preprint arXiv:2403.08295 , 2024. [36] Weijia Shi, Anirudh Ajith, Mengzhou Xia, Yangsibo Huang, Daogao Liu, Terra Blevins, Danqi Chen, and Luke Zettlemoyer. Detecting pretraining data from large language models, 2023. https://huggingface.co/ datasets/swj0419/WikiMIA .[37] Pratyush Maini, Zhili Feng, Avi Schwarzschild, Zachary C Lipton, and J Zico Kolter. Tofu: A task of fictitious unlearning for LLMs. arXiv preprint arXiv:2401.06121 , 2024. [38] Wenjie Fu, Huandong Wang, Chen Gao, Guanghua Liu, Yong Li, and Tao Jiang. Membership inference attacks against fine-tuned large language models via self-prompt calibration. Advances in Neural Information Processing Systems , 37:134981–135010, 2024. [39] Hongsheng Hu, Jie Tang, and Zhipeng Cai. Membership inference attacks on machine learning: A survey. IEEE Transactions on Knowledge and Data Engineering , 34(8):4010–4029, 2022. [40] Martín Abadi, Andy Chu, Ian Goodfellow, H. Brendan McMahan, Ilya Mironov, Kunal Talwar, and Li Zhang. Deep learning with differential privacy. Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security (CCS) , pages 308–318, 2016. [41] Ravi Ranjan, Utkarsh Grover, Xiaomin Lin, and Agoritsa Polyzou. Razor: Ratio-aware layer editing for targeted unlearning in vision transformers and diffusion models. arXiv preprint arXiv:2603.14819 , 2026. [42] Ravi Ranjan, Utkarsh Grover, Mayur Akewar, Xiaomin Lin, and Agoritsa Polyzou. Catrag: Functor-guided structural debiasing with retrieval augmentation for fair llms. arXiv preprint arXiv:2603.21524 , 2026. [43] Ravi Ranjan, Utkarsh Grover, and Agorista Polyzou. Position: Llms must use functor-based and rag-driven bias mitigation for fairness. arXiv preprint arXiv:2603.07368 , 2026. [44] Ravi R Kumar, Vishal Pramanik, Utkarsh Grover, and Venkata Ramesh Ganapam. Trustworthiness of llms in medical domain. Researchgate preprint , 2024. [45] Utkarsh Grover, Ravi Ranjan, Mingyang Mao, Trung Tien Dong, Satvik Praveen, Zhenqi Wu, J Morris Chang, Tinoosh Mohsenin, Yi Sheng, Agoritsa Polyzou, et al. Embodied foundation models at the edge: A survey of deployment constraints and mitigation strategies. arXiv preprint arXiv:2603.16952 , 2026. 11 G-Drift: Membership Inference via Gradient-Induced Feature Drift 
+
+# Appendix A Pseudo code 
+
+Algorithm 1 G-Drift MIA 
+
+Require: JSON link json_link to dataset of (q, a, ℓ )
+
+Ensure: Trained logistic-regression MIA classifier and its accuracy/ROC-AUC  
+
+> 1:
+
+Constants: MODEL _NAME ← "llm-model" , η ← 10 −2 
+
+> 2:
+
+D ← LOAD DATASET (json_link ) 
+
+> 3:
+
+Initialize tokenizer:  
+
+> 4:
+
+tokenizer ← AutoTokenizer.from_pretrained (MODEL _NAME)  
+
+> 5:
+
+Initialize model:  
+
+> 6:
+
+model ← AutoModelForCausalLM.from_pretrained (MODEL _NAME , output_hidden_states = True ) 
+
+> 7:
+
+model.train ()  
+
+> 8:
+
+Θorig ← CLONE PARAMS (model ) 
+
+> 9:
+
+Sample random unit vector v ∈ Rd 
+
+> 10:
+
+F ← ∅  
+
+> 11:
+
+for all (q, a, ℓ ) ∈ D do  
+
+> 12:
+
+x ← tokenizer (q) 
+
+> 13:
+
+τ ← FIRST SUBTOKEN ID (a) 
+
+> 14:
+
+(logits 0, h 0) ← model.forward (x) 
+
+> 15:
+
+loss 0 ← CE( logits 0, τ ) 
+
+> 16:
+
+logit 0 ← logits 0[τ ] 
+
+> 17:
+
+feat 0 ← h0 · v 
+
+> 18:
+
+optimizer ← SGD (model.params () , lr = η) 
+
+> 19:
+
+optimizer.zero_grad ()  
+
+> 20:
+
+loss u ← CE( model (x).logits , τ ) 
+
+> 21:
+
+(−loss u).backward ()  
+
+> 22:
+
+optimizer.step ()  
+
+> 23:
+
+(logits 1, h 1) ← model.forward (x) 
+
+> 24:
+
+loss 1 ← CE( logits 1, τ ) 
+
+> 25:
+
+logit 1 ← loogits 1[τ ] 
+
+> 26:
+
+feat 1 ← h1 · v 
+
+> 27:
+
+drift ← ∥ h0 − h1∥ 
+
+> 28:
+
+Append ([ loss 0, logit 0, feat 0, loss 1, logit 1, feat 1, drift ], ℓ ) to F 
+
+> 29:
+
+RESTORE PARAMS (model , Θorig ) 
+
+> 30:
+
+end for  
+
+> 31:
+
+Split F into train/test sets (Xtr , y tr , X te , y te ) 
+
+> 32:
+
+clf ← LogisticRegression ()  
+
+> 33:
+
+clf .fit( Xtr , y tr ) 
+
+> 34:
+
+ˆy ← clf .predict( Xte ) 
+
+> 35:
+
+ˆp ← clf .predict _proba( Xte )[: , 1]  
+
+> 36:
+
+accuracy ← accuracy _score( yte , ˆy) 
+
+> 37:
+
+AUC ← roc _auc _score( yte , ˆp) 
+
+> 38:
+
+return accuracy , AUC 
+
+# B Detailed Experimental Settings 
+
+In evaluating the Gradient-Induced Feature Drift (G-Drift) method, we conducted experiments using three modern transformer-based language models Llama-3 , Gemma-3 , and GPT-Neo-2 across the three subsets of the WikiMIA benchmark : World Facts , Real Authors , and Books . Models were fine-tuned on the corresponding training subsets, while non-member data consisted of Replica Q&A pairs (structurally similar but content-distinct from training data) and narrative excerpts from the Books portion of the benchmark. 
+
+G-Drift Method. Our method applies a single gradient-ascent step with a learning rate of 10 −2 to intentionally perturb model parameters in the direction of increasing loss on a queried instance. For each sample, we record both pre-and post-update statistics: logits, loss values, hidden state activations, and the induced feature drift measured via the 12 G-Drift: Membership Inference via Gradient-Induced Feature Drift Euclidean norm ∥∆h∥. A logistic regression classifier is trained on these drift features to distinguish members from non-members. We compare G-Drift against a suite of strong membership-inference baselines spanning black-box, reference-based, shadow-model, and label-only threat models: • Probability Threshold (Min-k%). This black-box attack estimates the percentile rank of the true likelihood 
+
+p(y | x) within a reference distribution [ 26 ]. Membership is predicted when p(y | x) exceeds a kth -percentile threshold. We compute token-level negative log-likelihood and calibrate thresholds using the median training-set score. • Shadow Model Attack (Neighbour-MIA). Following Mattern et al. [ 27 ], Neighbour-MIA trains shadow models on auxiliary data that approximate the target model’s behavior. Membership is inferred by comparing the queried instance’s outputs to outputs observed during shadow-model training. In our implementation, neighbourhood variants are generated using a masked language model (“bert-base-uncased”), and membership is inferred from the difference between original losses and averaged neighbour losses. • Perplexity-Based Likelihood (Perplexity-PL) and Zlib. Based on Carlini et al. [ 17 ], Perplexity-PL uses sequence-level perplexity as the membership statistic. The Zlib variant incorporates compression entropy by dividing perplexity by the compressed bit length. Thresholds are optimized using training data to detect samples that are unusually easy for the model to predict or compress. • Similarity-Based Attack (SPV-MIA). SPV-MIA [ 22 ] assumes access to reference data drawn from the same distribution and measures embedding-space similarity between the query’s outputs and those of reference samples. Membership is inferred when similarity exceeds a calibrated threshold. Our implementation monitors representation stability until convergence before thresholding cosine similarities. • PETAL (Label-Only MIA). PETAL [ 16 ] operates under a stricter label-only setting in which logits are unavailable. It infers membership by computing semantic similarity between model-predicted tokens and reference answers, serving as a strong baseline in restricted-access scenarios. All methods use an 70/10/20 train–validation-test split and logistic regression classifiers with L2 regularization selected via cross-validation. AUC is used as the primary evaluation metric to ensure consistent and rigorous comparison across all approaches. 
+
+B.1 Supporting Methodological Context 
+
+G-Drift is situated within a broader research program on trustworthy, controllable, and deployable foundation models. In particular, our use of a targeted gradient-based intervention is conceptually aligned with recent work on selective model editing and unlearning, where carefully localized updates are used to remove or suppress specific behaviors while preserving general utility [ 41 ]. From a safety and fairness perspective, this view also resonates with recent efforts to modify model behavior through structure-aware debiasing and retrieval-grounded correction, which emphasize that reliable intervention requires both principled internal transformations and external grounding [ 42 , 43 ]. More broadly, the motivation for auditing internal model responses is consistent with prior work on trustworthiness in high-stakes domains such as medicine, where interpretability and robust diagnostic signals are essential for responsible deployment [44 ]. Finally, as foundation models are increasingly deployed in constrained and real-world environments, system-level reliability and controllability become inseparable from model auditing, further motivating lightweight yet informative probes such as gradient-induced feature drift [45]. These works are not direct baselines for G-Drift, but they provide useful methodological support for our central premise: small, structured interventions can reveal meaningful properties of internal representations, and such signals are valuable for auditing safety, fairness, privacy, and deployment readiness. In this sense, G-Drift contributes a complementary perspective focused specifically on membership-sensitive representation dynamics in LLMs. 
+
+# C Quantitative Analysis 
+
+In Table 3, we evaluate a setting where the same question–answer pair is included in the training data of the member-class LLMs but excluded from the non-member models, and then apply paraphrased variants of the question to examine how feature drift differs between member and non-member behavior. Table 3 shows that feature projection drift remains highly consistent across semantically equivalent prompts for member samples, while non-members exhibit smaller and more variable drift. This stability indicates that memorized facts are anchored in robust internal feature representations, whereas unseen samples lack such geometric consistency. The result highlights that G-Drift captures semantic memorization rather than prompt-specific artifacts. 13 G-Drift: Membership Inference via Gradient-Induced Feature Drift Table 3: Drift consistency across semantically similar prompts (illustrative example on LLaMA-3). Members show stable, repeatable feature-projection drift across paraphrases, while non-members exhibit smaller and less consistent drift. 
+
+Prompt (paraphrase) Class αbefore αafter |∆α|
+
+Where would you find the Eif-fel Tower? Member 2.914 3.900 0.986 The Eiffel Tower is located in which city? Member 2.890 3.875 0.985 Which city is home to the Eif-fel Tower? Member 2.905 3.890 0.985 Where would you find the Eif-fel Tower? Non-member -0.103 -0.057 0.046 The Eiffel Tower is located in which city? Non-member -0.120 -0.030 0.090 Which city is home to the Eif-fel Tower? Non-member -0.085 -0.010 0.075 
+
+14
