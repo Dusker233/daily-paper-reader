@@ -4,6 +4,7 @@
 window.SubscriptionsGithubToken = (function () {
   const GITHUB_TOKEN_STORAGE_KEY = 'github_token_data';
   const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
+  const DEFAULT_SEED_UPLOAD_BRANCH_PREFIX = 'seed-paper-requests';
 
   const sanitizeGithubTokenData = (data) => {
     if (!data || typeof data !== 'object') {
@@ -433,6 +434,183 @@ window.SubscriptionsGithubToken = (function () {
     return normalized;
   };
 
+  const encodeGithubRefPath = (value) => String(value || '')
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+
+  const readRepoGitRef = async (owner, repo, token, ref) => {
+    const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const normalizedToken = String(token || '').trim();
+    const normalizedRef = normalizeGithubRef(ref);
+    if (!normalizedToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const repoLabel = `${normalizedOwner}/${normalizedRepo}`;
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/git/ref/heads/${encodeGithubRefPath(normalizedRef)}`,
+      {
+        headers: {
+          Authorization: `token ${normalizedToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      },
+    );
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`无法读取仓库 ${repoLabel} 的分支 ${normalizedRef}：${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`);
+    }
+    return res.json().catch(() => null);
+  };
+
+  const extractGitRefSha = (data) => String(
+    (data && data.object && data.object.sha) || '',
+  ).trim();
+
+  const extractRepoFileSha = (data) => String(
+    (data && data.fileSha)
+    || (data && data.sha)
+    || (data && data.content && data.content.sha)
+    || '',
+  ).trim();
+
+  const createRepoGitRef = async (owner, repo, token, ref, sha) => {
+    const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const normalizedToken = String(token || '').trim();
+    const normalizedRef = normalizeGithubRef(ref);
+    const normalizedSha = String(sha || '').trim();
+    if (!normalizedToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    if (!normalizedSha) {
+      throw new Error(`无法创建分支 ${normalizedRef}：缺少源提交 sha。`);
+    }
+    const repoLabel = `${normalizedOwner}/${normalizedRepo}`;
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/git/refs`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `token ${normalizedToken}`,
+          Accept: 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ref: `refs/heads/${normalizedRef}`,
+          sha: normalizedSha,
+        }),
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`无法创建仓库 ${repoLabel} 的分支 ${normalizedRef}：${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`);
+    }
+    return res.json().catch(() => null);
+  };
+
+  const updateRepoGitRef = async (owner, repo, token, ref, sha, force = false) => {
+    const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const normalizedToken = String(token || '').trim();
+    const normalizedRef = normalizeGithubRef(ref);
+    const normalizedSha = String(sha || '').trim();
+    if (!normalizedToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    if (!normalizedSha) {
+      throw new Error(`无法更新分支 ${normalizedRef}：缺少目标提交 sha。`);
+    }
+    const repoLabel = `${normalizedOwner}/${normalizedRepo}`;
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/git/refs/heads/${encodeGithubRefPath(normalizedRef)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `token ${normalizedToken}`,
+          Accept: 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sha: normalizedSha,
+          force: force === true,
+        }),
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`无法更新仓库 ${repoLabel} 的分支 ${normalizedRef}：${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`);
+    }
+    return res.json().catch(() => null);
+  };
+
+  const buildSeedPaperUploadBranch = ({ requestId, branchPrefix } = {}) => {
+    const normalizedRequestId = toPathSlug(requestId, 'seed-paper-request');
+    const prefix = normalizeGithubRef(
+      branchPrefix || DEFAULT_SEED_UPLOAD_BRANCH_PREFIX,
+      DEFAULT_SEED_UPLOAD_BRANCH_PREFIX,
+    );
+    return normalizeGithubRef(`${prefix}/${normalizedRequestId}`);
+  };
+
+  const prepareSeedPaperUploadTarget = async ({
+    owner,
+    repo,
+    token,
+    branch,
+    requestId,
+    branchPrefix,
+  } = {}) => {
+    const effectiveToken = token || getTokenForConfig();
+    if (!effectiveToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const repoInfo = owner && repo
+      ? {
+          owner: normalizeGithubRepoSegment(owner, 'owner'),
+          repo: normalizeGithubRepoSegment(repo, 'repo'),
+          token: effectiveToken,
+          defaultBranch: await resolveExplicitRepoDefaultBranch(owner, repo, effectiveToken),
+        }
+      : await resolveRepoInfoFromToken(effectiveToken, false);
+    const defaultBranch = normalizeGithubRef(repoInfo.defaultBranch || 'main');
+    const uploadBranch = branch
+      ? normalizeGithubRef(branch)
+      : buildSeedPaperUploadBranch({ requestId, branchPrefix });
+    if (uploadBranch === defaultBranch) {
+      throw new Error('seed 上传分支不能与默认分支相同。');
+    }
+    const defaultRef = await readRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, defaultBranch);
+    const defaultSha = extractGitRefSha(defaultRef);
+    if (!defaultSha) {
+      throw new Error(`无法读取仓库 ${repoInfo.owner}/${repoInfo.repo} 默认分支 ${defaultBranch} 的最新提交。`);
+    }
+    const uploadRef = await readRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, uploadBranch);
+    const uploadSha = extractGitRefSha(uploadRef);
+    const created = !uploadSha;
+    const needsReset = !!uploadSha && uploadSha !== defaultSha;
+    if (created) {
+      await createRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, uploadBranch, defaultSha);
+    } else if (needsReset) {
+      await updateRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, uploadBranch, defaultSha, true);
+    }
+    return {
+      owner: repoInfo.owner,
+      repo: repoInfo.repo,
+      token: effectiveToken,
+      defaultBranch,
+      branch: uploadBranch,
+      ref: uploadBranch,
+      sourceSha: defaultSha,
+      baseSha: defaultSha,
+      created,
+    };
+  };
+
   const buildSeedPaperRequestPath = ({ requestId, fileName } = {}) => {
     const normalizedRequestId = toPathSlug(requestId, 'seed-paper-request');
     const rawFileName = String(fileName || 'seed-paper.pdf')
@@ -552,13 +730,15 @@ window.SubscriptionsGithubToken = (function () {
       throw new Error(`写入 ${normalizedPath} 失败：${res.status} ${res.statusText} - ${text}`);
     }
     const result = await res.json();
+    const resultData = result && typeof result === 'object' ? result : {};
     return {
-      ...(result && typeof result === 'object' ? result : {}),
+      ...resultData,
       path: normalizedPath,
       owner: repoInfo.owner,
       repo: repoInfo.repo,
       branch: resolvedBranch,
       ref: resolvedBranch,
+      fileSha: extractRepoFileSha(resultData),
     };
   };
 
@@ -605,12 +785,14 @@ window.SubscriptionsGithubToken = (function () {
       throw new Error(`读取 ${normalizedPath} 失败：${res.status} ${res.statusText} - ${text}`);
     }
     const data = await res.json();
+    const fileData = data && typeof data === 'object' ? data : {};
     return {
-      ...(data && typeof data === 'object' ? data : {}),
+      ...fileData,
       path: normalizedPath,
       owner: repoInfo.owner,
       repo: repoInfo.repo,
       ref: resolvedRef,
+      fileSha: extractRepoFileSha(fileData),
     };
   };
 
@@ -620,6 +802,7 @@ window.SubscriptionsGithubToken = (function () {
     token,
     ref,
     paths,
+    expectedFiles,
   } = {}) => {
     const list = Array.isArray(paths) ? paths : [];
     const effectiveToken = token || getTokenForConfig();
@@ -637,24 +820,46 @@ window.SubscriptionsGithubToken = (function () {
         }
       : await resolveRepoInfoFromToken(effectiveToken, false);
     const effectiveRef = normalizeGithubRef(ref || repoInfo.defaultBranch || 'main');
+    const expectedByPath = new Map();
+    if (Array.isArray(expectedFiles)) {
+      expectedFiles.forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        const normalizedPath = normalizeRepoWritePath(item.path);
+        if (!normalizedPath) return;
+        expectedByPath.set(normalizedPath, {
+          path: normalizedPath,
+          ref: item.ref ? normalizeGithubRef(item.ref, effectiveRef) : effectiveRef,
+          fileSha: String(item.fileSha || item.sha || '').trim(),
+        });
+      });
+    }
     const results = await Promise.all(list.map(async (itemPath) => {
+      const normalizedPath = normalizeRepoWritePath(itemPath);
+      const expected = expectedByPath.get(normalizedPath) || null;
       const file = await readRepoFile({
         owner: repoInfo.owner,
         repo: repoInfo.repo,
         token: effectiveToken,
         ref: effectiveRef,
-        path: itemPath,
+        path: normalizedPath,
       });
+      const actualRef = file && file.ref ? file.ref : effectiveRef;
+      const actualSha = file && file.fileSha ? String(file.fileSha).trim() : '';
+      const matchesExpectedRef = !expected || expected.ref === actualRef;
+      const matchesExpectedSha = !expected || !expected.fileSha || expected.fileSha === actualSha;
       return {
-        path: normalizeRepoWritePath(itemPath),
+        path: normalizedPath,
         exists: !!file,
-        ref: file && file.ref ? file.ref : effectiveRef,
+        ref: actualRef,
+        fileSha: actualSha,
+        matchesExpectedRef,
+        matchesExpectedSha,
       };
     }));
     return {
       ref: effectiveRef,
       files: results,
-      allVisible: results.every((item) => item.exists),
+      allVisible: results.every((item) => item.exists && item.matchesExpectedRef && item.matchesExpectedSha),
     };
   };
 
@@ -983,6 +1188,7 @@ window.SubscriptionsGithubToken = (function () {
     readRepoFile,
     verifyRepoFilesVisible,
     buildSeedPaperRequestPath,
+    prepareSeedPaperUploadTarget,
     __test: {
       isShaConflictResponse,
       buildSeedPaperRequestPath,
@@ -992,6 +1198,7 @@ window.SubscriptionsGithubToken = (function () {
       verifyRepoFilesVisible,
       resolveRepoInfoFromPage,
       normalizeGithubRef,
+      prepareSeedPaperUploadTarget,
     },
   };
 })();

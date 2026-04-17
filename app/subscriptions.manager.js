@@ -686,7 +686,7 @@ window.SubscriptionsManager = (function () {
       setQuickRunMessage(text, '#c00');
       return false;
     }
-    if (!window.SubscriptionsGithubToken || typeof window.SubscriptionsGithubToken.buildSeedPaperRequestPath !== 'function' || typeof window.SubscriptionsGithubToken.writeRepoFile !== 'function' || typeof window.SubscriptionsGithubToken.verifyRepoFilesVisible !== 'function') {
+    if (!window.SubscriptionsGithubToken || typeof window.SubscriptionsGithubToken.buildSeedPaperRequestPath !== 'function' || typeof window.SubscriptionsGithubToken.prepareSeedPaperUploadTarget !== 'function' || typeof window.SubscriptionsGithubToken.writeRepoFile !== 'function' || typeof window.SubscriptionsGithubToken.verifyRepoFilesVisible !== 'function') {
       setQuickRunMessage('GitHub 仓库写入能力未加载，无法提交种子论文请求。', '#c00');
       return false;
     }
@@ -729,16 +729,24 @@ window.SubscriptionsManager = (function () {
       if (!hasPdfSignature(fileBuffer)) {
         throw new Error('上传文件内容不是有效的 PDF。');
       }
+      const uploadTarget = await window.SubscriptionsGithubToken.prepareSeedPaperUploadTarget({
+        requestId: pathInfo.requestId,
+      });
       const pdfWrite = await window.SubscriptionsGithubToken.writeRepoFile({
+        owner: uploadTarget && uploadTarget.owner ? uploadTarget.owner : undefined,
+        repo: uploadTarget && uploadTarget.repo ? uploadTarget.repo : undefined,
+        branch: uploadTarget && uploadTarget.branch ? uploadTarget.branch : undefined,
         path: pathInfo.filePath,
         contentBytes: fileBuffer,
         commitMessage: `chore: add seed paper upload ${pathInfo.requestId}`,
       });
       const requestWrite = await window.SubscriptionsGithubToken.writeRepoFile({
+        owner: uploadTarget && uploadTarget.owner ? uploadTarget.owner : undefined,
+        repo: uploadTarget && uploadTarget.repo ? uploadTarget.repo : undefined,
         path: pathInfo.requestPath,
         contentText: JSON.stringify(payload, null, 2),
         commitMessage: `chore: add seed paper request ${pathInfo.requestId}`,
-        branch: pdfWrite && pdfWrite.branch ? pdfWrite.branch : undefined,
+        branch: pdfWrite && pdfWrite.branch ? pdfWrite.branch : (uploadTarget && uploadTarget.branch ? uploadTarget.branch : undefined),
       });
       const requestRef = String(
         (requestWrite && (requestWrite.ref || requestWrite.branch))
@@ -750,6 +758,18 @@ window.SubscriptionsManager = (function () {
         repo: requestWrite && requestWrite.repo ? requestWrite.repo : undefined,
         ref: requestRef,
         paths: [pathInfo.filePath, pathInfo.requestPath],
+        expectedFiles: [
+          {
+            path: pathInfo.filePath,
+            ref: pdfWrite && (pdfWrite.ref || pdfWrite.branch) ? (pdfWrite.ref || pdfWrite.branch) : requestRef,
+            fileSha: pdfWrite && pdfWrite.fileSha ? pdfWrite.fileSha : '',
+          },
+          {
+            path: pathInfo.requestPath,
+            ref: requestWrite && (requestWrite.ref || requestWrite.branch) ? (requestWrite.ref || requestWrite.branch) : requestRef,
+            fileSha: requestWrite && requestWrite.fileSha ? requestWrite.fileSha : '',
+          },
+        ],
       });
       if (!repoVisibility || repoVisibility.allVisible !== true) {
         throw new Error('种子论文文件上传后暂未在目标分支可见，请稍后重试。');

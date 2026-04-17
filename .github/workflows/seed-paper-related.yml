@@ -29,10 +29,22 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout publish branch
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          path: publish-repo
+
+      - name: Checkout request payload branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          ref: seed-paper-requests/${{ github.event.inputs.request_id }}
+          path: request-repo
+          sparse-checkout: |
+            requests/seed_papers/${{ github.event.inputs.request_id }}
+          sparse-checkout-cone-mode: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -40,6 +52,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps (skip sqlite3)
+        working-directory: publish-repo
         run: |
           python3 - <<'PY'
           import re
@@ -56,11 +69,11 @@ jobs:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
           SEED_MODE: ${{ github.event.inputs.seed_mode }}
+          REQUEST_ROOT: ${{ github.workspace }}/request-repo
         run: |
           set -euo pipefail
-          export REQUEST_ID REQUEST_PATH SEED_MODE
+          export REQUEST_ID REQUEST_PATH SEED_MODE REQUEST_ROOT
           python3 - <<'PY'
-          import importlib.util
           import json
           import os
           import re
@@ -69,6 +82,7 @@ jobs:
           request_id = (os.environ.get("REQUEST_ID") or "").strip()
           request_path = (os.environ.get("REQUEST_PATH") or "").strip()
           seed_mode = (os.environ.get("SEED_MODE") or "skim").strip()
+          request_root = Path(os.environ["REQUEST_ROOT"]).resolve()
 
           if not request_id:
             raise SystemExit("Missing request_id")
@@ -80,23 +94,32 @@ jobs:
           expected_request_path = f"requests/seed_papers/{request_id}/request.json"
           if request_path != expected_request_path:
             raise SystemExit(f"Unexpected request path: {request_path}")
-          if Path(request_path).parts != tuple(expected_request_path.split("/")):
+          if PurePosixPath(request_path).parts != tuple(expected_request_path.split("/")):
             raise SystemExit(f"Unexpected request path: {request_path}")
           if seed_mode not in {"skim", "deep", "both"}:
             raise SystemExit(f"Unsupported seed mode: {seed_mode}")
-          if not Path(request_path).is_file():
+
+          resolved_request_path = request_root.joinpath(*PurePosixPath(request_path).parts).resolve()
+          if request_root not in resolved_request_path.parents:
+            raise SystemExit(f"Unexpected request path: {request_path}")
+          if not resolved_request_path.is_file():
             raise SystemExit(f"Missing request payload: {request_path}")
 
-          module_path = Path("src/seed_paper_processor.py")
-          spec = importlib.util.spec_from_file_location("seed_paper_processor_validation", module_path)
-          if not spec or not spec.loader:
-            raise SystemExit(f"Unable to load validation module: {module_path}")
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
+          source_path = ((json.loads(resolved_request_path.read_text(encoding="utf-8")) or {}).get("source_path") or "").strip()
+          relative_pdf_path = PurePosixPath(source_path)
+          expected_source_prefix = PurePosixPath("requests") / "seed_papers" / request_id
+          if (
+            relative_pdf_path.is_absolute()
+            or relative_pdf_path.parent != expected_source_prefix
+            or relative_pdf_path.suffix.lower() != ".pdf"
+          ):
+            raise SystemExit(f"Unexpected source_path: {source_path}")
+          if any(part in {"", ".", ".."} for part in relative_pdf_path.parts):
+            raise SystemExit(f"Unexpected source_path: {source_path}")
 
-          source_path = ((json.loads(Path(request_path).read_text(encoding="utf-8")) or {}).get("source_path") or "").strip()
-          relative_pdf_path = module._validate_source_path(source_path, request_id)
-          resolved_source_path = Path(*PurePosixPath(relative_pdf_path).parts)
+          resolved_source_path = request_root.joinpath(*relative_pdf_path.parts).resolve()
+          if request_root not in resolved_source_path.parents:
+            raise SystemExit(f"Unexpected source_path: {source_path}")
           if not resolved_source_path.is_file():
             raise SystemExit(f"Missing seed PDF: {source_path}")
           if resolved_source_path.stat().st_size > 50 * 1024 * 1024:
@@ -109,14 +132,16 @@ jobs:
       - name: Inspect request payload
         env:
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
+          REQUEST_ROOT: ${{ github.workspace }}/request-repo
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
           import os
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
 
-          request_path = Path(os.environ["REQUEST_PATH"])
+          request_root = Path(os.environ["REQUEST_ROOT"]).resolve()
+          request_path = request_root.joinpath(*PurePosixPath(os.environ["REQUEST_PATH"]).parts)
           data = json.loads(request_path.read_text(encoding="utf-8"))
           print("Loaded seed paper request:")
           print(json.dumps({
@@ -129,20 +154,27 @@ jobs:
           PY
 
       - name: Process seed paper request
+        working-directory: publish-repo
         env:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
           SEED_MODE: ${{ github.event.inputs.seed_mode }}
+          REQUEST_ROOT: ${{ github.workspace }}/request-repo
+          PUBLISH_ROOT: ${{ github.workspace }}/publish-repo
         run: |
           set -euo pipefail
           python3 src/seed_paper_processor.py \
-            --request-path "$REQUEST_PATH" \
+            --request-path "${REQUEST_ROOT}/${REQUEST_PATH}" \
             --request-id "$REQUEST_ID" \
+            --root-dir "$REQUEST_ROOT" \
+            --docs-dir "$PUBLISH_ROOT/docs" \
             --seed-mode "$SEED_MODE"
 
       - name: Commit generated seed docs
+        working-directory: publish-repo
         env:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
+          PUBLISH_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -153,4 +185,4 @@ jobs:
             exit 0
           fi
           git commit -m "feat: process seed paper request ${REQUEST_ID}"
-          git push
+          git push origin HEAD:"${PUBLISH_BRANCH}"

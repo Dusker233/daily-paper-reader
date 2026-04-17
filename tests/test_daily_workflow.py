@@ -67,12 +67,21 @@ class DailyWorkflowConfigTest(unittest.TestCase):
         steps = seed_smoke_job.get("steps") or []
         step_names = [step.get("name") for step in steps]
         self.assertIn("Run seed paper processor unit tests", step_names)
+        self.assertIn("Run seed workflow frontend tests", step_names)
         self.assertIn("Create seed smoke fixtures", step_names)
         self.assertIn("Run seed paper smoke flow", step_names)
         self.assertIn("Upload seed smoke docs artifact", step_names)
 
         unit_test_step = next(step for step in steps if step.get("name") == "Run seed paper processor unit tests")
-        self.assertIn("python -m unittest tests.test_seed_paper_processor tests.test_daily_workflow", unit_test_step.get("run") or "")
+        self.assertIn(
+            "python -m unittest tests.test_seed_paper_processor tests.test_seed_paper_workflow tests.test_daily_workflow",
+            unit_test_step.get("run") or "",
+        )
+
+        frontend_test_step = next(step for step in steps if step.get("name") == "Run seed workflow frontend tests")
+        frontend_test_script = frontend_test_step.get("run") or ""
+        self.assertIn("node tests/test_subscriptions_github_token.js", frontend_test_script)
+        self.assertIn("node tests/test_subscriptions_manager.js", frontend_test_script)
 
         smoke_step = next(step for step in steps if step.get("name") == "Run seed paper smoke flow")
         smoke_script = smoke_step.get("run") or ""

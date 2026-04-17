@@ -106,6 +106,8 @@ window.DPRWorkflowRunner = (function () {
   };
 
   const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
+  const SEED_REQUEST_BRANCH_PREFIX = 'seed-paper-requests';
+  const SEED_REQUEST_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
   const isValidGithubRepoSegment = (value) => /^[A-Za-z0-9_.-]+$/.test(String(value || '').trim());
 
@@ -854,12 +856,20 @@ window.DPRWorkflowRunner = (function () {
 
   const runSeedPaperWorkflow = async (requestInfo, extraInputs) => {
     const info = requestInfo && typeof requestInfo === 'object' ? requestInfo : {};
+    const requestId = String(info.requestId || '').trim();
+    if (!SEED_REQUEST_ID_RE.test(requestId)) {
+      throw new Error(`非法的 seed request_id：${requestId || '<empty>'}`);
+    }
     const requestPath = String(info.requestPath || '').trim();
     if (!requestPath) {
       throw new Error('缺少 seed request_path');
     }
     if (!/^requests\/seed_papers\/[a-z0-9._-]+\/request\.json$/i.test(requestPath)) {
       throw new Error(`非法的 seed request_path：${requestPath}`);
+    }
+    const expectedRequestPath = `requests/seed_papers/${requestId}/request.json`;
+    if (requestPath !== expectedRequestPath) {
+      throw new Error(`seed request_path 与 request_id 不匹配：${requestPath}`);
     }
     const requestRef = String(info.requestRef || info.ref || '').trim();
     if (!requestRef) {
@@ -873,13 +883,26 @@ window.DPRWorkflowRunner = (function () {
     if (!isValidRequestRef) {
       throw new Error(`非法的 seed ref：${requestRef}`);
     }
+    const token = loadGithubToken();
+    let dispatchRef = 'main';
+    if (token) {
+      const repoContext = await resolveRepoContext(token);
+      dispatchRef = String((repoContext && repoContext.defaultBranch) || 'main').trim() || 'main';
+      if (requestRef === dispatchRef) {
+        throw new Error(`seed ref 不能指向默认分支：${requestRef}`);
+      }
+    }
+    const expectedRequestRef = `${SEED_REQUEST_BRANCH_PREFIX}/${requestId}`;
+    if (requestRef !== expectedRequestRef) {
+      throw new Error(`seed ref 与 request_id 不匹配：${requestRef}`);
+    }
     const mergedInputs = combineInputs(extraInputs, {
-      request_id: info.requestId,
+      request_id: requestId,
       request_path: requestPath,
       seed_mode: info.seedMode,
     });
     return runWorkflowByKey('seed-paper-related', mergedInputs, {
-      ref: requestRef,
+      ref: dispatchRef,
     });
   };
 
