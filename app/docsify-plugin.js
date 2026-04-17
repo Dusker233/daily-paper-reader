@@ -3864,6 +3864,8 @@ window.$docsify = {
         const isReportPage = isReportRouteFile(file);
         const isPaperPage = isPaperRouteFile(file);
         const isLandingLikePage = isHomePage || isReportPage;
+        window.__DPR_CURRENT_ROUTE = vm && vm.route ? { ...vm.route } : null;
+        window.__DPR_CURRENT_ROUTE_FILE = String(file || '');
         syncPageTypeClasses({ isHomePage, isReportPage, isPaperPage });
 
         // A. 对正文区域进行一次全局公式渲染（支持 $...$ / $$...$$）
@@ -3912,7 +3914,7 @@ window.$docsify = {
         }
 
         if (!isLandingLikePage && window.PrivateDiscussionChat) {
-          window.PrivateDiscussionChat.initForPage(paperId);
+          window.PrivateDiscussionChat.initForPage(paperId, file);
         }
 
         bindPaperFigureCarousels();

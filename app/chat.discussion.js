@@ -106,6 +106,7 @@ window.PrivateDiscussionChat = (function () {
   };
 
   let chatDbPromise = null;
+  let currentRouteFile = '';
 
   const openChatDB = () => {
     if (chatDbPromise) return chatDbPromise;
@@ -771,6 +772,163 @@ window.PrivateDiscussionChat = (function () {
     return String(cloned.innerText || '').trim();
   };
 
+  const ABSOLUTE_URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+  const decodePathLikeValue = (value) => {
+    let decoded = String(value || '').trim();
+    if (!decoded) return '';
+    for (let index = 0; index < 3; index += 1) {
+      try {
+        const nextValue = decodeURIComponent(decoded);
+        if (nextValue === decoded) break;
+        decoded = nextValue;
+      } catch {
+        return '';
+      }
+    }
+    return decoded;
+  };
+
+  const normalizeDocsRelativePath = (value) => {
+    const normalized = decodePathLikeValue(value)
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/\/+$/, '');
+    if (!normalized) return '';
+    const segments = normalized.split('/').filter(Boolean);
+    if (segments.some((segment) => segment === '.' || segment === '..')) return '';
+    return segments.join('/');
+  };
+
+  const ensureTrailingSlash = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (ABSOLUTE_URL_RE.test(raw)) {
+      return /\/$/.test(raw) ? raw : `${raw}/`;
+    }
+    const isRootRelative = raw.startsWith('/');
+    const normalized = raw
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/\/+$/, '');
+    if (!normalized) {
+      return isRootRelative ? '/' : '';
+    }
+    return isRootRelative ? `/${normalized}/` : `${normalized}/`;
+  };
+
+  const stripMarkdownExtension = (value) => String(value || '').replace(/\.md$/i, '');
+  const stripTxtExtension = (value) => String(value || '').replace(/\.txt$/i, '');
+
+  const basenameOfPath = (value) => {
+    const normalized = normalizeDocsRelativePath(value);
+    if (!normalized) return '';
+    const parts = normalized.split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '';
+  };
+
+  const dirnameOfPath = (value) => {
+    const normalized = normalizeDocsRelativePath(value);
+    if (!normalized || !normalized.includes('/')) return '';
+    return normalized.slice(0, normalized.lastIndexOf('/'));
+  };
+
+  const resolveDocsBasePath = (basePath) => {
+    const configured =
+      typeof basePath === 'string' && basePath.trim()
+        ? basePath
+        : window.$docsify && typeof window.$docsify.basePath === 'string'
+          ? window.$docsify.basePath
+          : 'docs/';
+    return ensureTrailingSlash(configured || 'docs/');
+  };
+
+  const resolveComparableDocsBasePath = (basePath) => {
+    const resolvedBasePath = resolveDocsBasePath(basePath);
+    if (!resolvedBasePath) return '';
+    if (ABSOLUTE_URL_RE.test(resolvedBasePath)) {
+      try {
+        const parsed = new URL(resolvedBasePath);
+        return normalizeDocsRelativePath(parsed.pathname);
+      } catch {
+        return '';
+      }
+    }
+    return normalizeDocsRelativePath(resolvedBasePath);
+  };
+
+  const stripDocsBasePath = (value, basePath) => {
+    const normalizedValue = normalizeDocsRelativePath(value);
+    const comparableBase = resolveComparableDocsBasePath(basePath);
+    if (!normalizedValue || !comparableBase) return normalizedValue;
+    if (normalizedValue === comparableBase) return '';
+    if (normalizedValue.startsWith(`${comparableBase}/`)) {
+      return normalizedValue.slice(comparableBase.length + 1);
+    }
+    return normalizedValue;
+  };
+
+  const joinDocsPath = (basePath, relativePath) => {
+    const normalizedBase = resolveDocsBasePath(basePath);
+    const normalizedRelative = normalizeDocsRelativePath(relativePath);
+    return normalizedRelative ? `${normalizedBase}${normalizedRelative}` : normalizedBase;
+  };
+
+  const buildPaperTextCandidateUrls = ({ paperId, routeFile, basePath } = {}) => {
+    const resolvedBasePath = resolveDocsBasePath(basePath);
+    const normalizedPaperId = stripTxtExtension(
+      stripMarkdownExtension(stripDocsBasePath(paperId, resolvedBasePath)),
+    );
+    const normalizedRouteId = stripTxtExtension(
+      stripMarkdownExtension(stripDocsBasePath(routeFile, resolvedBasePath)),
+    );
+    const candidates = [];
+    const seen = new Set();
+
+    const pushCandidate = (relativePath) => {
+      const normalizedRelative = stripTxtExtension(
+        stripMarkdownExtension(normalizeDocsRelativePath(relativePath)),
+      );
+      if (!normalizedRelative) return;
+      const url = joinDocsPath(resolvedBasePath, `${normalizedRelative}.txt`);
+      if (seen.has(url)) return;
+      seen.add(url);
+      candidates.push(url);
+    };
+
+    if (normalizedRouteId) {
+      pushCandidate(normalizedRouteId);
+      if (normalizedPaperId && normalizedPaperId.includes('/')) {
+        pushCandidate(normalizedPaperId);
+      }
+      return candidates;
+    }
+
+    pushCandidate(normalizedPaperId);
+    pushCandidate(basenameOfPath(normalizedPaperId));
+
+    return candidates;
+  };
+
+  const loadPaperTextContent = async ({ paperId, routeFile, basePath } = {}) => {
+    const candidates = buildPaperTextCandidateUrls({ paperId, routeFile, basePath });
+    for (const url of candidates) {
+      try {
+        const resp = await fetch(url);
+        if (!resp || !resp.ok) continue;
+        const txt = await resp.text();
+        if (txt && txt.trim()) {
+          return txt;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return '';
+  };
+
   const buildMessagesForQuestion = ({ paperContent, history, question }) => {
     const messages = [
       {
@@ -842,18 +1000,13 @@ window.PrivateDiscussionChat = (function () {
 
     // 优先使用与后端一致的 .txt 抽取全文作为上下文（不截断）
     if (paperId) {
-      try {
-        const txtUrl = `docs/${paperId}.txt`;
-        const resp = await fetch(txtUrl);
-        if (resp.ok) {
-          const txt = await resp.text();
-          if (txt && txt.trim()) {
-            paperContent = txt;
-          }
-        }
-      } catch {
-        // ignore
-      }
+      paperContent = await loadPaperTextContent({
+        paperId,
+        routeFile: currentRouteFile,
+        basePath: window.$docsify && typeof window.$docsify.basePath === 'string'
+          ? window.$docsify.basePath
+          : 'docs/',
+      });
     }
 
     // 回退策略：如果 .txt 不存在，就用页面正文纯文本，但显式排除聊天 UI 本身
@@ -1393,7 +1546,8 @@ window.PrivateDiscussionChat = (function () {
     }
   };
 
-  const initForPage = (paperId) => {
+  const initForPage = (paperId, routeFile) => {
+    currentRouteFile = stripMarkdownExtension(normalizeDocsRelativePath(routeFile)) ? String(routeFile || '') : '';
     const mainContent = document.querySelector('.markdown-section');
     if (!mainContent || !paperId) return;
 
@@ -1743,8 +1897,13 @@ window.PrivateDiscussionChat = (function () {
     },
     __test: {
       buildPaperContextFallback,
+      buildPaperTextCandidateUrls,
+      loadPaperTextContent,
       buildMessagesForQuestion,
       sendMessage,
+      setCurrentRouteFileForTest(value) {
+        currentRouteFile = stripMarkdownExtension(normalizeDocsRelativePath(value)) ? String(value || '') : '';
+      },
     },
   };
 })();
