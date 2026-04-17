@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -308,6 +309,10 @@ def normalize_tags(raw: Any) -> List[str]:
     return cleaned
 
 
+def is_assessment_tag(tag: Any) -> bool:
+    return str(tag or "").strip().lower().startswith("assessment:")
+
+
 def normalize_carryover_tag(tag: Any) -> str:
     text = str(tag or "").strip()
     if not text:
@@ -327,6 +332,8 @@ def resolve_carryover_tags(item: Dict[str, Any], fallback_tags: List[str] | None
         collected.append(matched_query_tag)
 
     for raw_tag in normalize_tags(item.get("llm_tags")):
+        if is_assessment_tag(raw_tag):
+            continue
         normalized = normalize_carryover_tag(raw_tag)
         if normalized:
             collected.append(normalized)
@@ -396,9 +403,20 @@ def collect_seen_ids(
 
 def parse_score(value: Any) -> float:
     try:
-        return float(value)
+        score = float(value)
     except Exception:
         return 0.0
+    return score if math.isfinite(score) else 0.0
+
+
+def parse_optional_score(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        score = float(value)
+    except Exception:
+        return None
+    return score if math.isfinite(score) else None
 
 
 def build_scored_papers(papers: List[Dict[str, Any]], llm_ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -420,6 +438,10 @@ def build_scored_papers(papers: List[Dict[str, Any]], llm_ranked: List[Dict[str,
             continue
         paper = dict(paper_map[pid])
         paper["llm_score"] = score
+        paper["llm_relevance_score"] = parse_optional_score(item.get("relevance_score"))
+        paper["llm_quality_score"] = parse_optional_score(item.get("quality_score"))
+        paper["llm_reliability_score"] = parse_optional_score(item.get("reliability_score"))
+        paper["llm_practicality_score"] = parse_optional_score(item.get("practicality_score"))
         evidence_cn = str(item.get("evidence_cn") or "").strip()
         evidence_en = str(item.get("evidence_en") or "").strip()
         tldr_cn = str(item.get("tldr_cn") or "").strip()
@@ -438,6 +460,12 @@ def build_scored_papers(papers: List[Dict[str, Any]], llm_ranked: List[Dict[str,
         matched_query_tag = str(item.get("matched_query_tag") or "").strip()
         if matched_query_tag and matched_query_tag not in tags:
             tags.append(matched_query_tag)
+        if paper["llm_practicality_score"] is not None and paper["llm_practicality_score"] < 4.0 and "assessment:low-practicality" not in tags:
+            tags.append("assessment:low-practicality")
+        if paper["llm_reliability_score"] is not None and paper["llm_reliability_score"] < 6.0 and "assessment:low-reliability" not in tags:
+            tags.append("assessment:low-reliability")
+        if paper["llm_quality_score"] is not None and paper["llm_quality_score"] < 6.5 and "assessment:low-quality" not in tags:
+            tags.append("assessment:low-quality")
         paper["llm_tags"] = tags
         paper["matched_query_tag"] = matched_query_tag
         paper["matched_query_text"] = str(item.get("matched_query_text") or "").strip()
@@ -482,14 +510,17 @@ def sort_by_score(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(items, key=lambda x: (-float(x.get("llm_score", 0)), str(x.get("id") or "")))
 
 
+def build_selection_bucket_tags(item: Dict[str, Any]) -> List[str]:
+    tags = [tag for tag in normalize_tags(item.get("llm_tags")) if not is_assessment_tag(tag)]
+    return tags or [CARRYOVER_UNTAGGED]
+
+
+
 def build_tag_map(candidates: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     tag_map: Dict[str, List[Dict[str, Any]]] = {}
     for item in candidates:
-        tags = item.get("llm_tags") or []
-        if not tags:
-            tags = ["untagged"]
-        for tag in tags:
-            tag_map.setdefault(str(tag), []).append(item)
+        for tag in build_selection_bucket_tags(item):
+            tag_map.setdefault(tag, []).append(item)
 
     for tag, items in tag_map.items():
         tag_map[tag] = sort_by_score(items)

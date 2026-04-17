@@ -10,6 +10,11 @@ from unittest.mock import patch
 class GenerateDocsMetaParseTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._original_modules = {
+            "fitz": sys.modules.get("fitz"),
+            "llm": sys.modules.get("llm"),
+            "paper_figures": sys.modules.get("paper_figures"),
+        }
         cls._env_patch = patch.dict(
             "os.environ",
             {
@@ -72,9 +77,14 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         if cls._env_patch is not None:
             cls._env_patch.stop()
             cls._env_patch = None
+        for name, module in cls._original_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
     def test_parse_meta_from_front_matter(self):
-        md_path = Path("docs/201706/12/1706.03762v1-attention-is-all-you-need.md")
+        md_path = Path(__file__).resolve().parents[1] / "docs/201706/12/1706.03762v1-attention-is-all-you-need.md"
         item = self.mod._parse_generated_md_to_meta(str(md_path), "pid", "quick")
         self.assertEqual(item["title_en"], "Attention Is All You Need")
         self.assertTrue(item["authors"].startswith("Ashish Vaswani"))
@@ -152,6 +162,80 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertIn(("query", "equation-discovery"), tags)
         self.assertNotIn(("query", "sr:composite"), tags)
         self.assertEqual(tags.count(("query", "sr")), 1)
+
+    def test_extract_sidebar_tags_keeps_assessment_tags(self):
+        paper = {
+            "llm_score": 7.6,
+            "llm_tags": [
+                "query:sr",
+                "assessment:low-practicality",
+                "assessment:low-reliability",
+                "assessment:low-quality",
+            ],
+        }
+        tags = self.mod.extract_sidebar_tags(paper)
+        self.assertEqual(tags[0], ("score", "7.6"))
+        self.assertIn(("assessment", "low-practicality"), tags)
+        self.assertIn(("assessment", "low-reliability"), tags)
+        self.assertIn(("assessment", "low-quality"), tags)
+
+    def test_build_day_report_markdown_includes_entry_summaries(self):
+        content = self.mod.build_day_report_markdown(
+            date_str="20260326",
+            date_label="2026-03-26",
+            deep_entries=[
+                {
+                    "paper_id": "202603/26/paper-a",
+                    "title": "Deep Paper",
+                    "tags": [("score", "9.2"), ("query", "sr")],
+                    "summary_cn": "这是一篇精读摘要。",
+                }
+            ],
+            quick_entries=[
+                {
+                    "paper_id": "202603/26/paper-b",
+                    "title": "Quick Paper",
+                    "tags": [("score", "8.1"), ("assessment", "low-practicality")],
+                    "summary_cn": "这是一篇速读摘要。",
+                }
+            ],
+            recommend_exists=True,
+        )
+        self.assertIn("1. [Deep Paper](/202603/26/paper-a)（9.2/10）", content)
+        self.assertIn("摘要：这是一篇精读摘要。", content)
+        self.assertIn("1. [Quick Paper](/202603/26/paper-b)（8.1/10）", content)
+        self.assertIn("摘要：这是一篇速读摘要。", content)
+
+    def test_build_latest_report_section_includes_entry_summaries(self):
+        content = self.mod.build_latest_report_section(
+            date_str="20260326",
+            date_label="2026-03-26",
+            generated_at="2026-03-26 00:00:00 UTC",
+            recommend_exists=True,
+            deep_entries=[
+                {
+                    "paper_id": "202603/26/paper-a",
+                    "title": "Deep Paper",
+                    "tags": [("score", "9.2"), ("query", "sr")],
+                    "summary_cn": "精读区一句话总结。",
+                }
+            ],
+            quick_entries=[
+                {
+                    "paper_id": "202603/26/paper-b",
+                    "title": "Quick Paper",
+                    "tags": [("score", "8.1"), ("assessment", "low-practicality")],
+                    "summary_cn": "速读区一句话总结。",
+                }
+            ],
+            paper_evidence_by_id={
+                "202603/26/paper-a": "evidence a",
+                "202603/26/paper-b": "evidence b",
+            },
+        )
+        self.assertIn("摘要：精读区一句话总结。", content)
+        self.assertIn("摘要：速读区一句话总结。", content)
+        self.assertIn("标签：评分：8.1/10、assessment:low-practicality", content)
 
     def test_build_markdown_content_writes_figures_json_front_matter(self):
         paper = {
