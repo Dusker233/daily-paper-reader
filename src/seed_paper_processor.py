@@ -786,7 +786,7 @@ def rank_related_papers(
 
     documents = _build_rerank_documents(papers_by_id, filtered_ids)
     active_reranker = _resolve_reranker(reranker)
-    query_text = _normalize_text((queries[0] or {}).get("query_text")) or _paper_title_from_filename(request.get("file_name") or "")
+    query_text = _build_query_summary(request, seed_text) or _paper_title_from_filename(request.get("file_name") or "")
     rerank_model = _normalize_text(getattr(active_reranker, "model", "")) or None
     response = active_reranker.rerank(query=query_text, documents=documents, top_n=len(documents), model=rerank_model)
     results = (response.get("output") or {}).get("results") if isinstance(response, dict) and "output" in response else response.get("results", [])
