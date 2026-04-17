@@ -3,6 +3,7 @@
 
 window.SubscriptionsGithubToken = (function () {
   const GITHUB_TOKEN_STORAGE_KEY = 'github_token_data';
+  const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
 
   const sanitizeGithubTokenData = (data) => {
     if (!data || typeof data !== 'object') {
@@ -99,31 +100,36 @@ window.SubscriptionsGithubToken = (function () {
     }
   };
 
-  const readConfigYamlForRepo = async () => {
-    const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
-    if (!yaml || typeof yaml.load !== 'function') {
-      return null;
+  const isValidGithubRepoSegment = (value) => /^[A-Za-z0-9_.-]+$/.test(String(value || '').trim());
+
+  const normalizeGithubRepoSegment = (value, label) => {
+    const normalized = String(value || '').trim();
+    if (!normalized || !isValidGithubRepoSegment(normalized)) {
+      throw new Error(`非法的 GitHub ${label}：${normalized || '<empty>'}`);
     }
-    const candidates = ['config.yaml', 'docs/config.yaml', '../config.yaml', '/config.yaml'];
-    for (const url of candidates) {
-      try {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) continue;
-        const text = await res.text();
-        const cfg = yaml.load(text || '') || {};
-        const githubCfg = (cfg && cfg.github) || {};
-        if (githubCfg && typeof githubCfg === 'object') {
-          const owner = String(githubCfg.owner || '').trim();
-          const repo = String(githubCfg.repo || '').trim();
-          if (owner || repo) {
-            return { owner, repo };
-          }
-        }
-      } catch {
-        // ignore
-      }
+    return normalized;
+  };
+
+  const isTrustedGithubPagesHost = (host) => /(?:^|\.)github\.io$/i.test(String(host || '').trim());
+
+  const resolveRepoInfoFromPage = (login, currentHref) => {
+    const currentUrl = String(currentHref || '');
+    const urlObj = new URL(currentUrl);
+    const host = String(urlObj.hostname || '').trim();
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return {
+        owner: normalizeGithubRepoSegment(login || '', 'owner'),
+        repo: DEFAULT_GITHUB_REPO,
+      };
     }
-    return null;
+    const githubPagesMatch = currentUrl.match(/https?:\/\/([^.]+)\.github\.io\/([^\/]+)/i);
+    if (githubPagesMatch && isTrustedGithubPagesHost(host)) {
+      return {
+        owner: normalizeGithubRepoSegment(githubPagesMatch[1], 'owner'),
+        repo: normalizeGithubRepoSegment(githubPagesMatch[2], 'repo'),
+      };
+    }
+    throw new Error('当前页面不是受信任的 GitHub Pages 或 localhost，无法自动推断可写入仓库。');
   };
 
   // 验证 GitHub Token 并检查权限
@@ -165,48 +171,16 @@ window.SubscriptionsGithubToken = (function () {
         };
       }
 
-      // 3. 获取当前页面的仓库信息
-      // 规则：
-      // - 若运行在 localhost（含 127.0.0.1），默认仓库名为 daily-paper-reader，owner 为当前登录用户
-      // - 若运行在 username.github.io/repo-name，则从 URL 解析 owner/repo
-      // - 其它域名：尝试从当前站点 config.yaml 中读取 github 信息
-      const currentUrl = window.location.href;
-      const urlObj = new URL(currentUrl);
-      const host = urlObj.hostname || '';
+      // 3. 仅从受信任页面环境推断可写入仓库信息
+      const pageRepo = resolveRepoInfoFromPage(userData.login || '', window.location.href);
+      const repoOwner = pageRepo.owner;
+      const repoName = pageRepo.repo;
 
-      let repoOwner = '';
-      let repoName = '';
-
-      // 情况 A：本地开发（localhost 或 127.0.0.1）
-      if (host === 'localhost' || host === '127.0.0.1') {
-        repoOwner = userData.login || '';
-        repoName = 'daily-paper-reader';
-      } else {
-        // 情况 B：GitHub Pages
-        const githubPagesMatch = currentUrl.match(
-          /https?:\/\/([^.]+)\.github\.io\/([^\/]+)/,
-        );
-        if (githubPagesMatch) {
-          repoOwner = githubPagesMatch[1];
-          repoName = githubPagesMatch[2];
-        } else {
-          const parsedRepo = await readConfigYamlForRepo();
-          if (parsedRepo) {
-            repoOwner = parsedRepo.owner || repoOwner;
-            repoName = parsedRepo.repo || repoName;
-          }
-          // 情况 C：其它域名，尝试从当前站点的 config.yaml 中读取 github 信息
-          // 若 config.yaml 未提供 owner，则至少使用当前用户作为 owner
-          if (!repoOwner) {
-            repoOwner = userData.login || '';
-          }
-        }
-      }
-
-      // 4. 如果有仓库信息，验证 Token 是否有权限访问该仓库
+      // 4. 验证 Token 是否有权限访问该仓库
+      let defaultBranch = 'main';
       if (repoOwner && repoName) {
         const repoRes = await fetch(
-          `https://api.github.com/repos/${repoOwner}/${repoName}`,
+          `https://api.github.com/repos/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repoName)}`,
           {
             headers: {
               Authorization: `token ${token}`,
@@ -228,6 +202,7 @@ window.SubscriptionsGithubToken = (function () {
             `没有仓库 ${repoOwner}/${repoName} 的写入权限`,
           );
         }
+        defaultBranch = String(repoData.default_branch || 'main').trim() || 'main';
       }
 
       return {
@@ -239,6 +214,7 @@ window.SubscriptionsGithubToken = (function () {
             ? `${repoOwner}/${repoName}`
             : '未检测到仓库',
         scopes: scopeList,
+        defaultBranch,
       };
     } catch (error) {
       return {
@@ -274,9 +250,50 @@ window.SubscriptionsGithubToken = (function () {
       throw new Error('无法从 GitHub Token 推断有效的仓库信息');
     }
     const parts = result.repo.split('/');
-    const owner = parts[0];
-    const repo = parts[1];
-    return { owner, repo, token };
+    const owner = normalizeGithubRepoSegment(parts[0], 'owner');
+    const repo = normalizeGithubRepoSegment(parts[1], 'repo');
+    return {
+      owner,
+      repo,
+      token,
+      defaultBranch: String(result.defaultBranch || 'main').trim() || 'main',
+    };
+  };
+
+  const resolveExplicitRepoDefaultBranch = async (owner, repo, token) => {
+    const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const normalizedToken = String(token || '').trim();
+    if (!normalizedOwner || !normalizedRepo) {
+      throw new Error('无法解析目标仓库信息。');
+    }
+    if (!normalizedToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const repoLabel = `${normalizedOwner}/${normalizedRepo}`;
+    try {
+      const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}`, {
+        headers: {
+          Authorization: `token ${normalizedToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`无法读取仓库 ${repoLabel} 的默认分支：${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`);
+      }
+      const data = await res.json().catch(() => null);
+      const defaultBranch = String((data && data.default_branch) || '').trim();
+      if (!defaultBranch) {
+        throw new Error(`仓库 ${repoLabel} 未返回默认分支信息。`);
+      }
+      return defaultBranch;
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(`无法读取仓库 ${repoLabel} 的默认分支。`);
+    }
   };
 
   // 通过 GitHub API 读取 config.yaml（用于保存时获取最新 sha）
@@ -395,6 +412,27 @@ window.SubscriptionsGithubToken = (function () {
     return /^requests\/seed_papers\/[a-z0-9][a-z0-9-]*\/(?:request\.json|[a-z0-9][a-z0-9-]*\.pdf)$/i.test(normalized);
   };
 
+  const isValidGithubRef = (value) => {
+    const normalized = String(value || '').trim();
+    return !!normalized
+      && /^[A-Za-z0-9._/-]+$/.test(normalized)
+      && !normalized.startsWith('/')
+      && !normalized.endsWith('/')
+      && !normalized.includes('..')
+      && !normalized.includes('//');
+  };
+
+  const normalizeGithubRef = (value, fallback = 'main') => {
+    const normalized = String(value || '').trim();
+    if (!normalized) {
+      return String(fallback || 'main').trim() || 'main';
+    }
+    if (!isValidGithubRef(normalized)) {
+      throw new Error(`非法的 GitHub ref：${normalized}`);
+    }
+    return normalized;
+  };
+
   const buildSeedPaperRequestPath = ({ requestId, fileName } = {}) => {
     const normalizedRequestId = toPathSlug(requestId, 'seed-paper-request');
     const rawFileName = String(fileName || 'seed-paper.pdf')
@@ -439,6 +477,7 @@ window.SubscriptionsGithubToken = (function () {
     owner,
     repo,
     token,
+    branch,
     path,
     contentText,
     contentBase64,
@@ -455,7 +494,14 @@ window.SubscriptionsGithubToken = (function () {
       throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
     }
     const repoInfo = owner && repo
-      ? { owner, repo, token: effectiveToken }
+      ? {
+          owner: normalizeGithubRepoSegment(owner, 'owner'),
+          repo: normalizeGithubRepoSegment(repo, 'repo'),
+          token: effectiveToken,
+          defaultBranch: branch
+            ? normalizeGithubRef(branch)
+            : await resolveExplicitRepoDefaultBranch(owner, repo, effectiveToken),
+        }
       : await resolveRepoInfoFromToken(effectiveToken, false);
 
     let encodedContent = '';
@@ -473,9 +519,11 @@ window.SubscriptionsGithubToken = (function () {
       throw new Error('写入仓库文件失败：缺少文件内容。');
     }
 
+    const resolvedBranch = normalizeGithubRef(branch || repoInfo.defaultBranch || 'main');
     const body = {
       message: String(commitMessage || `chore: add ${normalizedPath}`),
       content: encodedContent,
+      branch: resolvedBranch,
     };
     if (sha) {
       body.sha = sha;
@@ -483,7 +531,7 @@ window.SubscriptionsGithubToken = (function () {
 
     const encodedPath = normalizedPath.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     const res = await fetch(
-      `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/contents/${encodedPath}`,
+      `https://api.github.com/repos/${encodeURIComponent(repoInfo.owner)}/${encodeURIComponent(repoInfo.repo)}/contents/${encodedPath}`,
       {
         method: 'PUT',
         headers: {
@@ -503,7 +551,111 @@ window.SubscriptionsGithubToken = (function () {
       }
       throw new Error(`写入 ${normalizedPath} 失败：${res.status} ${res.statusText} - ${text}`);
     }
-    return res.json();
+    const result = await res.json();
+    return {
+      ...(result && typeof result === 'object' ? result : {}),
+      path: normalizedPath,
+      owner: repoInfo.owner,
+      repo: repoInfo.repo,
+      branch: resolvedBranch,
+      ref: resolvedBranch,
+    };
+  };
+
+  const readRepoFile = async ({
+    owner,
+    repo,
+    token,
+    path,
+    ref,
+  } = {}) => {
+    const normalizedPath = normalizeRepoWritePath(path);
+    if (!isAllowedRepoWritePath(normalizedPath)) {
+      throw new Error(`不允许读取该仓库路径：${normalizedPath || '<empty>'}`);
+    }
+    const effectiveToken = token || getTokenForConfig();
+    if (!effectiveToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const repoInfo = owner && repo
+      ? {
+          owner: normalizeGithubRepoSegment(owner, 'owner'),
+          repo: normalizeGithubRepoSegment(repo, 'repo'),
+          token: effectiveToken,
+          defaultBranch: ref
+            ? normalizeGithubRef(ref)
+            : await resolveExplicitRepoDefaultBranch(owner, repo, effectiveToken),
+        }
+      : await resolveRepoInfoFromToken(effectiveToken, false);
+    const resolvedRef = normalizeGithubRef(ref || repoInfo.defaultBranch || 'main');
+    const encodedPath = normalizedPath.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    const url = new URL(`https://api.github.com/repos/${encodeURIComponent(repoInfo.owner)}/${encodeURIComponent(repoInfo.repo)}/contents/${encodedPath}`);
+    url.searchParams.set('ref', resolvedRef);
+    const res = await fetch(url.toString(), {
+      headers: {
+        Authorization: `token ${repoInfo.token}`,
+        Accept: 'application/vnd.github.v3+json',
+      },
+    });
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`读取 ${normalizedPath} 失败：${res.status} ${res.statusText} - ${text}`);
+    }
+    const data = await res.json();
+    return {
+      ...(data && typeof data === 'object' ? data : {}),
+      path: normalizedPath,
+      owner: repoInfo.owner,
+      repo: repoInfo.repo,
+      ref: resolvedRef,
+    };
+  };
+
+  const verifyRepoFilesVisible = async ({
+    owner,
+    repo,
+    token,
+    ref,
+    paths,
+  } = {}) => {
+    const list = Array.isArray(paths) ? paths : [];
+    const effectiveToken = token || getTokenForConfig();
+    if (!effectiveToken) {
+      throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
+    }
+    const repoInfo = owner && repo
+      ? {
+          owner: normalizeGithubRepoSegment(owner, 'owner'),
+          repo: normalizeGithubRepoSegment(repo, 'repo'),
+          token: effectiveToken,
+          defaultBranch: ref
+            ? normalizeGithubRef(ref)
+            : await resolveExplicitRepoDefaultBranch(owner, repo, effectiveToken),
+        }
+      : await resolveRepoInfoFromToken(effectiveToken, false);
+    const effectiveRef = normalizeGithubRef(ref || repoInfo.defaultBranch || 'main');
+    const results = await Promise.all(list.map(async (itemPath) => {
+      const file = await readRepoFile({
+        owner: repoInfo.owner,
+        repo: repoInfo.repo,
+        token: effectiveToken,
+        ref: effectiveRef,
+        path: itemPath,
+      });
+      return {
+        path: normalizeRepoWritePath(itemPath),
+        exists: !!file,
+        ref: file && file.ref ? file.ref : effectiveRef,
+      };
+    }));
+    return {
+      ref: effectiveRef,
+      files: results,
+      allVisible: results.every((item) => item.exists),
+    };
   };
 
   const writeConfigToGithub = async ({ owner, repo, token, contentObject, sha, commitMessage }) => {
@@ -828,12 +980,18 @@ window.SubscriptionsGithubToken = (function () {
     updateConfig,
     saveConfig,
     writeRepoFile,
+    readRepoFile,
+    verifyRepoFilesVisible,
     buildSeedPaperRequestPath,
     __test: {
       isShaConflictResponse,
       buildSeedPaperRequestPath,
       isAllowedRepoWritePath,
       normalizeRepoWritePath,
+      readRepoFile,
+      verifyRepoFilesVisible,
+      resolveRepoInfoFromPage,
+      normalizeGithubRef,
     },
   };
 })();
