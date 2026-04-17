@@ -105,30 +105,71 @@ window.DPRWorkflowRunner = (function () {
     return '';
   };
 
-  const resolveRepoFromUrl = async (token) => {
-    const currentUrl = window.location.href || '';
-    const githubPagesMatch = currentUrl.match(
-      /https?:\/\/([^.]+)\.github\.io\/([^\/]+)/,
-    );
-    if (githubPagesMatch) {
-      return { owner: githubPagesMatch[1], repo: githubPagesMatch[2] };
-    }
+  const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
+  const SEED_REQUEST_BRANCH_PREFIX = 'seed-paper-requests';
+  const SEED_REQUEST_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-    // 非 GitHub Pages URL：回退到「Token 对应的用户 + daily-paper-reader」作为默认目标仓库
+  const isValidGithubRepoSegment = (value) => /^[A-Za-z0-9_.-]+$/.test(String(value || '').trim());
+
+  const normalizeGithubRepoSegment = (value, label) => {
+    const normalized = String(value || '').trim();
+    if (!normalized || !isValidGithubRepoSegment(normalized)) {
+      throw new Error(`非法的 GitHub ${label}：${normalized || '<empty>'}`);
+    }
+    return normalized;
+  };
+
+  const isTrustedGithubPagesHost = (host) => /(?:^|\.)github\.io$/i.test(String(host || '').trim());
+
+  const resolveRepoInfoFromPage = (login, currentHref) => {
+    const currentUrl = String(currentHref || '');
+    const urlObj = new URL(currentUrl);
+    const host = String(urlObj.hostname || '').trim();
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return {
+        owner: normalizeGithubRepoSegment(login || '', 'owner'),
+        repo: DEFAULT_GITHUB_REPO,
+      };
+    }
+    const githubPagesMatch = currentUrl.match(/https?:\/\/([^.]+)\.github\.io\/([^\/]+)/i);
+    if (githubPagesMatch && isTrustedGithubPagesHost(host)) {
+      return {
+        owner: normalizeGithubRepoSegment(githubPagesMatch[1], 'owner'),
+        repo: normalizeGithubRepoSegment(githubPagesMatch[2], 'repo'),
+      };
+    }
+    throw new Error('当前页面不是受信任的 GitHub Pages 或 localhost，无法自动推断可触发工作流的仓库。');
+  };
+
+  const resolveRepoFromUrl = async (token) => {
+    const currentUrl = String((window.location && window.location.href) || '');
     try {
-      const userRes = await ghFetch(token, 'https://api.github.com/user');
-      if (userRes.ok) {
-        const user = await userRes.json();
-        const login = (user && user.login) ? String(user.login) : '';
-        if (login) {
-          return { owner: login, repo: 'daily-paper-reader' };
-        }
+      const urlObj = new URL(currentUrl);
+      const host = String(urlObj.hostname || '').trim();
+      const githubPagesMatch = currentUrl.match(/https?:\/\/([^.]+)\.github\.io\/([^\/]+)/i);
+      if (githubPagesMatch && isTrustedGithubPagesHost(host)) {
+        return {
+          owner: normalizeGithubRepoSegment(githubPagesMatch[1], 'owner'),
+          repo: normalizeGithubRepoSegment(githubPagesMatch[2], 'repo'),
+        };
+      }
+      if (host !== 'localhost' && host !== '127.0.0.1') {
+        return { owner: '', repo: '' };
       }
     } catch {
-      // ignore
+      return { owner: '', repo: '' };
     }
 
-    return { owner: '', repo: '' };
+    try {
+      const userRes = await ghFetch(token, 'https://api.github.com/user');
+      if (!userRes.ok) {
+        return { owner: '', repo: '' };
+      }
+      const user = await userRes.json().catch(() => null);
+      return resolveRepoInfoFromPage(user && user.login ? String(user.login) : '', currentUrl);
+    } catch {
+      return { owner: '', repo: '' };
+    }
   };
 
   const resolveRepoContext = async (token, options = {}) => {
@@ -183,28 +224,8 @@ window.DPRWorkflowRunner = (function () {
     return res;
   };
 
-  const resolveWorkflowRunInputs = async (owner, repo, token, runId) => {
-    if (!owner || !repo || !runId || !token) return null;
-    const runUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}`;
-    try {
-      const res = await ghFetch(token, runUrl);
-      if (!res.ok) return null;
-      const data = await res.json().catch(() => null);
-      if (!data || typeof data !== 'object') return null;
-      if (data.inputs && typeof data.inputs === 'object') {
-        return data.inputs;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  };
-
-  const resolveRecentRunTag = async (owner, repo, token, run) => {
+  const resolveRecentRunTag = (run) => {
     if (!run) return 'daily-now';
-    // 统一归类到 daily-now，触发面板不再单独展示一个月/一个月标准入口
-    if (run.inputs && typeof run.inputs === 'object') return 'daily-now';
-    await resolveWorkflowRunInputs(owner, repo, token, run.id);
     return 'daily-now';
   };
 
@@ -236,21 +257,21 @@ window.DPRWorkflowRunner = (function () {
     overlay.innerHTML = `
       <div id="dpr-workflow-panel">
         <div id="dpr-workflow-header">
-          <div style="font-weight:600;">工作流触发</div>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <button id="dpr-workflow-refresh-btn" class="arxiv-tool-btn" style="padding:2px 10px;">刷新</button>
-            <button id="dpr-workflow-close-btn" class="arxiv-tool-btn" style="padding:2px 6px;">关闭</button>
+          <div class="dpr-workflow-title">工作流触发</div>
+          <div class="dpr-workflow-header-actions">
+            <button id="dpr-workflow-refresh-btn" class="arxiv-tool-btn dpr-workflow-header-btn">刷新</button>
+            <button id="dpr-workflow-close-btn" class="arxiv-tool-btn dpr-workflow-header-btn dpr-workflow-header-btn-close">关闭</button>
           </div>
         </div>
         <div id="dpr-workflow-body">
-          <div id="dpr-workflow-status" style="font-size:12px; color:#666; margin-bottom:10px;">准备就绪。</div>
-          <div style="font-weight:600; font-size:13px; margin-bottom:6px;">最近运行（各取 3 条）</div>
-          <div id="dpr-workflow-recent" style="font-size:12px; color:#333; border:1px solid #eee; border-radius:8px; background:#fff; padding:10px; margin-bottom:12px;">
-            <div style="color:#999;">加载中...</div>
+          <div id="dpr-workflow-status" class="dpr-workflow-status-text">准备就绪。</div>
+          <div class="dpr-workflow-section-title">最近运行（各取 3 条）</div>
+          <div id="dpr-workflow-recent" class="dpr-workflow-surface">
+            <div class="dpr-workflow-muted">加载中...</div>
           </div>
-          <div style="font-weight:600; font-size:13px; margin-bottom:6px;">执行过程</div>
-          <div id="dpr-workflow-runs" style="font-size:12px; color:#333; border:1px solid #eee; border-radius:8px; background:#fff; padding:10px; min-height:120px;">
-            <div style="color:#999;">尚未触发工作流。</div>
+          <div class="dpr-workflow-section-title">执行过程</div>
+          <div id="dpr-workflow-runs" class="dpr-workflow-surface dpr-workflow-runs-surface">
+            <div class="dpr-workflow-muted">尚未触发工作流。</div>
           </div>
         </div>
       </div>
@@ -477,13 +498,11 @@ window.DPRWorkflowRunner = (function () {
       const dailyFileRuns = runsByWorkflowId['daily-paper-reader.yml'] || [];
       const dailyNowRuns = [];
       if (dailyFileRuns.length > 0) {
-        const tagged = await Promise.all(
-          dailyFileRuns.map((run) =>
-            resolveRecentRunTag(owner, repo, token, run).then((runTag) => ({ run, runTag })),
-          ),
-        );
-        tagged.forEach(({ run }) => {
-          dailyNowRuns.push(run);
+        dailyFileRuns.forEach((run) => {
+          const runTag = resolveRecentRunTag(run);
+          if (runTag === 'daily-now') {
+            dailyNowRuns.push(run);
+          }
         });
       }
 
@@ -524,7 +543,7 @@ window.DPRWorkflowRunner = (function () {
     return merged;
   };
 
-  const dispatchAndMonitor = async (workflow, extraInputs) => {
+  const dispatchAndMonitor = async (workflow, extraInputs, dispatchOptions = {}) => {
     const wf = workflow || {};
     const workflowFile = String(wf.id || '');
     if (!workflowFile) {
@@ -592,8 +611,11 @@ window.DPRWorkflowRunner = (function () {
         workflowFile,
       )}/dispatches`;
       const dispatchInputs = combineInputs(wf.dispatchInputs, extraInputs);
+      const dispatchRef = String(
+        (dispatchOptions && dispatchOptions.ref) || repoContext.defaultBranch || 'main',
+      ).trim() || 'main';
       const dispatchBody = {
-        ref: String(repoContext.defaultBranch || 'main'),
+        ref: dispatchRef,
       };
       if (Object.keys(dispatchInputs).length > 0) {
         dispatchBody.inputs = dispatchInputs;
@@ -800,14 +822,14 @@ window.DPRWorkflowRunner = (function () {
     }
   };
 
-  const runWorkflowByKey = async (workflowKey, extraInputs) => {
+  const runWorkflowByKey = async (workflowKey, extraInputs, dispatchOptions) => {
     const wf = getWorkflowByKey(workflowKey);
     if (!wf) {
       setStatus('未找到对应的工作流配置。', '#c00');
       return;
     }
     open();
-    return dispatchAndMonitor(wf, extraInputs);
+    return dispatchAndMonitor(wf, extraInputs, dispatchOptions);
   };
 
   const runQuickFetchByDays = async (days, extra) => {
@@ -834,12 +856,54 @@ window.DPRWorkflowRunner = (function () {
 
   const runSeedPaperWorkflow = async (requestInfo, extraInputs) => {
     const info = requestInfo && typeof requestInfo === 'object' ? requestInfo : {};
-    const mergedInputs = combineInputs({
-      request_id: info.requestId,
-      request_path: info.requestPath,
+    const requestId = String(info.requestId || '').trim();
+    if (!SEED_REQUEST_ID_RE.test(requestId)) {
+      throw new Error(`非法的 seed request_id：${requestId || '<empty>'}`);
+    }
+    const requestPath = String(info.requestPath || '').trim();
+    if (!requestPath) {
+      throw new Error('缺少 seed request_path');
+    }
+    if (!/^requests\/seed_papers\/[a-z0-9._-]+\/request\.json$/i.test(requestPath)) {
+      throw new Error(`非法的 seed request_path：${requestPath}`);
+    }
+    const expectedRequestPath = `requests/seed_papers/${requestId}/request.json`;
+    if (requestPath !== expectedRequestPath) {
+      throw new Error(`seed request_path 与 request_id 不匹配：${requestPath}`);
+    }
+    const requestRef = String(info.requestRef || info.ref || '').trim();
+    if (!requestRef) {
+      throw new Error('缺少 seed ref');
+    }
+    const isValidRequestRef = /^[A-Za-z0-9._/-]+$/.test(requestRef)
+      && !requestRef.startsWith('/')
+      && !requestRef.endsWith('/')
+      && !requestRef.includes('..')
+      && !requestRef.includes('//');
+    if (!isValidRequestRef) {
+      throw new Error(`非法的 seed ref：${requestRef}`);
+    }
+    const token = loadGithubToken();
+    let dispatchRef = 'main';
+    if (token) {
+      const repoContext = await resolveRepoContext(token);
+      dispatchRef = String((repoContext && repoContext.defaultBranch) || 'main').trim() || 'main';
+      if (requestRef === dispatchRef) {
+        throw new Error(`seed ref 不能指向默认分支：${requestRef}`);
+      }
+    }
+    const expectedRequestRef = `${SEED_REQUEST_BRANCH_PREFIX}/${requestId}`;
+    if (requestRef !== expectedRequestRef) {
+      throw new Error(`seed ref 与 request_id 不匹配：${requestRef}`);
+    }
+    const mergedInputs = combineInputs(extraInputs, {
+      request_id: requestId,
+      request_path: requestPath,
       seed_mode: info.seedMode,
-    }, extraInputs);
-    return runWorkflowByKey('seed-paper-related', mergedInputs);
+    });
+    return runWorkflowByKey('seed-paper-related', mergedInputs, {
+      ref: dispatchRef,
+    });
   };
 
   return {

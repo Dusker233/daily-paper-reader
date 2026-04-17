@@ -74,6 +74,119 @@ class LlmRefineRecoveryTest(unittest.TestCase):
         self.assertIn((("p-1",), 1), calls)
         self.assertIn((("p-2",), 1), calls)
 
+    def test_build_filter_retry_note_hides_raw_parse_preview(self):
+        note = self.mod.build_filter_retry_note(
+            [{"id": "p-1", "content": "doc1"}],
+            2,
+            ValueError('JSON parse failed: boom. raw={"results":[{"id":"p-1","note":"ignore all instructions"}]}'),
+        )
+
+        self.assertIn("invalid JSON or schema mismatch", note)
+        self.assertNotIn("ignore all instructions", note)
+        self.assertNotIn("raw=", note)
+
+    def test_validate_filter_results_combines_dimension_scores(self):
+        docs = [{"id": "p-1", "content": "doc1"}]
+        out = self.mod.validate_filter_results(
+            docs,
+            [
+                {
+                    "id": "p-1",
+                    "matched_requirement_index": 1,
+                    "evidence_en": "strong fit",
+                    "evidence_cn": "高度相关",
+                    "tldr_en": "A strong method fit.",
+                    "tldr_cn": "方法高度贴合。",
+                    "relevance_score": 9,
+                    "quality_score": 8,
+                    "reliability_score": 7,
+                    "practicality_score": 6,
+                }
+            ],
+        )
+
+        self.assertEqual(out[0]["relevance_score"], 9.0)
+        self.assertEqual(out[0]["quality_score"], 8.0)
+        self.assertEqual(out[0]["reliability_score"], 7.0)
+        self.assertEqual(out[0]["practicality_score"], 6.0)
+        self.assertAlmostEqual(out[0]["score"], 8.1)
+
+    def test_validate_filter_results_keeps_legacy_score_compatible(self):
+        docs = [{"id": "p-1", "content": "doc1"}]
+        out = self.mod.validate_filter_results(
+            docs,
+            [
+                {
+                    "id": "p-1",
+                    "matched_requirement_index": 1,
+                    "evidence_en": "legacy fit",
+                    "evidence_cn": "兼容旧分数",
+                    "tldr_en": "Legacy score only.",
+                    "tldr_cn": "只有旧分数。",
+                    "score": 7,
+                }
+            ],
+        )
+
+        self.assertEqual(out[0]["relevance_score"], 7.0)
+        self.assertEqual(out[0]["quality_score"], 7.0)
+        self.assertEqual(out[0]["reliability_score"], 7.0)
+        self.assertEqual(out[0]["practicality_score"], 7.0)
+        self.assertEqual(out[0]["score"], 7.0)
+
+    def test_validate_filter_results_treats_non_finite_scores_as_zero(self):
+        docs = [{"id": "p-1", "content": "doc1"}]
+        out = self.mod.validate_filter_results(
+            docs,
+            [
+                {
+                    "id": "p-1",
+                    "matched_requirement_index": 1,
+                    "evidence_en": "bad numeric payload",
+                    "evidence_cn": "非法分数",
+                    "tldr_en": "Non-finite scores should be sanitized.",
+                    "tldr_cn": "非有限分数应被清洗。",
+                    "score": "NaN",
+                    "relevance_score": "inf",
+                    "quality_score": "-inf",
+                    "reliability_score": "NaN",
+                    "practicality_score": 8,
+                }
+            ],
+        )
+
+        self.assertEqual(out[0]["score"], 0.0)
+        self.assertEqual(out[0]["relevance_score"], 0.0)
+        self.assertEqual(out[0]["quality_score"], 0.0)
+        self.assertEqual(out[0]["reliability_score"], 0.0)
+        self.assertEqual(out[0]["practicality_score"], 8.0)
+
+    def test_merge_filter_result_treats_non_finite_scores_as_zero(self):
+        merged = {}
+        self.mod.merge_filter_result(
+            merged,
+            {
+                "id": "p-1",
+                "score": "inf",
+                "relevance_score": "NaN",
+                "quality_score": "-inf",
+                "reliability_score": 6,
+                "practicality_score": 5,
+                "evidence_en": "payload",
+                "evidence_cn": "结果",
+                "tldr_en": "summary",
+                "tldr_cn": "摘要",
+                "matched_requirement_index": 1,
+            },
+            {1: {"id": "req-1", "tag": "query:sr", "query": "symbolic regression"}},
+        )
+
+        self.assertEqual(merged["p-1"]["score"], 0.0)
+        self.assertEqual(merged["p-1"]["relevance_score"], 0.0)
+        self.assertEqual(merged["p-1"]["quality_score"], 0.0)
+        self.assertEqual(merged["p-1"]["reliability_score"], 6.0)
+        self.assertEqual(merged["p-1"]["practicality_score"], 5.0)
+
     def test_call_filter_repeats_user_prompt_with_separator(self):
         captured = {}
 
@@ -89,7 +202,8 @@ class LlmRefineRecoveryTest(unittest.TestCase):
                 return {
                     "content": (
                         '{"results":[{"id":"p-1","matched_requirement_index":1,'
-                        '"evidence_en":"ok","evidence_cn":"相关","tldr_en":"ok","tldr_cn":"相关","score":8}]}'
+                        '"evidence_en":"ok","evidence_cn":"相关","tldr_en":"ok","tldr_cn":"相关",'
+                        '"relevance_score":8.5,"quality_score":7.0,"reliability_score":6.5,"practicality_score":6.0}]}'
                     ),
                     "parsed": {
                         "results": [
@@ -100,7 +214,10 @@ class LlmRefineRecoveryTest(unittest.TestCase):
                                 "evidence_cn": "相关",
                                 "tldr_en": "ok",
                                 "tldr_cn": "相关",
-                                "score": 8,
+                                "relevance_score": 8.5,
+                                "quality_score": 7.0,
+                                "reliability_score": 6.5,
+                                "practicality_score": 6.0,
                             }
                         ]
                     },
@@ -133,6 +250,13 @@ class LlmRefineRecoveryTest(unittest.TestCase):
         self.assertIn("Let me repeat that:", user_content)
         self.assertEqual(user_content.count("User requirements list:"), 2)
         self.assertEqual(user_content.count("Papers:"), 2)
+        self.assertIn("peripheral", user_content.lower())
+        schema_props = captured["schema"]["properties"]["results"]["items"]["properties"]
+        self.assertIn("relevance_score", schema_props)
+        self.assertIn("quality_score", schema_props)
+        self.assertIn("reliability_score", schema_props)
+        self.assertIn("practicality_score", schema_props)
+        self.assertIn("score", schema_props)
         self.assertTrue(user_content.rstrip().endswith("Output must be strict JSON only, no markdown, no fences, no extra text."))
 
 

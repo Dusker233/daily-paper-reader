@@ -171,7 +171,7 @@ async function testWriteRepoFileUsesSecretSessionGithubToken() {
       return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
     }
     if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
-      return createJsonResponse(200, { permissions: { push: true } });
+      return createJsonResponse(200, { permissions: { push: true }, default_branch: 'main' });
     }
     if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json') {
       return createJsonResponse(200, { content: { sha: 'sha-request' } });
@@ -190,6 +190,463 @@ async function testWriteRepoFileUsesSecretSessionGithubToken() {
   assert.equal(putCall.options.headers.Authorization, 'token ghp_secret_session');
 }
 
+async function testWriteRepoFileReturnsResolvedRefMetadata() {
+  global.fetch = async (url, options = {}) => {
+    if (url === 'https://api.github.com/user') {
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { permissions: { push: true }, default_branch: 'feature-seed' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json') {
+      return createJsonResponse(200, { content: { sha: 'sha-request' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await global.window.SubscriptionsGithubToken.writeRepoFile({
+    path: 'requests/seed_papers/demo/request.json',
+    contentText: '{"title":"论文"}',
+    commitMessage: 'test metadata',
+  });
+
+  assert.equal(result.owner, 'dusker');
+  assert.equal(result.repo, 'daily-paper-reader');
+  assert.equal(result.branch, 'feature-seed');
+  assert.equal(result.ref, 'feature-seed');
+  assert.equal(result.path, 'requests/seed_papers/demo/request.json');
+}
+
+async function testPrepareSeedPaperUploadTargetCreatesRequestBranchFromDefaultBranch() {
+  const seenUrls = [];
+  global.fetch = async (url, options = {}) => {
+    seenUrls.push({ url, options });
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { default_branch: 'main' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/main') {
+      return createJsonResponse(200, { object: { sha: 'sha-main' } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/seed-paper-requests/demo-request') {
+      return createJsonResponse(404, { message: 'Not Found' }, { statusText: 'Not Found' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/refs' && options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body, {
+        ref: 'refs/heads/seed-paper-requests/demo-request',
+        sha: 'sha-main',
+      });
+      return createJsonResponse(201, { ref: body.ref, object: { sha: 'sha-main' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.prepareSeedPaperUploadTarget({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    requestId: 'Demo Request',
+  });
+
+  assert.equal(result.defaultBranch, 'main');
+  assert.equal(result.branch, 'seed-paper-requests/demo-request');
+  assert.equal(result.ref, 'seed-paper-requests/demo-request');
+  assert.equal(result.baseSha, 'sha-main');
+  assert.equal(result.sourceSha, 'sha-main');
+  assert.equal(result.created, true);
+  assert.ok(seenUrls.some((entry) => entry.url.endsWith('/git/ref/heads/main')));
+  assert.ok(seenUrls.some((entry) => entry.url.endsWith('/git/ref/heads/seed-paper-requests/demo-request')));
+}
+
+async function testPrepareSeedPaperUploadTargetKeepsSyncedRequestBranch() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { default_branch: 'main' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/main') {
+      return createJsonResponse(200, { object: { sha: 'sha-main' } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/seed-paper-requests/demo-request') {
+      return createJsonResponse(200, { object: { sha: 'sha-main' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.prepareSeedPaperUploadTarget({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    requestId: 'demo-request',
+  });
+
+  assert.equal(result.branch, 'seed-paper-requests/demo-request');
+  assert.equal(result.ref, 'seed-paper-requests/demo-request');
+  assert.equal(result.baseSha, 'sha-main');
+  assert.equal(result.sourceSha, 'sha-main');
+  assert.equal(result.created, false);
+}
+
+async function testPrepareSeedPaperUploadTargetResetsExistingRequestBranchToDefaultBranch() {
+  const seenRequests = [];
+  global.fetch = async (url, options = {}) => {
+    seenRequests.push({ url, options });
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { default_branch: 'main' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/main') {
+      return createJsonResponse(200, { object: { sha: 'sha-main' } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/seed-paper-requests/demo-request') {
+      return createJsonResponse(200, { object: { sha: 'sha-stale' } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/refs/heads/seed-paper-requests/demo-request' && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body, {
+        sha: 'sha-main',
+        force: true,
+      });
+      return createJsonResponse(200, { ref: 'refs/heads/seed-paper-requests/demo-request', object: { sha: 'sha-main' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.prepareSeedPaperUploadTarget({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    requestId: 'demo-request',
+  });
+
+  assert.equal(result.branch, 'seed-paper-requests/demo-request');
+  assert.equal(result.ref, 'seed-paper-requests/demo-request');
+  assert.equal(result.baseSha, 'sha-main');
+  assert.equal(result.sourceSha, 'sha-main');
+  assert.equal(result.created, false);
+  assert.ok(seenRequests.some((entry) => entry.url.endsWith('/git/refs/heads/seed-paper-requests/demo-request') && entry.options.method === 'PATCH'));
+}
+
+async function testPrepareSeedPaperUploadTargetFallsBackToTokenResolvedRepo() {
+  global.fetch = async (url, options = {}) => {
+    if (url === 'https://api.github.com/user') {
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { permissions: { push: true }, default_branch: 'main' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/main') {
+      return createJsonResponse(200, { object: { sha: 'sha-main' } });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/ref/heads/seed-paper-requests/demo-request') {
+      return createJsonResponse(404, { message: 'Not Found' }, { statusText: 'Not Found' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/git/refs' && options.method === 'POST') {
+      return createJsonResponse(201, { ref: 'refs/heads/seed-paper-requests/demo-request', object: { sha: 'sha-main' } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.prepareSeedPaperUploadTarget({
+    token: 'ghp_demo',
+    requestId: 'demo-request',
+  });
+
+  assert.equal(result.owner, 'dusker');
+  assert.equal(result.repo, 'daily-paper-reader');
+  assert.equal(result.defaultBranch, 'main');
+  assert.equal(result.branch, 'seed-paper-requests/demo-request');
+  assert.equal(result.ref, 'seed-paper-requests/demo-request');
+  assert.equal(result.created, true);
+}
+
+async function testPrepareSeedPaperUploadTargetRejectsDefaultBranchAsUploadBranch() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { default_branch: 'main' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  await assert.rejects(
+    () => __test.prepareSeedPaperUploadTarget({
+      owner: 'dusker',
+      repo: 'daily-paper-reader',
+      token: 'ghp_demo',
+      branch: 'main',
+      requestId: 'demo-request',
+    }),
+    /seed 上传分支不能与默认分支相同/u,
+  );
+}
+
+async function testVerifyRepoFilesVisibleRejectsShaMismatch() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/paper.pdf?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/paper.pdf', sha: 'sha-stale-pdf' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/request.json', sha: 'sha-request' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.verifyRepoFilesVisible({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    ref: 'feature-seed',
+    paths: [
+      'requests/seed_papers/demo/paper.pdf',
+      'requests/seed_papers/demo/request.json',
+    ],
+    expectedFiles: [
+      { path: 'requests/seed_papers/demo/paper.pdf', ref: 'feature-seed', fileSha: 'sha-pdf' },
+      { path: 'requests/seed_papers/demo/request.json', ref: 'feature-seed', fileSha: 'sha-request' },
+    ],
+  });
+
+  assert.equal(result.allVisible, false);
+  assert.deepEqual(result.files, [
+    {
+      path: 'requests/seed_papers/demo/paper.pdf',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-stale-pdf',
+      matchesExpectedRef: true,
+      matchesExpectedSha: false,
+    },
+    {
+      path: 'requests/seed_papers/demo/request.json',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-request',
+      matchesExpectedRef: true,
+      matchesExpectedSha: true,
+    },
+  ]);
+}
+
+async function testVerifyRepoFilesVisibleChecksAllPathsOnSameRef() {
+  const seenUrls = [];
+  global.fetch = async (url, options = {}) => {
+    seenUrls.push({ url, options });
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/paper.pdf?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/paper.pdf', sha: 'sha-pdf' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/request.json', sha: 'sha-request' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.verifyRepoFilesVisible({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    ref: 'feature-seed',
+    paths: [
+      'requests/seed_papers/demo/paper.pdf',
+      'requests/seed_papers/demo/request.json',
+    ],
+    expectedFiles: [
+      { path: 'requests/seed_papers/demo/paper.pdf', ref: 'feature-seed', fileSha: 'sha-pdf' },
+      { path: 'requests/seed_papers/demo/request.json', ref: 'feature-seed', fileSha: 'sha-request' },
+    ],
+  });
+
+  assert.equal(result.ref, 'feature-seed');
+  assert.equal(result.allVisible, true);
+  assert.deepEqual(result.files, [
+    {
+      path: 'requests/seed_papers/demo/paper.pdf',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-pdf',
+      matchesExpectedRef: true,
+      matchesExpectedSha: true,
+    },
+    {
+      path: 'requests/seed_papers/demo/request.json',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-request',
+      matchesExpectedRef: true,
+      matchesExpectedSha: true,
+    },
+  ]);
+}
+
+async function testVerifyRepoFilesVisibleReportsMissingFile() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/paper.pdf?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/paper.pdf', sha: 'sha-pdf' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json?ref=feature-seed') {
+      return createJsonResponse(404, { message: 'Not Found' }, { statusText: 'Not Found' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.verifyRepoFilesVisible({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    ref: 'feature-seed',
+    paths: [
+      'requests/seed_papers/demo/paper.pdf',
+      'requests/seed_papers/demo/request.json',
+    ],
+    expectedFiles: [
+      { path: 'requests/seed_papers/demo/paper.pdf', ref: 'feature-seed', fileSha: 'sha-pdf' },
+      { path: 'requests/seed_papers/demo/request.json', ref: 'feature-seed', fileSha: 'sha-request' },
+    ],
+  });
+
+  assert.equal(result.allVisible, false);
+  assert.deepEqual(result.files, [
+    {
+      path: 'requests/seed_papers/demo/paper.pdf',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-pdf',
+      matchesExpectedRef: true,
+      matchesExpectedSha: true,
+    },
+    {
+      path: 'requests/seed_papers/demo/request.json',
+      exists: false,
+      ref: 'feature-seed',
+      fileSha: '',
+      matchesExpectedRef: true,
+      matchesExpectedSha: false,
+    },
+  ]);
+}
+
+async function testReadRepoFileUsesExplicitRepoDefaultBranchWhenRefMissing() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { default_branch: 'feature-seed' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/request.json', sha: 'sha-request' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.readRepoFile({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    path: 'requests/seed_papers/demo/request.json',
+  });
+
+  assert.equal(result.ref, 'feature-seed');
+  assert.equal(result.path, 'requests/seed_papers/demo/request.json');
+}
+
+async function testVerifyRepoFilesVisibleUsesResolvedDefaultBranchWhenRefMissing() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { default_branch: 'feature-seed' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/paper.pdf?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/paper.pdf', sha: 'sha-pdf' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/request.json', sha: 'sha-request' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.verifyRepoFilesVisible({
+    owner: 'dusker',
+    repo: 'daily-paper-reader',
+    token: 'ghp_demo',
+    paths: [
+      'requests/seed_papers/demo/paper.pdf',
+      'requests/seed_papers/demo/request.json',
+    ],
+  });
+
+  assert.equal(result.ref, 'feature-seed');
+  assert.deepEqual(result.files, [
+    {
+      path: 'requests/seed_papers/demo/paper.pdf',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-pdf',
+      matchesExpectedRef: true,
+      matchesExpectedSha: true,
+    },
+    {
+      path: 'requests/seed_papers/demo/request.json',
+      exists: true,
+      ref: 'feature-seed',
+      fileSha: 'sha-request',
+      matchesExpectedRef: true,
+      matchesExpectedSha: true,
+    },
+  ]);
+}
+
+async function testVerifyRepoFilesVisibleFallsBackToTokenResolvedRepo() {
+  global.fetch = async (url) => {
+    if (url === 'https://api.github.com/user') {
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader') {
+      return createJsonResponse(200, { permissions: { push: true }, default_branch: 'feature-seed' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/paper.pdf?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/paper.pdf', sha: 'sha-pdf' });
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/contents/requests/seed_papers/demo/request.json?ref=feature-seed') {
+      return createJsonResponse(200, { path: 'requests/seed_papers/demo/request.json', sha: 'sha-request' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.verifyRepoFilesVisible({
+    token: 'ghp_demo',
+    paths: [
+      'requests/seed_papers/demo/paper.pdf',
+      'requests/seed_papers/demo/request.json',
+    ],
+    expectedFiles: [
+      { path: 'requests/seed_papers/demo/paper.pdf', ref: 'feature-seed', fileSha: 'sha-pdf' },
+      { path: 'requests/seed_papers/demo/request.json', ref: 'feature-seed', fileSha: 'sha-request' },
+    ],
+  });
+
+  assert.equal(result.ref, 'feature-seed');
+  assert.equal(result.allVisible, true);
+}
+
+function testResolveRepoInfoFromPageAcceptsTrustedGithubPagesAndLocalhost() {
+  assert.deepEqual(
+    __test.resolveRepoInfoFromPage('dusker', 'https://dusker.github.io/daily-paper-reader/#/'),
+    { owner: 'dusker', repo: 'daily-paper-reader' },
+  );
+  assert.deepEqual(
+    __test.resolveRepoInfoFromPage('dusker', 'http://localhost:3000/'),
+    { owner: 'dusker', repo: 'daily-paper-reader' },
+  );
+}
+
+function testResolveRepoInfoFromPageRejectsUntrustedHost() {
+  assert.throws(
+    () => __test.resolveRepoInfoFromPage('dusker', 'https://mirror.example.com/daily-paper-reader/'),
+    /受信任的 GitHub Pages 或 localhost/u,
+  );
+}
+
+function testNormalizeGithubRefRejectsInvalidValue() {
+  assert.equal(__test.normalizeGithubRef('feature-seed'), 'feature-seed');
+  assert.throws(
+    () => __test.normalizeGithubRef('../bad'),
+    /非法的 GitHub ref/u,
+  );
+}
 
 function testBuildSeedPaperRequestPathNormalizesSegments() {
   const result = __test.buildSeedPaperRequestPath({
@@ -331,6 +788,21 @@ function testInitShowsSuccessButtonWhenSessionTokenExists() {
   testIsShaConflictResponseRecognizesGitHub409();
   await testWriteRepoFileEncodesUtf8TextAndHonorsPath();
   await testWriteRepoFileUsesSecretSessionGithubToken();
+  await testWriteRepoFileReturnsResolvedRefMetadata();
+  await testPrepareSeedPaperUploadTargetCreatesRequestBranchFromDefaultBranch();
+  await testPrepareSeedPaperUploadTargetKeepsSyncedRequestBranch();
+  await testPrepareSeedPaperUploadTargetResetsExistingRequestBranchToDefaultBranch();
+  await testPrepareSeedPaperUploadTargetFallsBackToTokenResolvedRepo();
+  await testPrepareSeedPaperUploadTargetRejectsDefaultBranchAsUploadBranch();
+  await testVerifyRepoFilesVisibleRejectsShaMismatch();
+  await testVerifyRepoFilesVisibleChecksAllPathsOnSameRef();
+  await testVerifyRepoFilesVisibleReportsMissingFile();
+  await testReadRepoFileUsesExplicitRepoDefaultBranchWhenRefMissing();
+  await testVerifyRepoFilesVisibleUsesResolvedDefaultBranchWhenRefMissing();
+  await testVerifyRepoFilesVisibleFallsBackToTokenResolvedRepo();
+  testResolveRepoInfoFromPageAcceptsTrustedGithubPagesAndLocalhost();
+  testResolveRepoInfoFromPageRejectsUntrustedHost();
+  testNormalizeGithubRefRejectsInvalidValue();
   testBuildSeedPaperRequestPathNormalizesSegments();
   testLoadGithubTokenDropsPersistedPatAndKeepsMetadata();
   testInitRequiresLiveSessionTokenForSuccessButton();

@@ -451,6 +451,10 @@ class SeedPaperProcessorTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in ranked], ["paper-a", "paper-b", "paper-c"])
         self.assertEqual([item["llm_score"] for item in ranked], [0.93, 0.87, 0.41])
         self.assertEqual(len(reranker.calls), 1)
+        self.assertEqual(
+            reranker.calls[0]["query"],
+            self.mod._build_query_summary(request, "seed paper body text"),
+        )
         self.assertEqual(reranker.calls[0]["top_n"], 3)
         self.assertEqual(len(reranker.calls[0]["documents"]), 3)
         self.assertTrue(all("Seed Paper" not in doc for doc in reranker.calls[0]["documents"]))
@@ -537,6 +541,10 @@ class SeedPaperProcessorTest(unittest.TestCase):
         )
 
         self.assertEqual([item["id"] for item in ranked], ["paper-b", "paper-c"])
+        self.assertEqual(
+            reranker.calls[0]["query"],
+            self.mod._build_query_summary(request, "seed paper body text"),
+        )
         self.assertEqual(reranker.calls[0]["top_n"], 2)
         self.assertEqual(len(reranker.calls[0]["documents"]), 2)
         self.assertTrue(all("Seed Paper" not in doc for doc in reranker.calls[0]["documents"]))
@@ -552,20 +560,90 @@ class SeedPaperProcessorTest(unittest.TestCase):
 
         normalized_tags = self.mod._normalize_tags(request["selected_tags"])
         normalized_notes = self.mod._normalize_notes(request["notes"])
-        queries = self.mod._build_seed_queries(
-            {
-                **request,
-                "selected_tags": normalized_tags,
-                "notes": normalized_notes,
-            },
-            seed_text=("transformer diffusion graph learning " * 200),
-        )
+        normalized_request = {
+            **request,
+            "selected_tags": normalized_tags,
+            "notes": normalized_notes,
+        }
+        seed_text = ("transformer diffusion graph learning " * 200)
+        queries = self.mod._build_seed_queries(normalized_request, seed_text=seed_text)
 
         self.assertLessEqual(len(normalized_tags), 8)
         self.assertTrue(all(len(tag) <= 48 for tag in normalized_tags))
         self.assertLessEqual(len(normalized_notes), 400)
         self.assertTrue(queries)
         self.assertTrue(all(len(query["query_text"]) <= 800 for query in queries))
+        self.assertEqual(queries[0]["query_text"], self.mod._build_query_summary(normalized_request, seed_text))
+
+    def test_rank_related_papers_uses_summary_instead_of_first_query_order(self):
+        request = {
+            "request_id": "demo-request",
+            "file_name": "Seed Paper.pdf",
+            "selected_tags": ["RL", "Security"],
+            "notes": "focus on methods",
+            "related_count": 2,
+            "mode": "both",
+        }
+        recall_payload = {
+            "queries": [
+                {
+                    "query_text": "keyword only fallback text",
+                    "sim_scores": {
+                        "paper-b": {"score": 0.92, "rank": 1},
+                        "paper-a": {"score": 0.91, "rank": 2},
+                    },
+                },
+                {
+                    "query_text": "semantic intent text that should not be order-dependent",
+                    "sim_scores": {
+                        "paper-a": {"score": 0.97, "rank": 1},
+                        "paper-c": {"score": 0.88, "rank": 2},
+                    },
+                },
+            ],
+            "papers": {
+                "paper-a": {
+                    "id": "paper-a",
+                    "title": "Paper A",
+                    "abstract": "paper a abstract",
+                    "source": "arxiv",
+                    "link": "https://example.com/a.pdf",
+                },
+                "paper-b": {
+                    "id": "paper-b",
+                    "title": "Paper B",
+                    "abstract": "paper b abstract",
+                    "source": "arxiv",
+                    "link": "https://example.com/b.pdf",
+                },
+                "paper-c": {
+                    "id": "paper-c",
+                    "title": "Paper C",
+                    "abstract": "paper c abstract",
+                    "source": "arxiv",
+                    "link": "https://example.com/c.pdf",
+                },
+            },
+        }
+        reranker = _StubReranker([
+            {"index": 0, "relevance_score": 0.95},
+            {"index": 1, "relevance_score": 0.84},
+            {"index": 2, "relevance_score": 0.63},
+        ])
+
+        self.mod.rank_related_papers(
+            request,
+            seed_text="seed paper body text",
+            retrieve_related=lambda req, seed_text: recall_payload,
+            reranker=reranker,
+            seed_identity={"seed-paper", "Seed Paper"},
+        )
+
+        self.assertEqual(
+            reranker.calls[0]["query"],
+            self.mod._build_query_summary(request, "seed paper body text"),
+        )
+        self.assertNotEqual(reranker.calls[0]["query"], recall_payload["queries"][0]["query_text"])
 
     def test_render_seed_workspace_uses_local_related_abstract_for_deep_mode(self):
         with tempfile.TemporaryDirectory() as tmp:

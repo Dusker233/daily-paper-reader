@@ -67,18 +67,30 @@ class DailyWorkflowConfigTest(unittest.TestCase):
         steps = seed_smoke_job.get("steps") or []
         step_names = [step.get("name") for step in steps]
         self.assertIn("Run seed paper processor unit tests", step_names)
+        self.assertIn("Run seed workflow frontend tests", step_names)
         self.assertIn("Create seed smoke fixtures", step_names)
         self.assertIn("Run seed paper smoke flow", step_names)
         self.assertIn("Upload seed smoke docs artifact", step_names)
 
         unit_test_step = next(step for step in steps if step.get("name") == "Run seed paper processor unit tests")
-        self.assertIn("python -m unittest tests.test_seed_paper_processor tests.test_daily_workflow", unit_test_step.get("run") or "")
+        self.assertIn(
+            "python -m unittest tests.test_seed_paper_processor tests.test_seed_paper_workflow tests.test_daily_workflow",
+            unit_test_step.get("run") or "",
+        )
+
+        frontend_test_step = next(step for step in steps if step.get("name") == "Run seed workflow frontend tests")
+        frontend_test_script = frontend_test_step.get("run") or ""
+        self.assertIn("node tests/test_subscriptions_github_token.js", frontend_test_script)
+        self.assertIn("node tests/test_subscriptions_manager.js", frontend_test_script)
 
         smoke_step = next(step for step in steps if step.get("name") == "Run seed paper smoke flow")
         smoke_script = smoke_step.get("run") or ""
         self.assertIn("python src/seed_paper_processor.py", smoke_script)
         self.assertIn("docs/seed-papers/${REQUEST_ID}/index.md", smoke_script)
         self.assertIn("docs/seed-papers/${REQUEST_ID}/seed-paper.md", smoke_script)
+        self.assertIn("docs/seed-papers/${REQUEST_ID}/related/fixture-related-1.md", smoke_script)
+        self.assertIn("docs/seed-papers/${REQUEST_ID}/related/fixture-related-2.md", smoke_script)
+        self.assertIn('grep -q "Fixture Related One" "docs/seed-papers/${REQUEST_ID}/index.md"', smoke_script)
         self.assertIn("docs/README.md", smoke_script)
         self.assertIn("docs/_sidebar.md", smoke_script)
         self.assertNotIn("git commit", smoke_script)

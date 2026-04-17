@@ -8,13 +8,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-def _load_module():
+def _load_module(module_name: str = "main_pipeline_mod", path: Path | None = None):
     root = Path(__file__).resolve().parents[1]
     src_dir = root / "src"
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
-    src_path = root / "src" / "main.py"
-    spec = importlib.util.spec_from_file_location("main_pipeline_mod", src_path)
+    src_path = path or (root / "src" / "main.py")
+    spec = importlib.util.spec_from_file_location(module_name, src_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -53,6 +53,104 @@ class MainPipelineTest(unittest.TestCase):
         }
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return path
+
+    def test_build_scored_papers_propagates_dimension_scores(self):
+        root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        select_mod = _load_module("select_mod_dimensions", src_dir / "5.select_papers.py")
+
+        out = select_mod.build_scored_papers(
+            [{"id": "p-1", "title": "Paper 1", "abstract": "A"}],
+            [
+                {
+                    "paper_id": "p-1",
+                    "score": 7.8,
+                    "relevance_score": 9.1,
+                    "quality_score": 6.2,
+                    "reliability_score": 5.8,
+                    "practicality_score": 3.6,
+                    "evidence_cn": "高度相关但落地有限",
+                    "tldr_cn": "一篇偏研究导向的工作。",
+                    "tags": ["query:test"],
+                }
+            ],
+        )
+
+        self.assertEqual(len(out), 1)
+        paper = out[0]
+        self.assertEqual(paper["llm_relevance_score"], 9.1)
+        self.assertEqual(paper["llm_quality_score"], 6.2)
+        self.assertEqual(paper["llm_reliability_score"], 5.8)
+        self.assertEqual(paper["llm_practicality_score"], 3.6)
+        self.assertIn("assessment:low-practicality", paper.get("llm_tags") or [])
+        self.assertIn("assessment:low-reliability", paper.get("llm_tags") or [])
+        self.assertIn("assessment:low-quality", paper.get("llm_tags") or [])
+
+    def test_build_scored_papers_does_not_tag_missing_dimension_scores_as_low(self):
+        root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        select_mod = _load_module("select_mod_missing_dimensions", src_dir / "5.select_papers.py")
+
+        out = select_mod.build_scored_papers(
+            [{"id": "p-1", "title": "Paper 1", "abstract": "A"}],
+            [
+                {
+                    "paper_id": "p-1",
+                    "score": 8.4,
+                    "relevance_score": 9.1,
+                    "evidence_cn": "高度相关",
+                    "tldr_cn": "未返回分维度打分。",
+                    "tags": ["query:test"],
+                }
+            ],
+        )
+
+        self.assertEqual(len(out), 1)
+        paper = out[0]
+        self.assertEqual(paper["llm_relevance_score"], 9.1)
+        self.assertIsNone(paper["llm_quality_score"])
+        self.assertIsNone(paper["llm_reliability_score"])
+        self.assertIsNone(paper["llm_practicality_score"])
+        self.assertNotIn("assessment:low-practicality", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-reliability", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-quality", paper.get("llm_tags") or [])
+
+    def test_build_scored_papers_does_not_tag_non_finite_dimension_scores_as_low(self):
+        root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        select_mod = _load_module("select_mod_non_finite_dimensions", src_dir / "5.select_papers.py")
+
+        out = select_mod.build_scored_papers(
+            [{"id": "p-1", "title": "Paper 1", "abstract": "A"}],
+            [
+                {
+                    "paper_id": "p-1",
+                    "score": 8.4,
+                    "relevance_score": "NaN",
+                    "quality_score": "inf",
+                    "reliability_score": "-inf",
+                    "evidence_cn": "分数非法",
+                    "tldr_cn": "非法分数应视为缺失。",
+                    "tags": ["query:test"],
+                }
+            ],
+        )
+
+        self.assertEqual(len(out), 1)
+        paper = out[0]
+        self.assertIsNone(paper["llm_relevance_score"])
+        self.assertIsNone(paper["llm_quality_score"])
+        self.assertIsNone(paper["llm_reliability_score"])
+        self.assertIsNone(paper["llm_practicality_score"])
+        self.assertNotIn("assessment:low-practicality", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-reliability", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-quality", paper.get("llm_tags") or [])
 
     def test_resolve_summary_step_env_prefers_workflow_config(self):
         with patch.dict(

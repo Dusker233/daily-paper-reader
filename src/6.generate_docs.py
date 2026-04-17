@@ -779,6 +779,7 @@ def build_tags_html(section: str, llm_tags: List[str]) -> str:
         # 前台主标签统一使用 query（蓝色），paper 为预留类型。
         css = {
             "query": "tag-blue",
+            "assessment": "tag-green",
             "paper": "tag-pink",
         }.get(kind, "tag-pink")
         tags_html.append(
@@ -906,11 +907,26 @@ def _format_entry_tags(tags: List[Tuple[str, str]]) -> str:
             continue
         if not v:
             continue
-        if k in ("keyword", "query", "paper"):
+        if k in ("keyword", "query", "paper", "assessment"):
             labels.append(f"{k}:{v}")
         else:
             labels.append(v)
     return "、".join(labels) if labels else "无标签"
+
+
+def _resolve_entry_summary(paper: Dict[str, Any]) -> str:
+    summary = str(
+        paper.get("llm_tldr_cn")
+        or paper.get("llm_tldr")
+        or paper.get("llm_tldr_en")
+        or ""
+    ).strip()
+    return ensure_single_sentence_end(summary) if summary else ""
+
+
+def _format_entry_summary_line(summary: str) -> str:
+    text = str(summary or "").strip()
+    return f"   摘要：{text}" if text else ""
 
 
 def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
@@ -928,21 +944,24 @@ def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
 
 def build_daily_brief_summary(
     date_label: str,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     total_count: int,
     run_status: str,
 ) -> str:
     if total_count == 0:
         return "> 今日无新推荐，系统未产出可展示论文。"
 
-    def _format_preview_item(paper_id: str, title: str, tags: List[Tuple[str, str]]) -> str:
-        name = ((title or "").strip() or paper_id)
+    def _format_preview_item(entry: Dict[str, Any]) -> str:
+        paper_id = str(entry.get("paper_id") or "").strip()
+        title = str(entry.get("title") or "").strip()
+        tags = entry.get("tags") or []
+        name = (title or paper_id)
         score = _entry_score_text(tags)
         return f"《{name}》（{score}）" if score else f"《{name}》"
 
-    deep_preview = [_format_preview_item(paper_id, title, tags) for paper_id, title, tags in deep_entries[:2] if (title or paper_id)]
-    quick_preview = [_format_preview_item(paper_id, title, tags) for paper_id, title, tags in quick_entries[:3] if (title or paper_id)]
+    deep_preview = [_format_preview_item(entry) for entry in deep_entries[:2] if (entry.get("title") or entry.get("paper_id"))]
+    quick_preview = [_format_preview_item(entry) for entry in quick_entries[:3] if (entry.get("title") or entry.get("paper_id"))]
     highlight = []
     if deep_preview:
         highlight.append(f"- 精读：{', '.join(deep_preview)}")
@@ -1021,8 +1040,8 @@ def build_latest_report_section(
     date_label: str | None,
     generated_at: str,
     recommend_exists: bool,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     paper_evidence_by_id: Dict[str, str],
 ) -> str:
     effective_label = (date_label or "").strip() or format_date_str(date_str)
@@ -1057,11 +1076,16 @@ def build_latest_report_section(
     lines.append("")
     lines.append("### 精读区论文标签")
     if deep_entries:
-        for idx, (paper_id, title, tags) in enumerate(deep_entries, start=1):
-            safe_title = (title or "").strip() or paper_id
+        for idx, entry in enumerate(deep_entries, start=1):
+            paper_id = str(entry.get("paper_id") or "").strip()
+            safe_title = str(entry.get("title") or "").strip() or paper_id
+            tags = entry.get("tags") or []
             evidence = (paper_evidence_by_id.get(str(paper_id).strip(), "") or "").strip()
             lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)})  ")
             lines.append(f"   标签：{_format_entry_tags(tags)}")
+            summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
+            if summary_line:
+                lines.append(summary_line)
             if evidence:
                 lines.append(f"   evidence：{evidence}")
     else:
@@ -1069,11 +1093,16 @@ def build_latest_report_section(
     lines.append("")
     lines.append("### 速读区论文标签")
     if quick_entries:
-        for idx, (paper_id, title, tags) in enumerate(quick_entries, start=1):
-            safe_title = (title or "").strip() or paper_id
+        for idx, entry in enumerate(quick_entries, start=1):
+            paper_id = str(entry.get("paper_id") or "").strip()
+            safe_title = str(entry.get("title") or "").strip() or paper_id
+            tags = entry.get("tags") or []
             evidence = (paper_evidence_by_id.get(str(paper_id).strip(), "") or "").strip()
             lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)})  ")
             lines.append(f"   标签：{_format_entry_tags(tags)}")
+            summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
+            if summary_line:
+                lines.append(summary_line)
             if evidence:
                 lines.append(f"   evidence：{evidence}")
     else:
@@ -1106,6 +1135,7 @@ def split_sidebar_tag(tag: str) -> Tuple[str, str]:
     for prefix, kind in (
         ("keyword:", "keyword"),
         ("query:", "query"),
+        ("assessment:", "assessment"),
         ("paper:", "paper"),
         ("ref:", "paper"),
         ("cite:", "paper"),
@@ -1176,6 +1206,7 @@ def extract_sidebar_tags(paper: Dict[str, Any], max_tags: int = 6) -> List[Tuple
     # 历史 keyword:* 统一折叠到 query:*，避免同名重复。
     seen_labels = set()
     q: List[Tuple[str, str]] = []
+    assessment: List[Tuple[str, str]] = []
     paper_tags: List[Tuple[str, str]] = []
     other: List[Tuple[str, str]] = []
 
@@ -1192,6 +1223,8 @@ def extract_sidebar_tags(paper: Dict[str, Any], max_tags: int = 6) -> List[Tuple
         seen_labels.add(dedup_key)
         if kind == "query":
             q.append((kind, label))
+        elif kind == "assessment":
+            assessment.append((kind, label))
         elif kind == "paper":
             paper_tags.append((kind, label))
         else:
@@ -1200,8 +1233,8 @@ def extract_sidebar_tags(paper: Dict[str, Any], max_tags: int = 6) -> List[Tuple
         if max_tags > 0 and len(seen_labels) >= max_tags:
             break
 
-    # 展示顺序：评分 -> query -> 论文引用(paper) -> 其它
-    tags = q + paper_tags + other
+    # 展示顺序：评分 -> query -> assessment -> 论文引用(paper) -> 其它
+    tags = q + assessment + paper_tags + other
     score = paper.get("llm_score")
     score_tag = []
     if score is not None:
@@ -1668,8 +1701,8 @@ def process_paper(
 def update_sidebar(
     sidebar_path: str,
     date_str: str,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     paper_evidence_by_id: Dict[str, str],
     date_label: str | None = None,
 ) -> None:
@@ -1755,8 +1788,11 @@ def update_sidebar(
     block: List[str] = [day_heading]
     if deep_entries:
         block.append("    * 精读区\n")
-        for paper_id, title, tags in deep_entries:
-            safe_title = html.escape((title or "").strip() or paper_id)
+        for entry in deep_entries:
+            paper_id = str(entry.get("paper_id") or "").strip()
+            title = str(entry.get("title") or "").strip()
+            tags = entry.get("tags") or []
+            safe_title = html.escape(title or paper_id)
             href = f"#/{paper_id}"
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
             payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence)
@@ -1766,8 +1802,11 @@ def update_sidebar(
             )
     if quick_entries:
         block.append("    * 速读区\n")
-        for paper_id, title, tags in quick_entries:
-            safe_title = html.escape((title or "").strip() or paper_id)
+        for entry in quick_entries:
+            paper_id = str(entry.get("paper_id") or "").strip()
+            title = str(entry.get("title") or "").strip()
+            tags = entry.get("tags") or []
+            safe_title = html.escape(title or paper_id)
             href = f"#/{paper_id}"
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
             payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence)
@@ -1797,8 +1836,8 @@ def update_sidebar(
 def build_day_report_markdown(
     date_str: str,
     date_label: str | None,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     recommend_exists: bool,
 ) -> str:
     effective_label = (date_label or "").strip() or format_date_str(date_str)
@@ -1835,22 +1874,32 @@ def build_day_report_markdown(
 
     lines.append("## 精读区")
     if deep_entries:
-        for idx, (paper_id, title, _tags) in enumerate(deep_entries, start=1):
-            safe_title = (title or "").strip() or paper_id
-            score = _entry_score_text(_tags)
+        for idx, entry in enumerate(deep_entries, start=1):
+            paper_id = str(entry.get("paper_id") or "").strip()
+            safe_title = str(entry.get("title") or "").strip() or paper_id
+            tags = entry.get("tags") or []
+            score = _entry_score_text(tags)
             suffix = f"（{score}）" if score else ""
-            lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)}) {suffix}")
+            lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)}){suffix}")
+            summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
+            if summary_line:
+                lines.append(summary_line)
     else:
         lines.append("- 本次无精读推荐。")
     lines.append("")
 
     lines.append("## 速读区")
     if quick_entries:
-        for idx, (paper_id, title, _tags) in enumerate(quick_entries, start=1):
-            safe_title = (title or "").strip() or paper_id
-            score = _entry_score_text(_tags)
+        for idx, entry in enumerate(quick_entries, start=1):
+            paper_id = str(entry.get("paper_id") or "").strip()
+            safe_title = str(entry.get("title") or "").strip() or paper_id
+            tags = entry.get("tags") or []
+            score = _entry_score_text(tags)
             suffix = f"（{score}）" if score else ""
-            lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)}) {suffix}")
+            lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)}){suffix}")
+            summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
+            if summary_line:
+                lines.append(summary_line)
     else:
         lines.append("- 本次无速读推荐。")
     lines.append("")
@@ -1865,8 +1914,8 @@ def write_day_report_readme(
     docs_dir: str,
     date_str: str,
     date_label: str | None,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     recommend_exists: bool,
 ) -> str:
     day_dir, day_readme = prepare_day_report_paths(docs_dir, date_str)
@@ -1922,8 +1971,8 @@ def build_home_readme_content(
     date_label: str | None,
     generated_at: str,
     recommend_exists: bool,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     paper_evidence_by_id: Dict[str, str],
 ) -> str:
     notice_path, promo_path = ensure_home_module_files(docs_dir)
@@ -1956,8 +2005,8 @@ def sync_home_readme_from_day_report(
     date_label: str | None,
     generated_at: str,
     recommend_exists: bool,
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]],
+    deep_entries: List[Dict[str, Any]],
+    quick_entries: List[Dict[str, Any]],
     paper_evidence_by_id: Dict[str, str],
 ) -> str:
     home_readme = os.path.join(docs_dir, "README.md")
@@ -2564,20 +2613,20 @@ def main() -> None:
         log(f"[OK] fix-tags-only: scanned={total_files}, updated={changed_files}")
         return
 
-    deep_entries: List[Tuple[str, str, List[Tuple[str, str]]]] = []
-    quick_entries: List[Tuple[str, str, List[Tuple[str, str]]]] = []
+    deep_entries: List[Dict[str, Any]] = []
+    quick_entries: List[Dict[str, Any]] = []
     docs_concurrency = max(1, int(args.docs_concurrency))
 
     def _process_section(
         section: str,
         papers: List[Dict[str, Any]],
         paper_evidence_by_id: Dict[str, str],
-    ) -> List[Tuple[str, str, List[Tuple[str, str]]]]:
+    ) -> List[Dict[str, Any]]:
         if not papers:
             return []
         max_workers = max(1, docs_concurrency)
         futures: Dict[Any, Tuple[int, Dict[str, Any]]] = {}
-        results: List[Tuple[int, Tuple[str, str, List[Tuple[str, str]]]]] = []
+        results: List[Tuple[int, Dict[str, Any]]] = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, paper in enumerate(papers):
                 future = executor.submit(
@@ -2600,7 +2649,17 @@ def main() -> None:
                     continue
                 paper_evidence_by_id[str((pid or "").strip())] = get_paper_sidebar_evidence(paper)
                 section_tags = extract_sidebar_tags(paper)
-                results.append((index, (pid, title, section_tags)))
+                results.append(
+                    (
+                        index,
+                        {
+                            "paper_id": pid,
+                            "title": title,
+                            "tags": section_tags,
+                            "summary_cn": _resolve_entry_summary(paper),
+                        },
+                    )
+                )
 
         results.sort(key=lambda item: item[0])
         return [v for _, v in results]
@@ -2614,14 +2673,28 @@ def main() -> None:
             arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
             _, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
             sidebar_evidence_by_id[str(pid).strip()] = get_paper_sidebar_evidence(paper)
-            deep_entries.append((pid, title, extract_sidebar_tags(paper)))
+            deep_entries.append(
+                {
+                    "paper_id": pid,
+                    "title": title,
+                    "tags": extract_sidebar_tags(paper),
+                    "summary_cn": _resolve_entry_summary(paper),
+                }
+            )
 
         for paper in quick_list:
             title = (paper.get("title") or "").strip()
             arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
             _, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
             sidebar_evidence_by_id[str(pid).strip()] = get_paper_sidebar_evidence(paper)
-            quick_entries.append((pid, title, extract_sidebar_tags(paper)))
+            quick_entries.append(
+                {
+                    "paper_id": pid,
+                    "title": title,
+                    "tags": extract_sidebar_tags(paper),
+                    "summary_cn": _resolve_entry_summary(paper),
+                }
+            )
         log_substep("6.3", "跳过生成文章（仅更新侧边栏）", "SKIP")
     else:
         log_substep("6.2", "生成精读区文章", "START")

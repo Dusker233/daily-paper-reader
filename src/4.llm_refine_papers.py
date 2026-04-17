@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import math
 import os
 import random
 import re
@@ -23,6 +24,18 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 DEFAULT_FILTER_MODEL = os.getenv("FILTER_MODEL") or os.getenv("BLT_FILTER_MODEL") or "gemini-3-flash-preview-nothinking"
 DEFAULT_FILTER_CONCURRENCY = 2
 MAX_FILTER_RETRIES = 3
+SCORE_DIMENSION_KEYS = (
+    "relevance_score",
+    "quality_score",
+    "reliability_score",
+    "practicality_score",
+)
+SCORE_WEIGHTS = {
+    "relevance_score": 0.55,
+    "quality_score": 0.15,
+    "reliability_score": 0.15,
+    "practicality_score": 0.15,
+}
 
 
 def log(message: str) -> None:
@@ -330,6 +343,10 @@ def call_filter(
                         "evidence_cn": {"type": "string"},
                         "tldr_en": {"type": "string"},
                         "tldr_cn": {"type": "string"},
+                        "relevance_score": {"type": "number"},
+                        "quality_score": {"type": "number"},
+                        "reliability_score": {"type": "number"},
+                        "practicality_score": {"type": "number"},
                         "score": {"type": "number"},
                     },
                     "required": [
@@ -339,7 +356,10 @@ def call_filter(
                         "evidence_cn",
                         "tldr_en",
                         "tldr_cn",
-                        "score",
+                        "relevance_score",
+                        "quality_score",
+                        "reliability_score",
+                        "practicality_score",
                     ],
                     "additionalProperties": False,
                 },
@@ -351,9 +371,8 @@ def call_filter(
 
     system_prompt = (
         "You are an intelligent Research Relevance Evaluator. "
-        "Score papers (0-10) based purely on relevance to ANY item in user's requirement list. "
-        "Prioritize conceptual/method relevance over exact term overlap. "
-        "Use the rubric and return JSON only."
+        "Evaluate each paper against the whole requirement set, not isolated keyword hits. "
+        "Prioritize conceptual/task fit over lexical overlap, penalize peripheral matches, and return JSON only."
     )
     req_lines = []
     for idx, req in enumerate(all_requirements, start=1):
@@ -371,11 +390,12 @@ def call_filter(
         "User requirements list:\n"
         f"{chr(10).join(req_lines)}\n\n"
         "SCORING RUBRIC:\n"
-        "9-10: Direct Requirement Match (same problem target and same evaluation intent)\n"
-        "8-9: Strong Method Match (different wording but equivalent objective/technical core)\n"
-        "6-8: Methodological Bridge (transferable method/approach likely useful for requirement)\n"
-        "3-4: Tangential (same broad discipline, weak link)\n"
-        "0-2: Noise (irrelevant)\n\n"
+        "Rate four dimensions on 0-10: relevance, quality, reliability, practicality.\n"
+        "- relevance_score: how central the paper is to the whole user intent and the best-matched requirement.\n"
+        "- quality_score: technical depth, clarity of contribution, and empirical strength.\n"
+        "- reliability_score: evidence credibility, evaluation rigor, and trustworthiness of claims.\n"
+        "- practicality_score: real-world usability, implementation readiness, and operational value.\n"
+        "High overall scores require strong whole-intent fit; a peripheral match should not score high even if one requirement is loosely related.\n\n"
         "GUARDRAILS:\n"
         "1) Beware of Polysemy: If a keyword is ambiguous, only match the sense that aligns with the user's intent.\n"
         "2) Reject Literal Matching: Do NOT score high just because the same word appears.\n"
@@ -384,20 +404,22 @@ def call_filter(
         "5) Be strict only when mismatch is substantive (different task objective, incompatible setting, or no reusable method).\n"
         "6) Some requirements may be profile-level composite requirements built from multiple keywords. "
         "Use them when a paper is clearly central to the overall theme but does not fit a narrower requirement cleanly.\n"
-        "7) Do not over-score generic LLM-for-science or infrastructure papers under a composite requirement unless they materially advance the core task.\n\n"
+        "7) Do not over-score generic LLM-for-science or infrastructure papers under a composite requirement unless they materially advance the core task.\n"
+        "8) Penalize peripheral matches: if the paper only helps with a side aspect while missing the user's core task, keep relevance_score low.\n"
+        "9) Quality, reliability, and practicality may differ. A novel paper can still be low-practicality or low-reliability.\n\n"
         "Papers:\n"
         f"{json.dumps(docs, ensure_ascii=False)}\n\n"
         "Output JSON format example:\n"
-        "{\"results\": [{\"id\": \"paper_id\", \"matched_requirement_index\": 1, \"evidence_en\": \"short English phrase\", \"evidence_cn\": \"简短中文短语\", \"tldr_en\": \"one-sentence TLDR\", \"tldr_cn\": \"一句话 TLDR\", \"score\": 7}]}\n\n"
+        "{\"results\": [{\"id\": \"paper_id\", \"matched_requirement_index\": 1, \"evidence_en\": \"short English phrase\", \"evidence_cn\": \"简短中文短语\", \"tldr_en\": \"one-sentence TLDR\", \"tldr_cn\": \"一句话 TLDR\", \"relevance_score\": 8.5, \"quality_score\": 7.0, \"reliability_score\": 7.5, \"practicality_score\": 6.0, \"score\": 7.8}]}\n\n"
         "Requirement: You MUST return exactly one result for every input paper. "
         "The results length must match the papers length, and every input id must appear once.\n\n"
         "Output must be a single-line JSON string. "
         "Do not include line breaks inside any string fields. "
         "Avoid double quotes inside evidence text fields.\n\n"
         "Task: Evaluate papers against the WHOLE requirement list. "
-        "If a paper matches any one point, it can get a high score. "
+        "Choose the best-matched requirement, but judge whether the paper satisfies the broader user intent rather than rewarding any single loose overlap. "
         "Set matched_requirement_index to the best-matched requirement (1-based). "
-        "Use semantic interpretation, not only lexical overlap, to decide relevance and score tier. "
+        "Use semantic interpretation, not only lexical overlap, to decide each score dimension. "
         "Evidence must be provided in both languages: "
         "evidence_en (English) and evidence_cn (Chinese). "
         "They should be short phrases linking the paper to the matched requirement; "
@@ -405,9 +427,10 @@ def call_filter(
         "Also generate TLDR in both languages: tldr_en and tldr_cn. "
         "TLDR should be one sentence summarizing what the paper does and why it matters. "
         "Keep TLDR concise: <= 120 characters in English and <= 60 Chinese characters. "
-        "Then give a score (0-10). "
+        "Return relevance_score, quality_score, reliability_score, practicality_score on a 0-10 scale. "
+        "You may include score, but it should reflect the weighted overall judgment. "
         "If unrelated, use evidence_en=\"not relevant\", evidence_cn=\"不相关\", "
-        "tldr_en=\"not relevant\", tldr_cn=\"不相关\", score 0, matched_requirement_index=0."
+        "tldr_en=\"not relevant\", tldr_cn=\"不相关\", all four dimension scores 0, score 0, matched_requirement_index=0."
     )
     if retry_note:
         user_prompt += f"\n\nRetry correction note:\n{retry_note}"
@@ -464,7 +487,9 @@ def _coerce_score(value: Any) -> float:
     try:
         score = float(value)
     except Exception:
-        score = 0.0
+        return 0.0
+    if not math.isfinite(score):
+        return 0.0
     return max(0.0, min(10.0, score))
 
 
@@ -475,13 +500,35 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _compose_final_score(scores: Dict[str, float]) -> float:
+    total = 0.0
+    weight_sum = 0.0
+    for key, weight in SCORE_WEIGHTS.items():
+        if key not in scores:
+            continue
+        total += scores[key] * weight
+        weight_sum += weight
+    if weight_sum <= 0:
+        return 0.0
+    return round(max(0.0, min(10.0, total / weight_sum)), 4)
+
+
 def _normalize_filter_result_item(item: Dict[str, Any]) -> Dict[str, Any]:
     legacy = _norm_text(item.get("evidence"))
     evidence_en = _norm_text(item.get("evidence_en") or legacy)
     evidence_cn = _norm_text(item.get("evidence_cn") or legacy or evidence_en)
-    score = _coerce_score(item.get("score"))
-    tldr_en = _norm_text(item.get("tldr_en")) or ("not relevant" if score <= 0 else evidence_en)
-    tldr_cn = _norm_text(item.get("tldr_cn")) or ("不相关" if score <= 0 else (evidence_cn or tldr_en))
+    dimension_scores: Dict[str, float] = {}
+    legacy_score = _coerce_score(item.get("score"))
+    for key in SCORE_DIMENSION_KEYS:
+        raw = item.get(key)
+        dimension_scores[key] = _coerce_score(raw if raw is not None else legacy_score)
+    score = item.get("score")
+    if score is None:
+        score_value = _compose_final_score(dimension_scores)
+    else:
+        score_value = _coerce_score(score)
+    tldr_en = _norm_text(item.get("tldr_en")) or ("not relevant" if score_value <= 0 else evidence_en)
+    tldr_cn = _norm_text(item.get("tldr_cn")) or ("不相关" if score_value <= 0 else (evidence_cn or tldr_en))
     return {
         "id": _norm_text(item.get("id")),
         "matched_requirement_index": _coerce_int(item.get("matched_requirement_index"), 0),
@@ -489,7 +536,11 @@ def _normalize_filter_result_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_cn": evidence_cn,
         "tldr_en": tldr_en,
         "tldr_cn": tldr_cn,
-        "score": score,
+        "relevance_score": dimension_scores["relevance_score"],
+        "quality_score": dimension_scores["quality_score"],
+        "reliability_score": dimension_scores["reliability_score"],
+        "practicality_score": dimension_scores["practicality_score"],
+        "score": score_value,
     }
 
 
@@ -541,11 +592,21 @@ def build_filter_retry_note(
 ) -> str:
     expected_ids = [_norm_text(doc.get("id")) for doc in batch_docs if _norm_text(doc.get("id"))]
     previous_error = _norm_text(error) or "unknown validation error"
+    if "missing ids=" in previous_error or "unexpected id=" in previous_error or "duplicate id=" in previous_error:
+        error_hint = previous_error
+    elif "results must be a list" in previous_error:
+        error_hint = "results must be a list"
+    elif "not an object" in previous_error:
+        error_hint = "each result item must be an object"
+    elif "missing id" in previous_error:
+        error_hint = "every result item must include an id"
+    else:
+        error_hint = "invalid JSON or schema mismatch"
     return (
-        f"Retry attempt {attempt}. The previous output was invalid: {previous_error}. "
+        f"Retry attempt {attempt}. The previous output was invalid: {error_hint}. "
         f"You must return exactly {len(expected_ids)} results for these ids only: {', '.join(expected_ids)}. "
         "Every id must appear once. Do not omit ids. Do not repeat ids. "
-        "Keep matched_requirement_index as an integer and score within 0-10."
+        "Keep matched_requirement_index as an integer and every score field within 0-10."
     )
 
 
@@ -630,6 +691,10 @@ def merge_filter_result(
         return
 
     score = _coerce_score(item.get("score"))
+    relevance_score = _coerce_score(item.get("relevance_score"))
+    quality_score = _coerce_score(item.get("quality_score"))
+    reliability_score = _coerce_score(item.get("reliability_score"))
+    practicality_score = _coerce_score(item.get("practicality_score"))
     evidence_en = _norm_text(item.get("evidence_en"))
     evidence_cn = _norm_text(item.get("evidence_cn"))
     tldr_en = _norm_text(item.get("tldr_en"))
@@ -655,6 +720,10 @@ def merge_filter_result(
         merged[pid] = {
             "paper_id": pid,
             "score": score,
+            "relevance_score": relevance_score,
+            "quality_score": quality_score,
+            "reliability_score": reliability_score,
+            "practicality_score": practicality_score,
             "evidence_en": evidence_en,
             "evidence_cn": evidence_cn,
             "canonical_evidence": evidence_cn or evidence_en or legacy,

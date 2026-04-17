@@ -157,6 +157,14 @@ class SelectPapersSourceTagTest(unittest.TestCase):
         self.assertEqual(items[0]["id"], "gene-1")
         self.assertEqual(items[0]["carry_days"], 1)
 
+    def test_resolve_carryover_tags_ignores_assessment_tags(self):
+        tags = self.mod.resolve_carryover_tags(
+            {
+                "llm_tags": ["assessment:low-quality", "query:GENE"],
+            }
+        )
+        self.assertEqual(tags, ["GENE"])
+
     def test_build_carryover_payload_updates_only_active_tag(self):
         existing = {
             "generated_at": "2026-03-27T00:00:00+00:00",

@@ -125,6 +125,146 @@ class QueryTagFlowTest(unittest.TestCase):
         self.assertIn("query:sr-rl", out[0].get("llm_tags") or [])
         self.assertEqual(out[0].get("matched_requirement_id"), "req-2")
 
+    def test_build_scored_papers_preserves_dimension_scores_and_assessment_tags(self):
+        papers = [{"id": "p-1", "title": "t", "abstract": "a"}]
+        llm_ranked = [
+            {
+                "paper_id": "p-1",
+                "score": 7.6,
+                "relevance_score": 9.0,
+                "quality_score": 6.0,
+                "reliability_score": 5.0,
+                "practicality_score": 3.0,
+                "evidence_cn": "方法相关但落地弱",
+                "tldr_cn": "偏研究型，实用性有限。",
+                "tags": ["query:sr"],
+                "matched_query_tag": "query:sr-rl",
+                "matched_query_text": "symbolic regression with reinforcement learning",
+                "matched_requirement_id": "req-2",
+            }
+        ]
+        out = self.select_mod.build_scored_papers(papers, llm_ranked)
+        self.assertEqual(len(out), 1)
+        paper = out[0]
+        self.assertEqual(paper.get("llm_relevance_score"), 9.0)
+        self.assertEqual(paper.get("llm_quality_score"), 6.0)
+        self.assertEqual(paper.get("llm_reliability_score"), 5.0)
+        self.assertEqual(paper.get("llm_practicality_score"), 3.0)
+        self.assertIn("assessment:low-practicality", paper.get("llm_tags") or [])
+        self.assertIn("assessment:low-reliability", paper.get("llm_tags") or [])
+        self.assertIn("assessment:low-quality", paper.get("llm_tags") or [])
+
+    def test_build_scored_papers_keeps_missing_dimension_scores_absent(self):
+        papers = [{"id": "p-1", "title": "t", "abstract": "a"}]
+        llm_ranked = [
+            {
+                "paper_id": "p-1",
+                "score": 8.2,
+                "relevance_score": 9.1,
+                "evidence_cn": "高度相关。",
+                "tldr_cn": "缺少分维度打分。",
+                "tags": ["query:sr"],
+            }
+        ]
+        out = self.select_mod.build_scored_papers(papers, llm_ranked)
+        self.assertEqual(len(out), 1)
+        paper = out[0]
+        self.assertEqual(paper.get("llm_relevance_score"), 9.1)
+        self.assertIsNone(paper.get("llm_quality_score"))
+        self.assertIsNone(paper.get("llm_reliability_score"))
+        self.assertIsNone(paper.get("llm_practicality_score"))
+        self.assertNotIn("assessment:low-practicality", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-reliability", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-quality", paper.get("llm_tags") or [])
+
+    def test_build_scored_papers_treats_non_finite_dimension_scores_as_missing(self):
+        papers = [{"id": "p-1", "title": "t", "abstract": "a"}]
+        llm_ranked = [
+            {
+                "paper_id": "p-1",
+                "score": 8.2,
+                "relevance_score": "NaN",
+                "quality_score": "inf",
+                "reliability_score": "-inf",
+                "evidence_cn": "分数非法。",
+                "tldr_cn": "非法分数应视为缺失。",
+                "tags": ["query:sr"],
+            }
+        ]
+        out = self.select_mod.build_scored_papers(papers, llm_ranked)
+        self.assertEqual(len(out), 1)
+        paper = out[0]
+        self.assertIsNone(paper.get("llm_relevance_score"))
+        self.assertIsNone(paper.get("llm_quality_score"))
+        self.assertIsNone(paper.get("llm_reliability_score"))
+        self.assertIsNone(paper.get("llm_practicality_score"))
+        self.assertNotIn("assessment:low-practicality", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-reliability", paper.get("llm_tags") or [])
+        self.assertNotIn("assessment:low-quality", paper.get("llm_tags") or [])
+
+    def test_build_scored_papers_treats_non_finite_primary_score_as_zero(self):
+        papers = [{"id": "p-1", "title": "t", "abstract": "a"}]
+        llm_ranked = [
+            {
+                "paper_id": "p-1",
+                "score": "NaN",
+                "evidence_cn": "主分非法。",
+                "tldr_cn": "主分应回退为 0。",
+                "tags": ["query:sr"],
+            }
+        ]
+        out = self.select_mod.build_scored_papers(papers, llm_ranked)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].get("llm_score"), 0.0)
+
+    def test_build_selection_bucket_tags_excludes_assessment_tags(self):
+        tags = self.select_mod.build_selection_bucket_tags(
+            {
+                "llm_tags": [
+                    "query:sr",
+                    "assessment:low-practicality",
+                    "assessment:low-reliability",
+                ]
+            }
+        )
+        self.assertEqual(tags, ["query:sr"])
+
+    def test_build_selection_bucket_tags_falls_back_to_untagged_for_assessment_only(self):
+        tags = self.select_mod.build_selection_bucket_tags(
+            {
+                "llm_tags": [
+                    "assessment:low-practicality",
+                    "assessment:low-reliability",
+                ]
+            }
+        )
+        self.assertEqual(tags, ["untagged"])
+
+    def test_round_robin_select_does_not_create_assessment_only_bucket(self):
+        tag_map = self.select_mod.build_tag_map(
+            [
+                {
+                    "id": "p-1",
+                    "llm_score": 8.9,
+                    "llm_tags": ["query:sr", "assessment:low-practicality"],
+                },
+                {
+                    "id": "p-2",
+                    "llm_score": 8.7,
+                    "llm_tags": ["query:sr"],
+                },
+                {
+                    "id": "p-3",
+                    "llm_score": 8.5,
+                    "llm_tags": ["assessment:low-quality"],
+                },
+            ]
+        )
+        self.assertIn("query:sr", tag_map)
+        self.assertIn("untagged", tag_map)
+        self.assertNotIn("assessment:low-practicality", tag_map)
+        self.assertNotIn("assessment:low-quality", tag_map)
+
 
 if __name__ == "__main__":
     unittest.main()
