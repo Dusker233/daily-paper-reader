@@ -6,73 +6,80 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-16
-- 运行时间：2026-04-16 20:56:41 UTC
+- 最新运行日期：2026-04-17
+- 运行时间：2026-04-17 20:10:40 UTC
 - 运行状态：成功
-- 本次总论文数：17
-- 精读区：6
+- 本次总论文数：15
+- 精读区：4
 - 速读区：11
 
 ### 今日简报（AI）
-今天完成17篇论文阅读，精读6篇，速读11篇，安全与多模态AI研究成热点。  
-重点关注AI驱动的实时威胁检测与多模态视频理解的最新方法。  
-建议普通读者关注AI在网络安全防护与视频内容生成的实际应用前景。
-- 详情：[/202604/16/README](/202604/16/README)
+今天完成了 15 篇文章的阅读，其中包括 4 篇精读和 11 篇速读。最值得关注的是关于加密流量解读和增强生成模型安全性的研究。建议继续关注模型安全性和异常检测技术的最新进展。
+- 详情：[/202604/17/README](/202604/17/README)
 
 ### 精读区论文标签
-1. [SentinelSphere: Integrating AI-Powered Real-Time Threat Detection with Cybersecurity Awareness Training](/202604/16/2604.06900v1-sentinelsphere-integrating-ai-powered-real-time-threat-detection-with-cybersecurity-awareness-training)  
-   标签：评分：9.0/10、query:q9
-   evidence：大语言模型增强的深度神经网络实时威胁检测
-2. [ABMAMBA: Multimodal Large Language Model with Aligned Hierarchical Bidirectional Scan for Efficient Video Captioning](/202604/16/2604.08050v1-abmamba-multimodal-large-language-model-with-aligned-hierarchical-bidirectional-scan-for-efficient-video-captioning)  
-   标签：评分：9.0/10、query:q6
-   evidence：多模态LLM用于视频描述，与加密视频识别相关
-3. [Multimodal Reasoning with LLM for Encrypted Traffic Interpretation: A Benchmark](/202604/16/2604.08140v1-multimodal-reasoning-with-llm-for-encrypted-traffic-interpretation-a-benchmark)  
-   标签：评分：9.0/10、query:q7
-   evidence：结合LLM进行加密流量解析的多模态推理
-4. [Event-Driven Temporal Graph Networks for Asynchronous Multi-Agent Cyber Defense in NetForge_RL](/202604/16/2604.09523v1-event-driven-temporal-graph-networks-for-asynchronous-multi-agent-cyber-defense-in-netforgerl)  
-   标签：评分：9.0/10、query:profile-1
-   evidence：多智能体强化学习结合大语言模型处理网络防御
-5. [Towards Automated Pentesting with Large Language Models](/202604/16/2604.11772v1-towards-automated-pentesting-with-large-language-models)  
-   标签：评分：9.0/10、query:q9
-   evidence：LLM在网络流量分析中的应用，涉及到网络安全
-6. [From IOCs to Regex: Automating CTI Operationalization for SOC with LLMs](/202604/16/2604.12228v1-from-iocs-to-regex-automating-cti-operationalization-for-soc-with-llms)  
-   标签：评分：9.0/10、query:q9
-   evidence：LLM用于自动化网络威胁情报处理
+1. [Multimodal Reasoning with LLM for Encrypted Traffic Interpretation: A Benchmark](/202604/17/2604.08140v1-multimodal-reasoning-with-llm-for-encrypted-traffic-interpretation-a-benchmark)  
+   标签：评分：8.5/10、query:q7
+   摘要：提出了一个用于加密流量解析的LLM多模态推理基准。
+   evidence：聚焦于加密流量分析与LLM结合
+2. [Securing Retrieval-Augmented Generation: A Taxonomy of Attacks, Defenses, and Future Directions](/202604/17/2604.08304v1-securing-retrieval-augmented-generation-a-taxonomy-of-attacks-defenses-and-future-directions)  
+   标签：评分：8.4/10、query:q9
+   摘要：探讨了LLMs中检索增强生成（RAG）的安全风险，对于LLMs在网络安全中的应用非常重要。
+   evidence：探讨了LLMs中检索增强生成（RAG）的安全性，涉及网络安全
+3. [EdgeDetect: Importance-Aware Gradient Compression with Homomorphic Aggregation for Federated Intrusion Detection](/202604/17/2604.14663v1-edgedetect-importance-aware-gradient-compression-with-homomorphic-aggregation-for-federated-intrusion-detection)  
+   标签：评分：8.3/10、query:q4
+   摘要：专注于联合入侵检测与同态加密，相关于加密流量分析方法。
+   evidence：隐私和加密流量聚焦的联合入侵检测
+4. [Preventing Safety Drift in Large Language Models via Coupled Weight and Activation Constraints](/202604/17/2604.12384v1-preventing-safety-drift-in-large-language-models-via-coupled-weight-and-activation-constraints)  
+   标签：评分：8.0/10、query:q9
+   摘要：提出了一种确保LLMs在微调过程中安全对齐的方法，适用于网络安全中的LLMs应用。
+   evidence：关注LLM微调中的安全性，与LLM在网络安全中的应用相关
 
 ### 速读区论文标签
-1. [Can Drift-Adaptive Malware Detectors Be Made Robust? Attacks and Defenses Under White-Box and Black-Box Threats](/202604/16/2604.06599v1-can-drift-adaptive-malware-detectors-be-made-robust-attacks-and-defenses-under-white-box-and-black-box-threats)  
-   标签：评分：8.0/10、query:q5
-   evidence：对抗鲁棒恶意软件检测，与加密恶意流量分析相关
-2. [Argus: Reorchestrating Static Analysis via a Multi-Agent Ensemble for Full-Chain Security Vulnerability Detection](/202604/16/2604.06633v1-argus-reorchestrating-static-analysis-via-a-multi-agent-ensemble-for-full-chain-security-vulnerability-detection)  
-   标签：评分：8.0/10、query:q9
-   evidence：基于LLM的网络安全方法
-3. [StructKV: Preserving the Structural Skeleton for Scalable Long-Context Inference](/202604/16/2604.06746v1-structkv-preserving-the-structural-skeleton-for-scalable-long-context-inference)  
-   标签：评分：8.0/10、query:q9
-   evidence：大语言模型（LLMs），上下文管理
-4. [Towards Privacy-Preserving Large Language Model: Text-free Inference Through Alignment and Adaptation](/202604/16/2604.06831v1-towards-privacy-preserving-large-language-model-text-free-inference-through-alignment-and-adaptation)  
-   标签：评分：8.0/10、query:q9
-   evidence：聚焦大语言模型的隐私保护与推理
-5. [RPM-Net Reciprocal Point MLP Network for Unknown Network Security Threat Detection](/202604/16/2604.06638v1-rpm-net-reciprocal-point-mlp-network-for-unknown-network-security-threat-detection)  
-   标签：评分：7.0/10、query:q4
-   evidence：检测未知网络安全威胁的框架。
-6. [RASR: Retrieval-Augmented Semantic Reasoning for Fake News Video Detection](/202604/16/2604.06687v1-rasr-retrieval-augmented-semantic-reasoning-for-fake-news-video-detection)  
-   标签：评分：7.0/10、query:q6
-   evidence：用于多模态视频验证的LLM
-7. [Making MLLMs Blind: Adversarial Smuggling Attacks in MLLM Content Moderation](/202604/16/2604.06950v2-making-mllms-blind-adversarial-smuggling-attacks-in-mllm-content-moderation)  
-   标签：评分：7.0/10、query:q6
-   evidence：MLLM处理对抗性视频内容
-8. [VulGD: A LLM-Powered Dynamic Open-Access Vulnerability Graph Database](/202604/16/2604.06967v1-vulgd-a-llm-powered-dynamic-open-access-vulnerability-graph-database)  
-   标签：评分：7.0/10、query:q9
-   evidence：LLM驱动的动态图数据库用于网络安全，可能适用于网络分析
-9. [Database Querying under Missing Values Governed by Missingness Mechanisms](/202604/16/2604.06520v1-database-querying-under-missing-values-governed-by-missingness-mechanisms)  
-   标签：评分：6.0/10、query:q4
-   evidence：针对缺失值数据库的概率查询回答
-10. [LASER: A Data-Centric Method for Low-Cost and Efficient SQL Rewriting based on SQL-GRPO](/202604/16/2604.06804v1-laser-a-data-centric-method-for-low-cost-and-efficient-sql-rewriting-based-on-sql-grpo)  
-   标签：评分：6.0/10、query:q3
-   evidence：讨论基于LLM的方法进行查询重写
-11. [Telecom World Models: Unifying Digital Twins, Foundation Models, and Predictive Planning for 6G](/202604/16/2604.06882v1-telecom-world-models-unifying-digital-twins-foundation-models-and-predictive-planning-for-6g)  
-   标签：评分：6.0/10、query:q9
-   evidence：将LLM与电信网络结合用于6G
+1. [SinkTrack: Attention Sink based Context Anchoring for Large Language Models](/202604/17/2604.10027v1-sinktrack-attention-sink-based-context-anchoring-for-large-language-models)  
+   标签：评分：7.8/10、query:q3
+   摘要：提出了一种改进LLM稳定性的方法，可通过确保上下文保持来支持网络流量分析任务。
+   evidence：LLM的上下文锚定方法，与网络流量理解相关
+2. [Anomaly Detection in IEC-61850 GOOSE Networks: Evaluating Unsupervised and Temporal Learning for Real-Time Intrusion Detection](/202604/17/2604.14233v1-anomaly-detection-in-iec-61850-goose-networks-evaluating-unsupervised-and-temporal-learning-for-real-time-intrusion-detection)  
+   标签：评分：7.8/10、query:q4
+   摘要：评估机器学习方法在GOOSE网络实时异常检测中的应用。
+   evidence：用于网络异常检测的无监督与时序建模
+3. [AI-Enabled Covert Channel Detection in RF Receiver Architectures](/202604/17/2604.14987v1-ai-enabled-covert-channel-detection-in-rf-receiver-architectures)  
+   标签：评分：7.8/10、query:q5
+   摘要：用CNN检测恶意射频流量，与加密流量分析相关。
+   evidence：AI用于隐蔽信道检测
+4. [Tracing the Chain: Deep Learning for Stepping-Stone Intrusion Detection](/202604/17/2604.08800v1-tracing-the-chain-deep-learning-for-stepping-stone-intrusion-detection)  
+   标签：评分：7.6/10、query:q5
+   摘要：使用深度学习和变压器模型检测踏脚石入侵，适用于网络安全应用。
+   evidence：深度学习模型用于踏脚石入侵检测
+5. [Task-Aware LLM Routing with Multi-Level Task-Profile-Guided Data Synthesis for Cold-Start Scenarios](/202604/17/2604.09377v1-task-aware-llm-routing-with-multi-level-task-profile-guided-data-synthesis-for-cold-start-scenarios)  
+   标签：评分：7.5/10、query:profile-1
+   摘要：提出面向任务的LLM路由以处理冷启动数据合成。
+   evidence：任务配置引导的LLM路由
+6. [LVSum: A Benchmark for Timestamp-Aware Long Video Summarization](/202604/17/2604.10024v1-lvsum-a-benchmark-for-timestamp-aware-long-video-summarization)  
+   标签：评分：7.5/10、query:q3
+   摘要：本论文提出了一个用于评估LLM在视频摘要中的基准，间接支持LLM在网络流量分析中的应用。
+   evidence：多模态LLM应用于视频分析
+7. [Policy-Aware Edge LLM-RAG Framework for Internet of Battlefield Things Mission Orchestration](/202604/17/2604.09493v1-policy-aware-edge-llm-rag-framework-for-internet-of-battlefield-things-mission-orchestration)  
+   标签：评分：6.9/10、query:q3
+   摘要：提出用于边缘自主系统调度的策略感知LLM框架。
+   evidence：边缘部署的LLM任务控制框架
+8. [Anamorphic Encryption with CCA Security: A Standard Model Construction](/202604/17/2604.07771v1-anamorphic-encryption-with-cca-security-a-standard-model-construction)  
+   标签：评分：6.8/10、query:q5
+   摘要：构建安全隐蔽通信的稳健变形加密方案。
+   evidence：用于隐蔽消息的CCA安全变形加密
+9. [BRASP: Boolean Range Queries over Encrypted Spatial Data with Access and Search Pattern Privacy](/202604/17/2604.07797v1-brasp-boolean-range-queries-over-encrypted-spatial-data-with-access-and-search-pattern-privacy)  
+   标签：评分：6.8/10、query:q4
+   摘要：BRASP支持隐私保护的加密数据查询。
+   evidence：加密空间数据的可搜索加密
+10. [Improving DNS Exfiltration Detection via Transformer Pretraining](/202604/17/2604.09849v1-improving-dns-exfiltration-detection-via-transformer-pretraining)  
+   标签：评分：6.8/10、query:q4
+   摘要：通过Transformer预训练提升加密流量分类。
+   evidence：基于Transformer的加密流量检测
+11. [ZoomR: Memory Efficient Reasoning through Multi-Granularity Key Value Retrieval](/202604/17/2604.10898v1-zoomr-memory-efficient-reasoning-through-multi-granularity-key-value-retrieval)  
+   标签：评分：6.8/10
+   摘要：专注于LLM推理与内存优化，与加密流量无关。
+   evidence：讨论LLM推理与内存优化，与加密流量无关
 
 
 <div class="dpr-home-promo-card">
