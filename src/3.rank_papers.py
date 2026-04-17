@@ -178,6 +178,12 @@ def resolve_global_pool_budget(
   return lane_top_k, guaranteed_per_lane, global_rrf_top
 
 
+def _is_intent_rerank_query(query: Dict[str, Any]) -> bool:
+  q_type = str(query.get("type") or "").strip().lower()
+  return q_type in {"intent_query", "llm_query"}
+
+
+
 def build_global_candidate_ids(
   queries: List[Dict[str, Any]],
   *,
@@ -186,8 +192,9 @@ def build_global_candidate_ids(
   global_limit: int,
 ) -> List[str]:
   """
-  将所有 query lane 的候选论文合并成统一候选池。
-  - 不区分 keyword / intent_query 来源；
+  将所有意图/语义 query lane 的候选论文合并成统一候选池。
+  - 仅纳入 intent_query / 兼容旧版 llm_query；
+  - 显式排除 keyword lane，避免字面命中污染全局候选池；
   - 使用 rank-based RRF 做全局聚合，避免不同分数量纲直接混用；
   - 每条 lane 只看前 lane_top_k 篇候选，避免全局池失控；
   - 每条 lane 的前 guaranteed_per_lane 固定保留；
@@ -199,6 +206,8 @@ def build_global_candidate_ids(
   guaranteed_ids: List[str] = []
 
   for q in queries or []:
+    if not _is_intent_rerank_query(q):
+      continue
     top_ids = get_top_ids(q)
     if lane_top_k > 0:
       top_ids = top_ids[:lane_top_k]
@@ -289,11 +298,6 @@ def process_file(
     log(f"[WARN] 文件 {os.path.basename(input_path)} 中缺少 papers 或 queries，跳过。")
     return
 
-  # 仅使用语义查询（intent_query 或兼容旧的 llm_query）进行 rerank。
-  def _is_intent_rerank_query(q: Dict[str, Any]) -> bool:
-    q_type = str(q.get("type") or "").strip().lower()
-    return q_type in {"intent_query", "llm_query"}
-
   queries = [q for q in all_queries if _is_intent_rerank_query(q)]
   if not queries:
     log("[WARN] 当前输入中没有可用于 rerank 的意图查询，跳过 rerank。")
@@ -310,7 +314,7 @@ def process_file(
     len(queries),
   )
   global_candidate_ids = build_global_candidate_ids(
-    all_queries,
+    queries,
     lane_top_k=lane_top_k,
     guaranteed_per_lane=guaranteed_per_lane,
     global_limit=global_rrf_top,
