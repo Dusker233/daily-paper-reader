@@ -589,6 +589,155 @@ async function testRunSeedPaperDiscoveryStopsWhenUploadedFilesAreNotVisible() {
   }
 }
 
+async function testRunSeedPaperDiscoveryDispatchesTrustedWorkflowWithoutRequestRefInput() {
+  global.window.decoded_secret_private = {};
+  global.window.DPRSecretSession = {
+    getGithubToken() {
+      return 'demo-token';
+    },
+  };
+  global.window.localStorage = {
+    getItem() {
+      return '';
+    },
+  };
+  global.window.location = {
+    href: 'http://localhost:3000/',
+  };
+  setupWorkflowRunnerDom();
+
+  const calls = [];
+  global.fetch = async (url, init = {}) => {
+    calls.push({ url, init });
+    if (url === 'https://api.github.com/user') {
+      return buildJsonResponse(200, { login: 'demo-user' });
+    }
+    if (url === 'https://api.github.com/repos/demo-user/daily-paper-reader') {
+      return buildJsonResponse(200, { fork: true, default_branch: 'main' });
+    }
+    if (url.includes('/actions/workflows/seed-paper-related.yml/runs?per_page=5')) {
+      return buildJsonResponse(200, { workflow_runs: [] });
+    }
+    if (url.includes('/dispatches')) {
+      return new Response('', { status: 200, statusText: 'OK' });
+    }
+    if (url.includes('/actions/workflows/seed-paper-related.yml/runs?event=workflow_dispatch&per_page=10')) {
+      return buildJsonResponse(200, {
+        workflow_runs: [
+          {
+            id: 901,
+            run_number: 77,
+            status: 'completed',
+            conclusion: 'success',
+            created_at: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (url.includes('/actions/runs/901/jobs?per_page=100')) {
+      return buildJsonResponse(200, { jobs: [] });
+    }
+    if (url.includes('/actions/runs/901')) {
+      return buildJsonResponse(200, {
+        id: 901,
+        run_number: 77,
+        status: 'completed',
+        conclusion: 'success',
+        created_at: new Date().toISOString(),
+      });
+    }
+    if (url.includes('/actions/workflows/seed-paper-related.yml/runs?per_page=12')) {
+      return buildJsonResponse(200, { workflow_runs: [] });
+    }
+    return buildJsonResponse(200, {});
+  };
+
+  delete require.cache[require.resolve('../app/workflows.runner.js')];
+  require('../app/workflows.runner.js');
+
+  global.window.SubscriptionsGithubToken = {
+    buildSeedPaperRequestPath() {
+      return {
+        requestId: 'demo-request',
+        requestPath: 'requests/seed_papers/demo-request/request.json',
+        filePath: 'requests/seed_papers/demo-request/paper.pdf',
+      };
+    },
+    async prepareSeedPaperUploadTarget() {
+      return {
+        owner: 'demo-user',
+        repo: 'daily-paper-reader',
+        branch: 'seed-paper-requests/demo-request',
+        ref: 'seed-paper-requests/demo-request',
+      };
+    },
+    async writeRepoFile(options) {
+      return {
+        owner: 'demo-user',
+        repo: 'daily-paper-reader',
+        branch: 'seed-paper-requests/demo-request',
+        ref: 'seed-paper-requests/demo-request',
+        path: options.path,
+        fileSha: options.path.endsWith('.pdf') ? 'sha-pdf' : 'sha-request',
+      };
+    },
+    async verifyRepoFilesVisible(options) {
+      assert.deepEqual(options, {
+        owner: 'demo-user',
+        repo: 'daily-paper-reader',
+        ref: 'seed-paper-requests/demo-request',
+        paths: [
+          'requests/seed_papers/demo-request/paper.pdf',
+          'requests/seed_papers/demo-request/request.json',
+        ],
+        expectedFiles: [
+          {
+            path: 'requests/seed_papers/demo-request/paper.pdf',
+            ref: 'seed-paper-requests/demo-request',
+            fileSha: 'sha-pdf',
+          },
+          {
+            path: 'requests/seed_papers/demo-request/request.json',
+            ref: 'seed-paper-requests/demo-request',
+            fileSha: 'sha-request',
+          },
+        ],
+      });
+      return {
+        ref: 'seed-paper-requests/demo-request',
+        allVisible: true,
+        files: [
+          { path: 'requests/seed_papers/demo-request/paper.pdf', exists: true, ref: 'seed-paper-requests/demo-request', fileSha: 'sha-pdf', matchesExpectedRef: true, matchesExpectedSha: true },
+          { path: 'requests/seed_papers/demo-request/request.json', exists: true, ref: 'seed-paper-requests/demo-request', fileSha: 'sha-request', matchesExpectedRef: true, matchesExpectedSha: true },
+        ],
+      };
+    },
+  };
+
+  const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+    file: {
+      name: 'paper.pdf',
+      type: 'application/pdf',
+      size: 1024,
+      async arrayBuffer() {
+        return Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]).buffer;
+      },
+    },
+    relatedCount: '3',
+    mode: 'deep',
+  });
+
+  assert.equal(ok, true);
+  const dispatchCall = calls.find((entry) => entry.url.includes('/dispatches'));
+  assert.ok(dispatchCall, 'should dispatch seed workflow after upload verification');
+  const body = JSON.parse(dispatchCall.init.body);
+  assert.equal(body.ref, 'main');
+  assert.equal(body.inputs.request_id, 'demo-request');
+  assert.equal(body.inputs.request_path, 'requests/seed_papers/demo-request/request.json');
+  assert.equal(body.inputs.seed_mode, 'deep');
+  assert.equal(Object.prototype.hasOwnProperty.call(body.inputs, 'request_ref'), false);
+}
+
 function setupWorkflowRunnerDom() {
   const elementMap = {};
   const createClassList = (initial = []) => {
@@ -1831,6 +1980,7 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   await testRunSeedPaperDiscoveryRejectsFakePdfBytesBeforeUpload();
   await testRunSeedPaperDiscoveryVerifiesFilesBeforeDispatch();
   await testRunSeedPaperDiscoveryStopsWhenUploadedFilesAreNotVisible();
+  await testRunSeedPaperDiscoveryDispatchesTrustedWorkflowWithoutRequestRefInput();
   await testWorkflowRunnerFallbackPreservesFetchModeForCustomDays();
   await testWorkflowRunnerIgnoresPersistedPatFallback();
   await testWorkflowRunnerUsesSecretSessionGithubToken();
