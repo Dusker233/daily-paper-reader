@@ -257,6 +257,22 @@ function testDocsifyPluginTestHooksStayDisabledWithoutExplicitFlag() {
   assert.equal(global.window.DPRDocsifyPluginTest, undefined);
 }
 
+function testAppCssKeepsMarkdownKatexDisplayScrollable() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cssPath = path.join(__dirname, '..', 'app', 'app.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  assert.match(
+    css,
+    /\.markdown-section \.katex-display \{[\s\S]*?overflow-x: auto;[\s\S]*?overflow-y: hidden;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.katex-display > \.katex \{[\s\S]*?white-space: nowrap;[\s\S]*?\}/,
+  );
+}
+
 testNormalizeSafeUrlRejectsJavascriptAndDataUrls();
 testResolveDocsAssetUrlAllowsRepoAssetsOnly();
 testParseFiguresMetaFiltersUnsafeEntries();
@@ -265,5 +281,6 @@ testRenderPaperFromMetaIncludesSafePdfLinksAndFiltersUnsafeFigures();
 testLoadGithubTokenForGistUsesSecretSessionAccessor();
 testDocsifyPluginDoneEachPublishesCurrentRouteGlobals();
 testDocsifyPluginTestHooksStayDisabledWithoutExplicitFlag();
+testAppCssKeepsMarkdownKatexDisplayScrollable();
 
 console.log('docsify plugin tests passed');

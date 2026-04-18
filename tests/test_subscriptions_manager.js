@@ -1,6 +1,25 @@
 const assert = require('node:assert/strict');
 
 global.window = global.window || {};
+global.window.jsyaml = global.window.jsyaml || {
+  load(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return {};
+    if (raw.startsWith('{')) {
+      return JSON.parse(raw);
+    }
+    const repoMatch = raw.match(/repo:\s*([^\n]+)/);
+    const ownerMatch = raw.match(/owner:\s*([^\n]+)/);
+    return {
+      github: {
+        owner: ownerMatch ? ownerMatch[1].trim().replace(/^['"]|['"]$/g, '') : '',
+        repo: repoMatch ? repoMatch[1].trim().replace(/^['"]|['"]$/g, '') : '',
+      },
+    };
+  },
+};
+global.window.jsYaml = global.window.jsyaml;
+global.window.jsYAML = global.window.jsyaml;
 global.document = global.document || {
   readyState: 'loading',
   addEventListener() {},
@@ -864,11 +883,27 @@ function createWorkflowRunnerFetchStub(calls, options = {}) {
     recentRunConclusion = runConclusion,
     repoOwner = 'demo-user',
     repoName = 'daily-paper-reader',
+    userLogin = 'demo-user',
+    configGithub = null,
   } = options;
   return async (url, init = {}) => {
     calls.push({ url, init });
     if (url === 'https://api.github.com/user') {
-      return buildJsonResponse(200, { login: 'demo-user' });
+      return buildJsonResponse(200, { login: userLogin });
+    }
+    if (url === 'config.yaml' || url === 'docs/config.yaml' || url === '../config.yaml') {
+      if (!configGithub) {
+        return buildJsonResponse(404, { message: 'Not Found' }, 'Not Found');
+      }
+      return new Response(`github:\n  owner: ${configGithub.owner || ''}\n  repo: ${configGithub.repo || ''}\n`, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/yaml',
+        },
+      });
+    }
+    if (url === `https://api.github.com/repos/${repoOwner}/${repoName}/pages`) {
+      return buildJsonResponse(200, { cname: 'mirror.example.com' });
     }
     if (url === `https://api.github.com/repos/${repoOwner}/${repoName}`) {
       return buildJsonResponse(200, { fork: true, default_branch: 'main' });
@@ -1042,6 +1077,23 @@ async function testWorkflowRunnerTrustedGithubPagesUsesPageRepo() {
   });
 
   assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/dusker/daily-paper-reader'), true);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/demo-user/daily-paper-reader'), false);
+}
+
+async function testWorkflowRunnerCustomDomainUsesConfigRepo() {
+  const { calls } = await setupWorkflowRunnerWithRecentRun({
+    href: 'https://mirror.example.com/#/',
+    userLogin: 'demo-user',
+    repoOwner: 'mirror-owner',
+    repoName: 'mirror-repo',
+    configGithub: {
+      owner: 'mirror-owner',
+      repo: 'mirror-repo',
+    },
+  });
+
+  assert.equal(calls.some((entry) => entry.url === 'config.yaml'), true);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/mirror-owner/mirror-repo'), true);
   assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/demo-user/daily-paper-reader'), false);
 }
 
@@ -1499,7 +1551,7 @@ async function testWorkflowRunnerRunSeedPaperWorkflowRejectsMissingRequestPath()
   assert.equal(calls.some((entry) => entry.url.includes('/dispatches')), false);
 }
 
-async function testWorkflowRunnerRejectsUntrustedHostDispatch() {
+async function testWorkflowRunnerRejectsCustomDomainWithoutConfig() {
   await flushAsyncWork();
   global.window.decoded_secret_private = {};
   global.window.DPRSecretSession = {
@@ -1520,6 +1572,12 @@ async function testWorkflowRunnerRejectsUntrustedHostDispatch() {
   const calls = [];
   global.fetch = async (url, init = {}) => {
     calls.push({ url, init });
+    if (url === 'https://api.github.com/user') {
+      return buildJsonResponse(200, { login: 'demo-user' });
+    }
+    if (url === 'config.yaml' || url === 'docs/config.yaml' || url === '../config.yaml') {
+      return buildJsonResponse(404, { message: 'Not Found' }, 'Not Found');
+    }
     throw new Error(`unexpected fetch: ${url}`);
   };
 
@@ -1533,7 +1591,8 @@ async function testWorkflowRunnerRejectsUntrustedHostDispatch() {
     seedMode: 'deep',
   });
 
-  assert.equal(calls.length, 0);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/user'), true);
+  assert.equal(calls.some((entry) => entry.url === 'config.yaml'), true);
   assert.equal(calls.some((entry) => entry.url.includes('/dispatches')), false);
   assert.match(dom['dpr-workflow-status'].textContent, /无法推断目标仓库/u);
 }
@@ -1953,6 +2012,7 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   await testWorkflowRunnerDoesNotStartPollingForCompletedRun();
   await testWorkflowRunnerDoesNotStartPollingWhenSelectingCompletedRecentRun();
   await testWorkflowRunnerTrustedGithubPagesUsesPageRepo();
+  await testWorkflowRunnerCustomDomainUsesConfigRepo();
   await testWorkflowRunnerOpenDoesNotFetchExtraRecentRunInputs();
   await testWorkflowRunnerStartsPollingForActiveDispatchRun();
   await testWorkflowRunnerStartsPollingWhenSelectingActiveRecentRun();
@@ -1963,7 +2023,7 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   await testWorkflowRunnerRunSeedPaperWorkflowRejectsInvalidRequestRef();
   await testWorkflowRunnerRunSeedPaperWorkflowRejectsMissingRequestRef();
   await testWorkflowRunnerRunSeedPaperWorkflowRejectsMissingRequestPath();
-  await testWorkflowRunnerRejectsUntrustedHostDispatch();
+  await testWorkflowRunnerRejectsCustomDomainWithoutConfig();
   testRunProfileQuickFetchPassesProfileTagToWorkflow();
   testRunProfileQuickFetchPreservesExplicitFilterConcurrency();
   testApplyQuickRunRerankDispatchInputsDefaultsLocalModel();
