@@ -1,0 +1,963 @@
+Title: Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans
+
+URL Source: https://arxiv.org/pdf/2604.09944v1
+
+Published Time: Tue, 14 Apr 2026 00:20:15 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans 
+
+# Qiuyang Mang 1,* Yufan Xiang 2,* Hangrui Zhou Runyuan He 1 Jiaxiang Yu 1 Hanchen Li 1
+
+# Aditya Parameswaran 1 Alvin Cheung 1∗
+
+> 1
+
+UC Berkeley 2University of Wisconsin-Madison 
+
+## ABSTRACT 
+
+Recent database systems have introduced semantic operators that leverage large language models (LLMs) to filter, join, and project over structured data using natural language predicates. In practice, these operators are combined with traditional relational operators, e.g., equi-joins, producing hybrid query plans whose execution cost depends on both expensive LLM calls and conventional data-base processing. A key optimization question is where to place each semantic operator relative to the relational operators in the plan: placing them earlier reduces the data that subsequent op-erators process, but requires more LLM calls; placing them later reduces LLM calls through deduplication, but forces relational op-erators to process larger intermediate data. Existing systems either ignore this placement question or apply simple heuristics without considering the full cost trade-off. We present Horrila , a plan-level optimizer for hybrid semantic-relational queries. Horrila 
+
+reduces hybrid query planning to semantic filter placement via two equivalence-preserving rewrites. We prove that deferring all semantic filters to the latest possible position minimizes LLM in-vocations under function caching, but show that this can cause relational processing costs to dominate on complex multi-table queries. To balance LLM cost against relational cost, Horrila uses a dynamic-programming-based cost model that finds the placement minimizing their weighted sum. On 44 semantic SQL queries across five schemas and two benchmarks, Horrila achieves up to 1.5×
+
+speedup and 4.29 × cost reduction while maintaining high output quality: an average F1 of 0.85 against the unoptimized baseline and 
+
+0.84 against human-annotated ground truth on SemBench. Overall, 
+
+Horrila achieves the significant cost reduction while preserving the highest accuracy among six publicly available systems. 
+
+## 1 INTRODUCTION 
+
+Recent advances in large language models (LLMs) have opened new opportunities for data analysis. In particular, semantic queries 
+
+have gained growing attention, as they allow users to express data operations in natural language. For instance, users can filter records with a predicate such as whether a movie review is positive , or join two tables on a condition such as whether a customer is likely to buy a product . These semantic operations are powered by LLM calls and can be freely composed with traditional relational operators such as filters, joins, projections, and aggregations, forming hybrid query plans .As a motivating example, consider the query in Listing 1, which finds books about artificial intelligence that received positive re-views. The query contains two semantic filters, SF 𝜙 1 on books and 
+
+SF 𝜙 2 on reviews, an equi-join on book_id , and a relational filter           
+
+> ∗*Equal contribution.
+> 1SELECT b.title, r.text
+> 2FROM books b
+> 3JOIN reviews r ON b.book_id = r.book_id
+> 4WHERE SEMANTIC ('{b.description} is about AI?' )//
+
+𝜙 1  
+
+> 5AND SEMANTIC ('{r.text} is a positive review?' )//
+
+𝜙 2  
+
+> 6AND r.rating >= 3;
+
+Listing 1: Motivating semantic SQL query over a book review database.  
+
+> rating
+
+≥ 3. Although semantic queries are powerful when com-bined with traditional relational operators, each semantic operator can require many LLM calls, making execution optimization crucial for both cost and latency. Several systems have been proposed to support and optimize semantic query execution. Lotus [ 18 ] introduces approximate exe-cution via model cascading [ 9 ], where a proxy model handles easy cases and a stronger model refines uncertain ones. Palimpzest [ 15 ]and Abacus [ 21 ] search for optimal physical implementations of in-dividual operators using a cost model. DocETL [ 23 ] and ZenDB [ 13 ]optimize LLM-powered pipelines for document analytics. Other sys-tems extend SQL with semantic operators and contribute their own optimization strategies, including FlockMTL [ 3 ], ThalamusDB [ 8 ], iPDB [ 10 ], Sema [ 19 ], and Cortex AISQL [ 14 ]. However, existing techniques remain limited in two important respects: 
+
+• Accuracy risk from approximation. Most existing systems reduce LLM cost by approximating or modifying individual op-erators. Model cascading routes easy cases to a cheaper proxy model, and approximate query processing replaces exact LLM evaluation with sampling-based estimates. While effective in isolation, these approximations alter operator outputs and can compound when multiple operators are composed in the same plan, causing significant deviations in the final result. 
+
+• Ignoring semantic-relational interactions. Existing systems optimize semantic operators in isolation without considering how their placement interacts with relational operators. As il-lustrated in Figure 1, where a semantic filter is placed relative to joins and relational filters can dramatically affect both LLM cost and relational execution cost. iPDB [ 10 ] and Cortex AISQL [ 14 ]apply pull-up as a heuristic, but pulling up is not always benefi-cial: it can inflate intermediate results and cause relational costs to explode, especially in multi-table queries [ 14 ]. No existing sys-tem reasons about the trade-off between LLM cost and relational cost when deciding where to place semantic operators. This motivates the problem we address: given a hybrid query plan that interleaves semantic and relational operators, where should each 
+
+> arXiv:2604.09944v1 [cs.DB] 10 Apr 2026
+
+Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+“Find books about AI that received positive reviews with rating ≥ 3.” 
+
+(a) Push-down 
+
+1book_id 
+
+SF 𝜙 1 SF 𝜙 2 
+
+> books
+
+𝜎 rat ≥3
+
+> reviews
+> 1K rows
+> 5K rows
+> 4,000 LLM calls Small join input
+
+(b) Pull-up 
+
+SF 𝜙 1 [cached] 
+
+SF 𝜙 2 [cached] 
+
+1book_id  
+
+> books
+
+𝜎 rat ≥3
+
+> reviews
+> 1K rows
+> 5K rows
+> 3,300 LLM calls Large join input
+
+(c) Horrila 
+
+SF 𝜙 2 [cached] 
+
+1book_id 
+
+SF 𝜙 1 𝜎 rat ≥3  
+
+> books reviews
+> 1K rows 5K rows
+> Balanced cost
+
+Figure 1: Three hybrid query plans for Listing 1 ( books : 1K rows, reviews : 5K rows). (a) Push-down: filters applied before the join. Small join, but 4K LLM calls. (b) Pull-up: filters deferred after the join. Function caching evaluates each distinct tuple once, yielding only 3.3K calls, but the join processes unfiltered tables. (c) Horrila : 𝜙 1 pushed down to shrink the join, 𝜙 2 pulled up to reduce LLM calls. 
+
+semantic operator be placed to minimize the combined LLM and rela-tional execution cost, without approximating or modifying individual operators? Classical work on expensive predicate placement [ 2, 6]addresses a related problem for user-defined functions, but does not account for the distinct cost characteristics of LLM-backed operators. We discuss these connections in Section 8. To address this problem, we present Horrila , a plan-level op-timization framework for hybrid semantic-relational queries that optimizes the placement of semantic operators within the plan tree. Our approach proceeds in three steps. First, we show that the gen-eral problem of placing all semantic operators can be reduced to placing semantic filters only, through two equivalence-preserving rewrites. After these rewrites, every remaining semantic operator to consider is a semantic filter. We then optimize semantic filter placement based on two key insights. First, as detailed in Section 4.1, we show that pulling up all semantic filters above relational operators, combined with function caching, minimizes the total number of LLM invocations. To illustrate, return to the example in Listing 1 and the three plans in Figure 1. Suppose books has 1,000 rows and reviews has 5,000 rows. The push-down plan (Figure 1a) evaluates SF 𝜙 1 on all 1,000 books and SF 𝜙 2 on the 3,000 reviews that pass the relational filter, totaling 4,000 LLM calls. In the pull-up plan shown in Figure 1b, the relational filter retains 3,000 reviews with rating ≥ 3, and the equi-join matches them with books. Assuming the join is selective, suppose only 800 of the 1,000 books appear in the join output, along with 2,500 distinct reviews. Function caching ensures each distinct tuple is evaluated once, yielding only 800 + 2,500 = 3,300 LLM calls instead of 4,000. Second, we observe that this strategy of minimizing LLM calls is not always globally optimal. For example, in production workloads at Snowflake, nearly 40% of semantic queries involve multiple ta-bles [ 14 ]. Queries with 5+ joins and multiple semantic filters are common in analytical scenarios. Consider a chain of five equi-joins over five tables, each with 1,000 rows and each carrying its own semantic filter with 10% selectivity. Pushing down all filters first shrinks each table to about 100 rows, so the subsequent joins oper-ate on small inputs. Pulling up all filters instead forces each join to process the full 1,000-row tables. Since intermediate sizes com-pound across multiple joins, the gap between the two strategies widens rapidly with the number of tables. Although pulling up still reduces LLM calls as shown above, the relational cost of joining unfiltered tables quickly dominates. To navigate this trade-off, Hor-rila employs a dynamic-programming-based cost model, described in Section 4.2, that jointly considers LLM and relational execution cost to determine the optimal placement of each semantic filter. We evaluate Horrila on 44 semantic SQL queries spanning five database schemas from DataAgentBench [ 16 ], TPC-H [ 25 ], and SemBench [ 11 ], comparing against six baseline methods. Hor-rila achieves up to 1.5× speedup and 4.3× cost reduction over the DuckDB baseline while maintaining an average F1 score of 0.85 .Competing systems either sacrifice accuracy for cost savings or achieve limited reduction at moderate accuracy. For example, Tha-lamusDB [ 8] reduces cost by 10 × but at only 0.52 F1; FlockMTL [ 3 ]achieves 7.3× at 0.34 F1. Palimpzest [ 15 ] reaches 2.1× cost reduction with 0.53 F1. We also show that pull-up alone suffices for simple queries, achieving the best LLM cost reduction. For complex multi-table queries, however, pull-up can cause join costs to explode; the DP cost model maintains acceptable latency while still significantly reducing LLM cost. In summary, we make the following contributions: 
+
+• We formalize the problem of optimizing hybrid query plans that interleave semantic and relational operators, and show how to reduce it to semantic filter placement by pulling up semantic projections and decomposing semantic joins. 2 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+• We prove that pulling up semantic filters with function caching minimizes LLM invocations, and propose a DP-based cost model that balances LLM and relational costs for cases where pull-up alone degrades overall performance. 
+
+• We benchmark 44 semantic SQL queries across five schemas and conduct an extensive evaluation against six baselines, demon-strating that Horrila achieves the best trade-off between cost reduction and query accuracy. 
+
+## 2 BACKGROUND 2.1 Semantic Operators 
+
+A semantic operator is a query operator parameterized by a natural language expression and evaluated by an LLM [ 18 ]. We study three semantic operators: Semantic Filter ( SF ), Semantic Join ( SJ ), and Semantic Projection ( SP ). Let 𝑅 and 𝑆 be relations, 𝜙 a natural language expression, and M an LLM. 
+
+Semantic Filter ( SF ) retains tuples in 𝑅 for which M evaluates predicate 𝜙 as true: 
+
+SF 𝜙 (𝑅 ) = {𝑟 ∈ 𝑅 | M ( 𝑟, 𝜙 ) = true }.
+
+Semantic Join ( SJ ) pairs tuples from 𝑅 and 𝑆 that satisfy a natural language condition 𝜙 :
+
+SJ 𝜙 (𝑅, 𝑆 ) = {( 𝑟, 𝑠 ) | 𝑟 ∈ 𝑅, 𝑠 ∈ 𝑆, M ( 𝑟, 𝑠, 𝜙 ) = true }.
+
+Semantic Projection ( SP ) produces new attributes by transform-ing each tuple in 𝑅 according to 𝜙 :
+
+SP 𝜙 (𝑅 ) = {M ( 𝑟, 𝜙 ) | 𝑟 ∈ 𝑅 }.
+
+Without caching and prompt batching, SF and SP require one LLM call per input tuple, or per tuple pair for SJ , making LLM invocation the dominant cost in hybrid query execution. 
+
+## 2.2 Hybrid Query Plans 
+
+A hybrid query plan is a logical query plan that integrates both relational and semantic operators. Formally, it is a rooted tree T =
+
+(𝑉 , 𝐸 ) where each node 𝑣 ∈ 𝑉 is either a relational operator, such as filter 𝜎 , projection 𝜋 , join 1, or aggregation 𝛾 , or a semantic operator from {SF , SJ , SP }. Each node takes the output of its children as input and produces a relation as the output. Figure 1 shows three hybrid plans for the query in Listing 1. Different placements of the same semantic operators lead to very different cost profiles: pushing down reduces join input but increases LLM calls, while pulling up reduces LLM calls but inflates the join. 
+
+## 2.3 Function Caching 
+
+Function caching for expensive predicates was first proposed in the context of predicate migration [ 6]. When an expensive predicate depends only on columns from one side of a join, its result can be computed once per distinct input tuple and reused across all join-expanded rows. We adopt this technique for semantic operators. When a seman-tic filter SF 𝜙 depends only on columns from a base table 𝐴 and is placed above a join 𝐴 1 𝐵 , the same tuple 𝑎 may appear in multiple output rows paired with different tuples from 𝐵 . With function caching, the LLM evaluates each distinct 𝑎 at most once and reuses the cached result. The number of LLM calls is therefore equal to the number of distinct 𝐴 -tuples in the join output, which can be much smaller than |𝐴 | if the join eliminates unmatched tuples. This property is critical for optimization: pulling up a semantic filter above a join can reduce LLM cost by skipping tuples that the join eliminates. With function caching, the effective cost of a semantic filter depends on the number of distinct relevant tuples in the intermediate result rather than the total number of tuples. Note that, classical query optimization cost models that assume per-tuple evaluation cost no longer apply, and placement decisions must account for how joins and filters change the set of distinct tuples. These cost characteristics motivate a formal optimization framework. 
+
+## 3 PROBLEM SPECIFICATION 
+
+In this section, we first provide a formal definition of the hybrid plan optimization problem, then show how to simplify it by reducing the general semantic operator placement problem to semantic filter placement only. 
+
+## 3.1 Problem Definition 
+
+We formalize the hybrid plan optimization problem as follows. 
+
+Problem 1 (Hybrid Plan Optimization) . Given a hybrid query plan tree T and a user-specified parameter 𝛼 > 0, find the plan T ∗ that minimizes: 
+
+𝐶 (T ∗) = 𝐶 LLM (T ∗) + 𝛼 · 𝐶 rel (T ∗),
+
+where 𝐶 LLM is the total number of distinct rows processed by seman-tic operators under function caching, and 𝐶 rel is the total number of rows processed by relational operators. The search space consists of all plans obtainable by repositioning semantic operators in T
+
+that produce the same output. Both costs are measured in rows, and 𝛼 converts between the per-row cost of each type of operator. In practice, 𝛼 reflects the relative price of CPU-based relational processing versus LLM inference: a small 𝛼 prioritizes reducing LLM calls, while a large 𝛼 prioritizes reducing relational cost. 
+
+## 3.2 Problem Simplification 
+
+Solving Problem 1 in full generality requires jointly optimizing join ordering and semantic operator placement. In this work, we fix the join order as given by the underlying optimizer and focus on semantic operator placement. We further simplify the problem through two reductions. 
+
+Pulling up semantic projections. The first reduction is designed for semantic projections. Pulling up a semantic projection to the highest feasible position in the plan tree reduces LLM cost: with function caching, SP is evaluated only on distinct tuples, and placing it higher means the operators below reduce the number of distinct tuples that reach it. Since SP does not change cardinality and only adds columns, the rewriting is semantics-preserving provided no intervening operator references the new columns. Meanwhile, a semantic projection SP 𝜙 generates new columns that may be refer-enced by downstream operators. When a relational operator does reference a column produced by SP , the two must be pulled up together. We determine the final position via a topological sort 3 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al.              
+
+> 1SELECT b.title,
+> 2SEMANTIC_INT ('Rate {r.text} sentiment 1-5') AS score
+> 3FROM books b JOIN reviews r ON b.id = r.book_id
+> 4WHERE score >= 4;
+
+Listing 2: Semantic projection with a relational filter. (a) Before   
+
+> 1
+> 𝜎 score ≥4books
+> SP :score
+> reviews
+
+# ⇒  
+
+> (b) After
+> 𝜎 score ≥4
+> SP :score
+> 1
+> reviews books
+
+Figure 2: Pulling up SP and its dependent 𝜎 . (a) SP computes a sentiment score on all reviews before the join. (b) After pull-up, SP evaluates only reviews that have a matching book. (a) Before     
+
+> 𝜎 m.yr ≥r.yr
+> SJ :{r} mentions {m}?
+> movies reviews
+
+# ⇒    
+
+> (b) After
+> SF :{r} mentions {m}?
+> 𝜎 m.yr ≥r.yr
+> ×
+> movies reviews
+
+Figure 3: Decomposing a semantic join. (a) 𝜎 sits above the monolithic SJ , which evaluates the semantic predicate on all pairs. (b) After decomposition, 𝜎 is placed between × and SF ,filtering pairs before LLM evaluation. 
+
+that respects these column dependencies. Consider the query in Listing 2 and the illustration of its transformation in Figure 2. This query computes a sentiment score via SP and then filters on it. To pull up the SP above the join, we first pull up the filter 𝜎 score ≥4 that refers to it. 
+
+Decomposing semantic joins. The second reduction is designed for semantic joins. By definition, SJ 𝜙 (𝑅, 𝑆 ) = SF 𝜙 (𝑅 × 𝑆 ), so this rewriting is trivially semantics-preserving. Figure 3 shows an exam-ple where a relational filter 𝜎 coexists with a semantic join. After decomposition, the semantic predicate becomes a separate SF that can be repositioned independently, just like any other semantic filter. Note that the relational cost of the cross join is negligible compared to the SJ it replaces, since the original SJ already eval-uates every pair with an LLM call. Once decoupled, the SF can be repositioned by the optimizer, e.g., any relational filters can be pushed between × and SF to reduce the number of pairs before LLM evaluation. 
+
+Reduced problem. We apply these two reductions repeatedly until no SJ or movable SP remains. In particular, decomposing an SJ 
+
+produces a new SF , which can then be pulled up just like any other 
+
+SF . Pulling up that SF may also enable pulling up an SP whose new column was previously used in the SJ . After convergence, all 
+
+SP positions are fixed, and every SJ has been rewritten into SF .The remaining optimization concerns only SF placement: finding where to position each semantic filter within the fixed plan tree to minimize 𝐶 LLM + 𝛼 · 𝐶 rel . We address this in Section 4. 
+
+## 4 METHODOLOGY 
+
+After the simplification in Section 3.2, the plan tree only has rela-tional operators and semantic filters to consider: semantic projec-tions have been fixed at their final highest positions, and semantic joins have been decomposed. All results in this section apply to this simplified tree. We now address the reduced problem of finding the optimal placement for each semantic filter. We first show in Sec-tion 4.1 that, with function caching, pulling up always minimizes LLM cost. We then present in Section 4.2 a cost model that balances LLM and relational cost via dynamic programming. 
+
+## 4.1 Pulling Up Semantic Filters 
+
+Recall from Section 2.3 that function caching evaluates each distinct input at most once. As a result, the cost of a semantic filter is determined not by the number of tuples it processes, but by the number of distinct inputs it receives. Let SF 𝜙 reference a set of columns 𝐶 . When evaluated at a plan node 𝑢 , the number of LLM calls equals the number of distinct non-null 𝜋 𝐶 -projections in the intermediate result at 𝑢 , which we denote by 𝑑 𝐶 (𝑢 ). We exclude null projections because, under SQL null semantics, they require no LLM call, i.e., SF 𝜙 (NULL ) = NULL .Thus, optimizing the placement of SF 𝜙 reduces to minimizing 𝑑 𝐶 (𝑢 ).A natural question is whether placing SF 𝜙 higher in the plan al-ways reduces its cost. The following theorem shows that, as long as we only move SF 𝜙 across standard relational operators, the number of distinct inputs it observes can only decrease. 
+
+Theorem 4.1 (Pull-up optimality) . For any ancestor 𝑢 ′ of 𝑢 in the plan tree, if the path from 𝑢 to 𝑢 ′ contains no block operator, then 
+
+𝑑 𝐶 (𝑢 ′) ≤ 𝑑 𝐶 (𝑢 ).
+
+Proof. Let 𝐷 𝐶 (𝑣 ) denote the set of distinct 𝜋 𝐶 -projections in the intermediate result at node 𝑣 . It suffices to show that each operator on the path preserves or shrinks 𝐷 𝐶 .A filter 𝜎 removes tuples, so 𝐷 𝐶 (𝜎 (𝑅 )) ⊆ 𝐷 𝐶 (𝑅 ). A projec-tion 𝜋 that retains all columns in 𝐶 preserves distinct values, i.e., 
+
+𝐷 𝐶 (𝜋 (𝑅 )) = 𝐷 𝐶 (𝑅 ). An inner join may replicate tuples but does not introduce new values for columns in 𝐶 , so 𝐷 𝐶 cannot increase. For outer joins, unmatched tuples introduce rows with NULL values in the padded columns; since SF 𝜙 (NULL ) = NULL and 𝑑 𝐶 counts only non-NULL projections, such rows do not contribute to the count. Applying these observations along the path from 𝑢 to 𝑢 ′ yields 
+
+𝑑 𝐶 (𝑢 ′) ≤ 𝑑 𝐶 (𝑢 ). □
+
+The monotonicity in Theorem 4.1 characterizes when semantic filters can be safely pulled upward to reduce cost. However, it does not hold across operators that change tuple identity, ordering, or 4 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+Algorithm 1: Semantic filter pull-up. 
+
+Input: Plan tree T with semantic filters SF 1, . . . , SF 𝑛 
+
+Output: Modified plan tree with all filters pulled up  
+
+> 1
+
+changed ← true ; 
+
+> 2
+
+while changed do  
+
+> 3
+
+changed ← false ; 
+
+> 4
+
+foreach SF 𝑖 in T do  
+
+> 5
+
+𝑝 ← parent (SF 𝑖 ); 
+
+> 6
+
+if 𝑝 ≠ root and 𝑝 is not a block operator and 𝑝 is not an SF then  
+
+> 7
+
+if 𝑝 is a projection 𝜋 then  
+
+> 8
+
+add columns referenced by SF 𝑖 to 𝜋 ; 
+
+> 9
+
+swap SF 𝑖 with 𝑝 ; 
+
+> 10
+
+changed ← true ; 
+
+> 11
+
+return T ;cardinality. We refer to aggregations, LIMIT , ORDER BY , and window functions as block operators , as they prevent such pull-up. Although   
+
+> ORDER BY
+
+alone does not change tuple identity, moving a filter above it may alter which tuples are returned when combined with 
+
+> LIMIT
+
+; we therefore conservatively treat it as a block operator. Finally, pulling up SF 𝜙 across non-block relational operators is semantics-preserving. Since SF 𝜙 depends only on columns in 𝐶 ,it removes the same tuples regardless of where it is applied. For outer joins, null-padded tuples are handled by SQL null seman-tics ( SF 𝜙 (NULL ) = NULL ), so their treatment is unaffected by the placement of SF 𝜙 .
+
+Pull-up algorithm. Based on Theorem 4.1, we greedily pull ev-ery semantic filter as high as possible. Algorithm 1 describes the procedure. The outer loop (Line 2) repeats until no swap occurs in a full pass. In each pass, the algorithm scans every SF 𝑖 (Line 4) and checks whether its parent 𝑝 is swappable (Line 6): the swap is skipped if 𝑝 is the root, a block operator, or another SF . Specifically, we do not consider reordering between semantic filters, as their relative order does not affect LLM cost under function caching. If 𝑝 
+
+is a projection, the columns referenced by SF 𝑖 are added to 𝜋 before the swap (Lines 7–8) so the predicate remains evaluable. The swap itself happens at Line 9, and Line 10 marks progress for the outer loop. The outer loop is necessary because moving one filter may unblock another. For example, if SF 1 sits below a join that is below 
+
+SF 2, pulling SF 2 above a higher operator in one iteration makes the join the new parent of SF 1, which can then be swapped in the next. 
+
+Theorem 4.2 (Complexity of Algorithm 1) . Algorithm 1 terminates in O( 𝑛 2 · 𝑑 ) time, where 𝑛 is the number of semantic filters and 𝑑 is the depth of the plan tree. 
+
+Proof. Each semantic filter can be pulled up at most 𝑑 levels before reaching the root or an aggregation. Since only swaps with non-SF operators count as progress, and there are 𝑛 filters, the outer loop executes at most 𝑛 · 𝑑 rounds. Each round scans all 𝑛 filters, giving O( 𝑛 2 · 𝑑 ) total work. □
+
+Why pull-up alone is not sufficient. While Theorem 4.1 shows that pull-up minimizes LLM cost, it can significantly increase relational cost. When all filters are pulled above the joins, the joins must process full, unfiltered tables, and intermediate result sizes can grow rapidly with the number of tables. This motivates a cost model that balances the two objectives, which we present next. 
+
+## 4.2 DP-based Cost Model 
+
+We now present a dynamic-programming (DP) algorithm that finds the optimal placement of each semantic filter, balancing LLM and relational cost as defined in Problem 1. 
+
+Overview. The key idea is to traverse the plan tree bottom-up and, at each node 𝑢 , decide which subset of semantic filters to apply at that position, i.e., applying a filter before a join reduces the join’s input size but incurs LLM calls on more tuples, since fewer prior operators have reduced the distinct count; while deferring it above the join saves LLM calls via function caching but leaves the join input unfiltered, increasing relational cost. The DP explores all valid assignments of filters to nodes and selects the one minimizing 
+
+𝐶 LLM + 𝛼 ·𝐶 rel . To do so, the algorithm processes each node 𝑢 by the following three steps: Step 1 combines the costs from child subtrees. Step 2 adds the relational cost of operator 𝑢 . Step 3 considers placing additional semantic filters at 𝑢 .
+
+Notation. The DP computes the combined LLM and relational cost at each node for a given set of placed filters. Let 𝑛 denote the number of semantic filters after the simplification in Section 3.2, and let SF 1, . . . , SF 𝑛 be these filters. For each SF 𝑖 , let 𝑠 𝑖 ∈ [ 0, 1] denote its selectivity, defined as the fraction of distinct tuples it retains under function caching. Assuming independence between filters, the combined selectivity on a table set 𝐴 for a set 𝑆 ⊆ { 1, . . . , 𝑛 } is sel (𝐴, 𝑆 ) =
+
+Ö   
+
+> 𝑖 ∈𝑆, ref (SF 𝑖 )∩ 𝐴 ≠∅
+
+𝑠 𝑖 ,
+
+where ref (SF 𝑖 ) denotes the set of base tables that SF 𝑖 references. To instantiate the cost model, we also need to estimate cardi-nalities. For a node 𝑢 , let tab (𝑢 ) denote the set of base tables in its subtree. For the LLM cost of placing SF 𝑖 at node 𝑢 , we need the number of distinct rows from the tables that SF 𝑖 references. We denote this 𝑁 𝑢, SF 𝑖 : the estimated number of distinct rows at 𝑢 
+
+projected onto ref (SF 𝑖 ).Finally, let 𝑐 (𝑢 ) denote the per-operator execution cost of 𝑢 on its original input that only consider the effect of other relational operators but is unfiltered by SF s. This can be estimated by the relational optimizer. 
+
+DP state and validity. Let 𝑑𝑝 𝑢,𝑆 denote the minimum cost of executing the subtree rooted at 𝑢 when the semantic filters in 𝑆 
+
+have been applied at or below 𝑢 . Here, not every combination of 𝑢 and 𝑆 is valid and we only consider filters whose original positions are within 𝑢 ’s subtree. A state 𝑑𝑝 𝑢,𝑆 is valid only if, for each 𝑖 ∈ 𝑆 , node 𝑢 lies above SF 𝑖 ’s original position. Invalid states are skipped during the computation. The base case is 𝑑𝑝 𝑢, ∅ = 0.The DP accumulates 𝐶 LLM + 𝛼 · 𝐶 rel based on its definition, where in step 2, we add the relational cost scaled by 𝛼 , while in step 3, we add the LLM cost directly. Algorithm 2 gives the complete procedure. The algorithm initial-izes all states to +∞ except 𝑑𝑝 𝑢, ∅ = 0 (Line 1), then traverses the 5 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al.                       
+
+> Input
+> 𝑢 :1
+> SF 1(𝑠 1)SF 2(𝑠 2)
+> 𝐿 (|𝐿 |)𝑅 (|𝑅 |)
+> (1) Distribute
+> 𝑑𝑝 𝐿, {1}+𝑑𝑝 𝑅, ∅
+> 𝑑𝑝 𝑢, {1}
+> (2) Relational cost
+> +𝛼 ·𝑐 (𝑢 ) · 𝑠 1
+> 𝑑𝑝 𝑢, {1}
+> (3) Place SF 2at 𝑢
+> 𝑑𝑝 𝑢, {1}+𝑁 𝑢, SF 2
+> 𝑑𝑝 𝑢, {1,2}
+> Output
+> SF 2
+> 1
+> SF 1
+> 𝐿
+> 𝑅
+
+Figure 4: Illustrating the DP cost model from Algorithm 2 at join node 𝑢 . Starting from the input plan (left) where both filters are pushed down, the DP considers pulling SF 2 up to 𝑢 . (1) Distribute SF 1 to 𝐿 , leaving 𝑅 unfiltered. (2) Add relational cost of 𝑢 ,scaled by 𝛼 and reduced by 𝑠 1. (3) Place SF 2 at 𝑢 ; the join eliminates unmatched tuples, so the number of distinct 𝑅 -tuples at 𝑢 .The output plan (right) shows the resulting placement. The DP explores all such traces and picks the minimum. Algorithm 2: DP-based semantic filter placement. 
+
+Input: Plan tree T , semantic filters SF 1, . . . , SF 𝑛 ,selectivities 𝑠 1, . . . , 𝑠 𝑛 , parameter 𝛼 
+
+Output: Optimal placement minimizing 𝐶 LLM + 𝛼 · 𝐶 rel  
+
+> 1
+
+Initialize 𝑑𝑝 𝑢, ∅ ← 0, 𝑑𝑝 𝑢,𝑆 ← +∞ for 𝑆 ≠ ∅, for all nodes 𝑢 ; 
+
+> 2
+
+foreach node 𝑢 in bottom-up order do  
+
+> 3
+
+foreach 𝑆 ⊆ { 1, . . . , 𝑛 } in increasing size do        
+
+> // Step 1: distribute filters to children
+> 4
+
+if 𝑢 is binary with children 𝑣 1, 𝑣 2 then  
+
+> 5
+
+𝑑𝑝 𝑢,𝑆 ← min  𝑑𝑝 𝑢,𝑆 , min 𝑆 1 ⊆𝑆 𝑑𝑝 𝑣 1,𝑆 1 + 𝑑𝑝 𝑣 2,𝑆 \𝑆 1
+
+; 
+
+> 6
+
+else if 𝑢 is unary with child 𝑣 1 then  
+
+> 7
+
+𝑑𝑝 𝑢,𝑆 ← 𝑑𝑝 𝑣 1,𝑆 ;       
+
+> // Step 2: add relational cost at
+
+𝑢  
+
+> 8
+
+𝑑𝑝 𝑢,𝑆 ← 𝑑𝑝 𝑢,𝑆 + 𝛼 · 𝑐 (𝑢 ) · sel (tab (𝑢 ), 𝑆 );     
+
+> // Step 3: consider placing
+
+max (𝑆 ) at 𝑢  
+
+> 9
+
+if 𝑆 ≠ ∅ then  
+
+> 10
+
+𝑖 ← max (𝑆 ); 
+
+> 11
+
+ℓ ← 𝑁 𝑢, SF 𝑖 · sel (ref (SF 𝑖 ), 𝑆 \ { 𝑖 }) ; 
+
+> 12
+
+𝑑𝑝 𝑢,𝑆 ← min (𝑑𝑝 𝑢,𝑆 , 𝑑𝑝 𝑢,𝑆 \{ 𝑖 } + ℓ); 
+
+> 13
+
+return 𝑑𝑝 𝑟, {1,...,𝑛 } and trace back placement; plan tree bottom-up (Line 2), processing subsets in increasing size (Line 3). We now explain each step in detail. 
+
+Step 1: distributing filters to children. Each node has at most two children. For a binary node 𝑢 with children 𝑣 1, 𝑣 2 (Line 5), we distribute the filters among them: 
+
+𝑑𝑝 𝑢,𝑆 ← min 
+
+
+
+𝑑𝑝 𝑢,𝑆 , min   
+
+> 𝑆 1⊆𝑆
+
+𝑑𝑝 𝑣 1,𝑆 1 + 𝑑𝑝 𝑣 2,𝑆 \𝑆 1
+
+
+
+,
+
+where 𝑆 1 is assigned to 𝑣 1 and the remainder 𝑆 \ 𝑆 1 goes to 𝑣 2.Filters whose columns span both children, such as those from SJ 
+
+decomposition, cannot go to either child alone, so their child states remain +∞ . Such filters are placed at 𝑢 via step 3, which runs at smaller subsets before step 1 sees them in 𝑆 . For a unary node, all filters pass through: 𝑑𝑝 𝑢,𝑆 = 𝑑𝑝 𝑣 1,𝑆 .
+
+Step 2: relational cost at 𝑢 . After combining the child costs, we add the relational cost of operator 𝑢 itself. Since the DP iterates over subsets 𝑆 in increasing size order (Line 3), step 3 for subset 
+
+𝑆 ′ ⊂ 𝑆 runs before steps 1–2 for 𝑆 , so all filters in 𝑆 have valid 𝑑𝑝 
+
+values from earlier iterations. The filters in 𝑆 reduce the input, so the adjusted cost is (Line 8): 
+
+𝑑𝑝 𝑢,𝑆 ← 𝑑𝑝 𝑢,𝑆 + 𝛼 · 𝑐 (𝑢 ) · sel (tab (𝑢 ), 𝑆 ).
+
+The factor sel (tab (𝑢 ), 𝑆 ) accounts for the reduction in input size from the semantic filters already placed below 𝑢 .
+
+Step 3: applying a semantic filter at 𝑢 . For each non-empty 𝑆 , we consider whether the filter SF 𝑖 with 𝑖 = max (𝑆 ) was placed at 𝑢 
+
+(Line 9). By always considering the largest-index filter in 𝑆 , each subset is reached via exactly one transition, avoiding redundant computation. The LLM cost of evaluating SF 𝑖 at 𝑢 equals the number of distinct projections on the columns that SF 𝑖 references. We ap-proximate this by the number of distinct rows from the referenced tables at 𝑢 :LLM cost of SF 𝑖 at 𝑢 = 𝑁 𝑢, SF 𝑖 · sel (ref (SF 𝑖 ), 𝑆 \ { 𝑖 }) .
+
+The transition (Lines 11–12) updates 𝑑𝑝 𝑢,𝑆 by considering placing 
+
+SF 𝑖 (where 𝑖 = max (𝑆 )) at 𝑢 :
+
+𝑑𝑝 𝑢,𝑆 ← min  𝑑𝑝 𝑢,𝑆 ,𝑑𝑝 𝑢,𝑆 \{ 𝑖 } + 𝑁 𝑢, SF 𝑖 · sel (ref (SF 𝑖 ), 𝑆 \ { 𝑖 }) .
+
+Finally, the optimal cost is 𝑑𝑝 𝑟, {1,...,𝑛 } (Line 13), meaning all 𝑛 
+
+filters have been placed. The actual placement is recovered by tracing back the choices at each node. Figure 4 provides an illustrative example showing the three DP steps above at a join node 𝑢 with children 𝐿 and 𝑅 . The input plan has both SF 1 and SF 2 pushed down. The figure traces one alternative: keep SF 1 pushed to 𝐿 (step (1) ), add the join cost scaled by 𝛼 and 𝑠 1 (step (2) ), then place SF 2 at 𝑢 (step (3) ). The output plan on the right shows this placement. The DP explores all such alternatives and selects the minimum-cost plan. 
+
+Theorem 4.3 (Complexity of Algorithm 2) . The DP runs in O(| 𝑉 | · 
+
+2𝑛 + 3𝑛 ) time, where |𝑉 | is the number of nodes in the plan tree and 
+
+𝑛 is the number of semantic filters. 
+
+Proof. We first analyze steps 2 and 3. At each node, step 2 iterates over 2𝑛 subsets in O( 1) each. In step 3, each non-empty 
+
+𝑆 considers only one transition, namely placing max (𝑆 ), so step 3 costs O( 2𝑛 ) per node. Over all |𝑉 | nodes, the total cost of steps 2–3 is O(| 𝑉 | · 2𝑛 ).6 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. For step 1, let 𝑚 (𝑢 ) denote the number of semantic filters whose valid range includes binary node 𝑢 . Specifically, step 1 at 𝑢 enu-merates all 𝑆 1 ⊆ 𝑆 for each valid 𝑆 , costing Í𝑚 (𝑢 )
+
+> 𝑘 =0
+
+ 𝑚 (𝑢 )
+
+> 𝑘
+
+2𝑘 = 3𝑚 (𝑢 ) .At a binary node 𝑢 with children 𝑣 1, 𝑣 2, filters partition: each filter valid at 𝑢 goes to at most one child, so 𝑚 (𝑣 1) + 𝑚 (𝑣 2) ≤ 𝑚 (𝑢 ). Let 
+
+𝑇 (𝑢 ) be the total cost of all step 1 computations in the subtree of 𝑢 .We have 𝑇 (𝑢 ) = 3𝑚 (𝑢 ) + 𝑇 (𝑣 1) + 𝑇 (𝑣 2) ≤ 2 · 3𝑚 (𝑢 ) .Therefore, the total time complexity is O(| 𝑉 | · 2𝑛 + 3𝑛 ). □
+
+## 5 IMPLEMENTATION 
+
+We implement Horrila as an extension to DuckDB [ 20 ], modifying its parser, binder, optimizer, and executor with approximately 3,000 lines of C++ code. 
+
+Parsing and binding. We extend DuckDB’s SQL parser to support semantic operators as native scalar functions: SEMANTIC for SF and 
+
+SJ , and typed variants for SP . During parsing, we split hybrid WHERE 
+
+clauses into minimal units so that each semantic predicate becomes a separate SF node that can be independently repositioned. When Algorithm 1 pulls an SF above a projection 𝜋 , the columns refer-enced by SF must remain available. We clear and rebuild DuckDB’s projection map after each swap to ensure these columns are not pruned. 
+
+Optimizer integration. Horrila integrates into DuckDB’s opti-mization pipeline without modifying the native optimizer. After DuckDB produces a plan with join order and predicate pushdown, 
+
+Horrila runs as a post-processing step. Semantic filters start at the positions assigned by DuckDB’s regular optimizer, which typically pushes them down to their lowest feasible positions. Horrila then considers pulling each filter up from there. It first applies the sim-plifications from Section 3.2: SP pull-up and SJ decomposition. The user then selects one of two optimization strategies. The pull-up algorithm from Algorithm 1 greedily moves all semantic filters as high as possible. The DP cost model from Algorithm 2 selec-tively places each filter to balance LLM and relational cost using DuckDB’s cardinality estimates for 𝑁 𝑢 and 𝑐 (𝑢 ). We evaluate both strategies in Section 6. 
+
+Cost and cardinality estimation. The DP requires three types of estimates as shown in Section 4.2. The relational cost 𝑐 (𝑢 ) at each node is obtained directly from DuckDB’s native cardinality estima-tor. For semantic filter selectivities, following the approach of join order optimization with minimal statistics [ 4], we set 𝑠 𝑖 = 0.2 for all 
+
+SF . We additionally introduce 𝑠 1 = 0.1 to estimate how much each join reduces the distinct count from one side. Cross join (e.g., from 
+
+SJ decomposition) is a special case that has selectivity 1 because it does not reduce the count. For distinct-count estimates 𝑁 𝑢, SF 𝑖 ,which represent the number of distinct rows at node 𝑢 projected onto the tables referred to by SF 𝑖 , we traverse the path from the base table to 𝑢 and multiply the size of the base table by 𝑠 𝑖 at each semantic filter and by 𝑠 1 at each join along the path. This provides a simple, statistics-free estimate that is consistent with the selec-tivity model used in the DP recurrence. Fine-grained estimation via sampling or learned models is complementary and can replace these fixed defaults. We evaluate sensitivity to these estimates in Section 6.5. 
+
+Function caching. We implement function caching using a single concurrent hash table shared across all operators in the execution pipeline, with bucket-level locking for parallel reads and writes during vectorized execution. The cache is keyed by the rendered prompt string, which includes both the predicate 𝜙 and the input tuple values, so different predicates never share cache entries. On a cache hit, the LLM call is skipped entirely. The cache is scoped per query execution and cleared between queries. However, function caching is not free: cache lookups add re-lational overhead when a semantic filter is pulled above a join, since every output row triggers a cache probe. The cost model ac-counts for this by including lookup cost in the relational cost at the join node, estimated by the join output size times the number of semantic filters at ancestors of that join. 
+
+Execution. Lastly, query execution follows DuckDB’s push-based vectorized pipeline. Semantic operators are executed as scalar func-tions within the pipeline, with function caching intercepting redun-dant LLM calls. In Horrila , no changes to DuckDB’s execution engine are required beyond registering the semantic functions and the function cache lookup. 
+
+## 6 EVALUATION 
+
+We evaluate Horrila on two benchmarks and address the following research questions: 
+
+• RQ1: Does Horrila improve latency and reduce LLM cost while maintaining accuracy compared to existing systems? 
+
+• RQ2: Does accuracy hold against human-annotated ground truth, not just the baseline output? 
+
+• RQ3: When does pull-up suffice, and when does the cost model provide additional benefit? 
+
+• RQ4: How sensitive is the cost model to its parameters ( 𝛼 , selec-tivity estimates), and what is the optimizer overhead? 
+
+## 6.1 Experimental Setup 
+
+Environment. All experiments run on an AWS r7i.8xlarge in-stance (32 vCPUs, 256 GB RAM). We use GPT-5-mini as the LLM backend via the OpenAI API. The cost model parameter is set to 
+
+𝛼 = 10 −7, reflecting the large gap between per-row relational pro-cessing cost and per-call LLM inference cost. 
+
+Hybrid query benchmark. Existing semantic query benchmarks such as SemBench [ 11 ] focus on simple queries with few relational and semantic operators (most ≤ 3), which offer limited optimization opportunity for plan-level placement. To stress-test Horrila on complex hybrid plans, we construct a benchmark of 30 semantic SQL queries spanning four schemas based on DataAgentBench [ 16 ]and TPC-H [ 25 ]. The original queries from [ 16 ] are written in natural language or basic SQL for a database agent benchmark. We adapt them into hybrid SQL by translating natural language intent into semantic operators ( SP , SF , SJ ) composed with relational operators. For TPC-H, we augment standard analytical queries with semantic predicates over text-rich columns. Table 1 summarizes the schema sizes. The queries cover all three semantic operator types. Q1–Q3 use SP to summarize or score text fields. Q4–Q30 use SF s. Q16–Q17, Q25, and Q27–Q30 additionally use SJ to match tuples across tables. Query complexity ranges from single-table 7 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+Table 1: Hybrid query benchmark: schema statistics (Avg Rows rounded to nearest integer).                
+
+> Schema Tables Avg Rows Source
+> BookReview 3682 [16] Yelp 31,594 [16] GoogleLocal 21,040 [16] TPC-H (SF=0.005) 810,851 [25]
+
+queries with one semantic operator to multi-way joins with up to 9 relational joins and 4 semantic filters. Figure 5 shows the operator composition of each query in the hybrid query benchmark. 
+
+SemBench E-Commerce. In our hybrid queries, we test the quality by referring to the results of the baseline DuckDB UDF execution as ground truth, which has no semantic-related query rewriting that will introduce additional errors. All errors come from LLM non-determinism across separate executions. To further validate the accuracy against ground truth, we additionally evaluate on the E-Commerce subset of SemBench [ 11 ], which has human-annotated labels. This independent benchmark contains 14 queries over an e-commerce product catalog. These queries are simpler than ours and typically involve fewer than 3 relational operators, so the main question is whether Horrila maintains high accuracy while still reducing cost and latency. 
+
+Baselines. We compare against the following systems. All use GPT-5-mini as the sole LLM backend. 
+
+• DuckDB + Cache : semantic operators executed as DuckDB UDFs with function caching enabled but no placement optimization. This isolates the gains from Horrila ’s placement decisions. 
+
+• ThalamusDB [8 ] (v0.1.15): approximate query processing for multi-modal data. Does not support SP , so queries with semantic projections are excluded. 
+
+• FlockMTL [ 3] (v0.7.0): LLM operator integration in DuckDB with its own prompt and batching optimizations. 
+
+• Palimpzest [ 15 ] and Abacus [ 21 ] (v1.4.0): declarative LLM ana-lytics with cost-based planning. Palimpzest optimizes individual operator implementations, while Abacus adds cost-based physi-cal plan selection. We evaluate both. 
+
+• Lotus [18 ] (v1.1.3): model cascading that routes easy cases to a cheaper proxy model and harder cases to GPT-5-mini. Follow-ing the SemBench configuration [ 11 ], Lotus uses e5-base-v2 for text embeddings and CLIP-ViT-B-32 for image embeddings. Be-cause its multi-model setup makes cost and latency not directly comparable, we include Lotus on SemBench only for accuracy comparison. 
+
+Metrics. We report three metrics. Speedup is the geometric mean of per-query latency ratio vs. DuckDB + Cache. Cost Reduction is the geometric mean of per-query LLM cost ratio vs. DuckDB + Cache. LLM cost is the total dollar amount charged by the OpenAI API for all calls in a query execution, including input and output tokens. 
+
+Quality is the arithmetic mean of F1 score, measured against the DuckDB + Cache output as ground truth for the 30-query hybrid 
+
+Table 2: Overall performance on the 30-query hybrid bench-mark. Speedup and cost reduction are geometric means vs. DuckDB + Cache baseline. F1 is the arithmetic mean.                           
+
+> Method Speedup Cost Red. Avg F1
+> Baseline (DuckDB + Cache) 1.00 ×1.00 ×1.000
+> Horrila -Cost 1.50 ×4.18 ×0.848
+> Horrila -Pullup 1.16 ×4.29 ×0.849 ThalamusDB †1.50 ×10.10 ×0.515 FlockMTL 0.64 ×7.31 ×0.343 Palimpzest 1.70 ×2.15 ×0.533 Abacus 0.15 ×0.43 ×0.561
+> †SP not supported by ThalamusDB; Q1–Q3 excluded.
+
+benchmark. For SemBench, we report the quality metric defined by the benchmark against human-annotated ground truth. 
+
+## 6.2 Hybrid Query Benchmark Results 
+
+We run each system on all 30 queries with a 3,000s timeout per query and report speedup, cost reduction, and F1 against the DuckDB + Cache baseline. Table 2 summarizes the results. Horrila -Cost achieves 1.50 × speedup and 4.18 × cost reduction, while Horrila -Pullup achieves 1.16 × speedup and 4.29 × cost reduction. Both main-tain an average F1 of ≈ 0.85 , substantially higher than all competing systems. Among the baselines, ThalamusDB achieves the highest cost reduction at 10 .10 × but at only 0.52 F1, indicating that roughly half the results are incorrect. FlockMTL is slower than the baseline at 
+
+0.64 × with the lowest accuracy at 0.34 F1. Palimpzest achieves the fastest execution at 1.70 × but only moderate cost reduction at 2.15 ×
+
+and 0.53 F1. Abacus is both slower at 0.15 × and more expensive at 
+
+0.43 × than the baseline. Figure 6 shows per-query latency and cost on a log scale. Hor-rila variants consistently produce valid results across all 30 bench-mark queries, while competing systems frequently produce unus-able outputs on multi-table queries. We use F1 ≥ 0.4 as the threshold for showing a bar in Figure 6: below this level, more than half the result rows are incorrect, making the output unreliable for down-stream use. Methods that fail this threshold are marked with ×. The advantage of plan-level placement is most pronounced on complex queries with 5+ joins and multiple SF s, where the interplay be-tween LLM cost and relational cost creates significant optimization opportunity. 
+
+## 6.3 SemBench E-Commerce Results 
+
+The F1 scores on the 30-query benchmark are measured against baseline output. To validate accuracy against human annotations, we evaluate on SemBench E-Commerce (Table 3). Horrila -Cost achieves 0.840 quality, close to the baseline 0.865 , with 1.11 × speedup. These queries are simple with few joins, leaving little room for place-ment optimization. The small gains confirm that Horrila preserves accuracy on simple queries. Lotus and Palimpzest are faster but at lower quality; ThalamusDB and Abacus fall below the baseline on all metrics. 8 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+> Q1
+> Q2
+> Q3
+> Q4
+> Q5
+> Q6
+> Q7
+> Q8
+> Q9
+> Q10
+> Q11
+> Q12
+> Q13
+> Q14
+> Q15
+> Q16
+> Q17
+> Q18
+> Q19
+> Q20
+> Q21
+> Q22
+> Q23
+> Q24
+> Q25
+> Q26
+> Q27
+> Q28
+> Q29
+> Q30
+
+0
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+> # Operators
+
+SP SF SJ 𝜎 1
+
+Figure 5: Hybrid query benchmark: operator composition per query. Each stacked bar shows the count of SP , SF , SJ , 𝜎 , and 1
+
+operators. Q17–Q19 and Q26–Q30 are the most complex, with up to 9 joins and 4 semantic filters. 
+
+> Q1
+> Q2
+> Q3
+> Q4
+> Q5
+> Q6
+> Q7
+> Q8
+> Q9
+> Q10
+> Q11
+> Q12
+> Q13
+> Q14
+> Q15 10 0
+> 10 1
+> 10 2
+> 10 3
+> Time (s)
+
+Baseline (DuckDB + Cache) Horrila -Cost (Ours) Horrila -Pullup (Ours) ThalamusDB FlockMTL Palimpzest Abacus 
+
+(a) Latency Q1–Q15 
+
+> Q1
+> Q2
+> Q3
+> Q4
+> Q5
+> Q6
+> Q7
+> Q8
+> Q9
+> Q10
+> Q11
+> Q12
+> Q13
+> Q14
+> Q15
+> 10 −4
+> 10 −3
+> 10 −2
+> 10 −1
+> 10 0
+> 10 1
+> Cost ($)
+
+(b) Cost Q1–Q15 
+
+> Q16
+> Q17
+> Q18
+> Q19
+> Q20
+> Q21
+> Q22
+> Q23
+> Q24
+> Q25
+> Q26
+> Q27
+> Q28
+> Q29
+> Q30 10 0
+> 10 1
+> 10 2
+> 10 3
+> Time (s)
+
+(c) Latency Q16–Q30 
+
+> Q16
+> Q17
+> Q18
+> Q19
+> Q20
+> Q21
+> Q22
+> Q23
+> Q24
+> Q25
+> Q26
+> Q27
+> Q28
+> Q29
+> Q30
+> 10 −4
+> 10 −3
+> 10 −2
+> 10 −1
+> 10 0
+> 10 1
+> Cost ($)
+
+(d) Cost Q16–Q30 
+
+Figure 6: Per-query latency (s) and LLM cost ($) on log scale across the 30-query hybrid benchmark. Subfigures (a, c) show latency; subfigures (b, d) show cost (hatched bars). Bars are shown only for methods with F1 ≥ 0.4 on that query; an × marks methods that failed this threshold. 
+
+## 6.4 Pull-up vs. Cost Model The two optimization strategies target different query regimes. We illustrate with two concrete examples. 9 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+Table 3: SemBench E-Commerce performance (14 queries). Quality is the arithmetic mean of per-query scores (F1 or Adjusted Rand Index); failed or timed-out queries score 0. 
+
+Method Speedup Cost Red. Quality 
+
+Baseline (DuckDB + Cache) 1.00 × 1.00 × 0.865 
+
+Horrila -Cost 1.11 × 1.04 × 0.840 
+
+Horrila -Pullup 1.10 × 1.04 × 0.796 ThalamusDB † 0.40 × 0.30 × 0.140 Palimpzest 2.26 × 0.29 × 0.500 Lotus 2.27 × 1.67 × 0.574 Abacus † 0.67 × 0.48 × 0.309                                                     
+
+> †Not all queries supported.
+> 1WITH candidates AS (
+> 2SELECT CAST (SPLIT_PART(b.book_id, '_' ,2) AS INTEGER )
+> 3AS book_idx, b.book_id, b.title
+> 4FROM books_info b
+> 5WHERE b.title IS NOT NULL
+> 6AND SEMANTIC ('Confirm this is the second edition of
+> 7Make: Electronics ... Title: {b.title}
+> 8Subtitle: {b.subtitle} Author: {b.author}
+> 9Categories: {b.categories}' )
+> 10 ),
+> 11 reviews_filtered AS (
+> 12 SELECT *FROM reviews r
+> 13 WHERE r.verified_purchase = 1
+> 14 AND CAST (r.rating AS DOUBLE) >= 5
+> 15 AND r.helpful_vote >= 50
+> 16 AND r.review_time >= TIMESTAMP '2017-01-01'
+> 17 AND r.review_time < TIMESTAMP '2018-01-01'
+> 18 )
+> 19 SELECT *FROM candidates c
+> 20 JOIN reviews_filtered rf
+> 21 ON rf.purchase_idx = c.book_idx
+> 22 ORDER BY rf.review_time DESC ;
+
+Listing 3: Q8: Semantic book lookup with filtered reviews (abbreviated). 
+
+For simple queries with few joins and one SF , pull-up alone suffices. Q8 from BookReview (Listing 3) searches for a specific book edition using one SF over a single join between books_info 
+
+and reviews . With only 1 join, pulling up the SF adds negligible relational cost while reducing LLM calls from 200 to 1 via function caching. Pull-up takes 2.1s vs. the cost model’s 2.9s. For complex multi-table queries, the two strategies diverge sig-nificantly. Q19 from TPC-H (Listing 4) is a multi-table audit query with 6 joins, 2 SF s, and 4 relational filters spanning lineitem ,
+
+orders , customer , part , partsupp , and supplier . Pulling up both 
+
+SF s forces all 6 joins to process unfiltered tables, causing interme-diate results to explode. Pull-up reaches the 3,000s timeout while the cost model finishes in 443s by keeping the highly selective 
+
+SF on lineitem pushed down, shrinking the join inputs early. In summary, pull-up is the better strategy for simple queries with                                                                                                           
+
+> 1WITH lineitem_returns AS (
+> 2SELECT *FROM lineitem l
+> 3WHERE l.l_shipdate BETWEEN DATE '1994-01-01'
+> 4AND DATE '1998-01-01'
+> 5AND l.l_returnflag IN ('R' ,'A' ,'N' )
+> 6AND l.l_quantity BETWEEN 3AND 38
+> 7AND SEMANTIC ('Mode: {l.l_shipmode}
+> 8Instruction: {l.l_shipinstruct}
+> 9Is this a potentially problematic fulfillment
+> 10 case? Answer YES or NO.' )
+> 11 ),
+> 12 order_customer AS (
+> 13 SELECT *FROM orders o
+> 14 JOIN customer c ON c.c_custkey = o.o_custkey
+> 15 WHERE o.o_orderdate BETWEEN DATE '1994-01-01'
+> 16 AND DATE '1998-01-01'
+> 17 AND o.o_orderstatus IN ('O' ,'F' )
+> 18 AND o.o_totalprice > 20000
+> 19 ),
+> 20 part_supplier AS (
+> 21 SELECT *FROM part p
+> 22 JOIN partsupp ps ON ps.ps_partkey = p.p_partkey
+> 23 JOIN supplier s ON s.s_suppkey = ps.ps_suppkey
+> 24 WHERE p.p_size BETWEEN 1AND 40
+> 25 ),
+> 26 customer_context AS (
+> 27 SELECT *FROM customer_sample c
+> 28 WHERE SEMANTIC ('Segment: {c.c_mktsegment}
+> 29 Balance: {c.c_acctbal}
+> 30 Higher complaint/escalation risk? YES or NO.' )
+> 31 )
+> 32 SELECT *FROM lineitem_returns lr
+> 33 JOIN order_customer oc ON oc.o_orderkey = lr.l_orderkey
+> 34 JOIN part_supplier ps ON ps.p_partkey = lr.l_partkey
+> 35 AND ps.s_suppkey = lr.l_suppkey
+> 36 CROSS JOIN customer_context cc;
+
+Listing 4: Q19: Multi-join audit query with two SEMANTIC 
+
+filters (abbreviated). 
+
+few joins, while the cost model is essential for complex multi-table queries where unfiltered joins cause latency blowups. 
+
+## 6.5 Ablations 
+
+Sensitivity to 𝛼 . The parameter 𝛼 scales the relational cost term in 
+
+𝐶 LLM + 𝛼 ·𝐶 rel . A large 𝛼 penalizes relational cost heavily, so the DP pushes filters down to shrink join inputs at the expense of more LLM calls. A small 𝛼 deprioritizes relational cost, so the DP pulls filters up to minimize LLM calls even if joins grow larger. Figure 7 shows how varying 𝛼 affects plan quality on a representative multi-table query. The cost model is robust across several orders of magnitude. For 
+
+𝛼 ∈ [ 10 −3, 10 0], LLM calls remain stable at 7–11 and latency stays under 30s. At small 𝛼 values from 10 −4 to 10 −6, the DP increasingly pulls filters up, reducing LLM calls to 7–8 but causing latency to spike above 90s as unfiltered joins dominate execution time. Our default 𝛼 = 10 −7 lies below the plotted range but in the same pull-up-favoring regime; the plan at 10 −7 is identical to the plan at 10 −6.On simple queries the resulting plans are near-optimal, while on 10 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al.        
+
+> 10 −6
+> 10 −5
+> 10 −4
+> 10 −3
+> 10 −2
+> 10 −1
+> 10 0
+> 6
+> 8
+> 10
+> 12
+> 𝛼
+> LLM Calls
+> LLM Calls Time (s)
+> 0
+> 30
+> 60
+> 90
+> 120
+> Time (s)
+> (a) 𝛼 =10 −1
+> 1
+> SF 1
+> 1
+> 𝑇 1𝑇 2
+> SF 2
+> 𝑇 3
+> 11 calls, 28.2s
+> (b) 𝛼 =10 −3
+> SF 1
+> 1
+> 1
+> 𝑇 1𝑇 2
+> SF 2
+> 𝑇 3
+> 7 calls, 16.7s
+> (c) 𝛼 =10 −5
+> SF 1
+> SF 2
+> 1
+> 1
+> 𝑇 1𝑇 2
+> 𝑇 3
+> 8 calls, 97.1s
+
+Figure 7: Sensitivity to 𝛼 . Left: LLM calls and latency as 𝛼 varies. Right: plan trees under three settings. (a) Large 𝛼 : both filters pushed down, 11 calls but 28.2s. (b) Moderate 𝛼 : SF 1 pulled above the top join, 7 calls at 16.7s. (c) Small 𝛼 : both filters pulled up, 8 calls but 97.1s as unfiltered joins dominate. (a) Cost ($)                 
+
+> 𝑠 1
+> 0.05 0.1 0.8
+> 𝑠 𝑖
+> 0.1
+> 0.2
+> 0.8
+> 0.067 0.158 0.158
+> 0.068 0.067 0.158
+> 0.067 0.068 0.155
+> (b) Time (s)
+> 𝑠 1
+> 0.05 0.1 0.8
+> 𝑠 𝑖
+> 0.1
+> 0.2
+> 0.8
+> 96.8 46.9 67.0
+> 62.7 79.2 59.0
+> 78.4 61.8 42.8
+
+Figure 8: Sensitivity to selectivity estimates. (a) LLM cost and (b) wall-clock time as 𝑠 𝑖 and 𝑠 1 vary. The DP produces two plans: low cost when 𝑠 1 ≤ 0.05 , higher cost when 𝑠 1 increases. Time varies due to execution noise but remains within a 2×
+
+range.        
+
+> 𝑛 =2𝑛 =4𝑛 =6𝑛 =8
+> 0
+> 0.03
+> 0.06
+> 0.09
+> 0.12
+> 0.15 % of total query time 0.6% 0.3% 0.5% 1.8%
+> Optimizer Time (s)
+> SF placement Other opt.
+
+Figure 9: Optimizer overhead by number of SF s. Percentages above bars show the optimizer’s share of total query execu-tion time. The optimizer takes under 0.12s in all cases. 
+
+complex multi-table queries the DP still selectively pushes down filters when the relational cost blowup outweighs the LLM savings. 
+
+Sensitivity to selectivity estimates. As described in Section 5, 
+
+𝑁 𝑢, SF 𝑖 is estimated by multiplying the base table size by 𝑠 𝑖 at each semantic filter and 𝑠 1 at each join along the path. Since 𝑁 𝑢, SF 𝑖 di-rectly determines the LLM cost of placing a filter at 𝑢 , errors in these estimates can shift the balance between pulling up and pushing down. To evaluate robustness, we vary 𝑠 𝑖 and 𝑠 1 independently on a representative multi-table query. Figure 8 shows cost and time as heatmaps. The DP produces two distinct plans depending on 𝑠 1.When 𝑠 1 ≤ 0.05 , the estimated join reduction is large, so the DP keeps filters pushed down, yielding ∼211 LLM calls at $0.07. When 
+
+𝑠 1 ≥ 0.1, pulling up becomes more attractive, increasing calls to 
+
+∼510 at $0.16. The plan is stable across all 𝑠 𝑖 values within each regime, confirming that placement is robust to moderate selectivity errors. 
+
+Optimizer overhead. The DP runs in O(| 𝑉 | · 2𝑛 +3𝑛 ) time. Figure 9 shows the optimizer latency for queries grouped by the number of SF s at 𝑛 = 2, 4, 6, 8. We decompose the total optimizer time into the SF placement, which runs the DP from Algorithm 2, and the remaining overhead from SP pull-up, SJ decomposition, and plan rewriting. The SF placement accounts for about 65% of the total optimizer time, with the DP itself taking under 0.08s even for 
+
+𝑛 = 8. The near-constant time across 𝑛 = 2 to 8 reflects that plan traversal and rewriting dominate; the 3𝑛 term becomes significant only for larger 𝑛 . In practice, 𝑛 = 8 already represents an extreme case: production semantic workloads at Snowflake report that most queries contain fewer than 4 semantic operators [ 14 ]. The total optimizer overhead stays below 2% of end-to-end query time in all cases, as shown by the annotations in Figure 9. We report overhead only for the cost model; as shown in Algorithm 1, the pull-up algorithm runs in O( 𝑛 2𝑑 ) with negligible cost. 
+
+## 7 DISCUSSION 
+
+Accuracy analysis. Horrila achieves an average F1 of 0.85 , with most queries at or near 1.0. Since Horrila only changes operator placement without modifying operator semantics, F1 deviations from 1.0 are not caused by plan rewriting. Instead, they arise from LLM non-determinism: when the same semantic predicate is evalu-ated in separate executions, the LLM may produce different outputs for borderline cases. Queries with lower F1 tend to involve more LLM calls, amplifying the effect of per-call variance. The SemBench evaluation confirms this interpretation: against human-annotated 11 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. ground truth, Horrila achieves quality comparable to the base-line, indicating that placement changes do not introduce systematic errors. 
+
+Comparison with classical expensive predicate optimization. Clas-sical work on expensive predicate placement does not fully address the cost characteristics of semantic operators. Hellerstein and Stone-braker [ 6 ] introduced predicate migration with function caching under the assumption of linear join cost. Semantic joins break this assumption: SJ evaluates each pair of tuples with an LLM call, re-sulting in |𝑅 | × | 𝑆 | calls in the worst case, a quadratic cost that the linear model cannot capture. Horrila does not rely on this assumption; its DP cost model directly estimates LLM and relational costs at each node across hybrid plans using 𝑁 𝑢, SF 𝑖 and selectivi-ties, handling non-linear cost structures naturally. Chaudhuri and Shim [ 2] introduced a DP-based cost model for ordering expensive predicates, but their formulation does not account for function caching. Function caching is critical for semantic queries because it reduces the effective LLM cost from total rows to distinct rows, fundamentally changing which placements are optimal. Horrila 
+
+combines function-caching-aware cost modeling with a DP that jointly balances LLM and relational costs across multi-table plans. 
+
+Limitations and future work. The current cost model uses fixed selectivity estimates 𝑠 𝑖 and 𝑠 1, which may lead to suboptimal place-ments when the true selectivity deviates significantly. Integrating learned or sampling-based selectivity estimation is a natural exten-sion and can serve as a drop-in replacement for the fixed defaults. The join order is fixed from DuckDB’s optimizer; jointly optimizing join order and semantic filter placement is an interesting direction for future work. The cost objective 𝐶 LLM + 𝛼 · 𝐶 rel treats all LLM calls as equally expensive; modeling token-dependent costs and heterogeneous LLMs could further improve placement decisions. Finally, adaptive runtime re-optimization that adjusts placement based on observed selectivities during execution is a promising avenue. 
+
+## 8 RELATED WORK 
+
+UDF optimization. Hellerstein and Stonebraker [ 6 ] introduced predicate migration and function caching for expensive user-defined predicates, enabling the optimizer to reposition UDFs within query plans under a linear join cost assumption. Chaudhuri and Shim [ 2]extended this to a DP-based cost model for ordering expensive predicates, but their formulation does not account for function caching. GRACEFUL [ 26 ] addresses UDF placement with a learned GNN-based cost estimator, achieving significant speedups through informed pull-up and push-down decisions. Chasialis et al. [ 1] study UDF query optimization in SQL data engines with operator fusion and pluggable registration. LLM-backed semantic operators violate the assumptions underlying these frameworks: semantic joins can incur quadratic LLM cost in the worst case, while function caching makes cost depend on the number of distinct inputs rather than the total number of rows. Horrila builds on these ideas by com-bining function caching [ 6] with a dynamic-programming-based optimization algorithm in the spirit of Chaudhuri and Shim [ 2], while introducing a caching-aware cost model that is absent from prior work. 
+
+Semantic query systems. Several systems have been proposed to optimize semantic queries over structured data. For example, Lotus [ 18 ] introduces model cascading for approximate execution. Palimpzest [ 15 ] and Abacus [ 21 ] provide cost-based physical plan selection over individual operator implementations. DocETL [ 23 ]and ZenDB [ 13 ] optimize LLM-powered pipelines for document analytics. FlockMTL [ 3] integrates LLM operators into DuckDB with prompt and batching optimizations. ThalamusDB [8] applies approximate query processing to multi-modal data. ScaleDoc [27] scales LLM-based predicates over large document collections. These systems primarily optimize individual operators and may alter their outputs in the process. For plan-level placement, iPDB [ 10 ] and Cortex AISQL [ 14 ] apply pull-up as a heuristic without a cost model. Sema [ 19 ] reorders semantic predicates with adaptive execution and introduces predicate deduction to extract relational constraints from semantic predicates. Nirvana [ 30 ] proposes an LLM-native op-timizer that uses LLM-driven random-walk search for semantically equivalent plans. Horrila differs by providing a formal optimality result for pull-up under function caching, a dynamic-programming-based cost model that searches over all valid placements, and no changes to individual operators. These directions are complemen-tary: operator-level optimizations can be combined with Horrila ’s plan-level placement decisions. 
+
+LLMs for database systems. A separate line of work applies LLMs to improve database systems themselves, spanning text-to-SQL [ 7 ], query optimization [ 12 , 24 ], SQL dialect translation [ 28 ], automated tuning [ 5, 29 ], and DBMS testing [ 17 ]. For query optimization, LLM-R2 [12] uses LLMs to guide rule-based query rewriting, while Tan et al. [ 24 ] explore whether LLMs can serve as query optimizers for relational databases. GALOIS [ 22 ] takes a different approach by treating the LLM as a data source and introducing logical and physical optimizations for executing SQL queries over LLMs. These approaches are orthogonal to Horrila : they use LLMs to improve database internals, while we optimize the execution of LLM-backed operators within query plans. The two approaches are complemen-tary: an LLM-based query optimizer could determine join orders, while Horrila optimizes semantic filter placement for the resulting query plans. 
+
+## 9 CONCLUSION 
+
+We present Horrila , a plan-level optimizer that determines where to place semantic operators in hybrid query plans to minimize the combined LLM and relational execution cost. Horrila reduces the problem to semantic filter placement, proves that pull-up with func-tion caching minimizes LLM invocations, and uses a DP-based cost model to balance LLM and relational costs when pull-up alone is in-sufficient. On 44 queries across five schemas and two benchmarks, 
+
+Horrila achieves up to 1.5× speedup and 4.3× cost reduction while maintaining the highest accuracy among six evaluated sys-tems. Compared to existing semantic query systems that modify operator internals, Horrila preserves operator outputs and opti-mizes placement across the entire plan tree. Horrila ’s plan-level approach is orthogonal to operator-level techniques and can serve as a foundation for cost-aware hybrid query processing as semantic operators become standard in data systems. 12 arXiv preprint, 2025 Horrila: Cost-Based Placement of Semantic Operators in Hybrid Query Plans Mang, Xiang, et al. 
+
+## REFERENCES 
+
+[1] Konstantinos Chasialis, Yannis Foufoulas, Alkis Simitsis, and Yannis Ioannidis. 2025. Optimizing UDF Queries in SQL Data Engines. (2025). [2] Surajit Chaudhuri and Kyuseok Shim. 1999. Optimization of Queries with User-Defined Predicates. ACM Transactions on Database Systems 24, 2 (1999), 177–228. [3] Anas Dorbani, Sunny Yasser, Jimmy Lin, and Amine Mhedhbi. 2025. Beyond quacking: Deep integration of language models and RAG into DuckDB. arXiv preprint arXiv:2504.01157 (2025). [4] Tom Ebergen. 2022. Join Order Optimization with (Almost) No Statistics . Master’s thesis. Vrije Universiteit Amsterdam. [5] Victor Giannakouris and Immanuel Trummer. 2025. 𝜆 -Tune: Harnessing Large Language Models for Automated Database System Tuning. Proceedings of the ACM on Management of Data 3, 1 (2025), 1–26. [6] Joseph M. Hellerstein and Michael Stonebraker. 1993. Predicate Migration: Optimizing Queries with Expensive Predicates. In Proceedings of the 1993 ACM SIGMOD International Conference on Management of Data . ACM, 267–276. [7] Zijin Hong, Zheng Yuan, Qinggang Zhang, Hao Chen, Junnan Dong, Feiran Huang, and Xiao Huang. 2024. Next-Generation Database Interfaces: A Survey of LLM-based Text-to-SQL. arXiv preprint arXiv:2406.08426 (2024). [8] Saehan Jo and Immanuel Trummer. 2024. Thalamusdb: Approximate query processing on multi-modal data. Proceedings of the ACM on Management of Data 
+
+2, 3 (2024), 1–26. [9] Daniel Kang, Edward Gan, Peter Bailis, Tatsunori Hashimoto, and Matei Zaharia. 2020. Approximate selection with guarantees using proxies. arXiv preprint arXiv:2004.00827 (2020). [10] Udesh Kumarasinghe, Tyler Liu, Chunwei Liu, and Walid G. Aref. 2026. iPDB – Optimizing SQL Queries with ML and LLM Predicates. arXiv:2601.16432 [cs.DB] [11] Jiale Lao, Andreas Zimmerer, Olga Ovcharenko, Tianji Cong, Matthew Russo, Gerardo Vitagliano, Michael Cochez, Fatma Özcan, Gautam Gupta, Thibaud Hottelier, H. V. Jagadish, Kris Kissel, Sebastian Schelter, Andreas Kipf, and Im-manuel Trummer. 2026. SemBench: A Benchmark for Semantic Query Processing Engines. arXiv:2511.01716 [cs.DB] https://arxiv.org/abs/2511.01716 [12] Zhaodongshui Li, Haitao Gao, Huiming Wang, Gao Cong, and Lidong Bing. 2024. LLM-R2: A Large Language Model Enhanced Rule-based Rewrite System for Boosting Query Efficiency. arXiv preprint arXiv:2404.12872 (2024). [13] Yiming Lin, Madelon Hulsebos, Ruiying Ma, Shreya Shankar, Sepanta Zeighami, and Aditya G. Parameswaran. 2025. Towards Accurate and Efficient Document Analytics with Large Language Models. In Proceedings of the IEEE International Conference on Data Engineering (ICDE) .[14] Paweł Liskowski, Benjamin Han, Paritosh Aggarwal, Bowei Chen, Boxin Jiang, Nitish Jindal, Zihan Li, Aaron Lin, Kyle Schmaus, Jay Tayade, Weicheng Zhao, Anupam Datta, Nathan Wiegand, and Dimitris Tsirogiannis. 2025. Cortex AISQL: A Production SQL Engine for Unstructured Data. arXiv:2511.07663 [cs.DB] [15] Chunwei Liu, Matthew Russo, Michael Cafarella, Lei Cao, Peter Baile Chen, Zui Chen, Michael Franklin, Tim Kraska, Samuel Madden, Rana Shahout, et al . 2025. Palimpzest: Optimizing ai-powered analytics with declarative query processing. In Proceedings of the Conference on Innovative Database Research (CIDR) . 2. [16] Ruiying Ma, Shreya Shankar, Ruiqi Chen, Yiming Lin, Sepanta Zeighami, Ra-joshi Ghosh, Abhinav Gupta, Anushrut Gupta, Tanmai Gopal, and Aditya G Parameswaran. 2026. Can AI Agents Answer Your Data Questions? A Bench-mark for Data Agents. arXiv preprint arXiv:2603.20576 (2026). [17] Qiuyang Mang, Runyuan He, Suyang Zhong, Xiaoxuan Liu, Huanchen Zhang, and Alvin Cheung. 2026. Automated Discovery of Test Oracles for Database Management Systems Using LLMs. Proceedings of the ACM on Management of Data 4, 3 (2026), 1–40. [18] Liana Patel, Siddharth Jha, Melissa Pan, Harshit Gupta, Parth Asawa, Carlos Guestrin, and Matei Zaharia. 2025. Semantic Operators and Their Optimization: Enabling LLM-Based Data Processing with Accuracy Guarantees in LOTUS. 
+
+Proceedings of the VLDB Endowment 18, 11 (2025), 4171–4184. [19] Kangkang Qi, Dongyang Xie, Wenbo Li, Hao Zhang, Yuanyuan Zhu, Jeffrey Xu Yu, and Kangfei Zhao. 2026. Sema: A High-performance System for LLM-based Semantic Query Processing. arXiv:2603.11622 [cs.DB] [20] Mark Raasveldt and Hannes Mühleisen. 2019. DuckDB: an Embeddable Analytical Database. In Proceedings of the 2019 International Conference on Management of Data (SIGMOD) . ACM, 1981–1984. [21] Matthew Russo, Sivaprasad Sudhir, Gerardo Vitagliano, Chunwei Liu, Tim Kraska, Samuel Madden, and Michael Cafarella. 2025. Abacus: A Cost-Based Optimizer for Semantic Operator Systems. arXiv:2505.14661 [cs.DB] https://arxiv.org/abs/ 2505.14661 [22] Dario Satriani, Enzo Veltri, Donatello Santoro, Sara Rosato, Simone Varriale, and Paolo Papotti. 2025. Logical and physical optimizations for sql query execution over large language models. Proceedings of the ACM on Management of Data 3, 3 (2025), 1–28. [23] Shreya Shankar, Tristan Chambers, Tarak Shah, Aditya G. Parameswaran, and Eugene Wu. 2024. DocETL: Agentic Query Rewriting and Evaluation for Complex Document Processing. arXiv:2410.12189 [cs.DB] [24] Jie Tan, Kangfei Zhao, Li Rui, Jeff Xu, Chengzhi Yu, Hong Piao, Helen Cheng, Deli Meng, Yu Zhao, and Yu Rong. 2025. Can Large Language Models Be Query Optimizer for Relational Databases? arXiv preprint arXiv:2502.05562 (2025). [25] Transaction Processing Performance Council. 2024. TPC-H Benchmark Specifi-cation. https://www.tpc.org/tpch/. Accessed: 2026-03-31. [26] Johannes Wehrstein, Tiemo Bang, Roman Heinrich, and Carsten Binnig. 2025. GRACEFUL: A Learned Cost Estimator for UDFs. In 2025 IEEE 41st International Conference on Data Engineering (ICDE) . IEEE, 2450–2463. [27] Hengrui Zhang, Yulong Hui, Yihao Liu, and Huanchen Zhang. 2025. ScaleDoc: Scaling LLM-based Predicates over Large Document Collections. arXiv preprint arXiv:2509.12610 (2025). [28] Wei Zhou, Yuyang Gao, Xuanhe Zhou, and Guoliang Li. 2025. CrackSQL: A Hybrid SQL Dialect Translation System Powered by Large Language Models. 
+
+arXiv preprint arXiv:2504.00882 (2025). [29] Xuanhe Zhou, Zhaoyan Sun, and Guoliang Li. 2024. Db-gpt: Large Language Model Meets Database. Data Science and Engineering 9, 1 (2024), 102–111. [30] Junhao Zhu, Lu Chen, Xiangyu Ke, Ziquan Fang, Tianyi Li, Yunjun Gao, and Christian S Jensen. 2025. Beyond Relational: Semantic-Aware Multi-Modal Analytics with LLM-Native Query Optimization. arXiv preprint arXiv:2511.19830 
+
+(2025). 
+
+13 arXiv preprint, 2025
