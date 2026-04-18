@@ -34,7 +34,19 @@ global.window.localStorage = global.window.localStorage || {
 global.localStorage = global.localStorage || global.window.localStorage;
 global.window.jsyaml = {
   load(text) {
-    return JSON.parse(text || '{}');
+    const raw = String(text || '').trim();
+    if (!raw) return {};
+    if (raw.startsWith('{')) {
+      return JSON.parse(raw);
+    }
+    const repoMatch = raw.match(/repo:\s*([^\n]+)/);
+    const ownerMatch = raw.match(/owner:\s*([^\n]+)/);
+    return {
+      github: {
+        owner: ownerMatch ? ownerMatch[1].trim().replace(/^['"]|['"]$/g, '') : '',
+        repo: repoMatch ? repoMatch[1].trim().replace(/^['"]|['"]$/g, '') : '',
+      },
+    };
   },
   dump(value) {
     return JSON.stringify(value);
@@ -633,6 +645,91 @@ function testResolveRepoInfoFromPageAcceptsTrustedGithubPagesAndLocalhost() {
   );
 }
 
+async function testResolveRepoInfoFromTokenUsesCustomDomainConfig() {
+  global.window.location.href = 'https://mirror.example.com/#/';
+  global.fetch = async (url, options = {}) => {
+    if (url === 'https://api.github.com/user') {
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'config.yaml') {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get() { return null; } },
+        async json() {
+          throw new Error('json not expected');
+        },
+        async text() {
+          return 'github:\n  owner: org-mirror\n  repo: mirror-repo\n';
+        },
+      };
+    }
+    if (url === 'https://api.github.com/repos/org-mirror/mirror-repo/pages') {
+      return createJsonResponse(200, { cname: 'mirror.example.com' });
+    }
+    if (url === 'https://api.github.com/repos/org-mirror/mirror-repo') {
+      return createJsonResponse(200, { permissions: { push: true }, default_branch: 'main' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.resolveRepoInfoFromToken('ghp_demo', false);
+
+  assert.equal(result.owner, 'org-mirror');
+  assert.equal(result.repo, 'mirror-repo');
+  assert.equal(result.defaultBranch, 'main');
+}
+
+async function testResolveRepoInfoFromTokenDiscoversCustomDomainRepoWhenConfigOwnerBlank() {
+  const calls = [];
+  global.window.location.href = 'https://mirror.example.com/#/';
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === 'https://api.github.com/user') {
+      return createJsonResponse(200, { login: 'dusker' }, { 'X-OAuth-Scopes': 'repo,gist' });
+    }
+    if (url === 'config.yaml') {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get() { return null; } },
+        async json() {
+          throw new Error('json not expected');
+        },
+        async text() {
+          return "github:\n  owner: ''\n  repo: daily-paper-reader\n";
+        },
+      };
+    }
+    if (url === 'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member') {
+      return createJsonResponse(200, [
+        { name: 'daily-paper-reader', owner: { login: 'dusker' } },
+        { name: 'daily-paper-reader', owner: { login: 'Dusker233' } },
+      ]);
+    }
+    if (url === 'https://api.github.com/repos/dusker/daily-paper-reader/pages') {
+      return createJsonResponse(200, { cname: 'other.example.com' });
+    }
+    if (url === 'https://api.github.com/repos/Dusker233/daily-paper-reader/pages') {
+      return createJsonResponse(200, { cname: 'mirror.example.com' });
+    }
+    if (url === 'https://api.github.com/repos/Dusker233/daily-paper-reader') {
+      return createJsonResponse(200, { permissions: { push: true }, default_branch: 'main' });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await __test.resolveRepoInfoFromToken('ghp_demo', false);
+
+  assert.equal(result.owner, 'Dusker233');
+  assert.equal(result.repo, 'daily-paper-reader');
+  assert.equal(result.defaultBranch, 'main');
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member'), true);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/Dusker233/daily-paper-reader'), true);
+}
+
 function testResolveRepoInfoFromPageRejectsUntrustedHost() {
   assert.throws(
     () => __test.resolveRepoInfoFromPage('dusker', 'https://mirror.example.com/daily-paper-reader/'),
@@ -800,6 +897,8 @@ function testInitShowsSuccessButtonWhenSessionTokenExists() {
   await testReadRepoFileUsesExplicitRepoDefaultBranchWhenRefMissing();
   await testVerifyRepoFilesVisibleUsesResolvedDefaultBranchWhenRefMissing();
   await testVerifyRepoFilesVisibleFallsBackToTokenResolvedRepo();
+  await testResolveRepoInfoFromTokenUsesCustomDomainConfig();
+  await testResolveRepoInfoFromTokenDiscoversCustomDomainRepoWhenConfigOwnerBlank();
   testResolveRepoInfoFromPageAcceptsTrustedGithubPagesAndLocalhost();
   testResolveRepoInfoFromPageRejectsUntrustedHost();
   testNormalizeGithubRefRejectsInvalidValue();

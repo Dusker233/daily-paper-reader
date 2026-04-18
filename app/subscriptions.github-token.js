@@ -5,6 +5,11 @@ window.SubscriptionsGithubToken = (function () {
   const GITHUB_TOKEN_STORAGE_KEY = 'github_token_data';
   const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
   const DEFAULT_SEED_UPLOAD_BRANCH_PREFIX = 'seed-paper-requests';
+  const CONFIG_PATH_CANDIDATES = [
+    'config.yaml',
+    'docs/config.yaml',
+    '../config.yaml',
+  ];
 
   const sanitizeGithubTokenData = (data) => {
     if (!data || typeof data !== 'object') {
@@ -133,6 +138,127 @@ window.SubscriptionsGithubToken = (function () {
     throw new Error('当前页面不是受信任的 GitHub Pages 或 localhost，无法自动推断可写入仓库。');
   };
 
+  const findGithubPagesRepoFromAccessibleRepos = async (repo, token, currentHost) => {
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const reposRes = await fetch(
+      'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member',
+      {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      },
+    );
+    if (!reposRes.ok) {
+      return null;
+    }
+    const reposData = await reposRes.json().catch(() => []);
+    const repos = Array.isArray(reposData) ? reposData : [];
+    for (const item of repos) {
+      const owner = String((item && item.owner && item.owner.login) || '').trim();
+      const name = String((item && item.name) || '').trim();
+      if (!owner || name !== normalizedRepo) {
+        continue;
+      }
+      let normalizedOwner = '';
+      try {
+        normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+      } catch {
+        continue;
+      }
+      const pagesRes = await fetch(
+        `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/pages`,
+        {
+          headers: {
+            Authorization: `token ${token}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        },
+      );
+      if (!pagesRes.ok) {
+        continue;
+      }
+      const pagesData = await pagesRes.json().catch(() => null);
+      const cname = String((pagesData && pagesData.cname) || '').trim().toLowerCase();
+      if (cname !== currentHost) {
+        continue;
+      }
+      return {
+        owner: normalizedOwner,
+        repo: normalizedRepo,
+      };
+    }
+    return null;
+  };
+
+  const loadRepoInfoFromConfig = async (login, token, currentHref) => {
+    const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
+    if (!yaml || typeof yaml.load !== 'function') {
+      return null;
+    }
+    let currentHost = '';
+    try {
+      currentHost = String(new URL(String(currentHref || '')).hostname || '').trim().toLowerCase();
+    } catch {
+      return null;
+    }
+    if (!currentHost || currentHost === 'localhost' || currentHost === '127.0.0.1') {
+      return null;
+    }
+    for (const url of CONFIG_PATH_CANDIDATES) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) {
+          continue;
+        }
+        const raw = await res.text();
+        const cfg = yaml.load(raw || '') || {};
+        const github = cfg && typeof cfg === 'object' ? cfg.github : null;
+        if (!github || typeof github !== 'object') {
+          continue;
+        }
+        const owner = String(github.owner || '').trim();
+        const repo = String(github.repo || '').trim();
+        if (!repo) {
+          continue;
+        }
+        if (!owner) {
+          const discoveredRepo = await findGithubPagesRepoFromAccessibleRepos(repo, token, currentHost);
+          if (discoveredRepo) {
+            return discoveredRepo;
+          }
+          continue;
+        }
+        const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+        const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+        const pagesRes = await fetch(
+          `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/pages`,
+          {
+            headers: {
+              Authorization: `token ${token}`,
+              Accept: 'application/vnd.github.v3+json',
+            },
+          },
+        );
+        if (!pagesRes.ok) {
+          continue;
+        }
+        const pagesData = await pagesRes.json().catch(() => null);
+        const cname = String((pagesData && pagesData.cname) || '').trim().toLowerCase();
+        if (cname !== currentHost) {
+          continue;
+        }
+        return {
+          owner: normalizedOwner,
+          repo: normalizedRepo,
+        };
+      } catch {
+        // ignore candidate and continue
+      }
+    }
+    return null;
+  };
+
   // 验证 GitHub Token 并检查权限
   const verifyGithubToken = async (token, options = {}) => {
     const { requireWorkflow = true } = options;
@@ -172,8 +298,16 @@ window.SubscriptionsGithubToken = (function () {
         };
       }
 
-      // 3. 仅从受信任页面环境推断可写入仓库信息
-      const pageRepo = resolveRepoInfoFromPage(userData.login || '', window.location.href);
+      // 3. 优先从页面环境推断仓库；自定义域名则回退到 config.yaml 的 github 配置
+      let pageRepo = null;
+      try {
+        pageRepo = resolveRepoInfoFromPage(userData.login || '', window.location.href);
+      } catch {
+        pageRepo = await loadRepoInfoFromConfig(userData.login || '', token, window.location.href);
+        if (!pageRepo) {
+          throw new Error('当前页面不是受信任的 GitHub Pages 或 localhost，且 config.yaml 未提供有效的 github.repo 配置，无法自动推断可写入仓库。');
+        }
+      }
       const repoOwner = pageRepo.owner;
       const repoName = pageRepo.repo;
 
@@ -1197,6 +1331,8 @@ window.SubscriptionsGithubToken = (function () {
       readRepoFile,
       verifyRepoFilesVisible,
       resolveRepoInfoFromPage,
+      resolveRepoInfoFromToken,
+      loadRepoInfoFromConfig,
       normalizeGithubRef,
       prepareSeedPaperUploadTarget,
     },

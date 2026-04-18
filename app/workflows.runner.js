@@ -108,6 +108,11 @@ window.DPRWorkflowRunner = (function () {
   const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
   const SEED_REQUEST_BRANCH_PREFIX = 'seed-paper-requests';
   const SEED_REQUEST_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+  const CONFIG_PATH_CANDIDATES = [
+    'config.yaml',
+    'docs/config.yaml',
+    '../config.yaml',
+  ];
 
   const isValidGithubRepoSegment = (value) => /^[A-Za-z0-9_.-]+$/.test(String(value || '').trim());
 
@@ -141,20 +146,124 @@ window.DPRWorkflowRunner = (function () {
     throw new Error('当前页面不是受信任的 GitHub Pages 或 localhost，无法自动推断可触发工作流的仓库。');
   };
 
+  const findGithubPagesRepoFromAccessibleRepos = async (repo, token, currentHost) => {
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const reposRes = await ghFetch(
+      token,
+      'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member',
+    );
+    if (!reposRes.ok) {
+      return null;
+    }
+    const reposData = await reposRes.json().catch(() => []);
+    const repos = Array.isArray(reposData) ? reposData : [];
+    for (const item of repos) {
+      const owner = String((item && item.owner && item.owner.login) || '').trim();
+      const name = String((item && item.name) || '').trim();
+      if (!owner || name !== normalizedRepo) {
+        continue;
+      }
+      let normalizedOwner = '';
+      try {
+        normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+      } catch {
+        continue;
+      }
+      const pagesRes = await ghFetch(
+        token,
+        `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/pages`,
+      );
+      if (!pagesRes.ok) {
+        continue;
+      }
+      const pagesData = await pagesRes.json().catch(() => null);
+      const cname = String((pagesData && pagesData.cname) || '').trim().toLowerCase();
+      if (cname !== currentHost) {
+        continue;
+      }
+      return {
+        owner: normalizedOwner,
+        repo: normalizedRepo,
+      };
+    }
+    return null;
+  };
+
+  const loadRepoInfoFromConfig = async (login, token, currentHref) => {
+    const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
+    if (!yaml || typeof yaml.load !== 'function') {
+      return null;
+    }
+    let currentHost = '';
+    try {
+      currentHost = String(new URL(String(currentHref || '')).hostname || '').trim().toLowerCase();
+    } catch {
+      return null;
+    }
+    if (!currentHost || currentHost === 'localhost' || currentHost === '127.0.0.1') {
+      return null;
+    }
+    for (const url of CONFIG_PATH_CANDIDATES) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) {
+          continue;
+        }
+        const raw = await res.text();
+        const cfg = yaml.load(raw || '') || {};
+        const github = cfg && typeof cfg === 'object' ? cfg.github : null;
+        if (!github || typeof github !== 'object') {
+          continue;
+        }
+        const owner = String(github.owner || '').trim();
+        const repo = String(github.repo || '').trim();
+        if (!repo) {
+          continue;
+        }
+        if (!owner) {
+          const discoveredRepo = await findGithubPagesRepoFromAccessibleRepos(repo, token, currentHost);
+          if (discoveredRepo) {
+            return discoveredRepo;
+          }
+          continue;
+        }
+        const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+        const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+        const pagesRes = await ghFetch(
+          token,
+          `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/pages`,
+        );
+        if (!pagesRes.ok) {
+          continue;
+        }
+        const pagesData = await pagesRes.json().catch(() => null);
+        const cname = String((pagesData && pagesData.cname) || '').trim().toLowerCase();
+        if (cname !== currentHost) {
+          continue;
+        }
+        return {
+          owner: normalizedOwner,
+          repo: normalizedRepo,
+        };
+      } catch {
+        // ignore candidate and continue
+      }
+    }
+    return null;
+  };
+
   const resolveRepoFromUrl = async (token) => {
     const currentUrl = String((window.location && window.location.href) || '');
+    let parsedUrl = null;
     try {
-      const urlObj = new URL(currentUrl);
-      const host = String(urlObj.hostname || '').trim();
+      parsedUrl = new URL(currentUrl);
+      const host = String(parsedUrl.hostname || '').trim();
       const githubPagesMatch = currentUrl.match(/https?:\/\/([^.]+)\.github\.io\/([^\/]+)/i);
       if (githubPagesMatch && isTrustedGithubPagesHost(host)) {
         return {
           owner: normalizeGithubRepoSegment(githubPagesMatch[1], 'owner'),
           repo: normalizeGithubRepoSegment(githubPagesMatch[2], 'repo'),
         };
-      }
-      if (host !== 'localhost' && host !== '127.0.0.1') {
-        return { owner: '', repo: '' };
       }
     } catch {
       return { owner: '', repo: '' };
@@ -166,7 +275,20 @@ window.DPRWorkflowRunner = (function () {
         return { owner: '', repo: '' };
       }
       const user = await userRes.json().catch(() => null);
-      return resolveRepoInfoFromPage(user && user.login ? String(user.login) : '', currentUrl);
+      const login = user && user.login ? String(user.login) : '';
+      try {
+        return resolveRepoInfoFromPage(login, currentUrl);
+      } catch {
+        const configRepo = await loadRepoInfoFromConfig(login, token, currentUrl);
+        if (configRepo) {
+          return configRepo;
+        }
+      }
+      const host = String((parsedUrl && parsedUrl.hostname) || '').trim();
+      if (host !== 'localhost' && host !== '127.0.0.1') {
+        return { owner: '', repo: '' };
+      }
+      return { owner: '', repo: '' };
     } catch {
       return { owner: '', repo: '' };
     }
@@ -911,5 +1033,10 @@ window.DPRWorkflowRunner = (function () {
     runWorkflowByKey,
     runQuickFetchByDays,
     runSeedPaperWorkflow,
+    __test: {
+      resolveRepoInfoFromPage,
+      loadRepoInfoFromConfig,
+      resolveRepoFromUrl,
+    },
   };
 })();
