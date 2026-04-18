@@ -17,6 +17,7 @@ def _load_module(module_name: str, path: pathlib.Path):
 
 class _StubGenerateDocs:
     ensure_text_content_calls = []
+    glance_calls = []
 
     @staticmethod
     def extract_pdf_text(pdf_path):
@@ -37,8 +38,19 @@ class _StubGenerateDocs:
         )
 
     @staticmethod
-    def generate_glance_overview(title, abstract):
-        return f"**TLDR**: {title}"
+    def generate_glance_overview(title, abstract, paper_text="", max_retries=3):
+        _StubGenerateDocs.glance_calls.append(
+            {"title": title, "abstract": abstract, "paper_text": paper_text, "max_retries": max_retries}
+        )
+        return "\n".join(
+            [
+                f"**TLDR**：{title} 讲了什么、方法为什么有效、值不值得继续细读。 \\",
+                "**Research Question**：这篇工作具体在解决什么问题。 \\",
+                "**Core Idea**：核心方法由哪些关键模块组成。 \\",
+                "**Evidence**：实验里最值得关注的结果信号是什么。 \\",
+                "**Reading Guide**：如果继续精读，优先看方法和实验两部分。",
+            ]
+        )
 
     @staticmethod
     def build_glance_fallback(paper):
@@ -46,7 +58,18 @@ class _StubGenerateDocs:
 
     @staticmethod
     def generate_deep_summary(md_path, txt_path):
-        return f"deep summary from {Path(txt_path).name}"
+        return "\n".join(
+            [
+                "### 问题定义与背景",
+                f"- deep summary from {Path(txt_path).name}",
+                "### 方法拆解",
+                "- 方法细节一",
+                "### 实验与证据",
+                "- 关键实验结论",
+                "### 局限与启发",
+                "- 局限说明",
+            ]
+        )
 
     @staticmethod
     def upsert_auto_block(md_path, heading, content):
@@ -100,6 +123,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
 
     def setUp(self):
         _StubGenerateDocs.ensure_text_content_calls = []
+        _StubGenerateDocs.glance_calls = []
 
     def _write_request(self, root: Path, payload: dict, request_id: str = "demo-request"):
         request_dir = root / "archive" / "seed-papers" / request_id
@@ -395,8 +419,25 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertIn("Seed Paper", seed_md)
             self.assertIn("archive/seed-papers/demo-request/seed-paper.pdf", seed_md)
             self.assertNotIn(str(seed_pdf), seed_md)
+            self.assertIn("## 速览", seed_md)
+            self.assertIn("**Research Question**：", seed_md)
+            self.assertIn("**Reading Guide**：", seed_md)
+            self.assertIn("## 精读", seed_md)
+            self.assertIn("### 方法拆解", seed_md)
+            self.assertEqual(_StubGenerateDocs.glance_calls[0]["abstract"], "seed paper full text")
+            self.assertEqual(_StubGenerateDocs.glance_calls[0]["paper_text"], "seed paper full text")
             related_files = sorted((workspace / "related").glob("*.md"))
             self.assertEqual(len(related_files), 2)
+            related_one_md = (workspace / "related" / "p1.md").read_text(encoding="utf-8")
+            self.assertIn("## 速览", related_one_md)
+            self.assertIn("**Research Question**：", related_one_md)
+            self.assertIn("## 精读", related_one_md)
+            self.assertEqual(_StubGenerateDocs.glance_calls[1]["abstract"], "first abstract")
+            self.assertEqual(_StubGenerateDocs.glance_calls[1]["paper_text"], "first abstract")
+            related_two_md = (workspace / "related" / "p2.md").read_text(encoding="utf-8")
+            self.assertIn("## 速览", related_two_md)
+            self.assertIn("**Reading Guide**：", related_two_md)
+            self.assertNotIn("## 精读", related_two_md)
             index_text = (workspace / "index.md").read_text(encoding="utf-8")
             self.assertIn("seed-paper.md", index_text)
             self.assertIn("related/", index_text)

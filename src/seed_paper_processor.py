@@ -265,7 +265,7 @@ def _render_seed_page(
 
     mode = _normalize_mode(request.get("mode"))
     if mode in {"skim", "both"}:
-        glance = generate_docs_module.generate_glance_overview(title, clean_seed_text)
+        glance = generate_docs_module.generate_glance_overview(title, clean_seed_text, clean_seed_text)
         if not _normalize_text(glance):
             glance = generate_docs_module.build_glance_fallback(paper)
         _upsert_auto_block(generate_docs_module, md_path, "速览", glance)
@@ -356,18 +356,23 @@ def _render_related_pages(
             encoding="utf-8",
         )
 
+        paper_text = ""
+        if record["include_deep"]:
+            if not txt_path.exists():
+                txt_path.write_text(_normalize_text(paper.get("abstract")), encoding="utf-8")
+            paper_text = _normalize_text(txt_path.read_text(encoding="utf-8"))
+
         if record["include_quick"]:
             glance = generate_docs_module.generate_glance_overview(
                 _normalize_text(paper.get("title")),
                 _normalize_text(paper.get("abstract")),
+                paper_text,
             )
             if not _normalize_text(glance):
                 glance = generate_docs_module.build_glance_fallback(paper)
             _upsert_auto_block(generate_docs_module, md_path, "速览", glance)
 
         if record["include_deep"]:
-            if not txt_path.exists():
-                txt_path.write_text(_normalize_text(paper.get("abstract")), encoding="utf-8")
             deep_summary = generate_docs_module.generate_deep_summary(str(md_path), str(txt_path))
             _upsert_auto_block(generate_docs_module, md_path, "精读", deep_summary)
 
