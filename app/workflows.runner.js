@@ -146,8 +146,50 @@ window.DPRWorkflowRunner = (function () {
     throw new Error('当前页面不是受信任的 GitHub Pages 或 localhost，无法自动推断可触发工作流的仓库。');
   };
 
+  const findGithubPagesRepoFromAccessibleRepos = async (repo, token, currentHost) => {
+    const normalizedRepo = normalizeGithubRepoSegment(repo, 'repo');
+    const reposRes = await ghFetch(
+      token,
+      'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member',
+    );
+    if (!reposRes.ok) {
+      return null;
+    }
+    const reposData = await reposRes.json().catch(() => []);
+    const repos = Array.isArray(reposData) ? reposData : [];
+    for (const item of repos) {
+      const owner = String((item && item.owner && item.owner.login) || '').trim();
+      const name = String((item && item.name) || '').trim();
+      if (!owner || name !== normalizedRepo) {
+        continue;
+      }
+      let normalizedOwner = '';
+      try {
+        normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');
+      } catch {
+        continue;
+      }
+      const pagesRes = await ghFetch(
+        token,
+        `https://api.github.com/repos/${encodeURIComponent(normalizedOwner)}/${encodeURIComponent(normalizedRepo)}/pages`,
+      );
+      if (!pagesRes.ok) {
+        continue;
+      }
+      const pagesData = await pagesRes.json().catch(() => null);
+      const cname = String((pagesData && pagesData.cname) || '').trim().toLowerCase();
+      if (cname !== currentHost) {
+        continue;
+      }
+      return {
+        owner: normalizedOwner,
+        repo: normalizedRepo,
+      };
+    }
+    return null;
+  };
+
   const loadRepoInfoFromConfig = async (login, token, currentHref) => {
-    const fallbackOwner = String(login || '').trim();
     const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
     if (!yaml || typeof yaml.load !== 'function') {
       return null;
@@ -173,9 +215,16 @@ window.DPRWorkflowRunner = (function () {
         if (!github || typeof github !== 'object') {
           continue;
         }
-        const owner = String(github.owner || '').trim() || fallbackOwner;
+        const owner = String(github.owner || '').trim();
         const repo = String(github.repo || '').trim();
-        if (!owner || !repo) {
+        if (!repo) {
+          continue;
+        }
+        if (!owner) {
+          const discoveredRepo = await findGithubPagesRepoFromAccessibleRepos(repo, token, currentHost);
+          if (discoveredRepo) {
+            return discoveredRepo;
+          }
           continue;
         }
         const normalizedOwner = normalizeGithubRepoSegment(owner, 'owner');

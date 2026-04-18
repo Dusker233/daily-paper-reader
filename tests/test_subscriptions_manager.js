@@ -885,28 +885,58 @@ function createWorkflowRunnerFetchStub(calls, options = {}) {
     repoName = 'daily-paper-reader',
     userLogin = 'demo-user',
     configGithub = null,
+    accessibleRepos = null,
   } = options;
+  const repoCandidates = Array.isArray(accessibleRepos) && accessibleRepos.length
+    ? accessibleRepos
+    : [{ owner: repoOwner, name: repoName, cname: 'mirror.example.com', fork: true, defaultBranch: 'main' }];
+  const findRepoCandidate = (owner, name) => repoCandidates.find(
+    (entry) => entry && entry.owner === owner && entry.name === name,
+  );
   return async (url, init = {}) => {
     calls.push({ url, init });
     if (url === 'https://api.github.com/user') {
       return buildJsonResponse(200, { login: userLogin });
     }
+    if (url === 'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member') {
+      return buildJsonResponse(200, repoCandidates.map((entry) => ({
+        name: entry.name,
+        owner: { login: entry.owner },
+      })));
+    }
     if (url === 'config.yaml' || url === 'docs/config.yaml' || url === '../config.yaml') {
       if (!configGithub) {
         return buildJsonResponse(404, { message: 'Not Found' }, 'Not Found');
       }
-      return new Response(`github:\n  owner: ${configGithub.owner || ''}\n  repo: ${configGithub.repo || ''}\n`, {
+      return new Response(`github:\n  owner: '${configGithub.owner || ''}'\n  repo: '${configGithub.repo || ''}'\n`, {
         status: 200,
         headers: {
           'Content-Type': 'text/yaml',
         },
       });
     }
-    if (url === `https://api.github.com/repos/${repoOwner}/${repoName}/pages`) {
-      return buildJsonResponse(200, { cname: 'mirror.example.com' });
+    const pagesMatch = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/pages$/);
+    if (pagesMatch) {
+      const owner = decodeURIComponent(pagesMatch[1]);
+      const name = decodeURIComponent(pagesMatch[2]);
+      const repo = findRepoCandidate(owner, name);
+      if (!repo) {
+        return buildJsonResponse(404, { message: 'Not Found' }, 'Not Found');
+      }
+      return buildJsonResponse(200, { cname: repo.cname || 'mirror.example.com' });
     }
-    if (url === `https://api.github.com/repos/${repoOwner}/${repoName}`) {
-      return buildJsonResponse(200, { fork: true, default_branch: 'main' });
+    const repoMatch = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)$/);
+    if (repoMatch) {
+      const owner = decodeURIComponent(repoMatch[1]);
+      const name = decodeURIComponent(repoMatch[2]);
+      const repo = findRepoCandidate(owner, name);
+      if (!repo) {
+        return buildJsonResponse(404, { message: 'Not Found' }, 'Not Found');
+      }
+      return buildJsonResponse(200, {
+        fork: repo.fork !== undefined ? repo.fork : true,
+        default_branch: repo.defaultBranch || 'main',
+      });
     }
     if (url.includes('/actions/workflows/daily-paper-reader.yml/runs?per_page=5')) {
       return buildJsonResponse(200, { workflow_runs: [] });
@@ -1094,6 +1124,34 @@ async function testWorkflowRunnerCustomDomainUsesConfigRepo() {
 
   assert.equal(calls.some((entry) => entry.url === 'config.yaml'), true);
   assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/mirror-owner/mirror-repo'), true);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/demo-user/daily-paper-reader'), false);
+}
+
+async function testWorkflowRunnerCustomDomainDiscoversRepoWhenConfigOwnerBlank() {
+  const { calls } = await setupWorkflowRunnerWithRecentRun({
+    href: 'https://mirror.example.com/#/',
+    userLogin: 'demo-user',
+    configGithub: {
+      owner: '',
+      repo: 'daily-paper-reader',
+    },
+    accessibleRepos: [
+      {
+        owner: 'demo-user',
+        name: 'daily-paper-reader',
+        cname: 'other.example.com',
+      },
+      {
+        owner: 'Dusker233',
+        name: 'daily-paper-reader',
+        cname: 'mirror.example.com',
+      },
+    ],
+  });
+
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member'), true);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/Dusker233/daily-paper-reader/pages'), true);
+  assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/Dusker233/daily-paper-reader'), true);
   assert.equal(calls.some((entry) => entry.url === 'https://api.github.com/repos/demo-user/daily-paper-reader'), false);
 }
 
@@ -2013,6 +2071,7 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   await testWorkflowRunnerDoesNotStartPollingWhenSelectingCompletedRecentRun();
   await testWorkflowRunnerTrustedGithubPagesUsesPageRepo();
   await testWorkflowRunnerCustomDomainUsesConfigRepo();
+  await testWorkflowRunnerCustomDomainDiscoversRepoWhenConfigOwnerBlank();
   await testWorkflowRunnerOpenDoesNotFetchExtraRecentRunInputs();
   await testWorkflowRunnerStartsPollingForActiveDispatchRun();
   await testWorkflowRunnerStartsPollingWhenSelectingActiveRecentRun();
