@@ -49,6 +49,10 @@ COMMON_QUERY_STOPWORDS = {
 }
 
 
+class SeedPaperProcessingError(RuntimeError):
+    pass
+
+
 def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -147,23 +151,31 @@ def _build_query_summary(request: dict[str, Any], seed_text: str) -> str:
     return " | ".join(part for part in summary_parts if part)[:MAX_QUERY_TEXT_LENGTH]
 
 
-def _derive_request_root(request_path: Path, root_dir: str | None) -> Path:
-    if root_dir:
-        return Path(root_dir).resolve()
-
+def _validate_request_path(request_path: Path) -> Path:
     resolved = request_path.resolve()
     if (
         resolved.name != "request.json"
-        or resolved.parent.parent.name != "seed_papers"
-        or resolved.parent.parent.parent.name != "requests"
+        or resolved.parent.parent.name != "seed-papers"
+        or resolved.parent.parent.parent.name != "archive"
     ):
         raise ValueError(f"Unexpected request path: {resolved}")
-    return resolved.parent.parent.parent.parent
+    return resolved
+
+
+def _derive_request_root(request_path: Path, root_dir: str | None) -> Path:
+    resolved = _validate_request_path(request_path)
+    derived_root = resolved.parent.parent.parent.parent
+    if root_dir:
+        root_resolved = Path(root_dir).resolve()
+        if root_resolved != derived_root:
+            raise ValueError(f"Unexpected request path: {resolved}")
+        return root_resolved
+    return derived_root
 
 
 def _validate_source_path(source_path: str, request_id: str) -> PurePosixPath:
     relative_path = PurePosixPath(source_path)
-    expected_prefix = PurePosixPath("requests") / "seed_papers" / request_id
+    expected_prefix = PurePosixPath("archive") / "seed-papers" / request_id
     if relative_path.parent != expected_prefix or relative_path.suffix.lower() != ".pdf":
         raise ValueError(f"Unexpected source_path: {source_path}")
     if any(part in {"", ".", ".."} for part in relative_path.parts):
@@ -172,11 +184,11 @@ def _validate_source_path(source_path: str, request_id: str) -> PurePosixPath:
 
 
 def load_request(request_path: str, root_dir: str | None = None) -> dict[str, Any]:
-    request_file = Path(request_path).resolve()
+    request_file = _validate_request_path(Path(request_path))
+    root = _derive_request_root(request_file, root_dir)
     payload = json.loads(request_file.read_text(encoding="utf-8"))
 
     request_id = _normalize_request_id(request_file.parent.name)
-    root = _derive_request_root(request_file, root_dir)
     source_path = _normalize_text(payload.get("source_path"))
     relative_pdf_path = _validate_source_path(source_path, request_id)
     seed_pdf_path = _resolve_under_root(root, *relative_pdf_path.parts)
@@ -474,7 +486,10 @@ def _extract_seed_text(request: dict[str, Any], generate_docs_module: Any) -> st
     extract_pdf_text = getattr(generate_docs_module, "extract_pdf_text", None)
     if not callable(extract_pdf_text):
         raise RuntimeError("generate_docs_module.extract_pdf_text is required")
-    return _normalize_text(extract_pdf_text(request["seed_pdf_path"]))
+    seed_text = _normalize_text(extract_pdf_text(request["seed_pdf_path"]))
+    if not seed_text:
+        raise SeedPaperProcessingError("text extraction returned empty text")
+    return seed_text
 
 
 @lru_cache(maxsize=1)
@@ -690,7 +705,7 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
     embedding_module = helpers["embedding"]
     filter_module = helpers["filter"]
 
-    request_root = Path(request["seed_pdf_path"]).resolve().parents[3]
+    request_root = _resolve_request_root(request)
     config_path = request_root / "config.yaml"
     config = source_config_module.load_config_with_source_migration(str(config_path), write_back=False)
     queries = _build_seed_queries(request, seed_text)
@@ -775,14 +790,18 @@ def rank_related_papers(
     recall = (retrieve_related or retrieve_related_papers)(request, seed_text)
     papers_by_id = {str(paper_id): dict(paper or {}) for paper_id, paper in (recall.get("papers") or {}).items()}
     queries = list(recall.get("queries") or [])
-    if not papers_by_id or not queries:
-        return []
+    if not queries:
+        raise SeedPaperProcessingError("retrieval returned no query lanes")
+    if not papers_by_id:
+        raise SeedPaperProcessingError("retrieval returned no recalled papers")
 
     candidate_ids = _build_candidate_ids(queries, _normalize_related_count(request.get("related_count")))
+    if not candidate_ids:
+        raise SeedPaperProcessingError("retrieval produced no candidate ids")
     effective_seed_identity = set(seed_identity or _seed_identity_values(request, seed_text))
     filtered_ids = [paper_id for paper_id in candidate_ids if paper_id in papers_by_id and not _paper_matches_seed(papers_by_id[paper_id], effective_seed_identity)]
     if not filtered_ids:
-        return []
+        raise SeedPaperProcessingError("retrieval only returned seed-paper matches")
 
     documents = _build_rerank_documents(papers_by_id, filtered_ids)
     active_reranker = _resolve_reranker(reranker)
@@ -815,6 +834,8 @@ def rank_related_papers(
                 "llm_score": item.get("relevance_score", item.get("score", 0.0)),
             }
         )
+    if not ordered:
+        raise SeedPaperProcessingError("rerank returned no scored results")
     for paper_id in filtered_ids:
         if paper_id in seen_ids:
             continue
@@ -894,6 +915,8 @@ def process_request(
         reranker=reranker,
     )
     selection = select_related_outputs(resolved_ranked_related, mode=request["mode"], related_count=request["related_count"])
+    if not _iter_unique_related(selection):
+        raise SeedPaperProcessingError("selection produced no related outputs")
     written = render_seed_workspace(
         request,
         seed_text=seed_text,
@@ -915,7 +938,7 @@ def process_request(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Process a seed paper request and write docs outputs.")
-    parser.add_argument("--request-path", required=True, help="Path to requests/seed_papers/<id>/request.json")
+    parser.add_argument("--request-path", required=True, help="Path to archive/seed-papers/<id>/request.json")
     parser.add_argument("--request-id", default="", help="Expected request id slug")
     parser.add_argument("--root-dir", default="", help="Optional repository root override")
     parser.add_argument("--docs-dir", default="", help="Optional docs output directory override")
@@ -931,14 +954,17 @@ def main() -> None:
     if args.ranked_related_fixture:
         ranked_related = _load_ranked_related_fixture(args.ranked_related_fixture)
 
-    result = process_request(
-        args.request_path,
-        request_id=args.request_id or None,
-        root_dir=args.root_dir or None,
-        docs_dir=args.docs_dir or None,
-        seed_mode=args.seed_mode or None,
-        ranked_related=ranked_related,
-    )
+    try:
+        result = process_request(
+            args.request_path,
+            request_id=args.request_id or None,
+            root_dir=args.root_dir or None,
+            docs_dir=args.docs_dir or None,
+            seed_mode=args.seed_mode or None,
+            ranked_related=ranked_related,
+        )
+    except (SeedPaperProcessingError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     print(
         json.dumps(
             {

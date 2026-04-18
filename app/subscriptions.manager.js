@@ -732,6 +732,24 @@ window.SubscriptionsManager = (function () {
       const uploadTarget = await window.SubscriptionsGithubToken.prepareSeedPaperUploadTarget({
         requestId: pathInfo.requestId,
       });
+      if (window.DPRSecretSession && typeof window.DPRSecretSession.syncSessionSecretsToGithub === 'function') {
+        setQuickRunMessage('正在同步当前会话的 GitHub Secrets...', '#666');
+        const syncResult = await window.DPRSecretSession.syncSessionSecretsToGithub({
+          token: uploadTarget && uploadTarget.token ? uploadTarget.token : undefined,
+          owner: uploadTarget && uploadTarget.owner ? uploadTarget.owner : undefined,
+          repo: uploadTarget && uploadTarget.repo ? uploadTarget.repo : undefined,
+          onProgress: (current, total) => {
+            setQuickRunMessage(`(${current}/${total}) 正在同步 GitHub Secrets...`, '#666');
+          },
+        });
+        if (syncResult && syncResult.skipped === true) {
+          setQuickRunMessage('当前会话未提供可复用的 LLM 配置，正在继续使用仓库中已有的 GitHub Secrets 上传请求。', '#666');
+        } else if (!syncResult || syncResult.ok !== true) {
+          throw new Error('当前会话 GitHub Secrets 同步失败，请稍后重试。');
+        } else {
+          setQuickRunMessage('正在上传种子论文请求...', '#666');
+        }
+      }
       const pdfWrite = await window.SubscriptionsGithubToken.writeRepoFile({
         owner: uploadTarget && uploadTarget.owner ? uploadTarget.owner : undefined,
         repo: uploadTarget && uploadTarget.repo ? uploadTarget.repo : undefined,
@@ -772,12 +790,11 @@ window.SubscriptionsManager = (function () {
         ],
       });
       if (!repoVisibility || repoVisibility.allVisible !== true) {
-        throw new Error('种子论文文件上传后暂未在目标分支可见，请稍后重试。');
+        throw new Error('种子论文文件上传后暂未在 archive 目录可见，请稍后重试。');
       }
       await window.DPRWorkflowRunner.runSeedPaperWorkflow({
         requestId: pathInfo.requestId,
         requestPath: pathInfo.requestPath,
-        requestRef,
         seedMode: payload.mode,
       });
       const finalTip = `已提交种子论文请求（${payload.related_count} 篇，模式：${payload.mode}）。`;
