@@ -162,8 +162,81 @@ jobs:
           DPR_ENABLE_MULTI_SOURCE_RPC: "true"
           DPR_MULTI_SOURCE_BM25_RPC: match_multi_source_papers_bm25
           DPR_MULTI_SOURCE_VECTOR_RPC_EXACT: match_multi_source_papers_exact
+          BLT_API_KEY: ${{ secrets.BLT_API_KEY }}
+          BLT_PRIMARY_BASE_URL: ${{ secrets.BLT_PRIMARY_BASE_URL }}
+          BLT_API_BASE: ${{ secrets.BLT_API_BASE }}
+          LLM_PRIMARY_BASE_URL: ${{ secrets.LLM_PRIMARY_BASE_URL }}
+          GPTBEST_BASE_URL: ${{ secrets.GPTBEST_BASE_URL }}
+          BLT_RERANK_MODEL: qwen3-reranker-4b
+          RERANK_ENABLED: ${{ secrets.RERANK_ENABLED }}
+          RERANK_API_KEY: ${{ secrets.RERANK_API_KEY }}
+          RERANK_BASE_URL: ${{ secrets.RERANK_BASE_URL }}
+          RERANK_MODEL: ${{ secrets.RERANK_MODEL }}
         run: |
           set -euo pipefail
+          RERANK_ENABLED_STATE="$(python3 - <<'PY'
+          import os
+          raw = os.getenv("RERANK_ENABLED")
+          if raw is None:
+              print("")
+          else:
+              value = str(raw).strip().lower()
+              if value in {"1", "true", "yes", "on"}:
+                  print("true")
+              elif value in {"0", "false", "no", "off"}:
+                  print("false")
+              else:
+                  print("")
+          PY
+          )"
+          if [ "$RERANK_ENABLED_STATE" = "true" ]; then
+            if [ -z "${RERANK_API_KEY:-}" ] || [ -z "${RERANK_BASE_URL:-}" ] || [ -z "${RERANK_MODEL:-}" ]; then
+              echo "RERANK_ENABLED=true but dedicated rerank secrets are incomplete." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+          elif [ "$RERANK_ENABLED_STATE" = "false" ]; then
+            if [ -z "${BLT_API_KEY:-}" ]; then
+              echo "RERANK_ENABLED=false but BLT_API_KEY is missing for hosted fallback." >&2
+              exit 1
+            fi
+            RUNTIME_BLT_BASE_URL="${BLT_API_BASE:-${BLT_PRIMARY_BASE_URL:-${LLM_PRIMARY_BASE_URL:-${GPTBEST_BASE_URL:-}}}}"
+            if [ -z "$RUNTIME_BLT_BASE_URL" ]; then
+              echo "RERANK_ENABLED=false but BLT base URL is missing for hosted fallback." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+            export RERANK_API_KEY="$BLT_API_KEY"
+            export RERANK_BASE_URL="$RUNTIME_BLT_BASE_URL"
+            export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
+            export Reranker_LLM_API_KEY="$RERANK_API_KEY"
+            export Reranker_LLM_BASE_URL="$RERANK_BASE_URL"
+            export Reranker_LLM_MODEL="$RERANK_MODEL"
+            unset RERANK_ENABLED
+          elif [ -n "${RERANK_API_KEY:-}" ] || [ -n "${RERANK_BASE_URL:-}" ] || [ -n "${RERANK_MODEL:-}" ]; then
+            if [ -z "${RERANK_API_KEY:-}" ] || [ -z "${RERANK_BASE_URL:-}" ] || [ -z "${RERANK_MODEL:-}" ]; then
+              echo "Dedicated rerank secrets are incomplete for hosted seed workflow." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+          else
+            if [ -z "${BLT_API_KEY:-}" ]; then
+              echo "Missing RERANK_ENABLED secret and BLT_API_KEY for hosted seed workflow." >&2
+              exit 1
+            fi
+            RUNTIME_BLT_BASE_URL="${BLT_API_BASE:-${BLT_PRIMARY_BASE_URL:-${LLM_PRIMARY_BASE_URL:-${GPTBEST_BASE_URL:-}}}}"
+            if [ -z "$RUNTIME_BLT_BASE_URL" ]; then
+              echo "Missing RERANK_ENABLED secret and BLT base URL for hosted seed workflow." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+            export RERANK_API_KEY="$BLT_API_KEY"
+            export RERANK_BASE_URL="$RUNTIME_BLT_BASE_URL"
+            export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
+            export Reranker_LLM_API_KEY="$RERANK_API_KEY"
+            export Reranker_LLM_BASE_URL="$RERANK_BASE_URL"
+            export Reranker_LLM_MODEL="$RERANK_MODEL"
+          fi
           python3 src/seed_paper_processor.py \
             --request-path "${PUBLISH_ROOT}/${REQUEST_PATH}" \
             --request-id "$REQUEST_ID" \

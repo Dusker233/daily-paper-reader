@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import urlparse
+import sys
 
 
 SEED_NAV_START = "<!--dpr-seed-papers:start-->"
@@ -52,6 +53,17 @@ COMMON_QUERY_STOPWORDS = {
 
 class SeedPaperProcessingError(RuntimeError):
     pass
+
+
+class RecallLaneFailure(SeedPaperProcessingError):
+    def __init__(self, reason: str, public_message: str, *, diagnostic_messages: list[str] | None = None):
+        super().__init__(public_message)
+        self.reason = _normalize_text(reason).lower()
+        self.diagnostic_messages = [
+            _normalize_text(message)
+            for message in (diagnostic_messages or [])
+            if _normalize_text(message)
+        ]
 
 
 def _normalize_text(value: Any) -> str:
@@ -616,6 +628,20 @@ def _default_embedding_model_name(config: dict[str, Any]) -> str:
     return "BAAI/bge-small-en-v1.5"
 
 
+def _normalize_failure_messages(messages: Any) -> list[str]:
+    if messages is None:
+        return []
+    if isinstance(messages, str):
+        values = [messages]
+    elif isinstance(messages, (list, tuple)):
+        values = list(messages)
+    elif isinstance(messages, set):
+        values = sorted(messages, key=lambda item: _normalize_text(item))
+    else:
+        values = [messages]
+    return [_normalize_text(message) for message in values if _normalize_text(message)]
+
+
 def _normalize_recall_results(result: dict[str, Any]) -> dict[str, Any]:
     papers_by_id: dict[str, dict[str, Any]] = {}
     for paper_id, paper in (result.get("papers") or {}).items():
@@ -623,11 +649,13 @@ def _normalize_recall_results(result: dict[str, Any]) -> dict[str, Any]:
         normalized = {**source_paper, "id": _normalize_text(source_paper.get("id") or paper_id)}
         if normalized["id"]:
             papers_by_id[normalized["id"]] = normalized
+    failure_messages = _normalize_failure_messages(result.get("failure_messages"))
     return {
         "queries": list(result.get("queries") or []),
         "papers": papers_by_id,
         "total_hits": int(result.get("total_hits") or 0),
         "non_empty_queries": int(result.get("non_empty_queries") or 0),
+        "failure_messages": failure_messages,
     }
 
 
@@ -679,20 +707,96 @@ def _build_candidate_ids(queries: list[dict[str, Any]], related_count: int) -> l
     return _unique_keep_order(guaranteed_ids + ranked_ids[:global_limit])
 
 
-def _empty_recall_results() -> dict[str, Any]:
-    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+def _empty_recall_results(*, failure_messages: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "queries": [],
+        "papers": {},
+        "total_hits": 0,
+        "non_empty_queries": 0,
+        "failure_messages": list(failure_messages or []),
+    }
 
 
 def _has_recalled_papers(result: dict[str, Any]) -> bool:
     return bool((result or {}).get("papers"))
 
 
+def _error_message(error: Exception) -> str:
+    if isinstance(error, RecallLaneFailure):
+        return " | ".join(error.diagnostic_messages) if error.diagnostic_messages else _normalize_text(error)
+    return _normalize_text(error)
+
+
+def _build_recall_lane_error(result: dict[str, Any]) -> RecallLaneFailure | None:
+    messages = _normalize_failure_messages((result or {}).get("failure_messages"))
+    if not messages:
+        return None
+    joined_messages = " | ".join(messages)
+    if "pgrst202" in joined_messages.lower() or "could not find the function" in joined_messages.lower() or (
+        "schema cache" in joined_messages.lower() and "function" in joined_messages.lower()
+    ):
+        return RecallLaneFailure(
+            "missing_function",
+            "seed recall backend is missing required RPC support",
+            diagnostic_messages=messages,
+        )
+    if (
+        "57014" in joined_messages.lower()
+        or "statement timeout" in joined_messages.lower()
+        or "canceling statement due to statement timeout" in joined_messages.lower()
+    ):
+        return RecallLaneFailure(
+            "statement_timeout",
+            "seed recall timed out",
+            diagnostic_messages=messages,
+        )
+    return RecallLaneFailure(
+        "backend_error",
+        "seed recall backend request failed",
+        diagnostic_messages=messages,
+    )
+
+
 def _is_missing_supabase_function_error(error: Exception) -> bool:
-    message = _normalize_text(error).lower()
-    return bool(message) and (
-        "pgrst202" in message
-        or "could not find the function" in message
-        or ("schema cache" in message and "function" in message)
+    message = _error_message(error).lower()
+    return (isinstance(error, RecallLaneFailure) and error.reason == "missing_function") or (
+        bool(message)
+        and (
+            "pgrst202" in message
+            or "could not find the function" in message
+            or ("schema cache" in message and "function" in message)
+        )
+    )
+
+
+def _is_statement_timeout_error(error: Exception) -> bool:
+    message = _error_message(error).lower()
+    return (isinstance(error, RecallLaneFailure) and error.reason == "statement_timeout") or (
+        bool(message)
+        and (
+            "57014" in message
+            or "statement timeout" in message
+            or "canceling statement due to statement timeout" in message
+        )
+    )
+
+
+def _safe_error_summary(error: Exception) -> str:
+    if isinstance(error, RecallLaneFailure):
+        if error.reason == "missing_function":
+            return "missing required RPC support"
+        if error.reason == "statement_timeout":
+            return "statement timeout"
+        if error.reason:
+            return error.reason.replace("_", " ")
+    summary = _normalize_text(error).splitlines()[0]
+    return summary[:200] if summary else type(error).__name__
+
+
+def _warn_recall_lane_error(source_key: str, lane_name: str, error: Exception) -> None:
+    print(
+        f"[WARN] seed recall {lane_name} failed for {source_key}: {_safe_error_summary(error)}",
+        file=sys.stderr,
     )
 
 
@@ -748,6 +852,7 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
 
     grouped_queries = router_module.group_queries_by_source(queries)
     merged_results: list[dict[str, Any]] = []
+    collected_failure_messages: list[str] = []
     related_top_k = max(_normalize_related_count(request.get("related_count")) * 8, 10)
     embedding_model_name = _default_embedding_model_name(config)
     multi_source_enabled = _multi_source_rpc_enabled()
@@ -771,6 +876,10 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
         if multi_source_enabled
         else None
     )
+    recall_window_resolver = getattr(bm25_module, "resolve_supabase_recall_window", None)
+    if not callable(recall_window_resolver):
+        recall_window_resolver = getattr(embedding_module, "resolve_supabase_recall_window", None)
+    recall_start_dt, recall_end_dt = recall_window_resolver(config) if callable(recall_window_resolver) else (None, None)
     coarse_filter = None
 
     def get_embedding_model():
@@ -785,8 +894,8 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
                 source_queries,
                 top_k=related_top_k,
                 supabase_conf=backend,
-                start_dt=None,
-                end_dt=None,
+                start_dt=recall_start_dt,
+                end_dt=recall_end_dt,
                 query_filter_sources=False,
             )
         )
@@ -803,8 +912,8 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
                 source_queries,
                 top_k=related_top_k,
                 supabase_conf=backend,
-                start_dt=None,
-                end_dt=None,
+                start_dt=recall_start_dt,
+                end_dt=recall_end_dt,
                 rpc_name_override=str(backend.get("vector_rpc_exact") or backend.get("vector_rpc") or "").strip() or None,
                 rpc_mode="exact",
                 query_filter_sources=query_filter_sources,
@@ -819,8 +928,8 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
                 source_queries,
                 top_k=related_top_k,
                 supabase_conf=multi_source_bm25_backend,
-                start_dt=None,
-                end_dt=None,
+                start_dt=recall_start_dt,
+                end_dt=recall_end_dt,
                 query_filter_sources=True,
             )
         )
@@ -830,35 +939,83 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
             raise error
         return run_vector_recall(source_queries, multi_source_vector_backend, query_filter_sources=True)
 
+    def execute_recall_lane(
+        source_key: str,
+        lane_name: str,
+        primary_runner: Callable[[], dict[str, Any]],
+        fallback_runner: Callable[[Exception], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        def public_lane_error(error: Exception) -> Exception:
+            if isinstance(error, RecallLaneFailure):
+                return error
+            if _is_missing_supabase_function_error(error):
+                return RecallLaneFailure(
+                    "missing_function",
+                    "seed recall backend is missing required RPC support",
+                    diagnostic_messages=[_error_message(error)],
+                )
+            return error
+
+        def handle_lane_error(error: Exception) -> dict[str, Any]:
+            if _is_missing_supabase_function_error(error) and fallback_runner is not None:
+                try:
+                    return fallback_runner(error)
+                except Exception as fallback_exc:
+                    if _is_statement_timeout_error(fallback_exc):
+                        _warn_recall_lane_error(source_key, lane_name, fallback_exc)
+                        return _empty_recall_results(failure_messages=[_error_message(fallback_exc)])
+                    raise public_lane_error(fallback_exc)
+            if _is_statement_timeout_error(error):
+                _warn_recall_lane_error(source_key, lane_name, error)
+                return _empty_recall_results(failure_messages=[_error_message(error)])
+            raise public_lane_error(error)
+
+        try:
+            result = primary_runner()
+        except Exception as exc:
+            return handle_lane_error(exc)
+        if _has_recalled_papers(result):
+            return result
+        lane_error = _build_recall_lane_error(result)
+        if lane_error is None:
+            return result
+        return handle_lane_error(lane_error)
+
     for source_key, source_queries in grouped_queries.items():
         backend = source_config_module.get_source_backend(config, source_key)
         if not backend or not backend.get("enabled"):
             continue
         source_results: list[dict[str, Any]] = []
         if backend.get("use_bm25_rpc"):
-            try:
-                bm25_result = run_bm25_recall(source_queries, backend)
-            except Exception as exc:
-                if not _is_missing_supabase_function_error(exc):
-                    raise
-                bm25_result = run_multi_source_bm25_recall(source_queries, exc)
+            bm25_result = execute_recall_lane(
+                source_key,
+                "bm25",
+                lambda: run_bm25_recall(source_queries, backend),
+                lambda exc: run_multi_source_bm25_recall(source_queries, exc),
+            )
+            collected_failure_messages.extend(_normalize_failure_messages(bm25_result.get("failure_messages")))
             if _has_recalled_papers(bm25_result):
                 source_results.append(bm25_result)
         if backend.get("use_vector_rpc"):
-            try:
-                embedding_result = run_vector_recall(source_queries, backend)
-            except Exception as exc:
-                if not _is_missing_supabase_function_error(exc):
-                    raise
-                embedding_result = run_multi_source_vector_recall(source_queries, exc)
+            embedding_result = execute_recall_lane(
+                source_key,
+                "vector",
+                lambda: run_vector_recall(source_queries, backend),
+                lambda exc: run_multi_source_vector_recall(source_queries, exc),
+            )
+            collected_failure_messages.extend(_normalize_failure_messages(embedding_result.get("failure_messages")))
             if _has_recalled_papers(embedding_result):
                 source_results.append(embedding_result)
         if source_results:
             merged_results.append(router_module.merge_pipeline_results(source_results))
 
     if not merged_results:
-        return _empty_recall_results()
-    return _normalize_recall_results(router_module.merge_pipeline_results(merged_results))
+        return _empty_recall_results(failure_messages=collected_failure_messages)
+    merged = _normalize_recall_results(router_module.merge_pipeline_results(merged_results))
+    merged["failure_messages"] = _normalize_failure_messages(
+        [*merged.get("failure_messages", []), *collected_failure_messages]
+    )
+    return merged
 
 
 def _build_rerank_documents(papers_by_id: dict[str, dict[str, Any]], paper_ids: list[str]) -> list[str]:
@@ -893,8 +1050,14 @@ def rank_related_papers(
     papers_by_id = {str(paper_id): dict(paper or {}) for paper_id, paper in (recall.get("papers") or {}).items()}
     queries = list(recall.get("queries") or [])
     if not queries:
+        recall_error = _build_recall_lane_error(recall)
+        if recall_error is not None:
+            raise SeedPaperProcessingError(str(recall_error))
         raise SeedPaperProcessingError("retrieval returned no query lanes")
     if not papers_by_id:
+        recall_error = _build_recall_lane_error(recall)
+        if recall_error is not None:
+            raise SeedPaperProcessingError(str(recall_error))
         raise SeedPaperProcessingError("retrieval returned no recalled papers")
 
     candidate_ids = _build_candidate_ids(queries, _normalize_related_count(request.get("related_count")))
