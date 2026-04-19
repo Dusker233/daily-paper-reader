@@ -420,8 +420,8 @@ def normalize_meta_tldr_line(md_text: str) -> Tuple[str, bool]:
 def normalize_glance_block_format(md_text: str) -> Tuple[str, bool]:
     """
     规范 `## 速览` 区块的换行符号：
-    - TLDR/Motivation/Method/Result 行末尾应带 ` \\`（强制换行）
-    - Conclusion 行末尾不应带 `\\`
+    - TLDR / Research Question / Core Idea / Evidence（兼容旧的 Motivation / Method / Result）行末尾应带 ` \\`
+    - Reading Guide（兼容旧的 Conclusion）行末尾不应带 `\\`
     """
     if not md_text:
         return md_text, False
@@ -430,6 +430,16 @@ def normalize_glance_block_format(md_text: str) -> Tuple[str, bool]:
     out: List[str] = []
     changed = False
     in_glance = False
+    line_break_labels = {
+        "tldr",
+        "motivation",
+        "method",
+        "result",
+        "research question",
+        "core idea",
+        "evidence",
+    }
+    no_break_labels = {"conclusion", "reading guide"}
 
     def ensure_line_break(s: str) -> str:
         ss = s.rstrip()
@@ -457,15 +467,11 @@ def normalize_glance_block_format(md_text: str) -> Tuple[str, bool]:
                 out.append(line)
                 continue
 
-            if stripped.startswith("**TLDR**：") or stripped.startswith("**TLDR**:"):
+            match = re.match(r"^\*\*([^*]+)\*\*[：:]", stripped)
+            normalized_label = _normalize_glance_label(match.group(1)) if match else ""
+            if normalized_label in line_break_labels:
                 new_line = ensure_line_break(line)
-            elif stripped.startswith("**Motivation**：") or stripped.startswith("**Motivation**:"):
-                new_line = ensure_line_break(line)
-            elif stripped.startswith("**Method**：") or stripped.startswith("**Method**:"):
-                new_line = ensure_line_break(line)
-            elif stripped.startswith("**Result**：") or stripped.startswith("**Result**:"):
-                new_line = ensure_line_break(line)
-            elif stripped.startswith("**Conclusion**：") or stripped.startswith("**Conclusion**:"):
+            elif normalized_label in no_break_labels:
                 new_line = remove_line_break(line)
             else:
                 new_line = line
@@ -489,6 +495,94 @@ def ensure_single_sentence_end(text: str) -> str:
         return s
     s = s.rstrip("。.!?！？")
     return s + "。"
+
+
+GLANCE_LABEL_ALIASES = {
+    "tldr": "tldr",
+    "motivation": "motivation",
+    "method": "method",
+    "result": "result",
+    "conclusion": "conclusion",
+    "research question": "research_question",
+    "core idea": "core_idea",
+    "evidence": "evidence",
+    "reading guide": "reading_guide",
+}
+
+
+GLANCE_FRONTMATTER_PRIORITY = [
+    ("motivation", ("research_question", "motivation")),
+    ("method", ("core_idea", "method")),
+    ("result", ("evidence", "result")),
+    ("conclusion", ("reading_guide", "conclusion")),
+]
+
+
+GLANCE_STRUCTURED_FIELDS = [
+    ("TLDR", "tldr", True),
+    ("Research Question", "research_question", True),
+    ("Core Idea", "core_idea", True),
+    ("Evidence", "evidence", True),
+    ("Reading Guide", "reading_guide", False),
+]
+
+
+def _normalize_glance_label(label: str) -> str:
+    return re.sub(r"\s+", " ", str(label or "").strip()).lower()
+
+
+def parse_glance_overview_fields(glance: str) -> Dict[str, str]:
+    fields: Dict[str, str] = {}
+    for raw_line in str(glance or "").splitlines():
+        line = raw_line.strip().rstrip("\\").strip()
+        match = re.match(r"^\*\*([^*]+)\*\*[：:](.+)$", line)
+        if not match:
+            continue
+        normalized_label = _normalize_glance_label(match.group(1))
+        field_key = GLANCE_LABEL_ALIASES.get(normalized_label)
+        if not field_key:
+            continue
+        value = ensure_single_sentence_end(match.group(2).strip())
+        if value:
+            fields[field_key] = value
+    return fields
+
+
+def _build_glance_text(fields: Dict[str, str]) -> str:
+    lines: List[str] = []
+    for label, key, keep_break in GLANCE_STRUCTURED_FIELDS:
+        value = ensure_single_sentence_end(str(fields.get(key) or "").strip())
+        if not value:
+            continue
+        suffix = " \\" if keep_break else ""
+        lines.append(f"**{label}**：{value}{suffix}")
+    return "\n".join(lines)
+
+
+def _prepare_glance_source_text(abstract: str, paper_text: str = "", max_chars: int = 12000) -> str:
+    candidate = str(paper_text or "").strip() or str(abstract or "").strip()
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    if len(candidate) <= max_chars:
+        return candidate
+    omission = "\n\n[...中间内容已省略...]\n\n"
+    if max_chars <= len(omission) + 20:
+        return candidate[:max_chars].rstrip()
+    budget = max_chars - len(omission)
+    head_budget = max(20, int(budget * 0.7))
+    tail_budget = max(20, budget - head_budget)
+    head = candidate[:head_budget].rstrip()
+    tail = candidate[-tail_budget:].lstrip()
+    return f"{head}{omission}{tail}"[:max_chars].rstrip()
+
+
+def load_text_content(txt_path: str) -> str:
+    if not txt_path or not os.path.exists(txt_path):
+        return ""
+    try:
+        with open(txt_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
 
 
 def upsert_auto_block(md_path: str, heading: str, content: str) -> None:
@@ -553,32 +647,38 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
     with open(md_file_path, "r", encoding="utf-8") as f:
         paper_md_content = strip_auto_sections(f.read())
 
-    paper_txt_content = ""
-    if os.path.exists(txt_file_path):
-        with open(txt_file_path, "r", encoding="utf-8") as f:
-            paper_txt_content = f.read()
+    paper_txt_content = load_text_content(txt_file_path)
+    source_text = _prepare_glance_source_text("", paper_txt_content, max_chars=20000)
 
     system_prompt = (
         "你是一名资深学术论文分析助手，请使用中文、以 Markdown 形式，"
         "对给定论文做结构化、深入、客观的总结。"
     )
     user_prompt = (
-        "请基于下面提供的论文内容，生成一段详细的中文总结，要求按照如下要点依次展开：\n"
-        "1. 论文的核心问题与整体含义（研究动机和背景）。\n"
-        "2. 论文提出的方法论：核心思想、关键技术细节、公式或算法流程（用文字说明即可）。\n"
-        "3. 实验设计：使用了哪些数据集 / 场景，它的 benchmark 是什么，对比了哪些方法。\n"
-        "4. 资源与算力：如果文中有提到，请总结使用了多少算力（GPU 型号、数量、训练时长等）。若未明确说明，也请指出这一点。\n"
-        "5. 实验数量与充分性：大概做了多少组实验（如不同数据集、消融实验等），这些实验是否充分、是否客观、公平。\n"
-        "6. 论文的主要结论与发现。\n"
-        "7. 优点：方法或实验设计上有哪些亮点。\n"
-        "8. 不足与局限：包括实验覆盖、偏差风险、应用限制等。\n\n"
-        "请用分层标题和项目符号（Markdown 格式）组织上述内容，语言尽量简洁但信息要尽量完整。\n"
-        "要求：最后单独输出一行“（完）”作为结束标记。"
+        "请基于下面提供的论文内容，生成一段偏精读的中文总结。要求不是泛泛概述，而是帮助读者真正决定如何精读这篇论文。\n"
+        "请严格按以下结构输出 Markdown：\n"
+        "### 问题定义与背景\n"
+        "- 研究问题是什么，为什么值得研究，论文试图填补什么空白。\n"
+        "### 方法拆解\n"
+        "- 按模块拆解核心方法、输入输出、关键机制、训练/推理流程。\n"
+        "### 关键创新点\n"
+        "- 相比已有方法，真正新增了什么，不要把常规工程包装成创新。\n"
+        "### 实验与证据\n"
+        "- 数据集/任务设置、主要对比对象、最关键结果、消融或误差分析。\n"
+        "### 局限性与风险\n"
+        "- 论文没有解决什么，结论依赖哪些前提，可能有哪些偏差或适用边界。\n"
+        "### 复现与延伸启发\n"
+        "- 如果读者要复现/继续做，最该关注哪些实现细节、实验抓手或后续问题。\n\n"
+        "要求：\n"
+        "- 每个二级标题下用 2-5 条项目符号。\n"
+        "- 尽量引用正文里的证据，不要写空泛赞美。\n"
+        "- 如果某项信息文中没有明确给出，要直接说明“文中未明确说明”。\n"
+        "- 最后单独输出一行“（完）”作为结束标记。"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
-    if paper_txt_content:
-        messages.append({"role": "user", "content": f"### 论文 PDF 提取文本 ###\n{paper_txt_content}"})
+    if source_text:
+        messages.append({"role": "user", "content": f"### 论文 PDF 提取文本 ###\n{source_text}"})
     messages.append({"role": "user", "content": f"### 论文 Markdown 元数据 ###\n{paper_md_content}"})
     messages.append({"role": "user", "content": user_prompt})
 
@@ -613,10 +713,10 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
     return last or None
 
 
-def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) -> str | None:
+def generate_glance_overview(title: str, abstract: str, paper_text: str = "", max_retries: int = 3) -> str | None:
     """
-    生成论文速览（包含 TLDR、Motivation、Method、Result、Conclusion）。
-    使用 JSON 结构化输出，确保返回完整的五个字段。
+    生成论文速览。
+    skim 不再只依赖 abstract，而是优先基于全文提取文本生成更有阅读价值的结构化速览。
     """
     if LLM_CLIENT is None:
         message = "[WARN] 未配置 LLM_CLIENT，跳过速览生成。"
@@ -625,15 +725,23 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
         log(message)
         return None
 
-    system_prompt = "你是论文速览助手，请用中文简洁地总结论文的关键信息。"
-    payload = {"title": title, "abstract": abstract}
+    source_text = _prepare_glance_source_text(abstract, paper_text)
+    if not source_text:
+        return None
+
+    system_prompt = "你是论文速览助手，请用中文输出基于全文线索的高密度速览，帮助读者快速判断是否值得精读。"
+    payload = {"title": title, "paper_text": source_text}
     user_text = json.dumps(payload, ensure_ascii=False)
     user_prompt = (
-        "请基于上面的 JSON 中的 title 和 abstract，输出一个中文速览摘要，严格返回 JSON（不要输出任何其它文字）：\n"
-        "{\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\"}\n"
+        "请基于上面的 JSON 中的 title 和 paper_text，严格返回 JSON（不要输出任何其它文字）：\n"
+        "{\"tldr\":\"...\",\"research_question\":\"...\",\"core_idea\":\"...\",\"evidence\":\"...\",\"reading_guide\":\"...\"}\n"
         "要求：\n"
-        "- tldr：100字左右的完整概述，涵盖研究背景、方法和主要贡献\n"
-        "- motivation/method/result/conclusion：每个字段一句话概括，简洁明了\n"
+        "- tldr：120-180 字，概括研究目标、方法抓手、主要发现、是否值得继续细读。\n"
+        "- research_question：一句话点明论文到底在解决什么问题。\n"
+        "- core_idea：一句话概括方法核心机制或技术路线。\n"
+        "- evidence：一句话指出最值得关注的实验/结果证据。\n"
+        "- reading_guide：一句话告诉读者若继续精读，优先看哪几部分以及为什么。\n"
+        "- 如果正文证据不足，允许写“从现有文本无法确认”，不要编造。\n"
         "Output must be strict JSON only, no markdown, no fences, no extra text."
     )
 
@@ -641,12 +749,12 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
         "type": "object",
         "properties": {
             "tldr": {"type": "string"},
-            "motivation": {"type": "string"},
-            "method": {"type": "string"},
-            "result": {"type": "string"},
-            "conclusion": {"type": "string"},
+            "research_question": {"type": "string"},
+            "core_idea": {"type": "string"},
+            "evidence": {"type": "string"},
+            "reading_guide": {"type": "string"},
         },
-        "required": ["tldr", "motivation", "method", "result", "conclusion"],
+        "required": ["tldr", "research_question", "core_idea", "evidence", "reading_guide"],
         "additionalProperties": False,
     }
 
@@ -668,25 +776,17 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
             )
             if not isinstance(parsed, dict):
                 continue
-            obj = parsed
-            tldr = str(obj.get("tldr") or "").strip()
-            motivation = str(obj.get("motivation") or "").strip()
-            method = str(obj.get("method") or "").strip()
-            result = str(obj.get("result") or "").strip()
-            conclusion = str(obj.get("conclusion") or "").strip()
-            if not (tldr and motivation and method and result and conclusion):
+            fields = {
+                "tldr": str(parsed.get("tldr") or "").strip(),
+                "research_question": str(parsed.get("research_question") or "").strip(),
+                "core_idea": str(parsed.get("core_idea") or "").strip(),
+                "evidence": str(parsed.get("evidence") or "").strip(),
+                "reading_guide": str(parsed.get("reading_guide") or "").strip(),
+            }
+            if not all(fields.values()):
                 continue
-            return "\n".join(
-                [
-                    f"**TLDR**：{ensure_single_sentence_end(tldr)} \\",
-                    f"**Motivation**：{ensure_single_sentence_end(motivation)} \\",
-                    f"**Method**：{ensure_single_sentence_end(method)} \\",
-                    f"**Result**：{ensure_single_sentence_end(result)} \\",
-                    f"**Conclusion**：{ensure_single_sentence_end(conclusion)}",
-                ]
-            )
+            return _build_glance_text(fields)
         except Exception as e:
-            # 额度不足等“硬失败”不必重试，直接降级
             msg = str(e)
             if (
                 "insufficient_user_quota" in msg
@@ -703,9 +803,8 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
 
 def build_glance_fallback(paper: Dict[str, Any]) -> str:
     """
-    当 LLM 额度不足/不可用时的降级速览：
-    - TLDR 优先用 llm_tldr_cn/llm_tldr；否则用摘要首句；
-    - 其余字段用“基于摘要的启发式”生成，保证 5 段齐全。
+    当 LLM 额度不足/不可用时的降级速览。
+    输出与新 skim 结构保持一致，避免前后端消费分叉。
     """
     abstract = str(paper.get("abstract") or "").strip()
     tldr = (
@@ -724,37 +823,28 @@ def build_glance_fallback(paper: Dict[str, Any]) -> str:
         tldr = first_sentence(abstract)
     if not tldr and evidence:
         tldr = evidence
-    tldr = ensure_single_sentence_end(tldr or "基于摘要生成的速览信息。")
-
-    motivation = ensure_single_sentence_end(
-        first_sentence(evidence) or "本文关注一个具有代表性的研究问题，并尝试提升现有方法的效果或可解释性。"
-    )
 
     method_hint = ""
     if abstract:
         m = re.search(r"(we (?:propose|present|introduce|develop)[^\\.]{0,200})\\.", abstract, re.I)
         if m:
             method_hint = m.group(1).strip()
-    method = ensure_single_sentence_end(method_hint or "方法与实现细节请参考摘要与正文。")
 
     result_hint = ""
     if abstract:
         m = re.search(r"(experiments? (?:show|demonstrate)[^\\.]{0,200})\\.", abstract, re.I)
         if m:
             result_hint = m.group(1).strip()
-    result = ensure_single_sentence_end(result_hint or "结果与对比结论请参考摘要与正文。")
 
-    conclusion = ensure_single_sentence_end("总体而言，该工作在所述任务上展示了有效性，并提供了可复用的思路或工具。")
-
-    return "\n".join(
-        [
-            f"**TLDR**：{tldr} \\",
-            f"**Motivation**：{motivation} \\",
-            f"**Method**：{method} \\",
-            f"**Result**：{result} \\",
-            f"**Conclusion**：{conclusion}",
-        ]
-    )
+    fields = {
+        "tldr": tldr or "基于现有文本，这篇工作给出了一个可继续跟进的研究方向与方法思路。",
+        "research_question": first_sentence(evidence)
+        or "这篇工作重点关注某个具体研究问题，并尝试解释现有方法的不足。",
+        "core_idea": method_hint or "核心方法与实现细节需要结合正文的方法部分进一步确认。",
+        "evidence": result_hint or "从当前可用摘要中只能看到有限结果信号，关键实验证据建议回到正文核对。",
+        "reading_guide": "若继续阅读，优先查看方法部分与实验部分，确认关键机制和结果是否真的支撑结论。",
+    }
+    return _build_glance_text(fields)
 
 
 def build_tags_html(section: str, llm_tags: List[str]) -> str:
@@ -915,8 +1005,10 @@ def _format_entry_tags(tags: List[Tuple[str, str]]) -> str:
 
 
 def _resolve_entry_summary(paper: Dict[str, Any]) -> str:
+    glance_fields = parse_glance_overview_fields(str(paper.get("_glance_overview") or ""))
     summary = str(
-        paper.get("llm_tldr_cn")
+        glance_fields.get("tldr")
+        or paper.get("llm_tldr_cn")
         or paper.get("llm_tldr")
         or paper.get("llm_tldr_en")
         or ""
@@ -1356,28 +1448,10 @@ def build_markdown_content(
 
     # 解析速览内容
     glance = paper.get("_glance_overview", "").strip()
-    glance_tldr = ""
-    glance_motivation = ""
-    glance_method = ""
-    glance_result = ""
-    glance_conclusion = ""
+    glance_fields = parse_glance_overview_fields(glance)
 
-    if glance:
-        for line in glance.split("\n"):
-            line = line.strip().rstrip("\\").strip()
-            if line.startswith("**TLDR**：") or line.startswith("**TLDR**:"):
-                glance_tldr = line.split("：", 1)[-1].split(":", 1)[-1].strip()
-            elif line.startswith("**Motivation**：") or line.startswith("**Motivation**:"):
-                glance_motivation = line.split("：", 1)[-1].split(":", 1)[-1].strip()
-            elif line.startswith("**Method**：") or line.startswith("**Method**:"):
-                glance_method = line.split("：", 1)[-1].split(":", 1)[-1].strip()
-            elif line.startswith("**Result**：") or line.startswith("**Result**:"):
-                glance_result = line.split("：", 1)[-1].split(":", 1)[-1].strip()
-            elif line.startswith("**Conclusion**：") or line.startswith("**Conclusion**:"):
-                glance_conclusion = line.split("：", 1)[-1].split(":", 1)[-1].strip()
-
-    # 优先使用速览生成的 TLDR（100字左右），否则使用原来的 TLDR
-    display_tldr = glance_tldr if glance_tldr else tldr
+    # 优先使用速览生成的 TLDR，否则使用原来的 TLDR
+    display_tldr = str(glance_fields.get("tldr") or "").strip() or tldr
 
     # 辅助函数：转义 YAML 字符串中的特殊字符
     # 构建 YAML front matter
@@ -1405,15 +1479,15 @@ def build_markdown_content(
     if figure_assets:
         lines.append(f"figures_json: {yaml_escape_value(json.dumps(figure_assets, ensure_ascii=False))}")
 
-    # 速览字段
-    if glance_motivation:
-        lines.append(f"motivation: {yaml_escape_value(glance_motivation)}")
-    if glance_method:
-        lines.append(f"method: {yaml_escape_value(glance_method)}")
-    if glance_result:
-        lines.append(f"result: {yaml_escape_value(glance_result)}")
-    if glance_conclusion:
-        lines.append(f"conclusion: {yaml_escape_value(glance_conclusion)}")
+    # 速览字段：新标签优先，兼容旧标签，但每个 front matter key 只写一次
+    for meta_key, candidate_keys in GLANCE_FRONTMATTER_PRIORITY:
+        value = ""
+        for field_key in candidate_keys:
+            value = str(glance_fields.get(field_key) or "").strip()
+            if value:
+                break
+        if value:
+            lines.append(f"{meta_key}: {yaml_escape_value(value)}")
 
     lines.append("---")
     lines.append("")
@@ -1572,7 +1646,7 @@ def process_paper(
         # 已存在速览则默认不重复生成（避免重复 LLM 调用），除非 force_glance=true
         has_glance = "## 速览" in existing
         if force_glance or not has_glance:
-            glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
+            glance = generate_glance_overview(title, abstract_en, load_text_content(txt_path)) or build_glance_fallback(paper)
             if glance:
                 paper["_glance_overview"] = glance
 
@@ -1655,7 +1729,7 @@ def process_paper(
         )
         if figures:
             paper["_figure_assets"] = figures
-        glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
+        glance = generate_glance_overview(title, abstract_en, load_text_content(txt_path)) or build_glance_fallback(paper)
         if glance:
             paper["_glance_overview"] = glance
         tags_list = build_tags_list(section, paper.get("llm_tags") or [])
@@ -1679,7 +1753,7 @@ def process_paper(
 
     zh_title, zh_abstract = translate_title_and_abstract_to_zh(title, abstract_en)
     tags_list = build_tags_list(section, paper.get("llm_tags") or [])
-    glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
+    glance = generate_glance_overview(title, abstract_en, load_text_content(txt_path)) or build_glance_fallback(paper)
     if glance:
         paper["_glance_overview"] = glance
     content = build_markdown_content(paper, section, zh_title, zh_abstract, tags_list)

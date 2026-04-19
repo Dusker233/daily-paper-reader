@@ -86,6 +86,8 @@ const {
   buildSessionSecretState,
   applySessionSecretState,
   enforceGuestMode,
+  buildGithubSecretDraftFromSession,
+  saveSummarizeSecretsToGithub,
 } = global.window.DPRSecretSession.__test;
 
 function resetSecretSessionState() {
@@ -317,6 +319,97 @@ function testApplySessionSecretStateMovesGithubTokenToSessionAccessor() {
   assert.equal(global.window.DPRSecretSession.getGithubToken(), 'ghp_session_secret');
 }
 
+function testBuildGithubSecretDraftFromSessionUsesWorkflowAndRerankConfig() {
+  const draft = buildGithubSecretDraftFromSession({
+    llmProvider: {
+      type: 'openai-compatible',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://api.workflow.example.com/v1/',
+      model: 'gpt-4.1-mini',
+    },
+    rerankerLLM: {
+      apiKey: 'sk-rerank',
+      baseUrl: 'https://api.rerank.example.com/v1/',
+      model: 'qwen3-reranker-4b',
+    },
+  });
+
+  assert.deepEqual(draft, {
+    providerType: 'openai-compatible',
+    workflowApiKey: 'sk-workflow',
+    workflowBaseUrl: 'https://api.workflow.example.com/v1',
+    workflowModel: 'gpt-4.1-mini',
+    filterModel: 'gpt-4.1-mini',
+    rewriteModel: 'gpt-4.1-mini',
+    skipRerank: false,
+    rerankerApiKey: 'sk-rerank',
+    rerankerBaseUrl: 'https://api.rerank.example.com/v1',
+    rerankerModel: 'qwen3-reranker-4b',
+  });
+}
+
+function testBuildGithubSecretDraftFromSessionHonorsExplicitSkipRerank() {
+  const draft = buildGithubSecretDraftFromSession({
+    llmProvider: {
+      type: 'plato',
+      skipRerank: true,
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://api.bltcy.ai/v1',
+      model: 'gpt-5-chat',
+    },
+    rerankerLLM: {
+      apiKey: 'sk-stale-rerank',
+      baseUrl: 'https://api.rerank.example.com/v1/',
+      model: 'qwen3-reranker-4b',
+    },
+  });
+
+  assert.deepEqual(draft, {
+    providerType: 'plato',
+    workflowApiKey: 'sk-workflow',
+    workflowBaseUrl: 'https://api.bltcy.ai/v1',
+    workflowModel: 'gpt-5-chat',
+    filterModel: 'gemini-3-flash-preview-nothinking',
+    rewriteModel: 'gemini-3-flash-preview',
+    skipRerank: true,
+    rerankerApiKey: '',
+    rerankerBaseUrl: '',
+    rerankerModel: '',
+  });
+}
+
+function testBuildGithubSecretDraftFromSessionFallsBackToChatAndDisablesMissingRerank() {
+  const draft = buildGithubSecretDraftFromSession({
+    chatLLMs: [
+      {
+        apiKey: 'sk-chat',
+        baseUrl: 'https://api.chat.example.com/v1/',
+        models: ['gpt-4.1-mini', 'gpt-4.1'],
+      },
+    ],
+    rerankerLLM: {
+      enabled: false,
+    },
+  });
+
+  assert.deepEqual(draft, {
+    providerType: 'openai-compatible',
+    workflowApiKey: 'sk-chat',
+    workflowBaseUrl: 'https://api.chat.example.com/v1',
+    workflowModel: 'gpt-4.1-mini',
+    filterModel: 'gpt-4.1-mini',
+    rewriteModel: 'gpt-4.1-mini',
+    skipRerank: true,
+    rerankerApiKey: '',
+    rerankerBaseUrl: '',
+    rerankerModel: '',
+  });
+}
+
 async function testVerifyGithubTokenForSetupStoresRuntimeTokenForCurrentSession() {
   resetSecretSessionState();
   const responses = [];
@@ -378,6 +471,130 @@ async function testVerifyGithubTokenForSetupClearsRuntimeTokenWhenScopeMissing()
   assert.equal(loadGithubTokenForSession(), '');
 }
 
+function buildMockSodium() {
+  return {
+    ready: Promise.resolve(),
+    base64_variants: { ORIGINAL: 'ORIGINAL' },
+    from_base64(value) {
+      return value;
+    },
+    from_string(value) {
+      return value;
+    },
+    crypto_box_seal(value) {
+      return `sealed:${value}`;
+    },
+    to_base64(value) {
+      return `base64:${value}`;
+    },
+  };
+}
+
+async function testSaveSummarizeSecretsToGithubUsesExplicitRepoTarget() {
+  const requests = [];
+  global.window.sodium = buildMockSodium();
+  global.fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url === 'https://api.github.com/repos/target-owner/target-repo/actions/secrets/public-key') {
+      return new Response(JSON.stringify({ key: 'public-key', key_id: 'key-id' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.startsWith('https://api.github.com/repos/target-owner/target-repo/actions/secrets/')) {
+      return new Response('', { status: 201 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const ok = await saveSummarizeSecretsToGithub('ghp_runtime_demo', {
+    owner: 'target-owner',
+    repo: 'target-repo',
+    providerType: 'openai-compatible',
+    workflowApiKey: 'sk-workflow',
+    workflowBaseUrl: 'https://api.workflow.example.com/v1',
+    workflowModel: 'gpt-4.1-mini',
+    filterModel: 'gpt-4.1-mini',
+    rewriteModel: 'gpt-4.1-mini',
+    skipRerank: true,
+    rerankerApiKey: '',
+    rerankerBaseUrl: '',
+    rerankerModel: '',
+  });
+
+  assert.equal(ok, true);
+  assert.equal(
+    requests.some((entry) => entry.url === 'https://api.github.com/user'),
+    false,
+  );
+  assert.equal(
+    requests[0].url,
+    'https://api.github.com/repos/target-owner/target-repo/actions/secrets/public-key',
+  );
+  assert.equal(
+    requests.every((entry) => entry.url.includes('/repos/target-owner/target-repo/')),
+    true,
+  );
+}
+
+async function testSyncSessionSecretsToGithubUsesExplicitRepoTargetAndRedactsProgressNames() {
+  resetSecretSessionState();
+  global.window.decoded_secret_private = {
+    llmProvider: {
+      type: 'openai-compatible',
+    },
+    workflowLLM: {
+      apiKey: 'sk-workflow',
+      baseUrl: 'https://api.workflow.example.com/v1',
+      model: 'gpt-4.1-mini',
+    },
+  };
+  global.window.sodium = buildMockSodium();
+  const requests = [];
+  const progressCalls = [];
+  global.fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url === 'https://api.github.com/repos/target-owner/target-repo/actions/secrets/public-key') {
+      return new Response(JSON.stringify({ key: 'public-key', key_id: 'key-id' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.startsWith('https://api.github.com/repos/target-owner/target-repo/actions/secrets/')) {
+      return new Response('', { status: 201 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const result = await global.window.DPRSecretSession.syncSessionSecretsToGithub({
+    token: 'ghp_runtime_demo',
+    owner: 'target-owner',
+    repo: 'target-repo',
+    onProgress(...args) {
+      progressCalls.push(args);
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    skipped: false,
+  });
+  assert.equal(
+    requests.some((entry) => entry.url === 'https://api.github.com/user'),
+    false,
+  );
+  assert.equal(
+    requests[0].url,
+    'https://api.github.com/repos/target-owner/target-repo/actions/secrets/public-key',
+  );
+  assert.equal(progressCalls.length > 0, true);
+  assert.equal(progressCalls.every((args) => args.length === 2), true);
+  assert.equal(
+    progressCalls.every((args) => typeof args[0] === 'number' && typeof args[1] === 'number'),
+    true,
+  );
+}
+
 (async () => {
   testBuildPingEntriesIncludesIndependentRerank();
   testBuildPingEntriesDedupesWorkflowAndRerankOverlap();
@@ -390,9 +607,14 @@ async function testVerifyGithubTokenForSetupClearsRuntimeTokenWhenScopeMissing()
   testClearRuntimeGithubTokenRemovesGlobalToken();
   testBuildSessionSecretStateStripsGithubTokenFromDecodedSecret();
   testApplySessionSecretStateMovesGithubTokenToSessionAccessor();
+  testBuildGithubSecretDraftFromSessionUsesWorkflowAndRerankConfig();
+  testBuildGithubSecretDraftFromSessionHonorsExplicitSkipRerank();
+  testBuildGithubSecretDraftFromSessionFallsBackToChatAndDisablesMissingRerank();
   await testVerifyGithubTokenForSetupStoresRuntimeTokenForCurrentSession();
   await testVerifyGithubTokenForSetupClearsRuntimeTokenOnFailure();
   await testVerifyGithubTokenForSetupClearsRuntimeTokenWhenScopeMissing();
+  await testSaveSummarizeSecretsToGithubUsesExplicitRepoTarget();
+  await testSyncSessionSecretsToGithubUsesExplicitRepoTargetAndRedactsProgressNames();
 
   console.log('secret session tests passed');
 })().catch((error) => {

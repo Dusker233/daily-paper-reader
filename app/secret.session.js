@@ -339,6 +339,9 @@
           ];
     return sanitizeModelList(defaults, 99);
   };
+  const DEFAULT_PLATO_REWRITE_MODEL = 'gemini-3-flash-preview';
+  const DEFAULT_PLATO_FILTER_MODEL = 'gemini-3-flash-preview-nothinking';
+  const DEFAULT_PLATO_RERANK_MODEL = 'qwen3-reranker-4b';
   const getOpenAICompatiblePreset = (key) => {
     const utils = getLLMUtils();
     if (typeof utils.getOpenAICompatiblePreset === 'function') {
@@ -676,7 +679,31 @@
   }
 
   // 将总结模型 / workflow 所需的大模型配置写入 GitHub Secrets
-  // 可选 progress 回调用于在 UI 中展示上传进度：progress(currentIndex, total, secretName)
+  // 可选 progress 回调用于在 UI 中展示上传进度：progress(currentIndex, total)
+  const buildGithubSecretDraftFromSession = (secret) => {
+    const safeSecret = secret && typeof secret === 'object' ? secret : {};
+    const providerType = inferProviderType(safeSecret);
+    const workflow = resolveWorkflowLLM(safeSecret);
+    if (!workflow || !workflow.apiKey || !workflow.baseUrl || !workflow.model) {
+      return null;
+    }
+
+    const explicitSkipRerank = !!(safeSecret.llmProvider && safeSecret.llmProvider.skipRerank);
+    const reranker = explicitSkipRerank ? null : resolveRerankerLLM(safeSecret);
+    const isPlato = providerType === 'plato';
+    return {
+      providerType,
+      workflowApiKey: workflow.apiKey,
+      workflowBaseUrl: workflow.baseUrl,
+      workflowModel: workflow.model,
+      filterModel: isPlato ? DEFAULT_PLATO_FILTER_MODEL : workflow.model,
+      rewriteModel: isPlato ? DEFAULT_PLATO_REWRITE_MODEL : workflow.model,
+      skipRerank: explicitSkipRerank || !reranker,
+      rerankerApiKey: reranker && reranker.apiKey ? reranker.apiKey : '',
+      rerankerBaseUrl: reranker && reranker.baseUrl ? reranker.baseUrl : '',
+      rerankerModel: reranker && reranker.model ? reranker.model : '',
+    };
+  };
   async function saveSummarizeSecretsToGithub(token, options, progress) {
     try {
       // 等待 libsodium-wrappers 就绪（通过 CDN 注入全局 sodium）
@@ -698,7 +725,12 @@
         throw new Error('浏览器缺少 libsodium 支持，无法写入 GitHub Secrets。');
       }
 
-      const { owner, repo } = await detectGithubRepoFromToken(token);
+      const safeOptions = options && typeof options === 'object' ? options : {};
+      const explicitOwner = normalizeText(safeOptions.owner || '');
+      const explicitRepo = normalizeText(safeOptions.repo || '');
+      const { owner, repo } = explicitOwner && explicitRepo
+        ? { owner: explicitOwner, repo: explicitRepo }
+        : await detectGithubRepoFromToken(token);
 
       // 获取仓库 Public Key
       const pkRes = await fetch(
@@ -732,7 +764,6 @@
         return sodium.to_base64(encBytes, sodium.base64_variants.ORIGINAL);
       };
 
-      const safeOptions = options && typeof options === 'object' ? options : {};
       const providerType = normalizeText(safeOptions.providerType || '').toLowerCase() || 'plato';
       const workflowApiKey = normalizeText(safeOptions.workflowApiKey || safeOptions.summarizedApiKey || '');
       const workflowBaseUrl = normalizeBaseUrlForStorage(safeOptions.workflowBaseUrl || safeOptions.summarizedBaseUrl || '');
@@ -881,7 +912,7 @@
         const item = operations[i];
         if (typeof progress === 'function') {
           try {
-            progress(i + 1, operations.length, item.name);
+            progress(i + 1, operations.length);
           } catch {
             // 忽略进度回调中的异常
           }
@@ -2018,8 +2049,8 @@
               rerankerBaseUrl: providerDraft.reranker && providerDraft.reranker.baseUrl,
               rerankerModel: providerDraft.reranker && providerDraft.reranker.model,
             },
-            (current, total, secretName) => {
-              setErrorText(`(${current}/${total}) 正在上传 GitHub Secret：${secretName}...`, '#666');
+            (current, total) => {
+              setErrorText(`(${current}/${total}) 正在上传 GitHub Secrets...`, '#666');
             },
           );
           if (!secretsOk) {
@@ -2317,6 +2348,46 @@
   window.DPRSecretSession.setSessionGithubToken = function (token) {
     saveRuntimeGithubToken(token);
   };
+  window.DPRSecretSession.syncSessionSecretsToGithub = async function (options) {
+    const secret = window.decoded_secret_private && typeof window.decoded_secret_private === 'object'
+      ? window.decoded_secret_private
+      : {};
+    const githubToken = normalizeText(
+      (options && options.token) || loadGithubTokenForSession(),
+    );
+    if (!githubToken) {
+      throw new Error('请先填写并验证 GitHub Token。');
+    }
+    const secretDraft = buildGithubSecretDraftFromSession(secret);
+    if (!secretDraft) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'missing_workflow_config',
+      };
+    }
+    const explicitOwner = normalizeText(options && options.owner);
+    const explicitRepo = normalizeText(options && options.repo);
+    const progress = options && typeof options.onProgress === 'function'
+      ? options.onProgress
+      : undefined;
+    const ok = await saveSummarizeSecretsToGithub(
+      githubToken,
+      {
+        ...secretDraft,
+        owner: explicitOwner,
+        repo: explicitRepo,
+      },
+      progress,
+    );
+    if (!ok) {
+      throw new Error('写入 GitHub Secrets 失败，请检查网络、Token 权限或稍后重试。');
+    }
+    return {
+      ok: true,
+      skipped: false,
+    };
+  };
   if (typeof window !== 'undefined' && window.__DPR_ENABLE_SECRET_SESSION_TESTS__ === true) {
     window.DPRSecretSession.__test = Object.assign(
       {},
@@ -2335,6 +2406,8 @@
         buildSessionSecretState,
         applySessionSecretState,
         enforceGuestMode,
+        buildGithubSecretDraftFromSession,
+        saveSummarizeSecretsToGithub,
       },
     );
   }

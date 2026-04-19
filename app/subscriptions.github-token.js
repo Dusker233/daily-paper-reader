@@ -4,7 +4,6 @@
 window.SubscriptionsGithubToken = (function () {
   const GITHUB_TOKEN_STORAGE_KEY = 'github_token_data';
   const DEFAULT_GITHUB_REPO = 'daily-paper-reader';
-  const DEFAULT_SEED_UPLOAD_BRANCH_PREFIX = 'seed-paper-requests';
   const CONFIG_PATH_CANDIDATES = [
     'config.yaml',
     'docs/config.yaml',
@@ -544,7 +543,7 @@ window.SubscriptionsGithubToken = (function () {
 
   const isAllowedRepoWritePath = (value) => {
     const normalized = normalizeRepoWritePath(value);
-    return /^requests\/seed_papers\/[a-z0-9][a-z0-9-]*\/(?:request\.json|[a-z0-9][a-z0-9-]*\.pdf)$/i.test(normalized);
+    return /^archive\/seed-papers\/[a-z0-9][a-z0-9-]*\/(?:request\.json|[a-z0-9][a-z0-9-]*\.pdf|ranked-related\.json)$/i.test(normalized);
   };
 
   const isValidGithubRef = (value) => {
@@ -682,22 +681,12 @@ window.SubscriptionsGithubToken = (function () {
     return res.json().catch(() => null);
   };
 
-  const buildSeedPaperUploadBranch = ({ requestId, branchPrefix } = {}) => {
-    const normalizedRequestId = toPathSlug(requestId, 'seed-paper-request');
-    const prefix = normalizeGithubRef(
-      branchPrefix || DEFAULT_SEED_UPLOAD_BRANCH_PREFIX,
-      DEFAULT_SEED_UPLOAD_BRANCH_PREFIX,
-    );
-    return normalizeGithubRef(`${prefix}/${normalizedRequestId}`);
-  };
-
   const prepareSeedPaperUploadTarget = async ({
     owner,
     repo,
     token,
     branch,
     requestId,
-    branchPrefix,
   } = {}) => {
     const effectiveToken = token || getTokenForConfig();
     if (!effectiveToken) {
@@ -712,36 +701,23 @@ window.SubscriptionsGithubToken = (function () {
         }
       : await resolveRepoInfoFromToken(effectiveToken, false);
     const defaultBranch = normalizeGithubRef(repoInfo.defaultBranch || 'main');
-    const uploadBranch = branch
-      ? normalizeGithubRef(branch)
-      : buildSeedPaperUploadBranch({ requestId, branchPrefix });
-    if (uploadBranch === defaultBranch) {
-      throw new Error('seed 上传分支不能与默认分支相同。');
-    }
+    const targetBranch = defaultBranch;
     const defaultRef = await readRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, defaultBranch);
     const defaultSha = extractGitRefSha(defaultRef);
     if (!defaultSha) {
       throw new Error(`无法读取仓库 ${repoInfo.owner}/${repoInfo.repo} 默认分支 ${defaultBranch} 的最新提交。`);
     }
-    const uploadRef = await readRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, uploadBranch);
-    const uploadSha = extractGitRefSha(uploadRef);
-    const created = !uploadSha;
-    const needsReset = !!uploadSha && uploadSha !== defaultSha;
-    if (created) {
-      await createRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, uploadBranch, defaultSha);
-    } else if (needsReset) {
-      await updateRepoGitRef(repoInfo.owner, repoInfo.repo, effectiveToken, uploadBranch, defaultSha, true);
-    }
     return {
       owner: repoInfo.owner,
       repo: repoInfo.repo,
       token: effectiveToken,
+      requestId: toPathSlug(requestId, 'seed-paper-request'),
       defaultBranch,
-      branch: uploadBranch,
-      ref: uploadBranch,
+      branch: targetBranch,
+      ref: targetBranch,
       sourceSha: defaultSha,
       baseSha: defaultSha,
-      created,
+      created: false,
     };
   };
 
@@ -756,12 +732,13 @@ window.SubscriptionsGithubToken = (function () {
     const extension = extensionMatch ? extensionMatch[1].toLowerCase() : 'pdf';
     const stem = rawFileName.replace(/\.[^.]+$/, '');
     const normalizedFileName = `${toPathSlug(stem, 'seed-paper')}.${extension}`;
-    const dirPath = `requests/seed_papers/${normalizedRequestId}`;
+    const dirPath = `archive/seed-papers/${normalizedRequestId}`;
     return {
       requestId: normalizedRequestId,
       dirPath,
       requestPath: `${dirPath}/request.json`,
       filePath: `${dirPath}/${normalizedFileName}`,
+      rankedRelatedPath: `${dirPath}/ranked-related.json`,
     };
   };
 

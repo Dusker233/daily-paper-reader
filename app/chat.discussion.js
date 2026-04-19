@@ -107,6 +107,7 @@ window.PrivateDiscussionChat = (function () {
 
   let chatDbPromise = null;
   let currentRouteFile = '';
+  let isQuickFetchPending = false;
 
   const openChatDB = () => {
     if (chatDbPromise) return chatDbPromise;
@@ -312,16 +313,57 @@ window.PrivateDiscussionChat = (function () {
     return String(y);
   };
 
-  const runQuickFetch = (days, statusEl, showToast = () => {}) => {
+  function syncQuickRunPendingControls(pending = isQuickFetchPending) {
+    [
+      document.getElementById('chat-quick-run-10d-btn'),
+      document.getElementById('chat-quick-run-30d-btn'),
+      document.getElementById('chat-quick-run-conference-run-btn'),
+      document.getElementById('chat-quick-run-year-select'),
+      document.getElementById('chat-quick-run-conference-select'),
+    ].forEach((control) => {
+      if (!control) return;
+      control.disabled = !!pending;
+    });
+  }
+
+  const runQuickFetch = async (days, statusEl, showToast = () => {}) => {
+    if (isQuickFetchPending) {
+      if (statusEl) {
+        statusEl.textContent = '快速抓取任务提交中，请稍候。';
+        statusEl.style.color = '#666';
+      }
+      return false;
+    }
     if (!window.DPRWorkflowRunner || typeof window.DPRWorkflowRunner.runQuickFetchByDays !== 'function') {
       if (statusEl) {
         statusEl.textContent = '工作流触发器未加载到当前页面。';
         statusEl.style.color = '#c00';
       }
-      return;
+      return false;
     }
-    window.DPRWorkflowRunner.runQuickFetchByDays(days);
-    showToast();
+    if (statusEl) {
+      statusEl.textContent = '正在发起快速抓取任务...';
+      statusEl.style.color = '#666';
+    }
+    isQuickFetchPending = true;
+    syncQuickRunPendingControls(true);
+    try {
+      await window.DPRWorkflowRunner.runQuickFetchByDays(days);
+      showToast();
+      return true;
+    } catch (error) {
+      if (console && typeof console.error === 'function') {
+        console.error(error);
+      }
+      if (statusEl) {
+        statusEl.textContent = `发起快速抓取失败：${error && error.message ? error.message : '未知错误'}`;
+        statusEl.style.color = '#c00';
+      }
+      return false;
+    } finally {
+      isQuickFetchPending = false;
+      syncQuickRunPendingControls(false);
+    }
   };
 
   const runQuickConferencePlaceholder = (yearSelectEl, confSelectEl, msgEl, statusEl) => {
@@ -1068,12 +1110,12 @@ window.PrivateDiscussionChat = (function () {
             <span class="dot"></span>
           </span>
         </div>
-        <div class="thinking-container" style="margin-top:8px; border-left:3px solid #ddd; padding-left:8px; font-size:0.85rem; color:#666; display:none;">
-          <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div class="thinking-container thinking-container-live" style="display:none;">
+          <div class="thinking-live-header">
             <span>思考过程</span>
-            <button class="thinking-toggle" style="margin-left:8px; font-size:0.75rem; padding:2px 6px;">展开</button>
+            <button class="thinking-toggle thinking-toggle-live">展开</button>
           </div>
-          <div class="thinking-content" style="white-space:pre-wrap; margin-top:4px;"></div>
+          <div class="thinking-content thinking-content-live"></div>
         </div>
         <div class="msg-content msg-content-ai"></div>
     `;
@@ -1583,6 +1625,7 @@ window.PrivateDiscussionChat = (function () {
       document.body.appendChild(modal);
     }
     fillQuickRunOptions(chatQuickRunYearSelect, chatQuickRunConferenceSelect);
+    syncQuickRunPendingControls();
 
     const inGuestMode =
       window.DPR_ACCESS_MODE === 'guest' || window.DPR_ACCESS_MODE === 'locked';
@@ -1814,15 +1857,15 @@ window.PrivateDiscussionChat = (function () {
 
     if (chatQuickRun10dBtn && !chatQuickRun10dBtn._bound) {
       chatQuickRun10dBtn._bound = true;
-      chatQuickRun10dBtn.addEventListener('click', () => {
-        runQuickFetch(10, statusEl, closeQuickRunPopover);
+      chatQuickRun10dBtn.addEventListener('click', async () => {
+        await runQuickFetch(10, statusEl, closeQuickRunPopover);
       });
     }
 
     if (chatQuickRun30dBtn && !chatQuickRun30dBtn._bound) {
       chatQuickRun30dBtn._bound = true;
-      chatQuickRun30dBtn.addEventListener('click', () => {
-        runQuickFetch(30, statusEl, closeQuickRunPopover);
+      chatQuickRun30dBtn.addEventListener('click', async () => {
+        await runQuickFetch(30, statusEl, closeQuickRunPopover);
       });
     }
 
@@ -1901,8 +1944,12 @@ window.PrivateDiscussionChat = (function () {
       loadPaperTextContent,
       buildMessagesForQuestion,
       sendMessage,
+      runQuickFetch,
       setCurrentRouteFileForTest(value) {
         currentRouteFile = stripMarkdownExtension(normalizeDocsRelativePath(value)) ? String(value || '') : '';
+      },
+      setQuickFetchPendingForTest(value) {
+        isQuickFetchPending = !!value;
       },
     },
   };

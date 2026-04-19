@@ -12,6 +12,7 @@ function createNode(tagName = 'div') {
     className: '',
     id: '',
     dataset: {},
+    _listeners: Object.create(null),
     classList: {
       add() {},
       remove() {},
@@ -38,7 +39,13 @@ function createNode(tagName = 'div') {
         this.parentNode.removeChild(this);
       }
     },
-    addEventListener() {},
+    addEventListener(type, handler) {
+      if (!type || typeof handler !== 'function') return;
+      if (!Array.isArray(this._listeners[type])) {
+        this._listeners[type] = [];
+      }
+      this._listeners[type].push(handler);
+    },
     setAttribute(name, value) {
       this[name] = value;
     },
@@ -46,7 +53,25 @@ function createNode(tagName = 'div') {
       return this[name];
     },
     focus() {},
-    click() {},
+    async click() {
+      const listeners = Array.isArray(this._listeners.click)
+        ? [...this._listeners.click]
+        : [];
+      const event = {
+        type: 'click',
+        target: this,
+        currentTarget: this,
+        preventDefault() {},
+        stopPropagation() {},
+      };
+      for (const handler of listeners) {
+        await handler(event);
+      }
+    },
+    contains(target) {
+      if (target === this) return true;
+      return this.children.some((child) => child === target || (child && typeof child.contains === 'function' && child.contains(target)));
+    },
     closest() { return null; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
@@ -87,6 +112,19 @@ const thinkingContentNode = createNode('div');
 const thinkingToggleNode = createNode('button');
 const aiAnswerNode = createNode('div');
 const aiResponseHeaderNode = createNode('div');
+const chatSidebarToggleNode = createNode('button');
+const chatSettingsToggleNode = createNode('button');
+const chatQuickRunToggleNode = createNode('button');
+const chatQuickRunCloseNode = createNode('button');
+const chatQuickRun10dNode = createNode('button');
+const chatQuickRun30dNode = createNode('button');
+const chatQuickRunConferenceRunNode = createNode('button');
+const chatQuickRunYearSelectNode = createNode('select');
+const chatQuickRunConferenceSelectNode = createNode('select');
+const chatQuickRunConferenceMsgNode = createNode('div');
+const chatQuickRunModalNode = createNode('div');
+const chatQuestionsToggleNode = createNode('button');
+const chatQuestionsPanelNode = createNode('div');
 
 thinkingContainerNode.style = {};
 aiAnswerNode.className = 'msg-content';
@@ -178,11 +216,26 @@ global.CustomEvent = global.CustomEvent || function CustomEvent(type, init) {
   this.detail = init ? init.detail : undefined;
 };
 
+const documentListeners = Object.create(null);
+
 global.document = {
   readyState: 'loading',
-  addEventListener() {},
-  removeEventListener() {},
-  dispatchEvent() {},
+  addEventListener(type, handler) {
+    if (!type || typeof handler !== 'function') return;
+    if (!Array.isArray(documentListeners[type])) {
+      documentListeners[type] = [];
+    }
+    documentListeners[type].push(handler);
+  },
+  removeEventListener(type, handler) {
+    if (!type || !Array.isArray(documentListeners[type])) return;
+    documentListeners[type] = documentListeners[type].filter((item) => item !== handler);
+  },
+  dispatchEvent(event) {
+    if (!event || !event.type || !Array.isArray(documentListeners[event.type])) return true;
+    documentListeners[event.type].forEach((handler) => handler(event));
+    return true;
+  },
   documentElement: {
     scrollTop: 0,
     scrollHeight: 1200,
@@ -194,6 +247,19 @@ global.document = {
     if (id === 'send-btn') return sendBtnNode;
     if (id === 'chat-status') return statusNode;
     if (id === 'chat-llm-model-select') return null;
+    if (id === 'chat-sidebar-toggle-btn') return chatSidebarToggleNode;
+    if (id === 'chat-settings-toggle-btn') return chatSettingsToggleNode;
+    if (id === 'chat-quick-run-btn') return chatQuickRunToggleNode;
+    if (id === 'chat-quick-run-close-btn') return chatQuickRunCloseNode;
+    if (id === 'chat-quick-run-10d-btn') return chatQuickRun10dNode;
+    if (id === 'chat-quick-run-30d-btn') return chatQuickRun30dNode;
+    if (id === 'chat-quick-run-conference-run-btn') return chatQuickRunConferenceRunNode;
+    if (id === 'chat-quick-run-year-select') return chatQuickRunYearSelectNode;
+    if (id === 'chat-quick-run-conference-select') return chatQuickRunConferenceSelectNode;
+    if (id === 'chat-quick-run-conference-msg') return chatQuickRunConferenceMsgNode;
+    if (id === 'chat-quick-run-modal') return chatQuickRunModalNode;
+    if (id === 'chat-questions-toggle-btn') return chatQuestionsToggleNode;
+    if (id === 'chat-questions-panel') return chatQuestionsPanelNode;
     return null;
   },
   createElement(tagName) {
@@ -227,6 +293,58 @@ require('../app/chat.discussion.js');
 const chat = global.window.PrivateDiscussionChat;
 assert.equal(typeof chat.initForPage, 'function');
 
+function resetTestNode(node, { text = '', html = '', disabled = false, display = '', value = '' } = {}) {
+  node.children = [];
+  node.parentNode = null;
+  node.parentElement = null;
+  node._innerHTML = html;
+  node._textContent = text;
+  node.innerText = text;
+  node.style = {};
+  if (display) {
+    node.style.display = display;
+  }
+  node.disabled = disabled;
+  node.value = value;
+  node._listeners = Object.create(null);
+  node._bound = false;
+  node._boundSend = false;
+  node._boundKey = false;
+  node._boundChange = false;
+  node._boundQToggle = false;
+  node._boundQPanelClick = false;
+  node._dprQuickRunOptionsFilled = false;
+  node.classList = {
+    _set: new Set(),
+    add(...names) {
+      names.filter(Boolean).forEach((name) => this._set.add(name));
+    },
+    remove(...names) {
+      names.filter(Boolean).forEach((name) => this._set.delete(name));
+    },
+    toggle(name, force) {
+      if (!name) return false;
+      if (force === true) {
+        this._set.add(name);
+        return true;
+      }
+      if (force === false) {
+        this._set.delete(name);
+        return false;
+      }
+      if (this._set.has(name)) {
+        this._set.delete(name);
+        return false;
+      }
+      this._set.add(name);
+      return true;
+    },
+    contains(name) {
+      return this._set.has(name);
+    },
+  };
+}
+
 function resetDomState() {
   historyNode.children = [];
   historyNode._innerHTML = '';
@@ -240,14 +358,54 @@ function resetDomState() {
   statusNode.textContent = '';
   statusNode.style = {};
   markdownSectionNode.innerText = '';
+  markdownSectionNode.children = [];
   markdownSectionNode.cloneNode = createNode('section').cloneNode;
   aiAnswerNode.innerHTML = '';
   aiAnswerNode.textContent = '';
+  [
+    historyNode,
+    inputNode,
+    sendBtnNode,
+    statusNode,
+    markdownSectionNode,
+    chatSidebarToggleNode,
+    chatSettingsToggleNode,
+    chatQuickRunToggleNode,
+    chatQuickRunCloseNode,
+    chatQuickRun10dNode,
+    chatQuickRun30dNode,
+    chatQuickRunConferenceRunNode,
+    chatQuickRunYearSelectNode,
+    chatQuickRunConferenceSelectNode,
+    chatQuickRunConferenceMsgNode,
+    chatQuickRunModalNode,
+    chatQuestionsToggleNode,
+    chatQuestionsPanelNode,
+    global.document.body,
+  ].forEach((node) => resetTestNode(node));
+  global.document.body.contains = createNode('body').contains;
+  markdownSectionNode.appendChild = createNode('section').appendChild;
+  markdownSectionNode.querySelector = () => null;
+  markdownSectionNode.querySelectorAll = () => [];
+  chatQuickRunModalNode.contains = createNode('div').contains;
+  chatQuickRunModalNode.setAttribute = createNode('div').setAttribute;
+  chatQuickRunModalNode.getAttribute = createNode('div').getAttribute;
+  chatQuickRunModalNode.style.display = 'none';
+  chatQuestionsPanelNode.style.display = 'none';
+  global.document._dprQuickRunPopoverBound = false;
+  global.document._dprQuickRunOpenEventBound = false;
+  global.document._dprQuickRunEscBound = false;
+  global.window.__dprQuickRunOpenRequested = false;
+  Object.keys(documentListeners).forEach((key) => {
+    documentListeners[key] = [];
+  });
   global.window.$docsify = { basePath: 'docs/' };
   global.window.__DPR_CURRENT_ROUTE = undefined;
   global.window.__DPR_CURRENT_ROUTE_FILE = undefined;
   global.window.location.hash = '#/';
+  global.window.DPRWorkflowRunner = undefined;
   chat.__test.setCurrentRouteFileForTest('');
+  chat.__test.setQuickFetchPendingForTest(false);
   delete localStorageState.dpr_chat_history_v1;
   delete localStorageState.dpr_chat_recent_questions_v1;
 }
@@ -547,6 +705,143 @@ async function testChatFallsBackWhenRouteAwareTxtIsEmpty() {
   assert.equal(paperContext.content.includes('Fallback body after empty txt'), true);
 }
 
+async function testChatQuickFetchReportsDispatchFailure() {
+  resetDomState();
+  const originalConsoleError = console.error;
+  let toastCalls = 0;
+  global.window.DPRWorkflowRunner = {
+    async runQuickFetchByDays() {
+      throw new Error('dispatch failed');
+    },
+  };
+
+  try {
+    console.error = () => {};
+    const ok = await chat.__test.runQuickFetch(10, statusNode, () => {
+      toastCalls += 1;
+    });
+
+    assert.equal(ok, false);
+    assert.equal(toastCalls, 0);
+    assert.match(statusNode.textContent, /发起快速抓取失败/u);
+    assert.equal(statusNode.style.color, '#c00');
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
+async function testChatQuickFetchWaitsForDispatchBeforeClosingPopover() {
+  resetDomState();
+  let resolveDispatch = null;
+  let dispatchCalls = 0;
+  let toastCalls = 0;
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays() {
+      dispatchCalls += 1;
+      return new Promise((resolve) => {
+        resolveDispatch = resolve;
+      });
+    },
+  };
+
+  const pendingRun = chat.__test.runQuickFetch(10, statusNode, () => {
+    toastCalls += 1;
+  });
+  await Promise.resolve();
+
+  assert.equal(dispatchCalls, 1);
+  assert.equal(statusNode.textContent, '正在发起快速抓取任务...');
+  assert.equal(statusNode.style.color, '#666');
+  assert.equal(toastCalls, 0);
+
+  resolveDispatch();
+  const ok = await pendingRun;
+
+  assert.equal(ok, true);
+  assert.equal(toastCalls, 1);
+  assert.equal(statusNode.textContent, '正在发起快速抓取任务...');
+  assert.equal(statusNode.style.color, '#666');
+}
+
+async function testChatQuickFetchRejectsDuplicateTriggerWhilePending() {
+  resetDomState();
+  let resolveDispatch = null;
+  let dispatchCalls = 0;
+  let toastCalls = 0;
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays() {
+      dispatchCalls += 1;
+      return new Promise((resolve) => {
+        resolveDispatch = resolve;
+      });
+    },
+  };
+
+  const firstRun = chat.__test.runQuickFetch(10, statusNode, () => {
+    toastCalls += 1;
+  });
+  await Promise.resolve();
+  const secondOk = await chat.__test.runQuickFetch(30, statusNode, () => {
+    toastCalls += 1;
+  });
+
+  assert.equal(dispatchCalls, 1);
+  assert.equal(secondOk, false);
+  assert.equal(toastCalls, 0);
+  assert.equal(statusNode.textContent, '快速抓取任务提交中，请稍候。');
+  assert.equal(statusNode.style.color, '#666');
+
+  resolveDispatch();
+  const firstOk = await firstRun;
+  assert.equal(firstOk, true);
+  assert.equal(toastCalls, 1);
+}
+
+async function testInitForPageDisablesQuickRunControlsDuringPendingDispatch() {
+  resetDomState();
+  let resolveDispatch = null;
+  let dispatchCalls = 0;
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays() {
+      dispatchCalls += 1;
+      return new Promise((resolve) => {
+        resolveDispatch = resolve;
+      });
+    },
+  };
+
+  assert.doesNotThrow(() => {
+    chat.initForPage('paper123', '202604/16/paper123.md');
+  });
+
+  assert.equal(chatQuickRun10dNode.disabled, false);
+  assert.equal(chatQuickRun30dNode.disabled, false);
+  assert.equal(chatQuickRunConferenceRunNode.disabled, false);
+  assert.equal(chatQuickRunYearSelectNode.disabled, false);
+  assert.equal(chatQuickRunConferenceSelectNode.disabled, false);
+
+  const clickPromise = chatQuickRun10dNode.click();
+  await Promise.resolve();
+
+  assert.equal(dispatchCalls, 1);
+  assert.equal(chatQuickRun10dNode.disabled, true);
+  assert.equal(chatQuickRun30dNode.disabled, true);
+  assert.equal(chatQuickRunConferenceRunNode.disabled, true);
+  assert.equal(chatQuickRunYearSelectNode.disabled, true);
+  assert.equal(chatQuickRunConferenceSelectNode.disabled, true);
+  assert.equal(statusNode.textContent, '正在发起快速抓取任务...');
+  assert.equal(statusNode.style.color, '#666');
+
+  resolveDispatch();
+  await clickPromise;
+
+  assert.equal(chatQuickRun10dNode.disabled, false);
+  assert.equal(chatQuickRun30dNode.disabled, false);
+  assert.equal(chatQuickRunConferenceRunNode.disabled, false);
+  assert.equal(chatQuickRunYearSelectNode.disabled, false);
+  assert.equal(chatQuickRunConferenceSelectNode.disabled, false);
+}
+
 (async () => {
   await testChatRequestUsesPaperTextWithoutDuplicateCurrentQuestion();
   testBuildPaperTextCandidateUrlsPrefersRouteScopedPath();
@@ -558,6 +853,10 @@ async function testChatFallsBackWhenRouteAwareTxtIsEmpty() {
   testBuildMessagesForQuestionMapsAiRoleToAssistant();
   await testChatFallbackStripsChatUiTextFromPaperContext();
   await testChatFallsBackWhenRouteAwareTxtIsEmpty();
+  await testChatQuickFetchReportsDispatchFailure();
+  await testChatQuickFetchWaitsForDispatchBeforeClosingPopover();
+  await testChatQuickFetchRejectsDuplicateTriggerWhilePending();
+  await testInitForPageDisablesQuickRunControlsDuringPendingDispatch();
   console.log('chat discussion tests passed');
 })().catch((error) => {
   console.error(error);

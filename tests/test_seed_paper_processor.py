@@ -17,6 +17,7 @@ def _load_module(module_name: str, path: pathlib.Path):
 
 class _StubGenerateDocs:
     ensure_text_content_calls = []
+    glance_calls = []
 
     @staticmethod
     def extract_pdf_text(pdf_path):
@@ -37,8 +38,19 @@ class _StubGenerateDocs:
         )
 
     @staticmethod
-    def generate_glance_overview(title, abstract):
-        return f"**TLDR**: {title}"
+    def generate_glance_overview(title, abstract, paper_text="", max_retries=3):
+        _StubGenerateDocs.glance_calls.append(
+            {"title": title, "abstract": abstract, "paper_text": paper_text, "max_retries": max_retries}
+        )
+        return "\n".join(
+            [
+                f"**TLDR**：{title} 讲了什么、方法为什么有效、值不值得继续细读。 \\",
+                "**Research Question**：这篇工作具体在解决什么问题。 \\",
+                "**Core Idea**：核心方法由哪些关键模块组成。 \\",
+                "**Evidence**：实验里最值得关注的结果信号是什么。 \\",
+                "**Reading Guide**：如果继续精读，优先看方法和实验两部分。",
+            ]
+        )
 
     @staticmethod
     def build_glance_fallback(paper):
@@ -46,7 +58,18 @@ class _StubGenerateDocs:
 
     @staticmethod
     def generate_deep_summary(md_path, txt_path):
-        return f"deep summary from {Path(txt_path).name}"
+        return "\n".join(
+            [
+                "### 问题定义与背景",
+                f"- deep summary from {Path(txt_path).name}",
+                "### 方法拆解",
+                "- 方法细节一",
+                "### 实验与证据",
+                "- 关键实验结论",
+                "### 局限与启发",
+                "- 局限说明",
+            ]
+        )
 
     @staticmethod
     def upsert_auto_block(md_path, heading, content):
@@ -83,6 +106,12 @@ class _StubReranker:
         return {"results": list(self._results)}
 
 
+class _EmptySeedTextGenerateDocs(_StubGenerateDocs):
+    @staticmethod
+    def extract_pdf_text(pdf_path):
+        return "   "
+
+
 class SeedPaperProcessorTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -94,9 +123,10 @@ class SeedPaperProcessorTest(unittest.TestCase):
 
     def setUp(self):
         _StubGenerateDocs.ensure_text_content_calls = []
+        _StubGenerateDocs.glance_calls = []
 
     def _write_request(self, root: Path, payload: dict, request_id: str = "demo-request"):
-        request_dir = root / "requests" / "seed_papers" / request_id
+        request_dir = root / "archive" / "seed-papers" / request_id
         request_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = request_dir / "seed-paper.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n")
@@ -111,7 +141,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 root,
                 {
                     "file_name": " Seed Paper.pdf ",
-                    "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                     "related_count": 3,
                     "selected_tags": [" RL ", "", "Security", "RL"],
                     "mode": "DEEP",
@@ -129,6 +159,135 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertEqual(request["mode"], "deep")
             self.assertEqual(request["notes"], "focus on methods")
 
+    def test_load_request_derives_archive_root_without_explicit_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_path, pdf_path = self._write_request(
+                root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": ["RL"],
+                    "mode": "skim",
+                    "notes": "",
+                },
+            )
+
+            request = self.mod.load_request(str(request_path))
+
+            self.assertEqual(request["request_id"], "demo-request")
+            self.assertEqual(Path(request["seed_pdf_path"]).resolve(), pdf_path.resolve())
+
+    def test_load_request_rejects_legacy_request_tree_without_explicit_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_dir = root / "requests" / "seed_papers" / "demo-request"
+            request_dir.mkdir(parents=True, exist_ok=True)
+            (request_dir / "seed-paper.pdf").write_bytes(b"%PDF-1.4\n")
+            request_path = request_dir / "request.json"
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "file_name": "Seed Paper.pdf",
+                        "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                        "related_count": 2,
+                        "selected_tags": [],
+                        "mode": "skim",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unexpected request path"):
+                self.mod.load_request(str(request_path))
+
+    def test_load_request_rejects_legacy_request_tree_with_explicit_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_dir = root / "requests" / "seed_papers" / "demo-request"
+            request_dir.mkdir(parents=True, exist_ok=True)
+            archive_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            archive_pdf.parent.mkdir(parents=True, exist_ok=True)
+            archive_pdf.write_bytes(b"%PDF-1.4\n")
+            request_path = request_dir / "request.json"
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "file_name": "Seed Paper.pdf",
+                        "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                        "related_count": 2,
+                        "selected_tags": [],
+                        "mode": "skim",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unexpected request path"):
+                self.mod.load_request(str(request_path), root_dir=str(root))
+
+    def test_load_request_rejects_request_path_outside_explicit_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as other_tmp:
+            root = Path(tmp)
+            other_root = Path(other_tmp)
+            request_path, _ = self._write_request(
+                other_root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": [],
+                    "mode": "skim",
+                },
+            )
+            archive_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            archive_pdf.parent.mkdir(parents=True, exist_ok=True)
+            archive_pdf.write_bytes(b"%PDF-1.4\n")
+
+            with self.assertRaisesRegex(ValueError, "Unexpected request path"):
+                self.mod.load_request(str(request_path), root_dir=str(root))
+
+    def test_load_request_rejects_archive_subdir_as_explicit_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_path, _ = self._write_request(
+                root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": [],
+                    "mode": "skim",
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unexpected request path"):
+                self.mod.load_request(str(request_path), root_dir=str(root / "archive"))
+
+    def test_load_request_rejects_nested_archive_request_path_under_explicit_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested_root = root / "tmp"
+            request_path, _ = self._write_request(
+                nested_root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": [],
+                    "mode": "skim",
+                },
+            )
+            archive_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            archive_pdf.parent.mkdir(parents=True, exist_ok=True)
+            archive_pdf.write_bytes(b"%PDF-1.4\n")
+
+            with self.assertRaisesRegex(ValueError, "Unexpected request path"):
+                self.mod.load_request(str(request_path), root_dir=str(root))
+
     def test_load_request_rejects_invalid_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -136,7 +295,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 root,
                 {
                     "file_name": "Seed Paper.pdf",
-                    "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                     "related_count": 3,
                     "selected_tags": [],
                     "mode": "weird",
@@ -153,7 +312,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 root,
                 {
                     "file_name": "Seed Paper.pdf",
-                    "source_path": "requests/seed_papers/demo-request/../other/seed-paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/../other/seed-paper.pdf",
                     "related_count": 3,
                     "selected_tags": [],
                     "mode": "skim",
@@ -170,7 +329,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 root,
                 {
                     "file_name": "Seed Paper.pdf",
-                    "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                     "related_count": 3,
                     "selected_tags": [],
                     "mode": "skim",
@@ -198,14 +357,14 @@ class SeedPaperProcessorTest(unittest.TestCase):
             root = Path(tmp)
             docs_dir = root / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
-            seed_pdf = root / "requests" / "seed_papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
             seed_pdf.parent.mkdir(parents=True, exist_ok=True)
             seed_pdf.write_bytes(b"%PDF-1.4\n")
 
             request = {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
-                "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                 "seed_pdf_path": str(seed_pdf),
                 "selected_tags": ["RL", "Security"],
                 "mode": "both",
@@ -258,10 +417,27 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertEqual(Path(written["workspace_dir"]).resolve(), workspace.resolve())
             seed_md = (workspace / "seed-paper.md").read_text(encoding="utf-8")
             self.assertIn("Seed Paper", seed_md)
-            self.assertIn("requests/seed_papers/demo-request/seed-paper.pdf", seed_md)
+            self.assertIn("archive/seed-papers/demo-request/seed-paper.pdf", seed_md)
             self.assertNotIn(str(seed_pdf), seed_md)
+            self.assertIn("## 速览", seed_md)
+            self.assertIn("**Research Question**：", seed_md)
+            self.assertIn("**Reading Guide**：", seed_md)
+            self.assertIn("## 精读", seed_md)
+            self.assertIn("### 方法拆解", seed_md)
+            self.assertEqual(_StubGenerateDocs.glance_calls[0]["abstract"], "seed paper full text")
+            self.assertEqual(_StubGenerateDocs.glance_calls[0]["paper_text"], "seed paper full text")
             related_files = sorted((workspace / "related").glob("*.md"))
             self.assertEqual(len(related_files), 2)
+            related_one_md = (workspace / "related" / "p1.md").read_text(encoding="utf-8")
+            self.assertIn("## 速览", related_one_md)
+            self.assertIn("**Research Question**：", related_one_md)
+            self.assertIn("## 精读", related_one_md)
+            self.assertEqual(_StubGenerateDocs.glance_calls[1]["abstract"], "first abstract")
+            self.assertEqual(_StubGenerateDocs.glance_calls[1]["paper_text"], "first abstract")
+            related_two_md = (workspace / "related" / "p2.md").read_text(encoding="utf-8")
+            self.assertIn("## 速览", related_two_md)
+            self.assertIn("**Reading Guide**：", related_two_md)
+            self.assertNotIn("## 精读", related_two_md)
             index_text = (workspace / "index.md").read_text(encoding="utf-8")
             self.assertIn("seed-paper.md", index_text)
             self.assertIn("related/", index_text)
@@ -271,14 +447,14 @@ class SeedPaperProcessorTest(unittest.TestCase):
             root = Path(tmp)
             docs_dir = root / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
-            seed_pdf = root / "requests" / "seed_papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
             seed_pdf.parent.mkdir(parents=True, exist_ok=True)
             seed_pdf.write_bytes(b"%PDF-1.4\n")
 
             request = {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
-                "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                 "seed_pdf_path": str(seed_pdf),
                 "selected_tags": ["RL"],
                 "mode": "both",
@@ -318,14 +494,14 @@ class SeedPaperProcessorTest(unittest.TestCase):
             root = Path(tmp)
             docs_dir = root / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
-            seed_pdf = root / "requests" / "seed_papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
             seed_pdf.parent.mkdir(parents=True, exist_ok=True)
             seed_pdf.write_bytes(b"%PDF-1.4\n")
 
             request = {
                 "request_id": "../demo-request",
                 "file_name": "Seed Paper.pdf",
-                "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                 "seed_pdf_path": str(seed_pdf),
                 "selected_tags": ["RL"],
                 "mode": "both",
@@ -459,32 +635,177 @@ class SeedPaperProcessorTest(unittest.TestCase):
         self.assertEqual(len(reranker.calls[0]["documents"]), 3)
         self.assertTrue(all("Seed Paper" not in doc for doc in reranker.calls[0]["documents"]))
 
-    def test_rank_related_papers_returns_empty_without_candidates(self):
+    def test_rank_related_papers_rejects_empty_retrieval_candidates(self):
         reranker = _StubReranker([])
 
-        ranked = self.mod.rank_related_papers(
-            {
-                "request_id": "demo-request",
-                "file_name": "Seed Paper.pdf",
-                "selected_tags": [],
-                "notes": "",
-                "related_count": 2,
-                "mode": "skim",
-            },
-            seed_text="seed paper body text",
-            retrieve_related=lambda req, seed_text: {"queries": [], "papers": {}},
-            reranker=reranker,
-            seed_identity={"seed-paper"},
-        )
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "retrieval returned no query lanes"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": [],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {"queries": [], "papers": {}},
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
 
-        self.assertEqual(ranked, [])
+        self.assertEqual(reranker.calls, [])
+
+    def test_rank_related_papers_rejects_rerank_without_scored_results(self):
+        reranker = _StubReranker([])
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "rerank returned no scored results"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": ["RL"],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [
+                        {
+                            "query_text": "seed paper related query",
+                            "sim_scores": {
+                                "paper-1": {"score": 0.8, "rank": 1},
+                            },
+                        }
+                    ],
+                    "papers": {
+                        "paper-1": {
+                            "id": "paper-1",
+                            "title": "Related One",
+                            "abstract": "first abstract",
+                            "source": "arxiv",
+                            "link": "https://example.com/p1.pdf",
+                        },
+                    },
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
+
+        self.assertEqual(len(reranker.calls), 1)
+
+    def test_rank_related_papers_rejects_empty_recalled_papers(self):
+        reranker = _StubReranker([])
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "retrieval returned no recalled papers"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": ["RL"],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [
+                        {
+                            "query_text": "seed paper related query",
+                            "sim_scores": {},
+                        }
+                    ],
+                    "papers": {},
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
+
+        self.assertEqual(reranker.calls, [])
+
+    def test_rank_related_papers_rejects_missing_candidate_ids(self):
+        reranker = _StubReranker([])
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "retrieval produced no candidate ids"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": ["RL"],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [
+                        {
+                            "query_text": "seed paper related query",
+                            "sim_scores": {},
+                            "top_ids": [],
+                        }
+                    ],
+                    "papers": {
+                        "paper-1": {
+                            "id": "paper-1",
+                            "title": "Related One",
+                            "abstract": "first abstract",
+                            "source": "arxiv",
+                            "link": "https://example.com/p1.pdf",
+                        },
+                    },
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
+
+        self.assertEqual(reranker.calls, [])
+
+    def test_rank_related_papers_rejects_seed_only_candidates(self):
+        reranker = _StubReranker([])
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "retrieval only returned seed-paper matches"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": ["RL"],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [
+                        {
+                            "query_text": "seed paper related query",
+                            "sim_scores": {
+                                "seed-paper": {"score": 0.8, "rank": 1},
+                            },
+                        }
+                    ],
+                    "papers": {
+                        "seed-paper": {
+                            "id": "seed-paper",
+                            "title": "Seed Paper",
+                            "abstract": "seed abstract",
+                            "source": "arxiv",
+                            "link": "https://example.com/seed.pdf",
+                        },
+                    },
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper", "Seed Paper"},
+            )
+
         self.assertEqual(reranker.calls, [])
 
     def test_rank_related_papers_excludes_seed_without_manual_identity_override(self):
         request = {
             "request_id": "demo-request",
             "file_name": "Seed Paper.pdf",
-            "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+            "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
             "seed_pdf_path": "/tmp/demo-request/seed-paper.pdf",
             "selected_tags": ["RL"],
             "notes": "",
@@ -650,14 +971,14 @@ class SeedPaperProcessorTest(unittest.TestCase):
             root = Path(tmp)
             docs_dir = root / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
-            seed_pdf = root / "requests" / "seed_papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
             seed_pdf.parent.mkdir(parents=True, exist_ok=True)
             seed_pdf.write_bytes(b"%PDF-1.4\n")
 
             request = {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
-                "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                 "seed_pdf_path": str(seed_pdf),
                 "selected_tags": ["RL"],
                 "mode": "deep",
@@ -690,6 +1011,41 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertEqual(related_txt.read_text(encoding="utf-8"), "deep abstract only")
             self.assertEqual(_StubGenerateDocs.ensure_text_content_calls, [])
 
+    def test_process_request_rejects_empty_seed_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            request_path, pdf_path = self._write_request(
+                root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": ["RL"],
+                    "mode": "skim",
+                    "notes": "",
+                },
+            )
+            pdf_path.write_bytes(b"%PDF-1.4\nseed")
+
+            with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "text extraction returned empty text"):
+                self.mod.process_request(
+                    str(request_path),
+                    request_id="demo-request",
+                    root_dir=str(root),
+                    docs_dir=str(docs_dir),
+                    generate_docs_module=_EmptySeedTextGenerateDocs,
+                    ranked_related=[
+                        {
+                            "id": "paper-1",
+                            "title": "Fixture Related One",
+                            "abstract": "fixture abstract one",
+                            "link": "https://arxiv.org/abs/1234.5678",
+                        }
+                    ],
+                )
+
     def test_process_request_builds_workspace_navigation_and_related_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -699,7 +1055,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 root,
                 {
                     "file_name": "Seed Paper.pdf",
-                    "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                     "related_count": 2,
                     "selected_tags": ["RL"],
                     "mode": "skim",
@@ -765,6 +1121,46 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertEqual(reranker.calls[0]["top_n"], 2)
             self.assertEqual(result["related_page_paths"], ["related/paper-2.md", "related/paper-1.md"])
 
+    def test_process_request_rejects_empty_ranked_related_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            request_path, pdf_path = self._write_request(
+                root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 2,
+                    "selected_tags": ["RL"],
+                    "mode": "both",
+                    "notes": "",
+                },
+            )
+            pdf_path.write_bytes(b"%PDF-1.4\nseed")
+
+            with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "selection produced no related outputs"):
+                self.mod.process_request(
+                    str(request_path),
+                    request_id="demo-request",
+                    root_dir=str(root),
+                    docs_dir=str(docs_dir),
+                    generate_docs_module=_StubGenerateDocs,
+                    ranked_related=[],
+                )
+
+    def test_main_exits_cleanly_on_request_validation_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid_request_path = Path(tmp) / "request.json"
+            invalid_request_path.write_text("{}", encoding="utf-8")
+            original_argv = list(sys.argv)
+            try:
+                sys.argv = ["seed_paper_processor.py", "--request-path", str(invalid_request_path)]
+                with self.assertRaisesRegex(SystemExit, "Unexpected request path"):
+                    self.mod.main()
+            finally:
+                sys.argv = original_argv
+
     def test_process_request_accepts_ranked_related_fixture_bypass(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -774,7 +1170,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 root,
                 {
                     "file_name": "Seed Paper.pdf",
-                    "source_path": "requests/seed_papers/demo-request/seed-paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
                     "related_count": 2,
                     "selected_tags": ["RL"],
                     "mode": "both",

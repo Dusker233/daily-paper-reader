@@ -263,6 +263,98 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertEqual(len(figures), 1)
         self.assertEqual(figures[0]["url"], "assets/figures/arxiv/1234.5678/fig-001.webp")
 
+    def test_resolve_entry_summary_prefers_glance_overview_tldr(self):
+        summary = self.mod._resolve_entry_summary(
+            {
+                "llm_tldr_cn": "旧的一句话摘要",
+                "_glance_overview": "\n".join(
+                    [
+                        "**TLDR**：新的速览 TLDR。 \\",
+                        "**Research Question**：问题。 \\",
+                        "**Core Idea**：方法。 \\",
+                        "**Evidence**：结果。 \\",
+                        "**Reading Guide**：导读。",
+                    ]
+                ),
+            }
+        )
+        self.assertEqual(summary, "新的速览 TLDR。")
+
+    def test_resolve_entry_summary_falls_back_to_legacy_tldr_without_glance(self):
+        summary = self.mod._resolve_entry_summary(
+            {
+                "llm_tldr_cn": "旧的一句话摘要",
+            }
+        )
+        self.assertEqual(summary, "旧的一句话摘要。")
+
+    def test_build_markdown_content_maps_new_glance_labels_to_legacy_frontmatter_fields(self):
+        paper = {
+            "title": "Glance Mapping Test",
+            "authors": ["Ada Lovelace"],
+            "published": "2026-03-26T00:00:00+00:00",
+            "link": "https://arxiv.org/pdf/9999.9999",
+            "abstract": "abstract body",
+            "source": "arxiv",
+            "_glance_overview": "\n".join(
+                [
+                    "**TLDR**：新的速览 TLDR。 \\",
+                    "**Research Question**：新的问题定义。 \\",
+                    "**Core Idea**：新的方法拆解。 \\",
+                    "**Evidence**：新的关键证据。 \\",
+                    "**Reading Guide**：新的继续阅读建议。",
+                ]
+            ),
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        meta = self.mod._parse_front_matter(md)
+        self.assertEqual(meta.get("tldr"), "新的速览 TLDR。")
+        self.assertEqual(meta.get("motivation"), "新的问题定义。")
+        self.assertEqual(meta.get("method"), "新的方法拆解。")
+        self.assertEqual(meta.get("result"), "新的关键证据。")
+        self.assertEqual(meta.get("conclusion"), "新的继续阅读建议。")
+
+    def test_build_markdown_content_prefers_new_glance_labels_over_legacy_duplicates(self):
+        paper = {
+            "title": "Glance Duplicate Test",
+            "authors": ["Ada Lovelace"],
+            "published": "2026-03-26T00:00:00+00:00",
+            "link": "https://arxiv.org/pdf/9999.9999",
+            "abstract": "abstract body",
+            "source": "arxiv",
+            "_glance_overview": "\n".join(
+                [
+                    "**TLDR**：新的速览 TLDR。 \\",
+                    "**Motivation**：旧的问题定义。 \\",
+                    "**Research Question**：新的问题定义。 \\",
+                    "**Method**：旧的方法拆解。 \\",
+                    "**Core Idea**：新的方法拆解。 \\",
+                    "**Result**：旧的关键证据。 \\",
+                    "**Evidence**：新的关键证据。 \\",
+                    "**Conclusion**：旧的阅读建议。 \\",
+                    "**Reading Guide**：新的继续阅读建议。",
+                ]
+            ),
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        self.assertEqual(md.count("\nmotivation:"), 1)
+        self.assertEqual(md.count("\nmethod:"), 1)
+        self.assertEqual(md.count("\nresult:"), 1)
+        self.assertEqual(md.count("\nconclusion:"), 1)
+        meta = self.mod._parse_front_matter(md)
+        self.assertEqual(meta.get("motivation"), "新的问题定义。")
+        self.assertEqual(meta.get("method"), "新的方法拆解。")
+        self.assertEqual(meta.get("result"), "新的关键证据。")
+        self.assertEqual(meta.get("conclusion"), "新的继续阅读建议。")
+
+    def test_prepare_glance_source_text_respects_requested_budget(self):
+        text = "a" * 5000 + "b" * 5000 + "c" * 5000
+        prepared = self.mod._prepare_glance_source_text("", text, max_chars=120)
+        self.assertLessEqual(len(prepared), 120)
+        self.assertIn("[...中间内容已省略...]", prepared)
+        self.assertTrue(prepared.startswith("a"))
+        self.assertTrue(prepared.endswith("c"))
+
     def test_maybe_generate_paper_figures_accepts_biorxiv(self):
         calls = []
 

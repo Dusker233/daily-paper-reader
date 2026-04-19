@@ -36,16 +36,6 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           path: publish-repo
 
-      - name: Checkout request payload branch
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-          ref: seed-paper-requests/${{ github.event.inputs.request_id }}
-          path: request-repo
-          sparse-checkout: |
-            requests/seed_papers/${{ github.event.inputs.request_id }}
-          sparse-checkout-cone-mode: false
-
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -69,7 +59,7 @@ jobs:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
           SEED_MODE: ${{ github.event.inputs.seed_mode }}
-          REQUEST_ROOT: ${{ github.workspace }}/request-repo
+          REQUEST_ROOT: ${{ github.workspace }}/publish-repo
         run: |
           set -euo pipefail
           export REQUEST_ID REQUEST_PATH SEED_MODE REQUEST_ROOT
@@ -91,7 +81,7 @@ jobs:
           if not request_path:
             raise SystemExit("Missing request_path")
 
-          expected_request_path = f"requests/seed_papers/{request_id}/request.json"
+          expected_request_path = f"archive/seed-papers/{request_id}/request.json"
           if request_path != expected_request_path:
             raise SystemExit(f"Unexpected request path: {request_path}")
           if PurePosixPath(request_path).parts != tuple(expected_request_path.split("/")):
@@ -105,9 +95,14 @@ jobs:
           if not resolved_request_path.is_file():
             raise SystemExit(f"Missing request payload: {request_path}")
 
-          source_path = ((json.loads(resolved_request_path.read_text(encoding="utf-8")) or {}).get("source_path") or "").strip()
+          try:
+            request_payload = json.loads(resolved_request_path.read_text(encoding="utf-8")) or {}
+          except json.JSONDecodeError as exc:
+            raise SystemExit(f"Invalid request payload JSON: {request_path}: {exc}") from exc
+
+          source_path = (request_payload.get("source_path") or "").strip()
           relative_pdf_path = PurePosixPath(source_path)
-          expected_source_prefix = PurePosixPath("requests") / "seed_papers" / request_id
+          expected_source_prefix = PurePosixPath("archive") / "seed-papers" / request_id
           if (
             relative_pdf_path.is_absolute()
             or relative_pdf_path.parent != expected_source_prefix
@@ -132,7 +127,7 @@ jobs:
       - name: Inspect request payload
         env:
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
-          REQUEST_ROOT: ${{ github.workspace }}/request-repo
+          REQUEST_ROOT: ${{ github.workspace }}/publish-repo
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -142,7 +137,10 @@ jobs:
 
           request_root = Path(os.environ["REQUEST_ROOT"]).resolve()
           request_path = request_root.joinpath(*PurePosixPath(os.environ["REQUEST_PATH"]).parts)
-          data = json.loads(request_path.read_text(encoding="utf-8"))
+          try:
+            data = json.loads(request_path.read_text(encoding="utf-8"))
+          except json.JSONDecodeError as exc:
+            raise SystemExit(f"Invalid request payload JSON: {os.environ['REQUEST_PATH']}: {exc}") from exc
           print("Loaded seed paper request:")
           print(json.dumps({
               "file_name": data.get("file_name"),
@@ -159,16 +157,38 @@ jobs:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
           SEED_MODE: ${{ github.event.inputs.seed_mode }}
-          REQUEST_ROOT: ${{ github.workspace }}/request-repo
+          REQUEST_ROOT: ${{ github.workspace }}/publish-repo
           PUBLISH_ROOT: ${{ github.workspace }}/publish-repo
         run: |
           set -euo pipefail
           python3 src/seed_paper_processor.py \
-            --request-path "${REQUEST_ROOT}/${REQUEST_PATH}" \
+            --request-path "${PUBLISH_ROOT}/${REQUEST_PATH}" \
             --request-id "$REQUEST_ID" \
-            --root-dir "$REQUEST_ROOT" \
+            --root-dir "$PUBLISH_ROOT" \
             --docs-dir "$PUBLISH_ROOT/docs" \
             --seed-mode "$SEED_MODE"
+
+      - name: Validate generated seed docs
+        working-directory: publish-repo
+        env:
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+        run: |
+          set -euo pipefail
+          WORKSPACE_DIR="docs/seed-papers/${REQUEST_ID}"
+          test -f "${WORKSPACE_DIR}/index.md"
+          test -f "${WORKSPACE_DIR}/seed-paper.md"
+          test -f "docs/README.md"
+          test -f "docs/_sidebar.md"
+          shopt -s nullglob
+          related_pages=("${WORKSPACE_DIR}/related/"*.md)
+          if [ "${#related_pages[@]}" -lt 1 ]; then
+            echo "Seed workflow produced no related pages." >&2
+            exit 1
+          fi
+          grep -q "seed-paper.md" "${WORKSPACE_DIR}/index.md"
+          grep -q "related/" "${WORKSPACE_DIR}/index.md"
+          grep -q "/seed-papers/${REQUEST_ID}/index" "docs/README.md"
+          grep -q "#/seed-papers/${REQUEST_ID}/index" "docs/_sidebar.md"
 
       - name: Commit generated seed docs
         working-directory: publish-repo
