@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import shutil
 from collections import Counter
@@ -678,6 +679,34 @@ def _build_candidate_ids(queries: list[dict[str, Any]], related_count: int) -> l
     return _unique_keep_order(guaranteed_ids + ranked_ids[:global_limit])
 
 
+def _empty_recall_results() -> dict[str, Any]:
+    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+
+def _has_recalled_papers(result: dict[str, Any]) -> bool:
+    return bool((result or {}).get("papers"))
+
+
+def _is_missing_supabase_function_error(error: Exception) -> bool:
+    message = _normalize_text(error).lower()
+    return bool(message) and (
+        "pgrst202" in message
+        or "could not find the function" in message
+        or ("schema cache" in message and "function" in message)
+    )
+
+
+def _resolve_multi_source_backend(module: Any, resolver_name: str, config: dict[str, Any], queries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    resolver = getattr(module, resolver_name, None)
+    if not callable(resolver):
+        return None
+    return resolver(config, queries)
+
+
+def _multi_source_rpc_enabled() -> bool:
+    return _normalize_text(os.getenv("DPR_ENABLE_MULTI_SOURCE_RPC")).lower() in {"1", "true", "yes", "on"}
+
+
 def _extract_year(value: Any) -> str:
     text = _normalize_text(value)
     match = re.search(r"\b(19|20)\d{2}\b", text)
@@ -715,11 +744,33 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
     config = source_config_module.load_config_with_source_migration(str(config_path), write_back=False)
     queries = _build_seed_queries(request, seed_text)
     if not queries:
-        return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+        return _empty_recall_results()
 
     grouped_queries = router_module.group_queries_by_source(queries)
     merged_results: list[dict[str, Any]] = []
+    related_top_k = max(_normalize_related_count(request.get("related_count")) * 8, 10)
     embedding_model_name = _default_embedding_model_name(config)
+    multi_source_enabled = _multi_source_rpc_enabled()
+    multi_source_bm25_backend = (
+        _resolve_multi_source_backend(
+            bm25_module,
+            "resolve_multi_source_bm25_backend",
+            config,
+            queries,
+        )
+        if multi_source_enabled
+        else None
+    )
+    multi_source_vector_backend = (
+        _resolve_multi_source_backend(
+            embedding_module,
+            "resolve_multi_source_vector_backend",
+            config,
+            queries,
+        )
+        if multi_source_enabled
+        else None
+    )
     coarse_filter = None
 
     def get_embedding_model():
@@ -728,39 +779,85 @@ def retrieve_related_papers(request: dict[str, Any], seed_text: str) -> dict[str
             coarse_filter = filter_module.EmbeddingCoarseFilter(model_name=embedding_model_name, top_k=50, device="cpu")
         return coarse_filter.model
 
+    def run_bm25_recall(source_queries: list[dict[str, Any]], backend: dict[str, Any]) -> dict[str, Any]:
+        return _normalize_recall_results(
+            bm25_module.rank_papers_for_queries_via_supabase(
+                source_queries,
+                top_k=related_top_k,
+                supabase_conf=backend,
+                start_dt=None,
+                end_dt=None,
+                query_filter_sources=False,
+            )
+        )
+
+    def run_vector_recall(
+        source_queries: list[dict[str, Any]],
+        backend: dict[str, Any],
+        *,
+        query_filter_sources: bool = False,
+    ) -> dict[str, Any]:
+        return _normalize_recall_results(
+            embedding_module.rank_papers_for_queries_via_supabase(
+                get_embedding_model(),
+                source_queries,
+                top_k=related_top_k,
+                supabase_conf=backend,
+                start_dt=None,
+                end_dt=None,
+                rpc_name_override=str(backend.get("vector_rpc_exact") or backend.get("vector_rpc") or "").strip() or None,
+                rpc_mode="exact",
+                query_filter_sources=query_filter_sources,
+            )
+        )
+
+    def run_multi_source_bm25_recall(source_queries: list[dict[str, Any]], error: Exception) -> dict[str, Any]:
+        if not multi_source_bm25_backend:
+            raise error
+        return _normalize_recall_results(
+            bm25_module.rank_papers_for_queries_via_supabase(
+                source_queries,
+                top_k=related_top_k,
+                supabase_conf=multi_source_bm25_backend,
+                start_dt=None,
+                end_dt=None,
+                query_filter_sources=True,
+            )
+        )
+
+    def run_multi_source_vector_recall(source_queries: list[dict[str, Any]], error: Exception) -> dict[str, Any]:
+        if not multi_source_vector_backend:
+            raise error
+        return run_vector_recall(source_queries, multi_source_vector_backend, query_filter_sources=True)
+
     for source_key, source_queries in grouped_queries.items():
         backend = source_config_module.get_source_backend(config, source_key)
         if not backend or not backend.get("enabled"):
             continue
         source_results: list[dict[str, Any]] = []
         if backend.get("use_bm25_rpc"):
-            bm25_result = bm25_module.rank_papers_for_queries_via_supabase(
-                source_queries,
-                top_k=max(_normalize_related_count(request.get("related_count")) * 8, 10),
-                supabase_conf=backend,
-                start_dt=None,
-                end_dt=None,
-                query_filter_sources=True,
-            )
-            source_results.append(_normalize_recall_results(bm25_result))
+            try:
+                bm25_result = run_bm25_recall(source_queries, backend)
+            except Exception as exc:
+                if not _is_missing_supabase_function_error(exc):
+                    raise
+                bm25_result = run_multi_source_bm25_recall(source_queries, exc)
+            if _has_recalled_papers(bm25_result):
+                source_results.append(bm25_result)
         if backend.get("use_vector_rpc"):
-            embedding_result = embedding_module.rank_papers_for_queries_via_supabase(
-                get_embedding_model(),
-                source_queries,
-                top_k=max(_normalize_related_count(request.get("related_count")) * 8, 10),
-                supabase_conf=backend,
-                start_dt=None,
-                end_dt=None,
-                rpc_name_override=str(backend.get("vector_rpc_exact") or backend.get("vector_rpc") or "").strip() or None,
-                rpc_mode="exact",
-                query_filter_sources=True,
-            )
-            source_results.append(_normalize_recall_results(embedding_result))
+            try:
+                embedding_result = run_vector_recall(source_queries, backend)
+            except Exception as exc:
+                if not _is_missing_supabase_function_error(exc):
+                    raise
+                embedding_result = run_multi_source_vector_recall(source_queries, exc)
+            if _has_recalled_papers(embedding_result):
+                source_results.append(embedding_result)
         if source_results:
             merged_results.append(router_module.merge_pipeline_results(source_results))
 
     if not merged_results:
-        return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+        return _empty_recall_results()
     return _normalize_recall_results(router_module.merge_pipeline_results(merged_results))
 
 

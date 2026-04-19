@@ -629,7 +629,6 @@ async function testRunSeedPaperDiscoveryVerifiesFilesBeforeDispatch() {
     {
       owner: 'dusker',
       repo: 'daily-paper-reader',
-      ref: 'main',
       paths: [
         'archive/seed-papers/demo-request/paper.pdf',
         'archive/seed-papers/demo-request/request.json',
@@ -740,7 +739,6 @@ async function testRunSeedPaperDiscoveryStopsWhenUploadedFilesAreNotVisible() {
       {
         owner: 'dusker',
         repo: 'daily-paper-reader',
-        ref: 'main',
         paths: [
           'archive/seed-papers/demo-request/paper.pdf',
           'archive/seed-papers/demo-request/request.json',
@@ -1051,7 +1049,6 @@ async function testRunSeedPaperDiscoveryDispatchesTrustedWorkflowWithoutRequestR
       assert.deepEqual(options, {
         owner: 'demo-user',
         repo: 'daily-paper-reader',
-        ref: defaultBranch,
         paths: [
           'archive/seed-papers/demo-request/paper.pdf',
           'archive/seed-papers/demo-request/request.json',
@@ -1101,7 +1098,7 @@ async function testRunSeedPaperDiscoveryDispatchesTrustedWorkflowWithoutRequestR
   assert.equal(body.inputs.request_id, 'demo-request');
   assert.equal(body.inputs.request_path, 'archive/seed-papers/demo-request/request.json');
   assert.equal(body.inputs.seed_mode, 'deep');
-  assert.equal(Object.prototype.hasOwnProperty.call(body.inputs, 'request_ref'), false);
+  assert.equal('request_ref' in body.inputs, false);
   assert.equal(secretSyncCalls.length, 1);
 }
 
@@ -1698,6 +1695,7 @@ async function testWorkflowRunnerRunSeedPaperWorkflowIncludesValidatedRequestInp
   assert.equal(body.ref, 'main');
   assert.equal(body.inputs.request_id, 'demo-request');
   assert.equal(body.inputs.request_path, 'archive/seed-papers/demo-request/request.json');
+  assert.equal('request_ref' in body.inputs, false);
   assert.equal(body.inputs.seed_mode, 'deep');
   assert.equal(body.inputs.related_limit, '5');
 }

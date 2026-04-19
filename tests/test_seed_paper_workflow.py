@@ -78,7 +78,7 @@ class SeedPaperWorkflowConfigTest(unittest.TestCase):
         self.assertIn('re.fullmatch(r"[a-z0-9][a-z0-9-]*", request_id)', self.text)
         self.assertIn('Unexpected request_id', self.text)
 
-    def test_workflow_checks_out_publish_branch_once(self):
+    def test_workflow_checks_out_request_payload_branch_once(self):
         publish_checkout = self._step_named("Checkout publish branch")
         publish_checkout_with = publish_checkout.get("with") or {}
 
@@ -103,6 +103,14 @@ class SeedPaperWorkflowConfigTest(unittest.TestCase):
         self.assertIn('--root-dir "$PUBLISH_ROOT"', run_script)
         self.assertIn('--docs-dir "$PUBLISH_ROOT/docs"', run_script)
         self.assertIn('--seed-mode "$SEED_MODE"', run_script)
+
+    def test_workflow_enables_multi_source_rpc_fallback_for_hosted_seed_processing(self):
+        process_step = self._step_named("Process seed paper request")
+        env = process_step.get("env") or {}
+
+        self.assertEqual(env.get("DPR_ENABLE_MULTI_SOURCE_RPC"), "true")
+        self.assertEqual(env.get("DPR_MULTI_SOURCE_BM25_RPC"), "match_multi_source_papers_bm25")
+        self.assertEqual(env.get("DPR_MULTI_SOURCE_VECTOR_RPC_EXACT"), "match_multi_source_papers_exact")
 
     def test_workflow_validates_generated_seed_docs_before_commit(self):
         validate_step = self._step_named("Validate generated seed docs")
