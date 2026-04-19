@@ -2480,6 +2480,61 @@ class SeedPaperProcessorTest(unittest.TestCase):
         self.assertEqual([item["llm_score"] for item in ranked], [None, None, None])
         self.assertEqual(len(reranker.calls), 1)
 
+    def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_returns_non_json_http_error(self):
+        response = requests.Response()
+        response.status_code = 200
+        reranker = _FailingReranker(
+            requests.exceptions.HTTPError(
+                "Non-JSON rerank response from https://rerank.example/api (content-type=text/html)",
+                response=response,
+            )
+        )
+
+        ranked = self.mod.rank_related_papers(
+            {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "selected_tags": ["RL"],
+                "notes": "",
+                "related_count": 2,
+                "mode": "skim",
+            },
+            seed_text="seed paper body text",
+            retrieve_related=lambda req, seed_text: {
+                "queries": [
+                    {
+                        "query_text": "seed paper related query",
+                        "sim_scores": {
+                            "paper-2": {"score": 0.9, "rank": 1},
+                            "paper-1": {"score": 0.8, "rank": 2},
+                        },
+                    }
+                ],
+                "papers": {
+                    "paper-1": {
+                        "id": "paper-1",
+                        "title": "Related One",
+                        "abstract": "first abstract",
+                        "source": "arxiv",
+                        "link": "https://arxiv.org/abs/1234.5678",
+                    },
+                    "paper-2": {
+                        "id": "paper-2",
+                        "title": "Related Two",
+                        "abstract": "second abstract",
+                        "source": "arxiv",
+                        "link": "https://openreview.net/forum?id=test-paper",
+                    },
+                },
+            },
+            reranker=reranker,
+            seed_identity={"seed-paper"},
+        )
+
+        self.assertEqual([item["id"] for item in ranked], ["paper-2", "paper-1"])
+        self.assertEqual([item["llm_score"] for item in ranked], [None, None])
+        self.assertEqual(len(reranker.calls), 1)
+
     def test_rank_related_papers_surfaces_rerank_config_errors(self):
         reranker = _FailingReranker(ValueError("缺少 rerank 配置: api_key, base_url"))
 
