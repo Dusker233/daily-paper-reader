@@ -792,6 +792,9 @@ def _safe_error_summary(error: Exception) -> str:
         if error.reason:
             return error.reason.replace("_", " ")
     summary = _normalize_text(error).splitlines()[0]
+    lowered_summary = summary.lower()
+    if lowered_summary in {"rerank 未启用", "rerank_enabled=false"}:
+        return "rerank disabled"
     return summary[:200] if summary else type(error).__name__
 
 
@@ -1074,7 +1077,8 @@ def _is_rerank_fallback_error(error: Exception) -> bool:
             return True
         return "non-json rerank response" in message
     return bool(message) and (
-        "rerank 未启用" in message
+        message == "rerank 未启用"
+        or message == "rerank_enabled=false"
         or "timed out" in message
         or "timeout" in message
         or "non-json rerank response" in message
