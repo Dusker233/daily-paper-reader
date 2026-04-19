@@ -13,6 +13,8 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 import sys
 
+import requests
+
 
 SEED_NAV_START = "<!--dpr-seed-papers:start-->"
 SEED_NAV_END = "<!--dpr-seed-papers:end-->"
@@ -1029,6 +1031,55 @@ def _build_rerank_documents(papers_by_id: dict[str, dict[str, Any]], paper_ids: 
     return documents
 
 
+def _build_ranked_related_paper(paper_id: str, paper: dict[str, Any], llm_score: Any) -> dict[str, Any]:
+    llm_tags = list(paper.get("tags") or paper.get("llm_tags") or [])
+    return {
+        **paper,
+        "id": _normalize_text(paper.get("id") or paper_id),
+        "title": _normalize_text(paper.get("title")) or paper_id,
+        "abstract": _normalize_text(paper.get("abstract")),
+        "link": _validate_related_link(paper.get("link")),
+        "llm_tags": llm_tags,
+        "llm_score": llm_score,
+    }
+
+
+def _build_retrieval_order_fallback(
+    papers_by_id: dict[str, dict[str, Any]],
+    filtered_ids: list[str],
+) -> list[dict[str, Any]]:
+    return [
+        _build_ranked_related_paper(paper_id, dict(papers_by_id.get(paper_id) or {}), None)
+        for paper_id in filtered_ids
+    ]
+
+
+def _warn_rerank_fallback(error: Exception) -> None:
+    print(
+        f"[WARN] seed rerank unavailable, falling back to retrieval order: {_safe_error_summary(error)}",
+        file=sys.stderr,
+    )
+
+
+def _is_rerank_fallback_error(error: Exception) -> bool:
+    message = _error_message(error).lower()
+    if isinstance(error, requests.exceptions.Timeout):
+        return True
+    if isinstance(error, requests.exceptions.ConnectionError):
+        return True
+    if isinstance(error, requests.exceptions.HTTPError):
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        return isinstance(status_code, int) and status_code >= 500
+    return bool(message) and (
+        "rerank 未启用" in message
+        or "timed out" in message
+        or "timeout" in message
+        or "non-json rerank response" in message
+        or "rerank 未命中可用 base" in message
+    )
+
+
 def _resolve_reranker(reranker: Any | None = None) -> Any:
     if reranker is not None:
         return reranker
@@ -1069,12 +1120,18 @@ def rank_related_papers(
         raise SeedPaperProcessingError("retrieval only returned seed-paper matches")
 
     documents = _build_rerank_documents(papers_by_id, filtered_ids)
-    active_reranker = _resolve_reranker(reranker)
-    query_text = _build_query_summary(request, seed_text) or _paper_title_from_filename(request.get("file_name") or "")
-    rerank_model = _normalize_text(getattr(active_reranker, "model", "")) or None
-    response = active_reranker.rerank(query=query_text, documents=documents, top_n=len(documents), model=rerank_model)
-    results = (response.get("output") or {}).get("results") if isinstance(response, dict) and "output" in response else response.get("results", [])
-    ranked = sorted(results or [], key=lambda item: item.get("relevance_score", item.get("score", 0.0)), reverse=True)
+    try:
+        active_reranker = _resolve_reranker(reranker)
+        query_text = _build_query_summary(request, seed_text) or _paper_title_from_filename(request.get("file_name") or "")
+        rerank_model = _normalize_text(getattr(active_reranker, "model", "")) or None
+        response = active_reranker.rerank(query=query_text, documents=documents, top_n=len(documents), model=rerank_model)
+        results = (response.get("output") or {}).get("results") if isinstance(response, dict) and "output" in response else response.get("results", [])
+        ranked = sorted(results or [], key=lambda item: item.get("relevance_score", item.get("score", 0.0)), reverse=True)
+    except Exception as exc:
+        if not _is_rerank_fallback_error(exc):
+            raise SeedPaperProcessingError(_error_message(exc) or "rerank failed") from exc
+        _warn_rerank_fallback(exc)
+        return _build_retrieval_order_fallback(papers_by_id, filtered_ids)
 
     ordered: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -1087,35 +1144,20 @@ def rank_related_papers(
             continue
         seen_ids.add(paper_id)
         paper = dict(papers_by_id.get(paper_id) or {})
-        llm_tags = list(paper.get("tags") or paper.get("llm_tags") or [])
         ordered.append(
-            {
-                **paper,
-                "id": _normalize_text(paper.get("id") or paper_id),
-                "title": _normalize_text(paper.get("title")) or paper_id,
-                "abstract": _normalize_text(paper.get("abstract")),
-                "link": _validate_related_link(paper.get("link")),
-                "llm_tags": llm_tags,
-                "llm_score": item.get("relevance_score", item.get("score", 0.0)),
-            }
+            _build_ranked_related_paper(
+                paper_id,
+                paper,
+                item.get("relevance_score", item.get("score", 0.0)),
+            )
         )
     if not ordered:
-        raise SeedPaperProcessingError("rerank returned no scored results")
+        return _build_retrieval_order_fallback(papers_by_id, filtered_ids)
     for paper_id in filtered_ids:
         if paper_id in seen_ids:
             continue
         paper = dict(papers_by_id.get(paper_id) or {})
-        ordered.append(
-            {
-                **paper,
-                "id": _normalize_text(paper.get("id") or paper_id),
-                "title": _normalize_text(paper.get("title")) or paper_id,
-                "abstract": _normalize_text(paper.get("abstract")),
-                "link": _validate_related_link(paper.get("link")),
-                "llm_tags": list(paper.get("tags") or paper.get("llm_tags") or []),
-                "llm_score": None,
-            }
-        )
+        ordered.append(_build_ranked_related_paper(paper_id, paper, None))
     return ordered
 
 

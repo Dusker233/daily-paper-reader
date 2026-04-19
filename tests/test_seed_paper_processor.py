@@ -4,6 +4,8 @@ import pathlib
 import sys
 import tempfile
 import unittest
+
+import requests
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -106,6 +108,25 @@ class _StubReranker:
             }
         )
         return {"results": list(self._results)}
+
+
+class _FailingReranker:
+    model = "stub-rerank-model"
+
+    def __init__(self, error):
+        self.error = error
+        self.calls = []
+
+    def rerank(self, query, documents, top_n=None, model=None):
+        self.calls.append(
+            {
+                "query": query,
+                "documents": list(documents),
+                "top_n": top_n,
+                "model": model,
+            }
+        )
+        raise self.error
 
 
 class _EmptySeedTextGenerateDocs(_StubGenerateDocs):
@@ -2307,10 +2328,162 @@ class SeedPaperProcessorTest(unittest.TestCase):
 
         self.assertEqual(reranker.calls, [])
 
-    def test_rank_related_papers_rejects_rerank_without_scored_results(self):
+    def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_returns_no_scores(self):
         reranker = _StubReranker([])
 
-        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "rerank returned no scored results"):
+        ranked = self.mod.rank_related_papers(
+            {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "selected_tags": ["RL"],
+                "notes": "",
+                "related_count": 2,
+                "mode": "skim",
+            },
+            seed_text="seed paper body text",
+            retrieve_related=lambda req, seed_text: {
+                "queries": [
+                    {
+                        "query_text": "seed paper related query",
+                        "sim_scores": {
+                            "paper-1": {"score": 0.8, "rank": 1},
+                            "paper-2": {"score": 0.7, "rank": 2},
+                        },
+                    }
+                ],
+                "papers": {
+                    "paper-1": {
+                        "id": "paper-1",
+                        "title": "Related One",
+                        "abstract": "first abstract",
+                        "source": "arxiv",
+                        "link": "https://arxiv.org/abs/1234.5678",
+                    },
+                    "paper-2": {
+                        "id": "paper-2",
+                        "title": "Related Two",
+                        "abstract": "second abstract",
+                        "source": "arxiv",
+                        "link": "https://openreview.net/forum?id=test-paper",
+                    },
+                },
+            },
+            reranker=reranker,
+            seed_identity={"seed-paper"},
+        )
+
+        self.assertEqual([item["id"] for item in ranked], ["paper-1", "paper-2"])
+        self.assertEqual([item["llm_score"] for item in ranked], [None, None])
+        self.assertEqual(len(reranker.calls), 1)
+
+    def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_is_disabled(self):
+        reranker = _FailingReranker(ValueError("rerank 未启用"))
+
+        ranked = self.mod.rank_related_papers(
+            {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "selected_tags": ["RL"],
+                "notes": "",
+                "related_count": 2,
+                "mode": "skim",
+            },
+            seed_text="seed paper body text",
+            retrieve_related=lambda req, seed_text: {
+                "queries": [
+                    {
+                        "query_text": "seed paper related query",
+                        "sim_scores": {
+                            "paper-2": {"score": 0.9, "rank": 1},
+                            "paper-1": {"score": 0.8, "rank": 2},
+                        },
+                    }
+                ],
+                "papers": {
+                    "paper-1": {
+                        "id": "paper-1",
+                        "title": "Related One",
+                        "abstract": "first abstract",
+                        "source": "arxiv",
+                        "link": "https://arxiv.org/abs/1234.5678",
+                    },
+                    "paper-2": {
+                        "id": "paper-2",
+                        "title": "Related Two",
+                        "abstract": "second abstract",
+                        "source": "arxiv",
+                        "link": "https://openreview.net/forum?id=test-paper",
+                    },
+                },
+            },
+            reranker=reranker,
+            seed_identity={"seed-paper"},
+        )
+
+        self.assertEqual([item["id"] for item in ranked], ["paper-2", "paper-1"])
+        self.assertEqual([item["llm_score"] for item in ranked], [None, None])
+        self.assertEqual(len(reranker.calls), 1)
+
+    def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_request_times_out(self):
+        reranker = _FailingReranker(requests.exceptions.Timeout("rerank request timed out"))
+
+        ranked = self.mod.rank_related_papers(
+            {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "selected_tags": ["RL"],
+                "notes": "",
+                "related_count": 2,
+                "mode": "skim",
+            },
+            seed_text="seed paper body text",
+            retrieve_related=lambda req, seed_text: {
+                "queries": [
+                    {
+                        "query_text": "seed paper related query",
+                        "sim_scores": {
+                            "paper-3": {"score": 0.91, "rank": 1},
+                            "paper-1": {"score": 0.8, "rank": 2},
+                            "paper-2": {"score": 0.7, "rank": 3},
+                        },
+                    }
+                ],
+                "papers": {
+                    "paper-1": {
+                        "id": "paper-1",
+                        "title": "Related One",
+                        "abstract": "first abstract",
+                        "source": "arxiv",
+                        "link": "https://arxiv.org/abs/1234.5678",
+                    },
+                    "paper-2": {
+                        "id": "paper-2",
+                        "title": "Related Two",
+                        "abstract": "second abstract",
+                        "source": "arxiv",
+                        "link": "https://openreview.net/forum?id=test-paper",
+                    },
+                    "paper-3": {
+                        "id": "paper-3",
+                        "title": "Related Three",
+                        "abstract": "third abstract",
+                        "source": "arxiv",
+                        "link": "https://arxiv.org/abs/9999.0001",
+                    },
+                },
+            },
+            reranker=reranker,
+            seed_identity={"seed-paper"},
+        )
+
+        self.assertEqual([item["id"] for item in ranked], ["paper-3", "paper-1", "paper-2"])
+        self.assertEqual([item["llm_score"] for item in ranked], [None, None, None])
+        self.assertEqual(len(reranker.calls), 1)
+
+    def test_rank_related_papers_surfaces_rerank_config_errors(self):
+        reranker = _FailingReranker(ValueError("缺少 rerank 配置: api_key, base_url"))
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "缺少 rerank 配置: api_key, base_url"):
             self.mod.rank_related_papers(
                 {
                     "request_id": "demo-request",
@@ -2327,6 +2500,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                             "query_text": "seed paper related query",
                             "sim_scores": {
                                 "paper-1": {"score": 0.8, "rank": 1},
+                                "paper-2": {"score": 0.7, "rank": 2},
                             },
                         }
                     ],
@@ -2336,7 +2510,14 @@ class SeedPaperProcessorTest(unittest.TestCase):
                             "title": "Related One",
                             "abstract": "first abstract",
                             "source": "arxiv",
-                            "link": "https://example.com/p1.pdf",
+                            "link": "https://arxiv.org/abs/1234.5678",
+                        },
+                        "paper-2": {
+                            "id": "paper-2",
+                            "title": "Related Two",
+                            "abstract": "second abstract",
+                            "source": "arxiv",
+                            "link": "https://openreview.net/forum?id=test-paper",
                         },
                     },
                 },
@@ -2344,7 +2525,52 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 seed_identity={"seed-paper"},
             )
 
-        self.assertEqual(len(reranker.calls), 1)
+    def test_rank_related_papers_surfaces_rerank_auth_errors(self):
+        response = requests.Response()
+        response.status_code = 401
+        reranker = _FailingReranker(requests.exceptions.HTTPError("401 unauthorized", response=response))
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "401 unauthorized"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": ["RL"],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [
+                        {
+                            "query_text": "seed paper related query",
+                            "sim_scores": {
+                                "paper-1": {"score": 0.8, "rank": 1},
+                                "paper-2": {"score": 0.7, "rank": 2},
+                            },
+                        }
+                    ],
+                    "papers": {
+                        "paper-1": {
+                            "id": "paper-1",
+                            "title": "Related One",
+                            "abstract": "first abstract",
+                            "source": "arxiv",
+                            "link": "https://arxiv.org/abs/1234.5678",
+                        },
+                        "paper-2": {
+                            "id": "paper-2",
+                            "title": "Related Two",
+                            "abstract": "second abstract",
+                            "source": "arxiv",
+                            "link": "https://openreview.net/forum?id=test-paper",
+                        },
+                    },
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
 
     def test_rank_related_papers_surfaces_recall_backend_error_when_queries_exist_but_papers_are_empty(self):
         reranker = _StubReranker([])
