@@ -28,6 +28,15 @@ class SeedPaperWorkflowConfigTest(unittest.TestCase):
         jobs = cls.workflow.get("jobs") or {}
         cls.run_job = jobs.get("run") or {}
         cls.steps = cls.run_job.get("steps") or []
+
+        cls.publish_workflow_path = cls.root / ".github" / "workflows" / "seed-paper-publish.yml"
+        cls.publish_text = cls.publish_workflow_path.read_text(encoding="utf-8")
+        cls.publish_workflow = yaml.safe_load(cls.publish_text) or {}
+        cls.publish_on_block = cls.publish_workflow.get("on") or cls.publish_workflow.get(True) or {}
+        publish_jobs = cls.publish_workflow.get("jobs") or {}
+        cls.publish_job = publish_jobs.get("publish") or {}
+        cls.publish_steps = cls.publish_job.get("steps") or []
+
         cls.llm_text = (cls.root / "src" / "llm.py").read_text(encoding="utf-8")
         runtime_bool_source = cls._extract_source_block(
             cls.llm_text,
@@ -45,25 +54,33 @@ class SeedPaperWorkflowConfigTest(unittest.TestCase):
                 return step
         self.fail(f"Missing workflow step: {name}")
 
+    def _publish_step_named(self, name: str):
+        for step in self.publish_steps:
+            if step.get("name") == name:
+                return step
+        self.fail(f"Missing publish workflow step: {name}")
+
     def _extract_rerank_enabled_preamble(self) -> str:
         process_step = self._step_named("Process seed paper request")
         run_script = process_step.get("run") or ""
-        return self._extract_source_block(
+        body = self._extract_source_block(
             run_script,
-            "set -euo pipefail\n",
+            'RERANK_ENABLED_STATE="$(python3 - <<\'PY\'\n',
             'if [ "$RERANK_ENABLED_STATE" = "true" ]; then',
             "workflow rerank enabled preamble",
         ).rstrip()
+        return "set -euo pipefail\n" + body
 
     def _extract_rerank_setup_script(self) -> str:
         process_step = self._step_named("Process seed paper request")
         run_script = process_step.get("run") or ""
-        return self._extract_source_block(
+        body = self._extract_source_block(
             run_script,
-            "set -euo pipefail\n",
-            'python3 src/seed_paper_processor.py \\\n',
+            'RERANK_ENABLED_STATE="$(python3 - <<\'PY\'\n',
+            'python3 "${WORKFLOW_ROOT}/src/seed_paper_processor.py" \\\n',
             "workflow rerank setup script",
         ).rstrip()
+        return "set -euo pipefail\n" + body
 
     def _build_shell_env(self, raw_value, extra_env=None):
         env = {
@@ -172,16 +189,22 @@ printf 'compat_model=%s\n' "${Reranker_LLM_MODEL:-}"
         self.assertIn("request_path", self.inputs)
         self.assertIn("seed_mode", self.inputs)
 
-    def test_run_job_uses_hosted_ubuntu_runner_and_write_permissions(self):
+    def test_run_job_uses_hosted_ubuntu_runner_and_read_only_permissions(self):
         runs_on = self.run_job.get("runs-on") or ""
         self.assertIn("ubuntu", runs_on)
         self.assertNotIn("self-hosted", runs_on)
         self.assertEqual((self.workflow.get("permissions") or {}).get("contents"), "read")
-        self.assertEqual(((self.run_job.get("permissions") or {}).get("contents")), "write")
+        self.assertEqual(((self.run_job.get("permissions") or {}).get("contents")), "read")
+        self.assertEqual(((self.run_job.get("permissions") or {}).get("actions")), "read")
 
     def test_workflow_concurrency_is_scoped_per_request(self):
         concurrency = self.workflow.get("concurrency") or {}
         self.assertEqual(concurrency.get("group"), "seed-paper-related-${{ github.event.inputs.request_id }}")
+        self.assertFalse(concurrency.get("cancel-in-progress"))
+
+    def test_publish_workflow_serializes_default_branch_writes(self):
+        concurrency = self.publish_workflow.get("concurrency") or {}
+        self.assertEqual(concurrency.get("group"), "seed-paper-publish-${{ github.event.repository.default_branch }}")
         self.assertFalse(concurrency.get("cancel-in-progress"))
 
     def test_workflow_validates_request_path_prefix(self):
@@ -222,30 +245,40 @@ printf 'compat_model=%s\n' "${Reranker_LLM_MODEL:-}"
         self.assertIn('re.fullmatch(r"[a-z0-9][a-z0-9-]*", request_id)', self.text)
         self.assertIn('Unexpected request_id', self.text)
 
-    def test_workflow_checks_out_request_payload_branch_once(self):
+    def test_workflow_uses_default_branch_only_dual_checkout_topology(self):
+        workflow_checkout = self._step_named("Checkout workflow ref")
+        workflow_checkout_with = workflow_checkout.get("with") or {}
         publish_checkout = self._step_named("Checkout publish branch")
         publish_checkout_with = publish_checkout.get("with") or {}
 
+        self.assertEqual(self.run_job.get("if"), "${{ github.ref_name == github.event.repository.default_branch }}")
+        self.assertEqual(workflow_checkout.get("uses"), "actions/checkout@v5")
+        self.assertEqual(workflow_checkout_with.get("path"), "workflow-repo")
+        self.assertEqual(workflow_checkout_with.get("ref"), "${{ github.sha }}")
+        self.assertEqual(workflow_checkout_with.get("persist-credentials"), False)
         self.assertEqual(publish_checkout.get("uses"), "actions/checkout@v5")
         self.assertEqual(publish_checkout_with.get("path"), "publish-repo")
-        self.assertEqual(publish_checkout_with.get("ref"), "${{ github.event.repository.default_branch }}")
+        self.assertEqual(publish_checkout_with.get("ref"), "${{ github.sha }}")
+        self.assertEqual(publish_checkout_with.get("persist-credentials"), False)
         self.assertNotIn("Checkout request payload branch", [step.get("name") for step in self.steps])
 
-    def test_workflow_installs_and_invokes_seed_paper_processor_from_publish_checkout(self):
+    def test_workflow_installs_processor_deps_from_workflow_checkout_and_reads_payload_from_publish_checkout(self):
         install_step = self._step_named("Install deps (skip sqlite3)")
         process_step = self._step_named("Process seed paper request")
         env = process_step.get("env") or {}
         run_script = process_step.get("run") or ""
 
-        self.assertEqual(install_step.get("working-directory"), "publish-repo")
-        self.assertEqual(process_step.get("working-directory"), "publish-repo")
+        self.assertEqual(install_step.get("working-directory"), "workflow-repo")
+        self.assertEqual(process_step.get("working-directory"), "workflow-repo")
         self.assertEqual(env.get("REQUEST_ROOT"), "${{ github.workspace }}/publish-repo")
         self.assertEqual(env.get("PUBLISH_ROOT"), "${{ github.workspace }}/publish-repo")
-        self.assertIn('python3 src/seed_paper_processor.py', run_script)
+        self.assertEqual(env.get("WORKFLOW_ROOT"), "${{ github.workspace }}/workflow-repo")
+        self.assertEqual(env.get("ARTIFACT_ROOT"), "${{ runner.temp }}/trusted-seed-publish")
+        self.assertIn('python3 "${WORKFLOW_ROOT}/src/seed_paper_processor.py"', run_script)
         self.assertIn('--request-path "${PUBLISH_ROOT}/${REQUEST_PATH}"', run_script)
         self.assertIn('--request-id "$REQUEST_ID"', run_script)
         self.assertIn('--root-dir "$PUBLISH_ROOT"', run_script)
-        self.assertIn('--docs-dir "$PUBLISH_ROOT/docs"', run_script)
+        self.assertIn('--docs-dir "${ARTIFACT_ROOT}/docs"', run_script)
         self.assertIn('--seed-mode "$SEED_MODE"', run_script)
 
     def test_workflow_enables_multi_source_rpc_fallback_for_hosted_seed_processing(self):
@@ -441,25 +474,21 @@ printf 'compat_model=%s\n' "${Reranker_LLM_MODEL:-}"
         self.assertEqual(result["base_url"], "https://api-base.example/v1")
         self.assertEqual(result["compat_base_url"], "https://api-base.example/v1")
 
-    def test_workflow_validates_generated_seed_docs_before_commit(self):
+    def test_workflow_validates_generated_seed_docs_before_packaging(self):
         validate_step = self._step_named("Validate generated seed docs")
         env = validate_step.get("env") or {}
         run_script = validate_step.get("run") or ""
 
-        self.assertEqual(validate_step.get("working-directory"), "publish-repo")
         self.assertEqual(env.get("REQUEST_ID"), "${{ github.event.inputs.request_id }}")
-        self.assertIn('WORKSPACE_DIR="docs/seed-papers/${REQUEST_ID}"', run_script)
+        self.assertEqual(env.get("ARTIFACT_ROOT"), "${{ runner.temp }}/trusted-seed-publish")
+        self.assertIn('WORKSPACE_DIR="${ARTIFACT_ROOT}/docs/seed-papers/${REQUEST_ID}"', run_script)
         self.assertIn('test -f "${WORKSPACE_DIR}/index.md"', run_script)
         self.assertIn('test -f "${WORKSPACE_DIR}/seed-paper.md"', run_script)
-        self.assertIn('test -f "docs/README.md"', run_script)
-        self.assertIn('test -f "docs/_sidebar.md"', run_script)
         self.assertIn('related_pages=("${WORKSPACE_DIR}/related/"*.md)', run_script)
         self.assertIn('if [ "${#related_pages[@]}" -lt 1 ]; then', run_script)
         self.assertIn('Seed workflow produced no related pages.', run_script)
         self.assertIn('grep -q "seed-paper.md" "${WORKSPACE_DIR}/index.md"', run_script)
         self.assertIn('grep -q "related/" "${WORKSPACE_DIR}/index.md"', run_script)
-        self.assertIn('grep -q "/seed-papers/${REQUEST_ID}/index" "docs/README.md"', run_script)
-        self.assertIn('grep -q "#/seed-papers/${REQUEST_ID}/index" "docs/_sidebar.md"', run_script)
 
     def test_workflow_inspect_step_rejects_malformed_request_json(self):
         inspect_step = self._step_named("Inspect request payload")
@@ -467,16 +496,158 @@ printf 'compat_model=%s\n' "${Reranker_LLM_MODEL:-}"
         self.assertIn('json.loads(request_path.read_text(encoding="utf-8"))', run_script)
         self.assertIn('Invalid request payload JSON', run_script)
 
-    def test_workflow_commits_docs_from_publish_checkout(self):
-        commit_step = self._step_named("Commit generated seed docs")
-        env = commit_step.get("env") or {}
-        run_script = commit_step.get("run") or ""
+    def test_workflow_packages_trusted_publish_artifact(self):
+        prepare_step = self._step_named("Prepare trusted publish artifact")
+        env = prepare_step.get("env") or {}
+        run_script = prepare_step.get("run") or ""
 
-        self.assertEqual(commit_step.get("working-directory"), "publish-repo")
-        self.assertEqual(env.get("PUBLISH_BRANCH"), "${{ github.event.repository.default_branch }}")
-        self.assertNotIn('Backend processing will be added next.', self.text)
-        self.assertIn('git add "docs/seed-papers/${REQUEST_ID}" "docs/README.md" "docs/_sidebar.md"', run_script)
-        self.assertIn('git push origin HEAD:"${PUBLISH_BRANCH}"', run_script)
+        self.assertEqual(env.get("REQUEST_ID"), "${{ github.event.inputs.request_id }}")
+        self.assertEqual(env.get("REQUEST_ROOT"), "${{ github.workspace }}/publish-repo")
+        self.assertEqual(env.get("ARTIFACT_ROOT"), "${{ runner.temp }}/trusted-seed-publish")
+        self.assertIn('request_root = Path(os.environ["REQUEST_ROOT"]).resolve()', run_script)
+        self.assertIn('request_relative_path = PurePosixPath("archive") / "seed-papers" / request_id / "request.json"', run_script)
+        self.assertIn('Missing archived request for artifact packaging', run_script)
+        self.assertIn('request_payload = json.loads(request_bytes.decode("utf-8")) or {}', run_script)
+        self.assertIn('Invalid archived request for artifact packaging', run_script)
+        self.assertIn('source_relative_path = PurePosixPath(str(request_payload.get("source_path") or "").strip())', run_script)
+        self.assertIn('Unexpected archived source_path for artifact packaging', run_script)
+        self.assertIn('Missing archived source PDF for artifact packaging', run_script)
+        self.assertIn('docs_root = artifact_root / "docs"', run_script)
+        self.assertIn('workspace_dir = docs_root / "seed-papers" / request_id', run_script)
+        self.assertIn('Missing docs workspace for artifact packaging', run_script)
+        self.assertIn('for txt_path in workspace_dir.rglob("*.txt"):', run_script)
+        self.assertIn('for stray_path in (docs_root / "README.md", docs_root / "_sidebar.md"):', run_script)
+        self.assertIn('doc_hashes = {}', run_script)
+        self.assertIn('for doc_path in sorted(workspace_dir.rglob("*.md")):', run_script)
+        self.assertIn('relative_doc_path = doc_path.relative_to(artifact_root).as_posix()', run_script)
+        self.assertIn('doc_hashes[relative_doc_path] = hashlib.sha256(doc_path.read_bytes()).hexdigest()', run_script)
+        self.assertIn('manifest_path = artifact_root / "manifest.json"', run_script)
+        self.assertIn('"request_id": request_id', run_script)
+        self.assertIn('"request_path": request_relative_path.as_posix()', run_script)
+        self.assertIn('"request_sha256": hashlib.sha256(request_bytes).hexdigest()', run_script)
+        self.assertIn('"source_path": source_relative_path.as_posix()', run_script)
+        self.assertIn('"source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest()', run_script)
+        self.assertIn('"docs_workspace": f"docs/seed-papers/{request_id}"', run_script)
+        self.assertIn('"doc_hashes": doc_hashes', run_script)
+        self.assertNotIn('"readme_path": "docs/README.md"', run_script)
+        self.assertNotIn('"sidebar_path": "docs/_sidebar.md"', run_script)
+
+    def test_workflow_uploads_trusted_publish_artifact(self):
+        upload_step = self._step_named("Upload trusted publish artifact")
+        upload_with = upload_step.get("with") or {}
+
+        self.assertEqual(upload_step.get("uses"), "actions/upload-artifact@v4")
+        self.assertEqual(upload_with.get("name"), "trusted-seed-publish")
+        self.assertEqual(upload_with.get("path"), "${{ runner.temp }}/trusted-seed-publish")
+        self.assertEqual(upload_with.get("if-no-files-found"), "error")
+        self.assertNotIn('git push origin HEAD:"${PUBLISH_BRANCH}"', self.text)
+
+    def test_publish_workflow_runs_from_completed_default_branch_seed_processing_run(self):
+        workflow_run = self.publish_on_block.get("workflow_run") or {}
+        self.assertEqual(workflow_run.get("workflows"), ["seed-paper-related"])
+        self.assertEqual(workflow_run.get("types"), ["completed"])
+        self.assertEqual((self.publish_workflow.get("permissions") or {}).get("actions"), "read")
+        self.assertEqual((self.publish_workflow.get("permissions") or {}).get("contents"), "read")
+        self.assertEqual(
+            self.publish_job.get("if"),
+            "${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == github.event.repository.default_branch }}",
+        )
+        self.assertEqual((self.publish_job.get("permissions") or {}).get("actions"), "read")
+        self.assertEqual((self.publish_job.get("permissions") or {}).get("contents"), "write")
+
+    def test_publish_workflow_downloads_seed_publish_artifact_from_source_run(self):
+        download_step = self._publish_step_named("Download trusted publish artifact")
+        download_with = download_step.get("with") or {}
+
+        self.assertEqual(download_step.get("uses"), "actions/download-artifact@v4")
+        self.assertEqual(download_with.get("name"), "trusted-seed-publish")
+        self.assertEqual(download_with.get("github-token"), "${{ secrets.GITHUB_TOKEN }}")
+        self.assertEqual(download_with.get("run-id"), "${{ github.event.workflow_run.id }}")
+        self.assertEqual(download_with.get("path"), "trusted-seed-publish")
+
+    def test_publish_workflow_validates_manifest_contract_and_paths(self):
+        validate_step = self._publish_step_named("Validate trusted publish artifact")
+        env = validate_step.get("env") or {}
+        run_script = validate_step.get("run") or ""
+
+        self.assertEqual(env.get("ARTIFACT_ROOT"), "${{ github.workspace }}/trusted-seed-publish")
+        self.assertIn('github_env = os.environ.get("GITHUB_ENV") or ""', run_script)
+        self.assertIn('Missing GITHUB_ENV path', run_script)
+        self.assertIn('manifest_path = artifact_root / "manifest.json"', run_script)
+        self.assertIn('Missing trusted publish manifest', run_script)
+        self.assertIn('Invalid trusted publish manifest JSON', run_script)
+        self.assertIn('request_id = (manifest.get("request_id") or "").strip()', run_script)
+        self.assertIn('request_relative_path = PurePosixPath((manifest.get("request_path") or "").strip())', run_script)
+        self.assertIn('expected_request_path = PurePosixPath("archive") / "seed-papers" / request_id / "request.json"', run_script)
+        self.assertIn('Unexpected request path in manifest', run_script)
+        self.assertIn('request_sha256 = (manifest.get("request_sha256") or "").strip().lower()', run_script)
+        self.assertIn('Unexpected request sha256 in manifest', run_script)
+        self.assertIn('Trusted publish request payload hash mismatch', run_script)
+        self.assertIn('Invalid archived request for trusted publish', run_script)
+        self.assertIn('Trusted publish manifest request_id mismatch', run_script)
+        self.assertIn('source_relative_path = PurePosixPath((manifest.get("source_path") or "").strip())', run_script)
+        self.assertIn('Unexpected source path in manifest', run_script)
+        self.assertIn('source_sha256 = (manifest.get("source_sha256") or "").strip().lower()', run_script)
+        self.assertIn('Unexpected source sha256 in manifest', run_script)
+        self.assertIn('Missing archived source PDF for trusted publish', run_script)
+        self.assertIn('Trusted publish source PDF hash mismatch', run_script)
+        self.assertIn('docs_workspace = PurePosixPath((manifest.get("docs_workspace") or "").strip())', run_script)
+        self.assertIn('doc_hashes = manifest.get("doc_hashes")', run_script)
+        self.assertIn('Missing trusted publish doc hashes', run_script)
+        self.assertIn('Trusted publish doc hash manifest mismatch', run_script)
+        self.assertIn('Unexpected doc hash in manifest', run_script)
+        self.assertIn('Unexpected doc path in manifest', run_script)
+        self.assertIn('Missing doc path in artifact', run_script)
+        self.assertIn('Trusted publish doc hash mismatch', run_script)
+        self.assertNotIn('readme_path = PurePosixPath((manifest.get("readme_path") or "").strip())', run_script)
+        self.assertNotIn('sidebar_path = PurePosixPath((manifest.get("sidebar_path") or "").strip())', run_script)
+        self.assertIn('if docs_workspace.is_absolute() or any(part in {"", ".", ".."} for part in docs_workspace.parts):', run_script)
+        self.assertIn('Unexpected artifact path', run_script)
+        self.assertIn('Missing artifact path', run_script)
+        self.assertIn('Missing related docs directory', run_script)
+        self.assertIn('Missing required seed docs in', run_script)
+        self.assertIn('Trusted publish artifact contains no related pages', run_script)
+        self.assertIn('Unexpected artifact file', run_script)
+        self.assertIn('Trusted publish index is missing expected links', run_script)
+        self.assertIn('with Path(github_env).open("a", encoding="utf-8") as fh:', run_script)
+
+    def test_publish_workflow_applies_and_commits_trusted_artifact_to_default_branch(self):
+        apply_step = self._publish_step_named("Apply trusted publish artifact")
+        apply_env = apply_step.get("env") or {}
+        apply_script = apply_step.get("run") or ""
+        commit_step = self._publish_step_named("Commit trusted seed docs")
+        commit_env = commit_step.get("env") or {}
+        commit_script = commit_step.get("run") or ""
+        checkout_step = self._publish_step_named("Checkout publish branch")
+        checkout_with = checkout_step.get("with") or {}
+
+        self.assertEqual(apply_env.get("ARTIFACT_ROOT"), "${{ github.workspace }}/trusted-seed-publish")
+        self.assertIn('WORKSPACE_DIR="docs/seed-papers/${REQUEST_ID}"', apply_script)
+        self.assertIn('rm -rf "$WORKSPACE_DIR"', apply_script)
+        self.assertIn('cp -R "${ARTIFACT_ROOT}/${WORKSPACE_DIR}" "$WORKSPACE_DIR"', apply_script)
+        self.assertNotIn("from seed_paper_processor import", apply_script)
+        self.assertNotIn("load_request", apply_script)
+        self.assertNotIn("update_seed_navigation", apply_script)
+        self.assertIn("dpr_start", apply_script)
+        self.assertIn("dpr_end", apply_script)
+        self.assertIn("README.md", apply_script)
+        self.assertIn("_sidebar.md", apply_script)
+        self.assertIn("readme_path.write_text", apply_script)
+        self.assertIn("sidebar_path.write_text", apply_script)
+
+        self.assertEqual(checkout_with.get("ref"), "${{ github.event.workflow_run.head_sha }}")
+        self.assertEqual(commit_env.get("PUBLISH_BRANCH"), "${{ github.event.repository.default_branch }}")
+        self.assertEqual(commit_env.get("ARTIFACT_ROOT"), "${{ github.workspace }}/trusted-seed-publish")
+        self.assertIn('git add "docs/seed-papers/${REQUEST_ID}" "docs/README.md" "docs/_sidebar.md"', commit_script)
+        self.assertIn('git fetch origin "${PUBLISH_BRANCH}"', commit_script)
+        self.assertIn('git rebase "origin/${PUBLISH_BRANCH}"', commit_script)
+        self.assertIn('manifest = json.loads((artifact_root / "manifest.json").read_text(encoding="utf-8")) or {}', commit_script)
+        self.assertIn('Unexpected request sha256 in manifest during publish', commit_script)
+        self.assertIn('Unexpected source sha256 in manifest during publish', commit_script)
+        self.assertIn('Trusted publish request payload hash mismatch after rebase', commit_script)
+        self.assertIn('Trusted publish source PDF hash mismatch after rebase', commit_script)
+        self.assertIn('git push origin HEAD:"${PUBLISH_BRANCH}"', commit_script)
+        self.assertNotIn('Backend processing will be added next.', self.publish_text)
 
 
 if __name__ == "__main__":
