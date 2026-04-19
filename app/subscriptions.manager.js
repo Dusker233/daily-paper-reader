@@ -35,6 +35,7 @@ window.SubscriptionsManager = (function () {
   let hasUnsavedChanges = false;
   let isSavingDraftConfig = false;
   let isSubmittingSeedPaper = false;
+  let isQuickFetchSubmitting = false;
 
   const defaultPromptTemplate = [
     'You are a retrieval planning assistant.',
@@ -495,6 +496,7 @@ window.SubscriptionsManager = (function () {
 
   const refreshQuickRunButtons = () => {
     const blocked = hasUnsavedChanges;
+    const quickFetchBlocked = blocked || isQuickFetchSubmitting;
     const seedBlocked = blocked || isSubmittingSeedPaper;
     [
       quickRunDaysSelect,
@@ -503,13 +505,15 @@ window.SubscriptionsManager = (function () {
       quickRunRunBtn,
     ].forEach((control) => {
       if (!control) return;
-      control.disabled = blocked;
+      control.disabled = quickFetchBlocked;
       if (control.classList && typeof control.classList.toggle === 'function') {
-        control.classList.toggle('chat-quick-run-item--disabled', blocked);
+        control.classList.toggle('chat-quick-run-item--disabled', quickFetchBlocked);
       }
       control.title = blocked
         ? '请先点击“保存”后再发起快速抓取。'
-        : (control.getAttribute('data-default-title') || control.textContent || '');
+        : (isQuickFetchSubmitting
+          ? '快速抓取任务提交中，请稍候。'
+          : (control.getAttribute('data-default-title') || control.textContent || ''));
     });
     [
       quickRunSeedFileInput,
@@ -819,7 +823,7 @@ window.SubscriptionsManager = (function () {
     }
   };
 
-  const runQuickFetch = (days, msgEl, tipText, runOptions) => {
+  const runQuickFetch = async (days, msgEl, tipText, runOptions) => {
     if (hasUnsavedChanges) {
       const text = '检测到未保存修改，请先点击“保存”后再发起快速抓取。';
       if (msgEl) {
@@ -827,6 +831,15 @@ window.SubscriptionsManager = (function () {
         msgEl.style.color = '#c00';
       }
       setQuickRunMessage(text, '#c00');
+      return false;
+    }
+    if (isQuickFetchSubmitting) {
+      const text = '快速抓取任务提交中，请稍候。';
+      if (msgEl) {
+        msgEl.textContent = text;
+        msgEl.style.color = '#666';
+      }
+      setQuickRunMessage(text, '#666');
       return false;
     }
     if (!window.DPRWorkflowRunner || typeof window.DPRWorkflowRunner.runQuickFetchByDays !== 'function') {
@@ -839,7 +852,31 @@ window.SubscriptionsManager = (function () {
       return false;
     }
     const options = applyQuickRunRerankDispatchInputs(runOptions);
-    window.DPRWorkflowRunner.runQuickFetchByDays(days, options);
+    const pendingText = '正在发起快速抓取任务...';
+    if (msgEl) {
+      msgEl.textContent = pendingText;
+      msgEl.style.color = '#666';
+    }
+    setQuickRunMessage(pendingText, '#666');
+    isQuickFetchSubmitting = true;
+    refreshQuickRunButtons();
+    try {
+      await window.DPRWorkflowRunner.runQuickFetchByDays(days, options);
+    } catch (error) {
+      if (console && typeof console.error === 'function') {
+        console.error(error);
+      }
+      const text = `发起快速抓取失败：${error && error.message ? error.message : '未知错误'}`;
+      if (msgEl) {
+        msgEl.textContent = text;
+        msgEl.style.color = '#c00';
+      }
+      setQuickRunMessage(text, '#c00');
+      return false;
+    } finally {
+      isQuickFetchSubmitting = false;
+      refreshQuickRunButtons();
+    }
     const finalTip = (typeof tipText === 'string' ? tipText : null) || `已发起 ${days} 天内抓取任务。`;
     if (msgEl) {
       msgEl.textContent = finalTip;
@@ -849,7 +886,7 @@ window.SubscriptionsManager = (function () {
     return true;
   };
 
-  const runProfileQuickFetch = (profileTag, days, runOptions) => {
+  const runProfileQuickFetch = async (profileTag, days, runOptions) => {
     const normalizedTag = normalizeText(profileTag);
     if (!normalizedTag) {
       setQuickRunMessage('词条标签为空，无法发起单词条抓取。', '#c00');
@@ -1607,12 +1644,12 @@ window.SubscriptionsManager = (function () {
 
     if (quickRunRunBtn && !quickRunRunBtn._bound) {
       quickRunRunBtn._bound = true;
-      quickRunRunBtn.addEventListener('click', () => {
+      quickRunRunBtn.addEventListener('click', async () => {
         const days = normalizeQuickRunDays(quickRunDaysSelect && quickRunDaysSelect.value);
         const fetchMode = normalizeQuickRunFetchMode(quickRunModeSelect && quickRunModeSelect.value);
         const rerankProvider = normalizeQuickRunRerankProvider(quickRunRerankSelect && quickRunRerankSelect.value) || QUICK_RUN_DEFAULT_RERANK_PROVIDER;
         const modeText = fetchMode === 'standard' ? '精读' : '速览';
-        runQuickFetch(
+        await runQuickFetch(
           days,
           quickRunMsgEl,
           `已发起 ${days} 天${modeText}抓取任务（rerank: ${rerankProvider}）。`,
@@ -1726,12 +1763,16 @@ window.SubscriptionsManager = (function () {
       normalizePaperSources: (values, options) => normalizePaperSources(values, options),
       mergeDraftConfigOntoLatest: (latestConfig, draftConfigValue, baseConfigValue) => mergeDraftConfigOntoLatest(latestConfig, draftConfigValue, baseConfigValue),
       applyQuickRunRerankDispatchInputs: (runOptions) => applyQuickRunRerankDispatchInputs(runOptions),
+      runQuickFetch: (days, targetMsgEl, tipText, runOptions) => runQuickFetch(days, targetMsgEl, tipText, runOptions),
       buildSeedPaperRequestPayload: (requestOptions) => buildSeedPaperRequestPayload(requestOptions),
       isPdfFile: (file) => isPdfFile(file),
       hasPdfSignature: (bufferLike) => hasPdfSignature(bufferLike),
       getMaxSeedPaperBytes: () => MAX_SEED_PAPER_BYTES,
       setSeedSubmissionStateForTest: (value) => {
         isSubmittingSeedPaper = !!value;
+      },
+      setQuickFetchSubmissionStateForTest: (value) => {
+        isQuickFetchSubmitting = !!value;
       },
       saveDraftConfig: () => saveDraftConfig(),
       getLoadedBaseConfig: () => cloneDeep(loadedBaseConfig || {}),

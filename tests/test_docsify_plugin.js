@@ -273,6 +273,274 @@ function testAppCssKeepsMarkdownKatexDisplayScrollable() {
   );
 }
 
+function testAppCssKeepsSidebarPaperItemsReadableInDarkMode() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cssPath = path.join(__dirname, '..', 'app', 'app.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-link-line \{[\s\S]*?color: var\(--dpr-sidebar-link-muted\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav li\.sidebar-paper-item:hover \.dpr-sidebar-link-line,[\s\S]*?\.sidebar-nav li\.active > a \.dpr-sidebar-link-line \{[\s\S]*?color: var\(--dpr-sidebar-link-active\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag \{[\s\S]*?color: var\(--dpr-sidebar-tag-text\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag-keyword \{[\s\S]*?background-color: var\(--dpr-sidebar-tag-keyword-bg\);[\s\S]*?color: var\(--dpr-sidebar-tag-keyword-text\);[\s\S]*?border: 1px solid var\(--dpr-sidebar-tag-keyword-border\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag-query \{[\s\S]*?background-color: var\(--dpr-sidebar-tag-query-bg\);[\s\S]*?color: var\(--dpr-sidebar-tag-query-text\);[\s\S]*?border: 1px solid var\(--dpr-sidebar-tag-query-border\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag-paper \{[\s\S]*?background-color: var\(--dpr-sidebar-tag-paper-bg\);[\s\S]*?color: var\(--dpr-sidebar-tag-paper-text\);[\s\S]*?border: 1px solid var\(--dpr-sidebar-tag-paper-border\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag-other \{[\s\S]*?background: var\(--dpr-sidebar-tag-other-bg\);[\s\S]*?color: var\(--dpr-sidebar-tag-other-text\);[\s\S]*?border: 1px solid var\(--dpr-sidebar-tag-other-border\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag-score \.dpr-stars-bg \{[\s\S]*?color: var\(--dpr-sidebar-stars-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.sidebar-nav \.dpr-sidebar-tag-score \.dpr-stars-fill \{[\s\S]*?color: var\(--dpr-sidebar-stars-fill\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /html\[data-theme='dark'\] \.sidebar-nav li\.sidebar-paper-item:not\(\.sidebar-paper-good\):not\(\.sidebar-paper-bad\):not\(\.sidebar-paper-blue\):not\(\.sidebar-paper-orange\)::before \{[\s\S]*?background-color: var\(--dpr-hover-bg\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /html\[data-theme='dark'\] \.sidebar-nav \.dpr-sidebar-active-indicator:not\(\.is-good\):not\(\.is-bad\):not\(\.is-blue\):not\(\.is-orange\) \{[\s\S]*?background-color: var\(--dpr-hover-strong-bg\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /:root \{[\s\S]*?--dpr-sidebar-tag-keyword-bg:[\s\S]*?--dpr-sidebar-stars-fill:[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /html\[data-theme='dark'\] \{[\s\S]*?--dpr-sidebar-tag-keyword-bg:[\s\S]*?--dpr-sidebar-stars-fill:[\s\S]*?\}/,
+  );
+}
+
+function testAppCssUsesThemeTokensForOverlayPanels() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cssPath = path.join(__dirname, '..', 'app', 'app.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  assert.match(
+    css,
+    /#dpr-workflow-panel \{[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#dpr-workflow-header \{[\s\S]*?border-bottom: 1px solid var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg-soft\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-workflow-surface \{[\s\S]*?color: var\(--dpr-text\);[\s\S]*?border: 1px solid var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-wf-card \{[\s\S]*?border: 1px solid var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-wf-recent-item:hover \{[\s\S]*?background: var\(--dpr-hover-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-wf-recent-item\.is-active \{[\s\S]*?background: var\(--dpr-hover-strong-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-wf-substeps \{[\s\S]*?border: 1px dashed var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg-soft\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.chat-quick-run-item:hover \{[\s\S]*?background: var\(--dpr-hover-bg\);[\s\S]*?border-color: var\(--dpr-interactive-border-hover\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.chat-quick-run-modal-panel \{[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.chat-quick-run-title \{[\s\S]*?color: var\(--dpr-text-strong\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.chat-quick-run-row label \{[\s\S]*?color: var\(--dpr-text-muted\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.secret-gate-modal \{[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.secret-gate-btn\.primary \{[\s\S]*?background: var\(--dpr-primary-button-bg\);[\s\S]*?border-color: var\(--dpr-primary-button-border\);[\s\S]*?color: var\(--dpr-primary-button-text\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /html\[data-theme='dark'\] \.secret-gate-btn\.primary:hover:not\(:disabled\) \{[\s\S]*?background: var\(--dpr-primary-button-hover-bg\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.thinking-container-live \{[\s\S]*?border-left: 3px solid var\(--dpr-panel-border\);[\s\S]*?color: var\(--dpr-text-muted\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.thinking-toggle-live \{[\s\S]*?border: 1px solid var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg-soft\);[\s\S]*?color: var\(--dpr-text-muted\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.thinking-content-live \{[\s\S]*?white-space: pre-wrap;[\s\S]*?margin-top: 4px;[\s\S]*?\}/,
+  );
+}
+
+function testAppCssUsesThemeTokensForHomeCardsAndSearchPanels() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cssPath = path.join(__dirname, '..', 'app', 'app.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-notice-card \{[\s\S]*?border: 1px solid var\(--dpr-home-notice-border\);[\s\S]*?background: var\(--dpr-home-notice-bg\);[\s\S]*?box-shadow: var\(--dpr-home-notice-shadow\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-notice-card::before,[\s\S]*?\.markdown-section \.dpr-home-notice-card::after \{[\s\S]*?var\(--dpr-home-notice-wave-strong\)[\s\S]*?var\(--dpr-home-notice-wave-soft\)[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-notice-title \{[\s\S]*?color: var\(--dpr-home-notice-title\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-notice-list li \{[\s\S]*?color: var\(--dpr-home-notice-text\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-notice-list a \{[\s\S]*?color: var\(--dpr-home-notice-link\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-promo-card \{[\s\S]*?border: 1px solid var\(--dpr-home-promo-border\);[\s\S]*?background: var\(--dpr-home-promo-bg\);[\s\S]*?box-shadow: var\(--dpr-home-promo-shadow\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-promo-card::before,[\s\S]*?\.markdown-section \.dpr-home-promo-card::after \{[\s\S]*?var\(--dpr-home-promo-wave-strong\)[\s\S]*?var\(--dpr-home-promo-wave-soft\)[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-promo-title \{[\s\S]*?color: var\(--dpr-home-promo-title\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.markdown-section \.dpr-home-promo-list li \{[\s\S]*?color: var\(--dpr-home-promo-text\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-search-panel \{[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?box-shadow: var\(--dpr-panel-shadow\);[\s\S]*?color: var\(--dpr-text\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-keywords-pane \{[\s\S]*?background: var\(--dpr-sidebar-tag-keyword-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-zotero-pane \{[\s\S]*?background: var\(--dpr-sidebar-tag-query-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-search-section \{[\s\S]*?background: var\(--dpr-sidebar-tag-paper-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-keywords-list::-webkit-scrollbar-track \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-track\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-keywords-list::-webkit-scrollbar-thumb \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-thumb\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-keywords-list::-webkit-scrollbar-thumb:hover \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-thumb-hover\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#zotero-list::-webkit-scrollbar-track \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-track\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#zotero-list::-webkit-scrollbar-thumb \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-thumb\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#zotero-list::-webkit-scrollbar-thumb:hover \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-thumb-hover\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-search-panel::-webkit-scrollbar-track \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-track\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-search-panel::-webkit-scrollbar-thumb \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-thumb\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /#arxiv-search-panel::-webkit-scrollbar-thumb:hover \{[\s\S]*?background: var\(--dpr-overlay-scrollbar-thumb-hover\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-modal-list \{[\s\S]*?background: var\(--dpr-panel-bg-soft\);[\s\S]*?border: 1px solid var\(--dpr-panel-border\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-chat-round \{[\s\S]*?border: 1px solid var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-chat-send-btn \{[\s\S]*?background: var\(--dpr-primary-action-bg\) !important;[\s\S]*?color: var\(--dpr-primary-action-text\) !important;[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-cloud-item \{[\s\S]*?border: 1px solid var\(--dpr-panel-border\);[\s\S]*?background: var\(--dpr-panel-bg\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-cloud-item\.selected \{[\s\S]*?border-color: var\(--dpr-selected-success-border\);[\s\S]*?background: var\(--dpr-selected-success-bg\);[\s\S]*?box-shadow: var\(--dpr-selected-success-shadow\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /\.dpr-pick-card\.selected \{[\s\S]*?border-color: var\(--dpr-selected-success-border\);[\s\S]*?background: var\(--dpr-selected-success-bg\);[\s\S]*?box-shadow: var\(--dpr-selected-success-shadow\);[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /:root \{[\s\S]*?--dpr-home-notice-border:[\s\S]*?--dpr-primary-action-bg:[\s\S]*?--dpr-selected-success-bg:[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /html\[data-theme='dark'\] \{[\s\S]*?--dpr-home-notice-border:[\s\S]*?--dpr-primary-action-bg:[\s\S]*?--dpr-selected-success-bg:[\s\S]*?--dpr-primary-button-bg:[\s\S]*?--dpr-overlay-scrollbar-track:[\s\S]*?\}/,
+  );
+  assert.match(
+    css,
+    /:root \{[\s\S]*?--dpr-home-notice-border:[\s\S]*?--dpr-primary-action-bg:[\s\S]*?--dpr-selected-success-bg:[\s\S]*?--dpr-primary-button-bg:[\s\S]*?--dpr-overlay-scrollbar-track:[\s\S]*?\}/,
+  );
+}
+
 testNormalizeSafeUrlRejectsJavascriptAndDataUrls();
 testResolveDocsAssetUrlAllowsRepoAssetsOnly();
 testParseFiguresMetaFiltersUnsafeEntries();
@@ -282,5 +550,8 @@ testLoadGithubTokenForGistUsesSecretSessionAccessor();
 testDocsifyPluginDoneEachPublishesCurrentRouteGlobals();
 testDocsifyPluginTestHooksStayDisabledWithoutExplicitFlag();
 testAppCssKeepsMarkdownKatexDisplayScrollable();
+testAppCssKeepsSidebarPaperItemsReadableInDarkMode();
+testAppCssUsesThemeTokensForOverlayPanels();
+testAppCssUsesThemeTokensForHomeCardsAndSearchPanels();
 
 console.log('docsify plugin tests passed');

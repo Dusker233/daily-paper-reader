@@ -32,11 +32,13 @@ const {
   normalizeSubscriptions,
   mergeDraftConfigOntoLatest,
   applyQuickRunRerankDispatchInputs,
+  runQuickFetch,
   buildSeedPaperRequestPayload,
   isPdfFile,
   hasPdfSignature,
   getMaxSeedPaperBytes,
   setSeedSubmissionStateForTest,
+  setQuickFetchSubmissionStateForTest,
 } = manager.__test;
 
 function buildJsonResponse(status, body, statusText = '') {
@@ -138,15 +140,15 @@ function testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields() {
   assert.equal(backend.vector_rpc_exact, 'match_biorxiv_papers_exact');
 }
 
-function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
+async function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
   const calls = [];
   global.window.DPRWorkflowRunner = {
-    runQuickFetchByDays(days, options) {
+    async runQuickFetchByDays(days, options) {
       calls.push({ days, options });
     },
   };
 
-  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
+  const ok = await global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
     fetchMode: 'skims',
   });
 
@@ -157,15 +159,15 @@ function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
   assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
 }
 
-function testRunProfileQuickFetchPreservesExplicitFilterConcurrency() {
+async function testRunProfileQuickFetchPreservesExplicitFilterConcurrency() {
   const calls = [];
   global.window.DPRWorkflowRunner = {
-    runQuickFetchByDays(days, options) {
+    async runQuickFetchByDays(days, options) {
       calls.push({ days, options });
     },
   };
 
-  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
+  const ok = await global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
     fetchMode: 'skims',
     dispatchInputs: {
       filter_concurrency: '1',
@@ -213,15 +215,15 @@ function testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderA
   assert.equal(out.dispatchInputs.rerank_model, 'custom-local-model');
 }
 
-function testRunProfileQuickFetchIncludesCustomDaysInTipOptions() {
+async function testRunProfileQuickFetchIncludesCustomDaysInTipOptions() {
   const calls = [];
   global.window.DPRWorkflowRunner = {
-    runQuickFetchByDays(days, options) {
+    async runQuickFetchByDays(days, options) {
       calls.push({ days, options });
     },
   };
 
-  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 17, {
+  const ok = await global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 17, {
     fetchMode: 'standard',
     rerankProvider: 'local',
   });
@@ -233,6 +235,127 @@ function testRunProfileQuickFetchIncludesCustomDaysInTipOptions() {
   assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
   assert.equal(calls[0].options.dispatchInputs.rerank_provider, 'local');
   assert.equal(calls[0].options.dispatchInputs.rerank_model, 'BAAI/bge-reranker-v2-m3');
+}
+
+async function testRunProfileQuickFetchReturnsFalseWhenWorkflowDispatchFails() {
+  const originalConsoleError = console.error;
+  global.window.DPRWorkflowRunner = {
+    async runQuickFetchByDays() {
+      throw new Error('dispatch failed');
+    },
+  };
+
+  try {
+    console.error = () => {};
+    const ok = await global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 7, {
+      fetchMode: 'skims',
+    });
+    assert.equal(ok, false);
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
+async function testRunQuickFetchShowsPendingStateUntilDispatchResolves() {
+  const msgEl = {
+    textContent: '',
+    style: {},
+  };
+  let resolveDispatch = null;
+  const calls = [];
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays(days, options) {
+      calls.push({ days, options });
+      return new Promise((resolve) => {
+        resolveDispatch = resolve;
+      });
+    },
+  };
+
+  const pendingRun = runQuickFetch(12, msgEl, '已发起 12 天速览抓取任务（rerank: blt）。', {
+    fetchMode: 'skims',
+    rerankProvider: 'blt',
+  });
+  await Promise.resolve();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].days, 12);
+  assert.equal(msgEl.textContent, '正在发起快速抓取任务...');
+  assert.equal(msgEl.style.color, '#666');
+
+  resolveDispatch();
+  const ok = await pendingRun;
+
+  assert.equal(ok, true);
+  assert.equal(msgEl.textContent, '已发起 12 天速览抓取任务（rerank: blt）。');
+  assert.equal(msgEl.style.color, '#080');
+}
+
+async function testRunQuickFetchRejectsReentryWhileDispatchIsPending() {
+  const msgEl = {
+    textContent: '',
+    style: {},
+  };
+  let resolveDispatch = null;
+  let callCount = 0;
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays() {
+      callCount += 1;
+      return new Promise((resolve) => {
+        resolveDispatch = resolve;
+      });
+    },
+  };
+
+  const firstRun = runQuickFetch(12, msgEl, '已发起 12 天速览抓取任务（rerank: blt）。', {
+    fetchMode: 'skims',
+    rerankProvider: 'blt',
+  });
+  await Promise.resolve();
+
+  const secondOk = await runQuickFetch(12, msgEl, '已发起 12 天速览抓取任务（rerank: blt）。', {
+    fetchMode: 'skims',
+    rerankProvider: 'blt',
+  });
+
+  assert.equal(secondOk, false);
+  assert.equal(callCount, 1);
+  assert.equal(msgEl.textContent, '快速抓取任务提交中，请稍候。');
+  assert.equal(msgEl.style.color, '#666');
+
+  resolveDispatch();
+  const firstOk = await firstRun;
+
+  assert.equal(firstOk, true);
+  assert.equal(callCount, 1);
+  assert.equal(msgEl.textContent, '已发起 12 天速览抓取任务（rerank: blt）。');
+  assert.equal(msgEl.style.color, '#080');
+}
+
+async function testRunQuickFetchReturnsFalseWhileSubmissionLockIsSet() {
+  const msgEl = {
+    textContent: '',
+    style: {},
+  };
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays() {
+      throw new Error('should not dispatch while quick fetch is locked');
+    },
+  };
+
+  setQuickFetchSubmissionStateForTest(true);
+  try {
+    const ok = await runQuickFetch(12, msgEl, 'ignored', {
+      fetchMode: 'skims',
+      rerankProvider: 'blt',
+    });
+
+    assert.equal(ok, false);
+    assert.equal(msgEl.textContent, '快速抓取任务提交中，请稍候。');
+    assert.equal(msgEl.style.color, '#666');
+  } finally {
+    setQuickFetchSubmissionStateForTest(false);
+  }
 }
 
 function testBuildSeedPaperRequestPayloadNormalizesFields() {
@@ -2197,12 +2320,16 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   await testWorkflowRunnerRunSeedPaperWorkflowRejectsMismatchedRequestPath();
   await testWorkflowRunnerRunSeedPaperWorkflowRejectsMissingRequestPath();
   await testWorkflowRunnerRejectsCustomDomainWithoutConfig();
-  testRunProfileQuickFetchPassesProfileTagToWorkflow();
-  testRunProfileQuickFetchPreservesExplicitFilterConcurrency();
+  await testRunProfileQuickFetchPassesProfileTagToWorkflow();
+  await testRunProfileQuickFetchPreservesExplicitFilterConcurrency();
   testApplyQuickRunRerankDispatchInputsDefaultsLocalModel();
   testApplyQuickRunRerankDispatchInputsStripsModelForNonLocalProvider();
   testApplyQuickRunRerankDispatchInputsPreservesExplicitDispatchProviderAndModel();
-  testRunProfileQuickFetchIncludesCustomDaysInTipOptions();
+  await testRunProfileQuickFetchIncludesCustomDaysInTipOptions();
+  await testRunProfileQuickFetchReturnsFalseWhenWorkflowDispatchFails();
+  await testRunQuickFetchShowsPendingStateUntilDispatchResolves();
+  await testRunQuickFetchRejectsReentryWhileDispatchIsPending();
+  await testRunQuickFetchReturnsFalseWhileSubmissionLockIsSet();
   testBuildSeedPaperRequestPayloadNormalizesFields();
   testBuildSeedPaperRequestPayloadDefaultsToSkimAndMaxCap();
   testIsPdfFileRequiresPdfExtension();
