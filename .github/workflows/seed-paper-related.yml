@@ -189,69 +189,32 @@ jobs:
           set -euo pipefail
           rm -rf "${ARTIFACT_ROOT}"
           mkdir -p "${ARTIFACT_ROOT}"
-          RERANK_ENABLED_STATE="$(python3 - <<'PY'
+          python3 - <<'PY'
           import os
-          raw = os.getenv("RERANK_ENABLED")
-          if raw is None:
-              print("")
-          else:
-              value = str(raw).strip().lower()
-              if value in {"1", "true", "yes", "on"}:
-                  print("true")
-              elif value in {"0", "false", "no", "off"}:
-                  print("false")
-              else:
-                  print("")
+
+          truthy_values = {"1", "true", "yes", "on"}
+          falsey_values = {"0", "false", "no", "off"}
+
+          raw_enabled = os.getenv("RERANK_ENABLED")
+          state = ""
+          if raw_enabled is not None:
+              value = str(raw_enabled).strip().lower()
+              if value in truthy_values:
+                  state = "true"
+              elif value in falsey_values:
+                  state = "false"
+              elif value:
+                  raise SystemExit("Unsupported RERANK_ENABLED value for hosted seed workflow.")
+
+          dedicated = [
+              str(os.getenv(name) or "").strip()
+              for name in ("RERANK_API_KEY", "RERANK_BASE_URL", "RERANK_MODEL")
+          ]
+          has_any_dedicated = any(dedicated)
+          has_complete_dedicated = all(dedicated)
+          if (state == "true" or has_any_dedicated) and not has_complete_dedicated:
+              raise SystemExit("Dedicated rerank secrets are incomplete for hosted seed workflow.")
           PY
-          )"
-          if [ "$RERANK_ENABLED_STATE" = "true" ]; then
-            if [ -z "${RERANK_API_KEY:-}" ] || [ -z "${RERANK_BASE_URL:-}" ] || [ -z "${RERANK_MODEL:-}" ]; then
-              echo "RERANK_ENABLED=true but dedicated rerank secrets are incomplete." >&2
-              exit 1
-            fi
-            export RERANK_PROVIDER="blt"
-          elif [ "$RERANK_ENABLED_STATE" = "false" ]; then
-            if [ -z "${BLT_API_KEY:-}" ]; then
-              echo "RERANK_ENABLED=false but BLT_API_KEY is missing for hosted fallback." >&2
-              exit 1
-            fi
-            RUNTIME_BLT_BASE_URL="${BLT_API_BASE:-${BLT_PRIMARY_BASE_URL:-${LLM_PRIMARY_BASE_URL:-${GPTBEST_BASE_URL:-}}}}"
-            if [ -z "$RUNTIME_BLT_BASE_URL" ]; then
-              echo "RERANK_ENABLED=false but BLT base URL is missing for hosted fallback." >&2
-              exit 1
-            fi
-            export RERANK_PROVIDER="blt"
-            export RERANK_API_KEY="$BLT_API_KEY"
-            export RERANK_BASE_URL="$RUNTIME_BLT_BASE_URL"
-            export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
-            export Reranker_LLM_API_KEY="$RERANK_API_KEY"
-            export Reranker_LLM_BASE_URL="$RERANK_BASE_URL"
-            export Reranker_LLM_MODEL="$RERANK_MODEL"
-            unset RERANK_ENABLED
-          elif [ -n "${RERANK_API_KEY:-}" ] || [ -n "${RERANK_BASE_URL:-}" ] || [ -n "${RERANK_MODEL:-}" ]; then
-            if [ -z "${RERANK_API_KEY:-}" ] || [ -z "${RERANK_BASE_URL:-}" ] || [ -z "${RERANK_MODEL:-}" ]; then
-              echo "Dedicated rerank secrets are incomplete for hosted seed workflow." >&2
-              exit 1
-            fi
-            export RERANK_PROVIDER="blt"
-          else
-            if [ -z "${BLT_API_KEY:-}" ]; then
-              echo "Missing RERANK_ENABLED secret and BLT_API_KEY for hosted seed workflow." >&2
-              exit 1
-            fi
-            RUNTIME_BLT_BASE_URL="${BLT_API_BASE:-${BLT_PRIMARY_BASE_URL:-${LLM_PRIMARY_BASE_URL:-${GPTBEST_BASE_URL:-}}}}"
-            if [ -z "$RUNTIME_BLT_BASE_URL" ]; then
-              echo "Missing RERANK_ENABLED secret and BLT base URL for hosted seed workflow." >&2
-              exit 1
-            fi
-            export RERANK_PROVIDER="blt"
-            export RERANK_API_KEY="$BLT_API_KEY"
-            export RERANK_BASE_URL="$RUNTIME_BLT_BASE_URL"
-            export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
-            export Reranker_LLM_API_KEY="$RERANK_API_KEY"
-            export Reranker_LLM_BASE_URL="$RERANK_BASE_URL"
-            export Reranker_LLM_MODEL="$RERANK_MODEL"
-          fi
           python3 "${WORKFLOW_ROOT}/src/seed_paper_processor.py" \
             --request-path "${PUBLISH_ROOT}/${REQUEST_PATH}" \
             --request-id "$REQUEST_ID" \
