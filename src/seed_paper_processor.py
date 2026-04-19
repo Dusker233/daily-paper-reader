@@ -1070,7 +1070,9 @@ def _is_rerank_fallback_error(error: Exception) -> bool:
     if isinstance(error, requests.exceptions.HTTPError):
         response = getattr(error, "response", None)
         status_code = getattr(response, "status_code", None)
-        return isinstance(status_code, int) and status_code >= 500
+        if isinstance(status_code, int) and status_code >= 500:
+            return True
+        return "non-json rerank response" in message
     return bool(message) and (
         "rerank 未启用" in message
         or "timed out" in message
