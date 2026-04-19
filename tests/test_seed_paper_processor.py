@@ -4,7 +4,9 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _load_module(module_name: str, path: pathlib.Path):
@@ -550,6 +552,1548 @@ class SeedPaperProcessorTest(unittest.TestCase):
                     title="Seed Paper",
                 )
 
+    def test_retrieve_related_papers_disables_rpc_filter_sources_for_single_source_backends(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_dir = root / "archive" / "seed-papers" / "demo-request"
+            request_dir.mkdir(parents=True, exist_ok=True)
+            seed_pdf = request_dir / "seed-paper.pdf"
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            bm25_calls = []
+            embedding_calls = []
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"arxiv": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    bm25_calls.append(kwargs)
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-1": {"score": 0.7, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-1": {
+                                "id": "paper-1",
+                                "title": "Paper One",
+                                "abstract": "first abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    embedding_calls.append({"model": model, **kwargs})
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual(len(bm25_calls), 1)
+            self.assertEqual(bm25_calls[0]["query_filter_sources"], False)
+            self.assertEqual(len(embedding_calls), 1)
+            self.assertEqual(embedding_calls[0]["query_filter_sources"], False)
+            self.assertIn("paper-1", result["papers"])
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_passes_resolved_recall_window_to_rpcs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+            expected_start = datetime(2026, 4, 1, tzinfo=timezone.utc)
+            expected_end = datetime(2026, 4, 10, tzinfo=timezone.utc)
+
+            bm25_calls = []
+            embedding_calls = []
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"arxiv": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_supabase_recall_window(config):
+                    return expected_start, expected_end
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    bm25_calls.append(kwargs)
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-1": {"score": 0.7, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-1": {
+                                "id": "paper-1",
+                                "title": "Paper One",
+                                "abstract": "first abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    embedding_calls.append({"model": model, **kwargs})
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual(bm25_calls[0]["start_dt"], expected_start)
+            self.assertEqual(bm25_calls[0]["end_dt"], expected_end)
+            self.assertEqual(embedding_calls[0]["start_dt"], expected_start)
+            self.assertEqual(embedding_calls[0]["end_dt"], expected_end)
+            self.assertIn("paper-1", result["papers"])
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_falls_back_to_multi_source_rpcs_when_source_rpc_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+            expected_start = datetime(2026, 4, 1, tzinfo=timezone.utc)
+            expected_end = datetime(2026, 4, 10, tzinfo=timezone.utc)
+
+            bm25_calls = []
+            embedding_calls = []
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_supabase_recall_window(config):
+                    return expected_start, expected_end
+
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "bm25_rpc": "match_multi_source_papers_bm25",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    bm25_calls.append(kwargs)
+                    if not kwargs.get("query_filter_sources"):
+                        raise RuntimeError("PGRST202: Could not find the function public.match_iclr_papers_bm25 in the schema cache")
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-1": {"score": 0.7, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-1": {
+                                "id": "paper-1",
+                                "title": "Paper One",
+                                "abstract": "first abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def resolve_multi_source_vector_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_vector_rpc": True,
+                        "vector_rpc_exact": "match_multi_source_papers_exact",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    embedding_calls.append({"model": model, **kwargs})
+                    if not kwargs.get("query_filter_sources"):
+                        raise RuntimeError("PGRST202: Could not find the function public.match_iclr_papers_exact in the schema cache")
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {"DPR_ENABLE_MULTI_SOURCE_RPC": "true"}, clear=False):
+                    result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual([call["query_filter_sources"] for call in bm25_calls], [False, True])
+            self.assertEqual([call["start_dt"] for call in bm25_calls], [expected_start, expected_start])
+            self.assertEqual([call["end_dt"] for call in bm25_calls], [expected_end, expected_end])
+            self.assertEqual(bm25_calls[1]["supabase_conf"]["bm25_rpc"], "match_multi_source_papers_bm25")
+            self.assertEqual([call["query_filter_sources"] for call in embedding_calls], [False, True])
+            self.assertEqual([call["start_dt"] for call in embedding_calls], [expected_start, expected_start])
+            self.assertEqual([call["end_dt"] for call in embedding_calls], [expected_end, expected_end])
+            self.assertEqual(embedding_calls[1]["supabase_conf"]["vector_rpc_exact"], "match_multi_source_papers_exact")
+            self.assertIn("paper-1", result["papers"])
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_falls_back_to_multi_source_rpcs_when_source_rpc_returns_failure_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+            expected_start = datetime(2026, 4, 1, tzinfo=timezone.utc)
+            expected_end = datetime(2026, 4, 10, tzinfo=timezone.utc)
+
+            bm25_calls = []
+            embedding_calls = []
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_supabase_recall_window(config):
+                    return expected_start, expected_end
+
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "bm25_rpc": "match_multi_source_papers_bm25",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    bm25_calls.append(kwargs)
+                    if not kwargs.get("query_filter_sources"):
+                        return {
+                            "queries": [],
+                            "papers": {},
+                            "total_hits": 0,
+                            "non_empty_queries": 0,
+                            "failure_messages": [
+                                'rpc 查询失败：HTTP 404 {"code":"PGRST202","message":"Could not find the function public.match_iclr_papers_bm25 in the schema cache"}'
+                            ],
+                        }
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-1": {"score": 0.7, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-1": {
+                                "id": "paper-1",
+                                "title": "Paper One",
+                                "abstract": "first abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def resolve_multi_source_vector_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_vector_rpc": True,
+                        "vector_rpc_exact": "match_multi_source_papers_exact",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    embedding_calls.append({"model": model, **kwargs})
+                    if not kwargs.get("query_filter_sources"):
+                        return {
+                            "queries": [],
+                            "papers": {},
+                            "total_hits": 0,
+                            "non_empty_queries": 0,
+                            "failure_messages": [
+                                'rpc 查询失败：HTTP 404 {"code":"PGRST202","message":"Could not find the function public.match_iclr_papers_exact in the schema cache"}'
+                            ],
+                        }
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {"DPR_ENABLE_MULTI_SOURCE_RPC": "true"}, clear=False):
+                    result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual([call["query_filter_sources"] for call in bm25_calls], [False, True])
+            self.assertEqual([call["start_dt"] for call in bm25_calls], [expected_start, expected_start])
+            self.assertEqual([call["end_dt"] for call in bm25_calls], [expected_end, expected_end])
+            self.assertEqual(bm25_calls[1]["supabase_conf"]["bm25_rpc"], "match_multi_source_papers_bm25")
+            self.assertEqual([call["query_filter_sources"] for call in embedding_calls], [False, True])
+            self.assertEqual([call["start_dt"] for call in embedding_calls], [expected_start, expected_start])
+            self.assertEqual([call["end_dt"] for call in embedding_calls], [expected_end, expected_end])
+            self.assertEqual(embedding_calls[1]["supabase_conf"]["vector_rpc_exact"], "match_multi_source_papers_exact")
+            self.assertIn("paper-1", result["papers"])
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_preserves_vector_lane_when_multi_source_bm25_fallback_times_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            bm25_calls = []
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "bm25_rpc": "match_multi_source_papers_bm25",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    bm25_calls.append(kwargs)
+                    if not kwargs.get("query_filter_sources"):
+                        raise RuntimeError("PGRST202: Could not find the function public.match_iclr_papers_bm25 in the schema cache")
+                    raise RuntimeError("57014: canceling statement due to statement timeout")
+
+            class _StubEmbedding:
+                @staticmethod
+                def resolve_multi_source_vector_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_vector_rpc": True,
+                        "vector_rpc_exact": "match_multi_source_papers_exact",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {"DPR_ENABLE_MULTI_SOURCE_RPC": "true"}, clear=False):
+                    result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual([call["query_filter_sources"] for call in bm25_calls], [False, True])
+            self.assertEqual(len(result["queries"]), 1)
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_preserves_bm25_lane_when_multi_source_vector_fallback_times_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            embedding_calls = []
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-1": {"score": 0.7, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-1": {
+                                "id": "paper-1",
+                                "title": "Paper One",
+                                "abstract": "first abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def resolve_multi_source_vector_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_vector_rpc": True,
+                        "vector_rpc_exact": "match_multi_source_papers_exact",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    embedding_calls.append(kwargs)
+                    if not kwargs.get("query_filter_sources"):
+                        raise RuntimeError("PGRST202: Could not find the function public.match_iclr_papers_exact in the schema cache")
+                    raise RuntimeError("statement timeout while calling vector rpc")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {"DPR_ENABLE_MULTI_SOURCE_RPC": "true"}, clear=False):
+                    result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual([call["query_filter_sources"] for call in embedding_calls], [False, True])
+            self.assertEqual(len(result["queries"]), 1)
+            self.assertIn("paper-1", result["papers"])
+
+    def test_retrieve_related_papers_reraises_missing_function_errors_when_multi_source_rpc_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": False,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    raise AssertionError("multi-source resolver should not run when feature flag is disabled")
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    raise RuntimeError("PGRST202: Could not find the function public.match_iclr_papers_bm25 in the schema cache")
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise AssertionError("embedding should not run")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {}, clear=True):
+                    with self.assertRaisesRegex(
+                        self.mod.RecallLaneFailure,
+                        "seed recall backend is missing required RPC support",
+                    ):
+                        self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+    def test_retrieve_related_papers_reraises_missing_function_messages_when_multi_source_rpc_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": False,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    raise AssertionError("multi-source resolver should not run when feature flag is disabled")
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    return {
+                        "queries": [],
+                        "papers": {},
+                        "total_hits": 0,
+                        "non_empty_queries": 0,
+                        "failure_messages": [
+                            "rpc 查询失败：HTTP 500 upstream failure",
+                            "hint: retry through fallback backend",
+                            'rpc 查询失败：HTTP 404 {"code":"PGRST202","message":"Could not find the function public.match_iclr_papers_bm25 in the schema cache"}'
+                        ],
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise AssertionError("embedding should not run")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {}, clear=True):
+                    with self.assertRaisesRegex(
+                        self.mod.RecallLaneFailure,
+                        "seed recall backend is missing required RPC support",
+                    ):
+                        self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+    def test_retrieve_related_papers_reraises_missing_function_string_when_multi_source_rpc_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": False,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    raise AssertionError("multi-source resolver should not run when feature flag is disabled")
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    return {
+                        "queries": [],
+                        "papers": {},
+                        "total_hits": 0,
+                        "non_empty_queries": 0,
+                        "failure_messages": 'rpc 查询失败：HTTP 404 {"code":"PGRST202","message":"Could not find the function public.match_iclr_papers_bm25 in the schema cache"}',
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise AssertionError("embedding should not run")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {}, clear=True):
+                    with self.assertRaisesRegex(
+                        self.mod.RecallLaneFailure,
+                        "seed recall backend is missing required RPC support",
+                    ):
+                        self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+    def test_retrieve_related_papers_reraises_missing_function_errors_when_multi_source_backend_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": False,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    return None
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    raise RuntimeError("PGRST202: Could not find the function public.match_iclr_papers_bm25 in the schema cache")
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise AssertionError("embedding should not run")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {"DPR_ENABLE_MULTI_SOURCE_RPC": "true"}, clear=False):
+                    with self.assertRaisesRegex(
+                        self.mod.RecallLaneFailure,
+                        "seed recall backend is missing required RPC support",
+                    ):
+                        self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+    def test_retrieve_related_papers_reraises_non_schema_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": False,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+            class _StubBM25:
+                @staticmethod
+                def resolve_multi_source_bm25_backend(config, queries):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "bm25_rpc": "match_multi_source_papers_bm25",
+                    }
+
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    raise RuntimeError("network down")
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise AssertionError("embedding should not run")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with patch.dict("os.environ", {"DPR_ENABLE_MULTI_SOURCE_RPC": "true"}, clear=False):
+                    with self.assertRaisesRegex(RuntimeError, "network down"):
+                        self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+    def test_retrieve_related_papers_preserves_vector_lane_when_bm25_timeout_message_is_returned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    return {
+                        "queries": [],
+                        "papers": {},
+                        "total_hits": 0,
+                        "non_empty_queries": 0,
+                        "failure_messages": [
+                            'rpc 查询失败：HTTP 500 {"code":"57014","message":"canceling statement due to statement timeout"}'
+                        ],
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual(len(result["queries"]), 1)
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_preserves_vector_lane_when_bm25_times_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    raise RuntimeError("57014: canceling statement due to statement timeout")
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-2": {"score": 0.8, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-2": {
+                                "id": "paper-2",
+                                "title": "Paper Two",
+                                "abstract": "second abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual(len(result["queries"]), 1)
+            self.assertIn("paper-2", result["papers"])
+
+    def test_retrieve_related_papers_preserves_bm25_lane_when_vector_times_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    merged_queries = []
+                    merged_papers = {}
+                    for result in results:
+                        merged_queries.extend(result.get("queries") or [])
+                        merged_papers.update(result.get("papers") or {})
+                    return {
+                        "queries": merged_queries,
+                        "papers": merged_papers,
+                        "total_hits": len(merged_papers),
+                        "non_empty_queries": sum(1 for item in merged_queries if item.get("sim_scores")),
+                    }
+
+            class _StubBM25:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    return {
+                        "queries": [
+                            {
+                                "query_text": queries[0]["query_text"],
+                                "sim_scores": {"paper-1": {"score": 0.7, "rank": 1}},
+                            }
+                        ],
+                        "papers": {
+                            "paper-1": {
+                                "id": "paper-1",
+                                "title": "Paper One",
+                                "abstract": "first abstract",
+                            }
+                        },
+                        "total_hits": 1,
+                        "non_empty_queries": 1,
+                    }
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise RuntimeError("statement timeout while calling vector rpc")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                result = self.mod.retrieve_related_papers(request, "seed paper body text")
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual(len(result["queries"]), 1)
+            self.assertIn("paper-1", result["papers"])
+
     def test_rank_related_papers_excludes_seed_and_reranks_candidates(self):
         request = {
             "request_id": "demo-request",
@@ -635,6 +2179,113 @@ class SeedPaperProcessorTest(unittest.TestCase):
         self.assertEqual(len(reranker.calls[0]["documents"]), 3)
         self.assertTrue(all("Seed Paper" not in doc for doc in reranker.calls[0]["documents"]))
 
+    def test_rank_related_papers_surfaces_timeout_when_recall_exhausts_all_lanes(self):
+        reranker = _StubReranker([])
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "seed recall timed out"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": [],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [],
+                    "papers": {},
+                    "failure_messages": [
+                        'rpc 查询失败：HTTP 500 {"code":"57014","message":"canceling statement due to statement timeout"}'
+                    ],
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
+
+        self.assertEqual(reranker.calls, [])
+
+    def test_rank_related_papers_surfaces_timeout_when_all_recall_lanes_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+            (root / "config.yaml").write_text("subscriptions: {}\n", encoding="utf-8")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["LLM"],
+                "notes": "focus on methods",
+                "related_count": 1,
+                "mode": "both",
+            }
+
+            class _StubSourceConfig:
+                @staticmethod
+                def load_config_with_source_migration(path, write_back=False):
+                    return {"subscriptions": {}}
+
+                @staticmethod
+                def get_source_backend(config, source_key):
+                    return {
+                        "enabled": True,
+                        "use_bm25_rpc": True,
+                        "use_vector_rpc": True,
+                        "bm25_rpc": f"match_{source_key}_papers_bm25",
+                        "vector_rpc_exact": f"match_{source_key}_papers_exact",
+                    }
+
+            class _StubRouter:
+                @staticmethod
+                def group_queries_by_source(queries):
+                    return {"iclr": list(queries)}
+
+                @staticmethod
+                def merge_pipeline_results(results):
+                    return {"queries": [], "papers": {}, "total_hits": 0, "non_empty_queries": 0}
+
+            class _StubBM25:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(queries, **kwargs):
+                    raise RuntimeError("57014: canceling statement due to statement timeout")
+
+            class _StubEmbedding:
+                @staticmethod
+                def rank_papers_for_queries_via_supabase(model, queries, **kwargs):
+                    raise RuntimeError("statement timeout while calling vector rpc")
+
+            class _StubFilter:
+                class EmbeddingCoarseFilter:
+                    def __init__(self, model_name, top_k, device):
+                        self.model = f"stub::{model_name}::{top_k}::{device}"
+
+            reranker = _StubReranker([])
+            original_loader = self.mod._load_retrieval_helpers
+            self.mod._load_retrieval_helpers = lambda: {
+                "source_config": _StubSourceConfig,
+                "router": _StubRouter,
+                "bm25": _StubBM25,
+                "embedding": _StubEmbedding,
+                "filter": _StubFilter,
+            }
+            try:
+                with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "seed recall timed out"):
+                    self.mod.rank_related_papers(
+                        request,
+                        seed_text="seed paper body text",
+                        reranker=reranker,
+                        seed_identity={"seed-paper", "Seed Paper"},
+                    )
+            finally:
+                self.mod._load_retrieval_helpers = original_loader
+
+            self.assertEqual(reranker.calls, [])
+
     def test_rank_related_papers_rejects_empty_retrieval_candidates(self):
         reranker = _StubReranker([])
 
@@ -694,6 +2345,38 @@ class SeedPaperProcessorTest(unittest.TestCase):
             )
 
         self.assertEqual(len(reranker.calls), 1)
+
+    def test_rank_related_papers_surfaces_recall_backend_error_when_queries_exist_but_papers_are_empty(self):
+        reranker = _StubReranker([])
+
+        with self.assertRaisesRegex(self.mod.SeedPaperProcessingError, "seed recall backend is missing required RPC support"):
+            self.mod.rank_related_papers(
+                {
+                    "request_id": "demo-request",
+                    "file_name": "Seed Paper.pdf",
+                    "selected_tags": ["RL"],
+                    "notes": "",
+                    "related_count": 2,
+                    "mode": "skim",
+                },
+                seed_text="seed paper body text",
+                retrieve_related=lambda req, seed_text: {
+                    "queries": [
+                        {
+                            "query_text": "seed paper related query",
+                            "sim_scores": {},
+                        }
+                    ],
+                    "papers": {},
+                    "failure_messages": [
+                        'rpc 查询失败：HTTP 404 {"code":"PGRST202","message":"Could not find the function public.match_arxiv_papers_bm25 in the schema cache"}'
+                    ],
+                },
+                reranker=reranker,
+                seed_identity={"seed-paper"},
+            )
+
+        self.assertEqual(reranker.calls, [])
 
     def test_rank_related_papers_rejects_empty_recalled_papers(self):
         reranker = _StubReranker([])

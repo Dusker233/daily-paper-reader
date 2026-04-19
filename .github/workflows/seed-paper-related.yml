@@ -23,18 +23,29 @@ concurrency:
 
 jobs:
   run:
+    if: ${{ github.ref_name == github.event.repository.default_branch }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      actions: read
     timeout-minutes: 30
 
     steps:
+      - name: Checkout workflow ref
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          path: workflow-repo
+          persist-credentials: false
+
       - name: Checkout publish branch
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           path: publish-repo
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -42,7 +53,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps (skip sqlite3)
-        working-directory: publish-repo
+        working-directory: workflow-repo
         run: |
           python3 - <<'PY'
           import re
@@ -152,33 +163,111 @@ jobs:
           PY
 
       - name: Process seed paper request
-        working-directory: publish-repo
+        working-directory: workflow-repo
         env:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           REQUEST_PATH: ${{ github.event.inputs.request_path }}
           SEED_MODE: ${{ github.event.inputs.seed_mode }}
           REQUEST_ROOT: ${{ github.workspace }}/publish-repo
           PUBLISH_ROOT: ${{ github.workspace }}/publish-repo
+          WORKFLOW_ROOT: ${{ github.workspace }}/workflow-repo
+          ARTIFACT_ROOT: ${{ runner.temp }}/trusted-seed-publish
+          DPR_ENABLE_MULTI_SOURCE_RPC: "true"
+          DPR_MULTI_SOURCE_BM25_RPC: match_multi_source_papers_bm25
+          DPR_MULTI_SOURCE_VECTOR_RPC_EXACT: match_multi_source_papers_exact
+          BLT_API_KEY: ${{ secrets.BLT_API_KEY }}
+          BLT_PRIMARY_BASE_URL: ${{ secrets.BLT_PRIMARY_BASE_URL }}
+          BLT_API_BASE: ${{ secrets.BLT_API_BASE }}
+          LLM_PRIMARY_BASE_URL: ${{ secrets.LLM_PRIMARY_BASE_URL }}
+          GPTBEST_BASE_URL: ${{ secrets.GPTBEST_BASE_URL }}
+          BLT_RERANK_MODEL: qwen3-reranker-4b
+          RERANK_ENABLED: ${{ secrets.RERANK_ENABLED }}
+          RERANK_API_KEY: ${{ secrets.RERANK_API_KEY }}
+          RERANK_BASE_URL: ${{ secrets.RERANK_BASE_URL }}
+          RERANK_MODEL: ${{ secrets.RERANK_MODEL }}
         run: |
           set -euo pipefail
-          python3 src/seed_paper_processor.py \
+          rm -rf "${ARTIFACT_ROOT}"
+          mkdir -p "${ARTIFACT_ROOT}"
+          RERANK_ENABLED_STATE="$(python3 - <<'PY'
+          import os
+          raw = os.getenv("RERANK_ENABLED")
+          if raw is None:
+              print("")
+          else:
+              value = str(raw).strip().lower()
+              if value in {"1", "true", "yes", "on"}:
+                  print("true")
+              elif value in {"0", "false", "no", "off"}:
+                  print("false")
+              else:
+                  print("")
+          PY
+          )"
+          if [ "$RERANK_ENABLED_STATE" = "true" ]; then
+            if [ -z "${RERANK_API_KEY:-}" ] || [ -z "${RERANK_BASE_URL:-}" ] || [ -z "${RERANK_MODEL:-}" ]; then
+              echo "RERANK_ENABLED=true but dedicated rerank secrets are incomplete." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+          elif [ "$RERANK_ENABLED_STATE" = "false" ]; then
+            if [ -z "${BLT_API_KEY:-}" ]; then
+              echo "RERANK_ENABLED=false but BLT_API_KEY is missing for hosted fallback." >&2
+              exit 1
+            fi
+            RUNTIME_BLT_BASE_URL="${BLT_API_BASE:-${BLT_PRIMARY_BASE_URL:-${LLM_PRIMARY_BASE_URL:-${GPTBEST_BASE_URL:-}}}}"
+            if [ -z "$RUNTIME_BLT_BASE_URL" ]; then
+              echo "RERANK_ENABLED=false but BLT base URL is missing for hosted fallback." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+            export RERANK_API_KEY="$BLT_API_KEY"
+            export RERANK_BASE_URL="$RUNTIME_BLT_BASE_URL"
+            export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
+            export Reranker_LLM_API_KEY="$RERANK_API_KEY"
+            export Reranker_LLM_BASE_URL="$RERANK_BASE_URL"
+            export Reranker_LLM_MODEL="$RERANK_MODEL"
+            unset RERANK_ENABLED
+          elif [ -n "${RERANK_API_KEY:-}" ] || [ -n "${RERANK_BASE_URL:-}" ] || [ -n "${RERANK_MODEL:-}" ]; then
+            if [ -z "${RERANK_API_KEY:-}" ] || [ -z "${RERANK_BASE_URL:-}" ] || [ -z "${RERANK_MODEL:-}" ]; then
+              echo "Dedicated rerank secrets are incomplete for hosted seed workflow." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+          else
+            if [ -z "${BLT_API_KEY:-}" ]; then
+              echo "Missing RERANK_ENABLED secret and BLT_API_KEY for hosted seed workflow." >&2
+              exit 1
+            fi
+            RUNTIME_BLT_BASE_URL="${BLT_API_BASE:-${BLT_PRIMARY_BASE_URL:-${LLM_PRIMARY_BASE_URL:-${GPTBEST_BASE_URL:-}}}}"
+            if [ -z "$RUNTIME_BLT_BASE_URL" ]; then
+              echo "Missing RERANK_ENABLED secret and BLT base URL for hosted seed workflow." >&2
+              exit 1
+            fi
+            export RERANK_PROVIDER="blt"
+            export RERANK_API_KEY="$BLT_API_KEY"
+            export RERANK_BASE_URL="$RUNTIME_BLT_BASE_URL"
+            export RERANK_MODEL="${BLT_RERANK_MODEL:-qwen3-reranker-4b}"
+            export Reranker_LLM_API_KEY="$RERANK_API_KEY"
+            export Reranker_LLM_BASE_URL="$RERANK_BASE_URL"
+            export Reranker_LLM_MODEL="$RERANK_MODEL"
+          fi
+          python3 "${WORKFLOW_ROOT}/src/seed_paper_processor.py" \
             --request-path "${PUBLISH_ROOT}/${REQUEST_PATH}" \
             --request-id "$REQUEST_ID" \
             --root-dir "$PUBLISH_ROOT" \
-            --docs-dir "$PUBLISH_ROOT/docs" \
+            --docs-dir "${ARTIFACT_ROOT}/docs" \
             --seed-mode "$SEED_MODE"
 
       - name: Validate generated seed docs
-        working-directory: publish-repo
         env:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
+          ARTIFACT_ROOT: ${{ runner.temp }}/trusted-seed-publish
         run: |
           set -euo pipefail
-          WORKSPACE_DIR="docs/seed-papers/${REQUEST_ID}"
+          WORKSPACE_DIR="${ARTIFACT_ROOT}/docs/seed-papers/${REQUEST_ID}"
           test -f "${WORKSPACE_DIR}/index.md"
           test -f "${WORKSPACE_DIR}/seed-paper.md"
-          test -f "docs/README.md"
-          test -f "docs/_sidebar.md"
           shopt -s nullglob
           related_pages=("${WORKSPACE_DIR}/related/"*.md)
           if [ "${#related_pages[@]}" -lt 1 ]; then
@@ -187,22 +276,80 @@ jobs:
           fi
           grep -q "seed-paper.md" "${WORKSPACE_DIR}/index.md"
           grep -q "related/" "${WORKSPACE_DIR}/index.md"
-          grep -q "/seed-papers/${REQUEST_ID}/index" "docs/README.md"
-          grep -q "#/seed-papers/${REQUEST_ID}/index" "docs/_sidebar.md"
 
-      - name: Commit generated seed docs
-        working-directory: publish-repo
+      - name: Prepare trusted publish artifact
         env:
           REQUEST_ID: ${{ github.event.inputs.request_id }}
-          PUBLISH_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUEST_ROOT: ${{ github.workspace }}/publish-repo
+          ARTIFACT_ROOT: ${{ runner.temp }}/trusted-seed-publish
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "docs/seed-papers/${REQUEST_ID}" "docs/README.md" "docs/_sidebar.md"
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-          git commit -m "feat: process seed paper request ${REQUEST_ID}"
-          git push origin HEAD:"${PUBLISH_BRANCH}"
+          export REQUEST_ID REQUEST_ROOT ARTIFACT_ROOT
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+
+          request_id = os.environ["REQUEST_ID"]
+          request_root = Path(os.environ["REQUEST_ROOT"]).resolve()
+          artifact_root = Path(os.environ["ARTIFACT_ROOT"]).resolve()
+          docs_root = artifact_root / "docs"
+          workspace_dir = docs_root / "seed-papers" / request_id
+          if not workspace_dir.is_dir():
+            raise SystemExit(f"Missing docs workspace for artifact packaging: {workspace_dir}")
+
+          request_relative_path = PurePosixPath("archive") / "seed-papers" / request_id / "request.json"
+          request_path = request_root.joinpath(*request_relative_path.parts).resolve()
+          if request_root not in request_path.parents or not request_path.is_file():
+            raise SystemExit(f"Missing archived request for artifact packaging: {request_relative_path}")
+          request_bytes = request_path.read_bytes()
+          try:
+            request_payload = json.loads(request_bytes.decode("utf-8")) or {}
+          except json.JSONDecodeError as exc:
+            raise SystemExit(f"Invalid archived request for artifact packaging: {exc}") from exc
+          source_relative_path = PurePosixPath(str(request_payload.get("source_path") or "").strip())
+          if source_relative_path.is_absolute() or any(part in {"", ".", ".."} for part in source_relative_path.parts):
+            raise SystemExit(f"Unexpected archived source_path for artifact packaging: {source_relative_path}")
+          source_path = request_root.joinpath(*source_relative_path.parts).resolve()
+          if request_root not in source_path.parents or not source_path.is_file():
+            raise SystemExit(f"Missing archived source PDF for artifact packaging: {source_relative_path}")
+
+          for txt_path in workspace_dir.rglob("*.txt"):
+            txt_path.unlink()
+          for stray_path in (docs_root / "README.md", docs_root / "_sidebar.md"):
+            if stray_path.exists():
+              stray_path.unlink()
+
+          doc_hashes = {}
+          for doc_path in sorted(workspace_dir.rglob("*.md")):
+            if not doc_path.is_file():
+              continue
+            relative_doc_path = doc_path.relative_to(artifact_root).as_posix()
+            doc_hashes[relative_doc_path] = hashlib.sha256(doc_path.read_bytes()).hexdigest()
+
+          manifest_path = artifact_root / "manifest.json"
+          manifest_path.write_text(
+              json.dumps(
+                  {
+                      "request_id": request_id,
+                      "request_path": request_relative_path.as_posix(),
+                      "request_sha256": hashlib.sha256(request_bytes).hexdigest(),
+                      "source_path": source_relative_path.as_posix(),
+                      "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                      "docs_workspace": f"docs/seed-papers/{request_id}",
+                      "doc_hashes": doc_hashes,
+                  },
+                  ensure_ascii=False,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload trusted publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trusted-seed-publish
+          path: ${{ runner.temp }}/trusted-seed-publish
+          if-no-files-found: error

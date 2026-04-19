@@ -770,25 +770,19 @@ window.SubscriptionsManager = (function () {
         commitMessage: `chore: add seed paper request ${pathInfo.requestId}`,
         branch: pdfWrite && pdfWrite.branch ? pdfWrite.branch : (uploadTarget && uploadTarget.branch ? uploadTarget.branch : undefined),
       });
-      const requestRef = String(
-        (requestWrite && (requestWrite.ref || requestWrite.branch))
-        || (pdfWrite && (pdfWrite.ref || pdfWrite.branch))
-        || '',
-      ).trim();
       const repoVisibility = await window.SubscriptionsGithubToken.verifyRepoFilesVisible({
         owner: requestWrite && requestWrite.owner ? requestWrite.owner : undefined,
         repo: requestWrite && requestWrite.repo ? requestWrite.repo : undefined,
-        ref: requestRef,
         paths: [pathInfo.filePath, pathInfo.requestPath],
         expectedFiles: [
           {
             path: pathInfo.filePath,
-            ref: pdfWrite && (pdfWrite.ref || pdfWrite.branch) ? (pdfWrite.ref || pdfWrite.branch) : requestRef,
+            ref: pdfWrite && (pdfWrite.ref || pdfWrite.branch) ? (pdfWrite.ref || pdfWrite.branch) : '',
             fileSha: pdfWrite && pdfWrite.fileSha ? pdfWrite.fileSha : '',
           },
           {
             path: pathInfo.requestPath,
-            ref: requestWrite && (requestWrite.ref || requestWrite.branch) ? (requestWrite.ref || requestWrite.branch) : requestRef,
+            ref: requestWrite && (requestWrite.ref || requestWrite.branch) ? (requestWrite.ref || requestWrite.branch) : '',
             fileSha: requestWrite && requestWrite.fileSha ? requestWrite.fileSha : '',
           },
         ],

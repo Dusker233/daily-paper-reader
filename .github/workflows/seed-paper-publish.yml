@@ -1,0 +1,281 @@
+name: seed-paper-publish
+
+on:
+  workflow_run:
+    workflows: ["seed-paper-related"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: seed-paper-publish-${{ github.event.repository.default_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout publish branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download trusted publish artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trusted-seed-publish
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: trusted-seed-publish
+
+      - name: Validate trusted publish artifact
+        env:
+          ARTIFACT_ROOT: ${{ github.workspace }}/trusted-seed-publish
+        run: |
+          set -euo pipefail
+          export ARTIFACT_ROOT
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path, PurePosixPath
+
+          repo_root = Path(".").resolve()
+          sys.path.insert(0, str(repo_root / "src"))
+          from seed_paper_processor import load_request
+
+          artifact_root = Path(os.environ["ARTIFACT_ROOT"]).resolve()
+          github_env = os.environ.get("GITHUB_ENV") or ""
+          if not github_env:
+            raise SystemExit("Missing GITHUB_ENV path")
+          manifest_path = artifact_root / "manifest.json"
+          if not manifest_path.is_file():
+            raise SystemExit("Missing trusted publish manifest")
+          try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) or {}
+          except json.JSONDecodeError as exc:
+            raise SystemExit(f"Invalid trusted publish manifest JSON: {exc}") from exc
+
+          request_id = (manifest.get("request_id") or "").strip()
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", request_id):
+            raise SystemExit(f"Unexpected request_id: {request_id}")
+          request_relative_path = PurePosixPath((manifest.get("request_path") or "").strip())
+          expected_request_path = PurePosixPath("archive") / "seed-papers" / request_id / "request.json"
+          if request_relative_path != expected_request_path:
+            raise SystemExit(f"Unexpected request path in manifest: {request_relative_path}")
+          if request_relative_path.is_absolute() or any(part in {"", ".", ".."} for part in request_relative_path.parts):
+            raise SystemExit(f"Unexpected request path in manifest: {request_relative_path}")
+          request_path = repo_root.joinpath(*request_relative_path.parts).resolve()
+          if repo_root not in request_path.parents or not request_path.is_file():
+            raise SystemExit(f"Missing archived request for trusted publish: {request_relative_path}")
+          request_sha256 = (manifest.get("request_sha256") or "").strip().lower()
+          if not re.fullmatch(r"[0-9a-f]{64}", request_sha256):
+            raise SystemExit(f"Unexpected request sha256 in manifest: {request_sha256}")
+          request_bytes = request_path.read_bytes()
+          if hashlib.sha256(request_bytes).hexdigest() != request_sha256:
+            raise SystemExit("Trusted publish request payload hash mismatch")
+          try:
+            request = load_request(str(request_path), root_dir=str(repo_root))
+          except Exception as exc:
+            raise SystemExit(f"Invalid archived request for trusted publish: {exc}") from exc
+          if request.get("request_id") != request_id:
+            raise SystemExit(f"Trusted publish manifest request_id mismatch: {request.get('request_id')}")
+          source_relative_path = PurePosixPath((manifest.get("source_path") or "").strip())
+          if source_relative_path.is_absolute() or any(part in {"", ".", ".."} for part in source_relative_path.parts):
+            raise SystemExit(f"Unexpected source path in manifest: {source_relative_path}")
+          source_sha256 = (manifest.get("source_sha256") or "").strip().lower()
+          if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+            raise SystemExit(f"Unexpected source sha256 in manifest: {source_sha256}")
+          source_path = repo_root.joinpath(*source_relative_path.parts).resolve()
+          if repo_root not in source_path.parents or not source_path.is_file():
+            raise SystemExit(f"Missing archived source PDF for trusted publish: {source_relative_path}")
+          if hashlib.sha256(source_path.read_bytes()).hexdigest() != source_sha256:
+            raise SystemExit("Trusted publish source PDF hash mismatch")
+
+          expected_workspace = PurePosixPath("docs") / "seed-papers" / request_id
+          docs_workspace = PurePosixPath((manifest.get("docs_workspace") or "").strip())
+          if docs_workspace != expected_workspace:
+            raise SystemExit(f"Unexpected docs workspace: {docs_workspace}")
+          if docs_workspace.is_absolute() or any(part in {"", ".", ".."} for part in docs_workspace.parts):
+            raise SystemExit(f"Unexpected artifact path: {docs_workspace}")
+
+          docs_dir = artifact_root.joinpath(*docs_workspace.parts).resolve()
+          if artifact_root != docs_dir and artifact_root not in docs_dir.parents:
+            raise SystemExit(f"Unexpected artifact path: {docs_workspace}")
+          if not docs_dir.is_dir():
+            raise SystemExit(f"Missing artifact path: {docs_workspace}")
+          related_dir = docs_dir / "related"
+          if not related_dir.is_dir():
+            raise SystemExit(f"Missing related docs directory: {docs_workspace}/related")
+
+          index_path = docs_dir / "index.md"
+          seed_paper_path = docs_dir / "seed-paper.md"
+          if not index_path.is_file() or not seed_paper_path.is_file():
+            raise SystemExit(f"Missing required seed docs in: {docs_workspace}")
+
+          related_pages = sorted(path.name for path in related_dir.glob("*.md") if path.is_file())
+          if not related_pages:
+            raise SystemExit("Trusted publish artifact contains no related pages")
+
+          doc_hashes = manifest.get("doc_hashes")
+          if not isinstance(doc_hashes, dict) or not doc_hashes:
+            raise SystemExit("Missing trusted publish doc hashes")
+
+          allowed_files = {
+            PurePosixPath("manifest.json"),
+            docs_workspace / "index.md",
+            docs_workspace / "seed-paper.md",
+          }
+          allowed_files.update(docs_workspace / "related" / name for name in related_pages)
+          if {path.as_posix() for path in allowed_files if path != PurePosixPath("manifest.json")} != set(doc_hashes.keys()):
+            raise SystemExit("Trusted publish doc hash manifest mismatch")
+          for relative_doc_path, expected_hash in sorted(doc_hashes.items()):
+            if not re.fullmatch(r"[0-9a-f]{64}", str(expected_hash or "").strip().lower()):
+              raise SystemExit(f"Unexpected doc hash in manifest: {relative_doc_path}")
+            doc_relative_path = PurePosixPath(relative_doc_path)
+            if doc_relative_path.is_absolute() or any(part in {"", ".", ".."} for part in doc_relative_path.parts):
+              raise SystemExit(f"Unexpected doc path in manifest: {doc_relative_path}")
+            if doc_relative_path not in allowed_files:
+              raise SystemExit(f"Unexpected doc path in manifest: {doc_relative_path}")
+            doc_path = artifact_root.joinpath(*doc_relative_path.parts).resolve()
+            if artifact_root != doc_path and artifact_root not in doc_path.parents:
+              raise SystemExit(f"Unexpected doc path in manifest: {doc_relative_path}")
+            if not doc_path.is_file():
+              raise SystemExit(f"Missing doc path in artifact: {doc_relative_path}")
+            if hashlib.sha256(doc_path.read_bytes()).hexdigest() != str(expected_hash).strip().lower():
+              raise SystemExit(f"Trusted publish doc hash mismatch: {doc_relative_path}")
+
+          for file_path in artifact_root.rglob("*"):
+            if not file_path.is_file():
+              continue
+            relative_path = PurePosixPath(file_path.relative_to(artifact_root).as_posix())
+            if relative_path not in allowed_files:
+              raise SystemExit(f"Unexpected artifact file: {relative_path}")
+
+          index_text = index_path.read_text(encoding="utf-8")
+          if "seed-paper.md" not in index_text or "related/" not in index_text:
+            raise SystemExit("Trusted publish index is missing expected links")
+
+          with Path(github_env).open("a", encoding="utf-8") as fh:
+            fh.write(f"REQUEST_ID={request_id}\n")
+          PY
+
+      - name: Apply trusted publish artifact
+        env:
+          ARTIFACT_ROOT: ${{ github.workspace }}/trusted-seed-publish
+        run: |
+          set -euo pipefail
+          WORKSPACE_DIR="docs/seed-papers/${REQUEST_ID}"
+          rm -rf "$WORKSPACE_DIR"
+          mkdir -p "docs/seed-papers"
+          cp -R "${ARTIFACT_ROOT}/${WORKSPACE_DIR}" "$WORKSPACE_DIR"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          request_id = os.environ["REQUEST_ID"]
+          request_path = Path("archive") / "seed-papers" / request_id / "request.json"
+          try:
+            payload = json.loads(request_path.read_text(encoding="utf-8")) or {}
+          except Exception as exc:
+            raise SystemExit(f"Cannot read archived request for navigation update: {exc}") from exc
+          file_name = str(payload.get("file_name") or "").strip()
+          title = Path(file_name or "seed-paper.pdf").stem.replace("_", " ").replace("-", " ").strip() or "Seed Paper"
+
+          dpr_start = "<!--dpr-seed-papers:start-->"
+          dpr_end = "<!--dpr-seed-papers:end-->"
+          clean_request_id = request_id
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", clean_request_id):
+            raise SystemExit(f"Unexpected request_id for navigation: {clean_request_id}")
+
+          readme_path = Path("docs") / "README.md"
+          sidebar_path = Path("docs") / "_sidebar.md"
+          readme_text = readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
+          sidebar_text = sidebar_path.read_text(encoding="utf-8") if sidebar_path.exists() else ""
+
+          def escape_md(value):
+            return re.sub(r"([\\`*_{}\[\]()#+!<>|-])", r"\\\1", value.strip())
+
+          readme_block = "\n".join([
+            dpr_start,
+            "## Seed Papers",
+            f"- [Latest: {escape_md(title)}](/seed-papers/{clean_request_id}/index)",
+            dpr_end,
+          ])
+          sidebar_block = "\n".join([
+            dpr_start,
+            "* Seed Papers",
+            f"  * [{escape_md(title)}](#/seed-papers/{clean_request_id}/index)",
+            dpr_end,
+          ])
+
+          def replace_or_append(text, block, start_marker, end_marker):
+            if start_marker in text and end_marker in text:
+              before, remainder = text.split(start_marker, 1)
+              _, after = remainder.split(end_marker, 1)
+              updated = before.rstrip()
+              suffix = after.lstrip("\n")
+              parts = [updated, block.rstrip()]
+              if suffix:
+                parts.append(suffix.rstrip())
+              return "\n\n".join(p for p in parts if p) + "\n"
+            base = text.rstrip()
+            return (base + "\n\n" if base else "") + block.rstrip() + "\n"
+
+          readme_path.write_text(replace_or_append(readme_text, readme_block, dpr_start, dpr_end), encoding="utf-8")
+          sidebar_path.write_text(replace_or_append(sidebar_text, sidebar_block, dpr_start, dpr_end), encoding="utf-8")
+          PY
+
+      - name: Commit trusted seed docs
+        env:
+          PUBLISH_BRANCH: ${{ github.event.repository.default_branch }}
+          ARTIFACT_ROOT: ${{ github.workspace }}/trusted-seed-publish
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "docs/seed-papers/${REQUEST_ID}" "docs/README.md" "docs/_sidebar.md"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "docs: publish seed paper request ${REQUEST_ID}"
+          git fetch origin "${PUBLISH_BRANCH}"
+          git rebase "origin/${PUBLISH_BRANCH}"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          request_id = os.environ["REQUEST_ID"]
+          artifact_root = Path(os.environ["ARTIFACT_ROOT"]).resolve()
+          manifest = json.loads((artifact_root / "manifest.json").read_text(encoding="utf-8")) or {}
+          request_path = Path(manifest.get("request_path") or "")
+          source_path = Path(manifest.get("source_path") or "")
+          request_sha256 = str(manifest.get("request_sha256") or "").strip().lower()
+          source_sha256 = str(manifest.get("source_sha256") or "").strip().lower()
+          if not re.fullmatch(r"[0-9a-f]{64}", request_sha256):
+            raise SystemExit(f"Unexpected request sha256 in manifest during publish: {request_sha256}")
+          if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+            raise SystemExit(f"Unexpected source sha256 in manifest during publish: {source_sha256}")
+          if hashlib.sha256(request_path.read_bytes()).hexdigest() != request_sha256:
+            raise SystemExit("Trusted publish request payload hash mismatch after rebase")
+          if hashlib.sha256(source_path.read_bytes()).hexdigest() != source_sha256:
+            raise SystemExit("Trusted publish source PDF hash mismatch after rebase")
+          PY
+          git push origin HEAD:"${PUBLISH_BRANCH}"

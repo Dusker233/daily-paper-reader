@@ -1001,7 +1001,7 @@ window.DPRWorkflowRunner = (function () {
     const safeExtraInputs = {};
     if (extraInputs && typeof extraInputs === 'object') {
       Object.keys(extraInputs).forEach((key) => {
-        if (key === 'request_id' || key === 'request_path' || key === 'seed_mode' || key === 'request_ref') {
+        if (key === 'request_id' || key === 'request_path' || key === 'seed_mode') {
           return;
         }
         safeExtraInputs[key] = extraInputs[key];
