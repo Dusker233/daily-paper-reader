@@ -569,7 +569,7 @@ def _build_glance_text(fields: Dict[str, str]) -> str:
             value_str = ensure_single_sentence_end(str(value).strip())
             if not value_str:
                 continue
-            suffix = "\" if keep_break else ""
+            suffix = " \\" if keep_break else ""
             lines.append(f"**{label}**：{value_str}{suffix}")
     return "\n".join(lines)
 
@@ -710,8 +710,8 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
         "要求：\n"
         "- 每个二级标题下用 2-5 条项目符号。\n"
         "- 尽量引用正文里的证据，注明具体章节、表格编号或图表编号。\n"
-        "- 如果某项信息文中没有明确给出，要直接说明"文中未明确说明"。\n"
-        "- 最后单独输出一行"（完）"作为结束标记。"
+        "- 如果某项信息文中没有明确给出，要直接说明\"文中未明确说明\"。\n"
+        "- 最后单独输出一行\"（完）\"作为结束标记。"
     )
 
 
@@ -784,7 +784,7 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
         "- reading_guide：1-2 句话告诉读者若继续精读，优先看哪几部分以及为什么。\n"
         "- key_findings：列出 2-3 个关键发现，每个 20-50 字。\n"
         "- limitations：简短描述论文的主要局限性（20-60 字）。\n"
-        "- 如果正文证据不足，允许写"从现有文本无法确认"，不要编造。\n"
+        "- 如果正文证据不足，允许写\"从现有文本无法确认\"，不要编造。\n"
         "Output must be strict JSON only, no markdown, no fences, no extra text."
     )
 
@@ -828,8 +828,11 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
                 "core_idea": str(parsed.get("core_idea") or "").strip(),
                 "evidence": str(parsed.get("evidence") or "").strip(),
                 "reading_guide": str(parsed.get("reading_guide") or "").strip(),
+                "key_findings": [str(v).strip() for v in (parsed.get("key_findings") or []) if str(v).strip()],
+                "limitations": str(parsed.get("limitations") or "").strip(),
             }
-            if not all(fields.values()):
+            required_str_fields = {k: v for k, v in fields.items() if k not in ("key_findings", "limitations")}
+            if not all(required_str_fields.values()):
                 continue
             return _build_glance_text(fields)
         except Exception as e:
@@ -1478,6 +1481,10 @@ def build_markdown_content(
         published = published[:10]
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
     score = paper.get("llm_score")
+    relevance_score = paper.get("llm_relevance_score")
+    quality_score = paper.get("llm_quality_score")
+    reliability_score = paper.get("llm_reliability_score")
+    practicality_score = paper.get("llm_practicality_score")
     evidence = str(paper.get("canonical_evidence") or "").strip()
     tldr = (
         paper.get("llm_tldr_cn")
@@ -1514,6 +1521,14 @@ def build_markdown_content(
         lines.append(f"tags: [{', '.join(yaml_escape_value(t) for t in tags_list)}]")
     if score is not None:
         lines.append(f"score: {score}")
+    if relevance_score is not None:
+        lines.append(f"relevance_score: {relevance_score}")
+    if quality_score is not None:
+        lines.append(f"quality_score: {quality_score}")
+    if reliability_score is not None:
+        lines.append(f"reliability_score: {reliability_score}")
+    if practicality_score is not None:
+        lines.append(f"practicality_score: {practicality_score}")
     if evidence:
         lines.append(f"evidence: {yaml_escape_value(evidence)}")
     if display_tldr:
@@ -2487,6 +2502,10 @@ def _parse_generated_md_to_meta(
     date_value = _fallback_meta("date", "Date")
     pdf_value = _fallback_meta("pdf", "PDF")
     score_value = _fallback_meta("score", "Score")
+    relevance_score_value = fm_meta.get("relevance_score")
+    quality_score_value = fm_meta.get("quality_score")
+    reliability_score_value = fm_meta.get("reliability_score")
+    practicality_score_value = fm_meta.get("practicality_score")
     evidence_value = _fallback_meta("evidence", "Evidence")
     tldr_value = _fallback_meta("tldr", "TLDR")
     paper_source_value = str(fm_meta.get("source") or fm_meta.get("Source") or "").strip()
@@ -2514,6 +2533,10 @@ def _parse_generated_md_to_meta(
         "date": str(date_value or "").strip(),
         "pdf": str(pdf_value or "").strip(),
         "score": str(score_value or "").strip(),
+        "relevance_score": relevance_score_value,
+        "quality_score": quality_score_value,
+        "reliability_score": reliability_score_value,
+        "practicality_score": practicality_score_value,
         "evidence": str(evidence_value or "").strip(),
         "tldr": str(tldr_value or "").strip(),
         "tags": ", ".join(tags_compact),
