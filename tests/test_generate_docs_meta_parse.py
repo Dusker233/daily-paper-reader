@@ -347,6 +347,46 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertEqual(meta.get("result"), "新的关键证据。")
         self.assertEqual(meta.get("conclusion"), "新的继续阅读建议。")
 
+    def test_build_markdown_content_key_findings_limitations_roundtrip(self):
+        paper = {
+            "title": "Key Findings Roundtrip Test",
+            "authors": ["Bob Smith"],
+            "published": "2026-04-01T00:00:00+00:00",
+            "link": "https://arxiv.org/pdf/1234.9999",
+            "abstract": "abstract body",
+            "source": "arxiv",
+            "_glance_overview": "\n".join(
+                [
+                    "**TLDR**：简短摘要。 \\",
+                    "**Research Question**：研究问题。 \\",
+                    "**Core Idea**：核心方法。 \\",
+                    "**Evidence**：关键证据。 \\",
+                    "**Reading Guide**：阅读指南。",
+                    "**Key Findings**：",
+                    "- 第一个关键发现",
+                    "- 第二个关键发现",
+                    "- 第三个关键发现",
+                    "**Limitations**：主要局限性描述。",
+                ]
+            ),
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        # round-trip: _parse_front_matter reads the YAML list written by build_markdown_content
+        meta = self.mod._parse_front_matter(md)
+        # key_findings is stored as YAML inline list [Finding 1, Finding 2, Finding 3]
+        self.assertEqual(meta.get("key_findings"), ["Finding 1", "Finding 2", "Finding 3"])
+        self.assertEqual(meta.get("limitations"), "主要局限性描述。")
+
+        # round-trip through _parse_generated_md_to_meta
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_path = Path(tmp_dir) / "paper.md"
+            md_path.write_text(md, encoding="utf-8")
+            item = self.mod._parse_generated_md_to_meta(
+                tmp_dir, "paper.md", "quick", "test_source"
+            )
+            self.assertEqual(item["key_findings"], ["Finding 1", "Finding 2", "Finding 3"])
+            self.assertEqual(item["limitations"], "主要局限性描述。")
+
     def test_prepare_glance_source_text_respects_requested_budget(self):
         text = "a" * 5000 + "b" * 5000 + "c" * 5000
         prepared = self.mod._prepare_glance_source_text("", text, max_chars=120)
@@ -399,6 +439,72 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
 
         self.assertIsNone(module.LLM_CLIENT)
         self.assertIn("workflow LLM base_url", module.LLM_CLIENT_ERROR)
+
+    def test_import_disables_workflow_client_when_no_model_is_available(self):
+        root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        src_path = src_dir / "6.generate_docs.py"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        llm_module = sys.modules["llm"]
+        captured = {}
+
+        def fake_from_env(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            raise ValueError("缺少 workflow LLM model")
+
+        with patch.dict(
+            "os.environ",
+            {
+                "WORKFLOW_LLM_API_KEY": "workflow-key",
+                "WORKFLOW_LLM_BASE_URL": "https://workflow.example.com/v1",
+            },
+            clear=True,
+        ), patch.object(llm_module.ClientFactory, "from_env", side_effect=fake_from_env):
+            spec = importlib.util.spec_from_file_location("gen6_mod_missing_model", src_path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec and spec.loader
+            spec.loader.exec_module(module)
+
+        self.assertIsNone(module.WORKFLOW_MODEL)
+        self.assertIsNone(module.LLM_CLIENT)
+        self.assertIn("workflow LLM model", module.LLM_CLIENT_ERROR)
+        self.assertIsNone(captured["kwargs"]["model_override"])
+        self.assertIsNone(captured["kwargs"]["default_model"])
+
+    def test_import_prefers_summary_model_for_workflow_client_when_workflow_model_missing(self):
+        root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        src_path = src_dir / "6.generate_docs.py"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        llm_module = sys.modules["llm"]
+        captured = {}
+        fake_client = object()
+
+        def fake_from_env(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return fake_client
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SUMMARY_API_KEY": "summary-key",
+                "SUMMARY_BASE_URL": "https://summary.example.com/v1",
+                "SUMMARY_MODEL": "summary-model",
+            },
+            clear=True,
+        ), patch.object(llm_module.ClientFactory, "from_env", side_effect=fake_from_env):
+            spec = importlib.util.spec_from_file_location("gen6_mod_summary_model", src_path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec and spec.loader
+            spec.loader.exec_module(module)
+
+        self.assertEqual(module.WORKFLOW_MODEL, "summary-model")
+        self.assertIs(module.LLM_CLIENT, fake_client)
+        self.assertEqual(captured["kwargs"]["scope"], "workflow")
+        self.assertEqual(captured["kwargs"]["model_override"], "summary-model")
+        self.assertEqual(captured["kwargs"]["default_model"], "summary-model")
 
 
 if __name__ == "__main__":
