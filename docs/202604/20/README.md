@@ -1,42 +1,50 @@
 # 日报 · 2026-04-20
 
-- 生成时间：2026-04-20 02:16:17 UTC
-- 当次推荐总数：12
-- 精读区：1
+- 生成时间：2026-04-20 20:29:19 UTC
+- 当次推荐总数：16
+- 精读区：5
 - 速读区：11
 
 ## 今日简报（AI）
-今天浏览了 12 篇最新论文，聚焦云网络安全与大模型在网络运维中的应用。  
-精读显示半监督时序入侵检测在对抗云环境下表现出色，速读关注大模型在二进制分析与跨域查询中的潜力。  
-建议关注大模型在网络安全场景的实用案例，并尝试理解其对日常运维的实际影响。
+今天精读了2篇、速读了11篇，涵盖自动化渗透测试与物联网入侵检测优化。  
+推荐重点关注大语言模型在渗透测试中的应用，以及智能城市物联网安全的研究进展。  
+建议继续关注物联网与智能交通的跨领域研究，寻找未来的技术创新点。
 
 ## 精读区
-1. [Robust Semi-Supervised Temporal Intrusion Detection for Adversarial Cloud Networks](/202604/20/2604.12655v1-robust-semi-supervised-temporal-intrusion-detection-for-adversarial-cloud-networks)（8.1/10）
-   摘要：本文针对云网络入侵检测中标签稀缺、流量非平稳及对抗污染问题，提出一种鲁棒半监督时序框架RSST-NIDS，通过一致性正则、置信感知伪标签和选择性时序不变性，保守利用未标注数据并抑制恶意样本干扰。方法利用流量时间结构提升泛化与鲁棒性，在多个公开数据集和少标签场景下优于现有方法，尤其在跨分布和对抗环境中表现更稳，整体具有较强实用价值，值得精读方法与实验细节。
+1. [Towards Automated Pentesting with Large Language Models / 面向自动化渗透测试的大型语言模型应用](/202604/20/2604.11772v1-towards-automated-pentesting-with-large-language-models)（8.5/10）
+   摘要：本文提出 RedShell 框架，利用本地微调的大型语言模型（LLMs）自动生成用于 Windows 漏洞测试的恶意 PowerShell 代码，实现渗透测试流程的自动化。实验显示生成代码在语法有效性超过 90%，与参考代码的语义相似度超过 50%，并在受控环境下执行可靠，说明方法具有实用潜力，值得进一步精读了解其实现和评估细节。
+2. [Optimizing IoT Intrusion Detection with Tabular Foundation Models for Smart City Forensics / 利用表格基础模型优化智能城市物联网入侵检测的取证分析](/202604/20/2604.11394v1-optimizing-iot-intrusion-detection-with-tabular-foundation-models-for-smart-city-forensics)（8.2/10）
+   摘要：本文针对智能城市物联网环境中的入侵检测提出利用TabPFNv2.5表格基础模型提升实时威胁响应效率的方法。研究表明，相比随机森林，TabPFNv2.5推理速度快40倍，同时二分类准确率仍达97%。论文还提出混合管道方案，用快速模型进行初筛，精细分类由传统集成模型完成，兼顾速度与准确性。对于智能城市安全操作与快速取证场景具有实用参考价值，值得精读。
+3. [Latent Instruction Representation Alignment: defending against jailbreaks, backdoors and undesired knowledge in LLMs / 潜在指令表示对齐：防御大型语言模型中的越狱、后门和不期望知识](/202604/20/2604.10403v1-latent-instruction-representation-alignment-defending-against-jailbreaks-backdoors-and-undesired-knowledge-in-llms)（8.0/10）
+   摘要：本文提出 Latent Instruction Representation Alignment (LIRA) 方法，针对大型语言模型的越狱、后门和不良知识问题，通过改变模型对指令的内部表示而非输出行为，实现更强泛化的安全防护。实验显示，LIRA 能阻挡 99% 以上 PEZ 越狱攻击，移除复杂后门，并实现高效的有害知识遗忘，同时对正常功能影响极小，值得继续精读其方法与实验细节。
+4. [Structure-Grounded Knowledge Retrieval via Code Dependencies for Multi-Step Data Reasoning / 基于代码依赖的结构化知识检索用于多步骤数据推理](/202604/20/2604.10516v1-structure-grounded-knowledge-retrieval-via-code-dependencies-for-multi-step-data-reasoning)（8.0/10）
+   摘要：本文提出SGKR方法，针对多步数据分析中传统基于语义相似度的检索难以提供关键计算知识的问题，将领域知识绑定到函数并构建代码调用依赖图，通过输入输出语义标签定位相关函数，再沿依赖路径检索子图作为LLM生成上下文。实验表明该方法在多个数据分析基准上相比无检索与语义检索均显著提升答案正确率，同时减少上下文冗余，整体思路清晰且工程价值较强，值得进一步细读。
+5. [Clustering-Enhanced Domain Adaptation for Cross-Domain Intrusion Detection in Industrial Control Systems / 面向工业控制系统跨域入侵检测的聚类增强域适应方法](/202604/20/2604.12183v1-clustering-enhanced-domain-adaptation-for-cross-domain-intrusion-detection-in-industrial-control-systems)（8.0/10）
+   摘要：本文针对工业控制系统中跨域入侵检测面临的数据稀缺、流量分布差异和未知攻击问题，提出了一种聚类增强的域适应方法。通过特征迁移学习和K-Medoids聚类结合PCA降维，该方法在源域和目标域间实现分布对齐并提升跨域相关性估计。实验显示其在未知攻击检测上准确率提高最多49%，F-score显著提升，并具有较强稳定性，表明值得继续精读。
 
 ## 速读区
-1. [Feedback-Driven Execution for LLM-Based Binary Analysis](/202604/20/2604.15136v1-feedback-driven-execution-for-llm-based-binary-analysis)（7.8/10）
-   摘要：This paper presents FORGE, a feedback-driven system for binary analysis using large language models (LLMs). The system addresses limitations of one-pass execution paradigms by introducing a Dynamic Forest of Agents (FoA) to stabilize long-horizon, multi-path analysis. By interleaving reasoning with tool interactions, FORGE enhances vulnerability discovery in real-world firmware binaries. Evaluations on 3,457 binaries show 1,274 vulnerabilities identified with 72.3% precision, surpassing previous approaches. The method is promising for scalable and high-quality binary analysis, making it a worthwhile read for those interested in LLM-based program analysis systems。
-2. [Like a Hammer, It Can Build, It Can Break: Large Language Model Uses, Perceptions, and Adoption in Cybersecurity Operations on Reddit](/202604/20/2604.09998v1-like-a-hammer-it-can-build-it-can-break-large-language-model-uses-perceptions-and-adoption-in-cybersecurity-operations-on-reddit)（7.6/10）
-   摘要：本文研究了大型语言模型（LLMs）在网络安全运营中心（SOC）中的使用、认知与采纳情况，基于对Reddit上892条安全论坛讨论帖的混合方法分析，揭示了从低风险生产力任务到安全企业级平台的不同采用模式，并指出尽管LLM可提高效率，但可靠性、安全性和自主性问题限制了其全面应用。研究结果对理解LLM在SOC中的实际影响及设计安全可信工具具有参考价值，值得精读。
-3. [Cross-Domain Query Translation for Network Troubleshooting: A Multi-Agent LLM Framework with Privacy Preservation and Self-Reflection](/202604/20/2604.13353v1-cross-domain-query-translation-for-network-troubleshooting-a-multi-agent-llm-framework-with-privacy-preservation-and-self-reflection)（7.6/10）
-   摘要：论文提出一个面向私有电信网络故障排查的跨域查询翻译框架，核心是分层多智能体LLM系统，将用户非技术描述转换为专家可用语义并反向解释。方法结合双阶段分类、语义保持匿名化（结合差分隐私与k匿名）、ReAct+自反思机制以及少样本学习，在数据受限场景下运行。通过1万条跨行业未见样本验证，展示了在准确性、隐私保护与可理解性之间的平衡。整体思路系统性强，适合关注多智能体+隐私NLP的读者深入阅读。
-4. [AnomalyGen: Enhancing Log-Based Anomaly Detection with Code-Guided Data Augmentation](/202604/20/2604.11107v1-anomalygen-enhancing-log-based-anomaly-detection-with-code-guided-data-augmentation)（7.5/10）
-   摘要：本文针对日志异常检测中训练数据稀疏导致的误报问题，提出AnomalyGen框架，通过源码引导的数据增强生成新的日志序列，结合静态分析和大模型逻辑推理以保证序列合理性。实验证明在HDFS和Zookeeper上对多种检测模型均提升F1分数，深度模型平均提升约2%，显示该方法有效且值得精读。
-5. [Fully Homomorphic Encryption on Llama 3 model for privacy preserving LLM inference](/202604/20/2604.12168v1-fully-homomorphic-encryption-on-llama-3-model-for-privacy-preserving-llm-inference)（7.5/10）
-   摘要：本研究旨在通过将全同态加密（FHE）应用于Llama 3模型的推理过程，提升大语言模型（LLM）在生成文本时的数据隐私保护。采用基于格的后量子密码学方法，研究者在推理管道中集成了加密操作，确保模型在生成文本时不会泄露敏感数据。实验结果表明，经过FHE加密的Llama 3模型能够在保证高准确率的同时，保持合理的延迟和运行速度（最高每秒80个token）。该研究为大语言模型的隐私保护提供了创新的解决方案，值得关注。若对数据隐私保护有较高需求，建议继续精读。
-6. [Towards Automated Pentesting with Large Language Models](/202604/20/2604.11772v1-towards-automated-pentesting-with-large-language-models)（7.4/10）
-   摘要：本研究提出了RedShell框架，利用微调的大型语言模型（LLMs）自动生成针对Windows漏洞的恶意PowerShell代码，旨在帮助道德黑客自动化渗透测试。RedShell通过隐私保护和硬件高效的设计，基于公开的恶意PowerShell数据集进行训练，生成的代码在语法有效性和语义对齐度方面均表现出色。实验结果显示，RedShell在生成的代码样本中达到了超过90%的语法有效性，并且与参考渗透测试片段的语义对齐度较高，适用于现实环境中的渗透测试应用。此项研究值得深入阅读，尤其是对自动化渗透测试有兴趣的研究者。
-7. [Machine Learning-Based Detection of MCP Attacks](/202604/20/2604.10534v1-machine-learning-based-detection-of-mcp-attacks)（6.8/10）
-   摘要：本文针对新兴的模型上下文协议（MCP）攻击，提出基于监督机器学习的检测方法，结合传统模型和深度学习模型对恶意工具进行二分类及多分类实验。结果显示，部分模型在二分类任务中可达100% F1分，多分类任务中SVC和BERT表现最佳，超过规则基线方案。研究还开发了中间件以在实际环境中拦截不安全MCP工具，表明方法具有实用潜力，值得进一步阅读。
-8. [Neural Stringology Based Cryptanalysis of EChaCha20](/202604/20/2604.13289v1-neural-stringology-based-cryptanalysis-of-echacha20)（6.8/10）
-   摘要：本研究提出了一种结合神经网络与字符串学的流密码分析框架（NSC），旨在检测现代流密码（如EChaCha20）密钥流中的潜在结构性异常。通过对密钥流进行m-gram频率分析、子串重复检测等字符串学特征提取，并结合机器学习模型进行分析，NSC框架能够识别出传统统计方法无法察觉的结构特征。实验结果表明，NSC方法可以在控制条件下成功发现密钥流中的结构性特征，从而为流密码设计提供补充的结构性评估手段。适合继续阅读以了解NSC框架在不同配置下的实际表现。
-9. [Can Agents Secure Hardware? Evaluating Agentic LLM-Driven Obfuscation for IP Protection](/202604/20/2604.13298v1-can-agents-secure-hardware-evaluating-agentic-llm-driven-obfuscation-for-ip-protection)（6.8/10）
-   摘要：本文提出了一种基于代理型大语言模型（LLM）的硬件知识产权(IP)保护框架，针对IC设计在全球供应链中面临的逆向工程和盗版风险，通过多阶段工作流实现硬件网表混淆，包括规划、锁定生成、确定性编译、功能验证和SAT攻击评估。实验显示该方法能生成功能正确的锁定网表，并在错误密钥下产生可测输出扰动，但SAT攻击仍有效，表明该方法具有潜力但仍存在局限，值得硬件安全方向读者进一步研究。
-10. [FAST: A Synergistic Framework of Attention and State-space Models for Spatiotemporal Traffic Prediction](/202604/20/2604.13453v1-fast-a-synergistic-framework-of-attention-and-state-space-models-for-spatiotemporal-traffic-prediction)（6.8/10）
-   摘要：本研究提出了一个名为FAST的框架，结合了时序注意力机制和基于Mamba的状态空间模型，解决了时空交通预测中的时空依赖建模问题。FAST采用了时空架构，通过时序注意力模块捕捉短期和长期的时间依赖性，而Mamba模块高效地建模了传感器间的空间依赖。实验结果表明，FAST在PeMS04、PeMS07和PeMS08数据集上均优于现有的Transformer、GNN等基准方法，能够在精度、可扩展性和泛化能力上取得良好平衡。因此，FAST值得进一步细读，特别是其时空融合的创新方法。
-11. [SLQ: Bridging Modalities via Shared Latent Queries for Retrieval with Frozen MLLMs](/202604/20/2604.13710v2-slq-bridging-modalities-via-shared-latent-queries-for-retrieval-with-frozen-mllms)（6.8/10）
-   摘要：本论文提出SLQ方法，通过共享潜在查询（Shared Latent Queries）将冻结的多模态大语言模型（MLLMs）高效改造为检索模型，从而避免全量微调导致的语义退化和计算开销。作者设计了KARR-Bench评测知识感知推理检索能力，实验显示SLQ在COCO、Flickr30K上优于LoRA和全量微调，在KARR-Bench上也有显著提升，说明该方法能保留预训练知识并高效生成统一嵌入，值得进一步阅读。
+1. [FAST: A Synergistic Framework of Attention and State-space Models for Spatiotemporal Traffic Prediction / FAST：一种融合注意力机制与状态空间模型的时空交通预测协同框架](/202604/20/2604.13453v1-fast-a-synergistic-framework-of-attention-and-state-space-models-for-spatiotemporal-traffic-prediction)（7.9/10）
+   摘要：本文提出 FAST 框架，结合时间注意力和 Mamba 状态空间模型，用于大规模交通网络的时空预测。通过 Temporal-Spatial-Temporal 架构和多源时空嵌入，模型兼顾短期波动与长期依赖，同时保持线性计算复杂度。实验证明，FAST 在 PeMS04、PeMS07、PeMS08 数据集上均优于 Transformer、GNN 和单独状态空间模型，表现出较好的准确性、可扩展性与泛化能力，值得进一步精读。
+2. [AnomalyGen: Enhancing Log-Based Anomaly Detection with Code-Guided Data Augmentation / AnomalyGen：基于代码引导的数据增强提升日志异常检测](/202604/20/2604.11107v1-anomalygen-enhancing-log-based-anomaly-detection-with-code-guided-data-augmentation)（7.8/10）
+   摘要：本研究提出AnomalyGen框架，通过从源代码合成标记日志序列来增强日志异常检测中的训练数据，从而解决了现有公共基准数据集覆盖率低的问题。实验结果表明，该方法在多个异常检测模型上均显著提升了性能，值得进一步关注与研究。
+3. [MCPThreatHive: Automated Threat Intelligence for Model Context Protocol Ecosystems / MCPThreatHive：面向模型上下文协议生态系统的自动化威胁情报](/202604/20/2604.13849v1-mcpthreathive-automated-threat-intelligence-for-model-context-protocol-ecosystems)（7.8/10）
+   摘要：MCPThreatHive is an open-source platform designed to automate the end-to-end lifecycle of Model Context Protocol (MCP) threat intelligence. It addresses key security gaps in MCP ecosystems by automating threat data collection, AI-driven analysis, and interactive visualization, offering a composite risk scoring model. The platform highlights gaps in existing MCP security tools, such as incomplete attack modeling and lack of continuous threat intelligence. This paper is useful for those exploring security in MCP-based systems but may require further investigation into practical implementations。
+4. [Adaptive Query Routing: A Tier-Based Framework for Hybrid Retrieval Across Financial, Legal, and Medical Documents / 自适应查询路由：面向金融、法律与医疗文档的分层混合检索框架](/202604/20/2604.14222v1-adaptive-query-routing-a-tier-based-framework-for-hybrid-retrieval-across-financial-legal-and-medical-documents)（7.8/10）
+   摘要：本文提出了一种面向金融、法律和医疗文档的自适应查询路由框架（AHR），比较了向量检索、树状推理和混合检索三种RAG架构，并引入四层查询复杂度基准。实验表明，不同架构在不同查询层次表现差异明显，混合AHR在交叉引用和多部分查询上表现最佳，Tree Reasoning整体得分最高。结果支持根据查询复杂度动态选择检索策略的系统设计，值得进一步精读以理解跨域适应性。
+5. [Demonstration of Pneuma-Seeker: Agentic System for Reifying and Fulfilling Information Needs on Tabular Data / Pneuma-Seeker 的演示：一个实现和满足表格数据上信息需求的自主系统](/202604/20/2604.14422v1-demonstration-of-pneuma-seeker-agentic-system-for-reifying-and-fulfilling-information-needs-on-tabular-data)（7.8/10）
+   摘要：本论文介绍了 Pneuma-Seeker 系统，旨在支持数据分析过程中用户信息需求的迭代明确化和可检查化。系统通过将用户当前信息需求 I+ 转化为显式关系规范，使数据发现和处理可追踪和可验证。通过两个采购场景的演示，论文展示了系统如何利用 LLM 作为交互式分析协作者而非黑箱答案引擎，从而提高信息需求满足的精度和透明度。值得关注数据分析自动化和交互式系统的读者可进一步精读。
+6. [SecureRouter: Encrypted Routing for Efficient Secure Inference / SecureRouter：高效安全推理的加密路由](/202604/20/2604.15499v1-securerouter-encrypted-routing-for-efficient-secure-inference)（7.8/10）
+   摘要：本论文提出 SecureRouter，一种面向加密环境下高效 Transformer 推理的输入自适应模型路由框架，通过结合 MPC 优化的模型池和加密路由器，实现不同输入选择最合适模型以平衡效率与准确率。实验显示，与固定模型的 MPC 推理相比，SecureRouter 在保持几乎无精度损失的情况下，推理延迟降低约 1.95 倍，显示其在隐私保护 AI 推理中的实际应用潜力，值得深入阅读。
+7. [SAGE: Selective Attention-Guided Extraction for Token-Efficient / SAGE：选择性注意力引导提取以实现令牌高效](/202604/20/2604.15583v1-sage-selective-attention-guided-extraction-for-token-efficient)（6.9/10）
+   摘要：本论文提出了 SAGE，一种无需训练、可插拔的长文档上下文压缩框架，通过轻量级本地 LLM 将注意力信号转换为查询相关热力图，并在用户设定的 token 预算下提取最相关文本单元，实现上下文大幅度压缩。实验表明，在多个长文档问答基准上，SAGE 在仅使用 10% 上下文的情况下仍取得竞争性准确率，显示其在效率与准确性之间取得良好平衡，值得对长文档问答和模型推理优化方向感兴趣的读者精读。
+8. [RECIPER: A Dual-View Retrieval Pipeline for Procedure-Oriented Materials Question Answering / RECIPER：一种面向过程的材料问答的双视图检索管道](/202604/20/2604.11229v1-reciper-a-dual-view-retrieval-pipeline-for-procedure-oriented-materials-question-answering)（6.8/10）
+   摘要：本研究提出了RECIPER，一个双视图检索管道，通过结合段落级上下文与LLM提取的程序摘要来提高材料科学领域的问题回答能力。实验表明，该方法在多个指标上均优于传统段落仅密集检索，值得进一步细读以了解其具体实现与应用潜力。
+9. [Evaluating Lightweight Block Cipher Payload Encryption for Real-Time CAN Traffic / 评估轻量级分组密码有效载荷加密在实时CAN通信中的应用](/202604/20/2604.11853v1-evaluating-lightweight-block-cipher-payload-encryption-for-real-time-can-traffic)（6.8/10）
+   摘要：本研究评估了将轻量级区块密码负载加密集成到实时CAN节点的可行性，旨在防止通过统计分析和观察推测信号含义的语义反向工程攻击。实验表明，采用Speck加密算法后，负载加密有效地隐藏了常量值和信号模式，同时保持100Hz的实时传输调度。此发现证明了轻量级负载加密能够在资源受限的硬件上减少基于观察的攻击，但对于其他类型的攻击保护效果尚待评估。值得继续精读，尤其是加密算法的时间影响与数据模式的可观察性部分。
+10. [Latent-Condensed Transformer for Efficient Long Context Modeling / 用于高效长上下文建模的潜在压缩变换器](/202604/20/2604.12452v2-latent-condensed-transformer-for-efficient-long-context-modeling)（6.8/10）
+   摘要：本研究提出了一种新的注意力机制——潜在压缩注意力（LCA），旨在解决大语言模型在处理长文本时面临的计算复杂性和内存开销问题。通过将上下文直接压缩到潜在空间中，LCA实现了显著的速度提升和内存节省，同时保持了良好的性能。这一创新方法值得深入研究与应用。
+11. [LLM-Driven Large-Scale Spectrum Access / 基于大语言模型的大规模频谱接入](/202604/20/2604.13132v1-llm-driven-large-scale-spectrum-access)（6.8/10）
+   摘要：本文提出了一种基于大语言模型（LLM）的超大规模频谱接入框架（LSA），通过组相对策略优化（GRPO）和分层状态序列化机制解决大规模无线网络中频谱管理的计算复杂性问题。实验显示该方法在严格时间限制下，能保持稳定的频谱利用率和良好的扩展性，性能优于传统启发式算法和分区经典求解器，值得深入研究其方法设计与实验验证。
 
 ---
 使用键盘方向键可在日报/论文之间快速切换。
