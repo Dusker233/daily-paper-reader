@@ -335,6 +335,8 @@ def _build_related_records(selection: dict[str, Any]) -> list[dict[str, Any]]:
                 "title": _normalize_text(paper.get("title")) or candidate,
                 "include_quick": paper_key in quick_keys,
                 "include_deep": paper_key in deep_keys,
+                "score": paper.get("llm_score"),
+                "evidence": paper.get("evidence") or paper.get("tldr") or "",
             }
         )
     return records
@@ -391,15 +393,24 @@ def _render_related_pages(
             deep_summary = generate_docs_module.generate_deep_summary(str(md_path), str(txt_path))
             _upsert_auto_block(generate_docs_module, md_path, "精读", deep_summary)
 
-        written.append({"title": paper_title, "path": f"related/{md_path.name}"})
+        written.append({
+            "title": paper_title,
+            "path": f"related/{md_path.name}",
+            "score": record.get("score"),
+            "evidence": record.get("evidence") or "",
+        })
     return written
 
 
 def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, str]]) -> str:
     title = _paper_title_from_filename(request.get("file_name") or "")
-    related_lines = [
-        f"- [{_escape_markdown_text(page['title'])}]({page['path']})" for page in related_pages
-    ]
+    related_lines = []
+    for page in related_pages:
+        score_str = f" [{page.get('score', '-')}]" if page.get('score') else ""
+        evidence_str = f" - {page.get('evidence', '')}" if page.get('evidence') else ""
+        related_lines.append(
+            f"- [{_escape_markdown_text(page['title'])}]({page['path']}){score_str}{evidence_str}"
+        )
     related_block = "\n".join(related_lines) if related_lines else "- None"
     return "\n".join(
         [
