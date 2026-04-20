@@ -37,10 +37,10 @@ RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
 
 # LLM 配置（统一 workflow LLM 入口）
 WORKFLOW_MODEL = (
-    os.getenv("WORKFLOW_LLM_MODEL")
-    or os.getenv("SUMMARY_MODEL")
-    or os.getenv("BLT_SUMMARY_MODEL")
-    or "gemini-3-flash-preview"
+    str(os.getenv("WORKFLOW_LLM_MODEL") or "").strip()
+    or str(os.getenv("SUMMARY_MODEL") or "").strip()
+    or str(os.getenv("BLT_SUMMARY_MODEL") or "").strip()
+    or None
 )
 LLM_CLIENT = None
 LLM_CLIENT_ERROR = ""
@@ -300,6 +300,7 @@ def fetch_arxiv_paper_meta(arxiv_id: str) -> Dict[str, Any]:
 
 
 def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, str]:
+    """Translate the English title and abstract to Chinese."""
     if LLM_CLIENT is None:
         if LLM_CLIENT_ERROR:
             log(f"[WARN] 未配置 workflow LLM，跳过中译。原因：{LLM_CLIENT_ERROR}")
@@ -507,6 +508,8 @@ GLANCE_LABEL_ALIASES = {
     "core idea": "core_idea",
     "evidence": "evidence",
     "reading guide": "reading_guide",
+    "key findings": "key_findings",
+    "limitations": "limitations",
 }
 
 
@@ -523,7 +526,9 @@ GLANCE_STRUCTURED_FIELDS = [
     ("Research Question", "research_question", True),
     ("Core Idea", "core_idea", True),
     ("Evidence", "evidence", True),
-    ("Reading Guide", "reading_guide", False),
+    ("Reading Guide", "reading_guide", True),
+    ("Key Findings", "key_findings", True),
+    ("Limitations", "limitations", False),
 ]
 
 
@@ -547,16 +552,27 @@ def parse_glance_overview_fields(glance: str) -> Dict[str, str]:
             fields[field_key] = value
     return fields
 
-
 def _build_glance_text(fields: Dict[str, str]) -> str:
     lines: List[str] = []
     for label, key, keep_break in GLANCE_STRUCTURED_FIELDS:
-        value = ensure_single_sentence_end(str(fields.get(key) or "").strip())
-        if not value:
+        value = fields.get(key)
+        if value is None:
             continue
-        suffix = " \\" if keep_break else ""
-        lines.append(f"**{label}**：{value}{suffix}")
+        if isinstance(value, list):
+            items = [ensure_single_sentence_end(str(v).strip()) for v in value if str(v).strip()]
+            if not items:
+                continue
+            lines.append(f"**{label}**：")
+            for item in items:
+                lines.append(f"- {item}")
+        else:
+            value_str = ensure_single_sentence_end(str(value).strip())
+            if not value_str:
+                continue
+            suffix = "\" if keep_break else ""
+            lines.append(f"**{label}**：{value_str}{suffix}")
     return "\n".join(lines)
+
 
 
 def _prepare_glance_source_text(abstract: str, paper_text: str = "", max_chars: int = 12000) -> str:
@@ -655,26 +671,49 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
         "对给定论文做结构化、深入、客观的总结。"
     )
     user_prompt = (
-        "请基于下面提供的论文内容，生成一段偏精读的中文总结。要求不是泛泛概述，而是帮助读者真正决定如何精读这篇论文。\n"
+        "请基于下面提供的论文内容，生成一段偏精读的中文总结。参考本地 paper-reading 技能的粒度，要求深入、结构完整、有证据支撑。\n"
         "请严格按以下结构输出 Markdown：\n"
-        "### 问题定义与背景\n"
-        "- 研究问题是什么，为什么值得研究，论文试图填补什么空白。\n"
-        "### 方法拆解\n"
-        "- 按模块拆解核心方法、输入输出、关键机制、训练/推理流程。\n"
-        "### 关键创新点\n"
-        "- 相比已有方法，真正新增了什么，不要把常规工程包装成创新。\n"
-        "### 实验与证据\n"
-        "- 数据集/任务设置、主要对比对象、最关键结果、消融或误差分析。\n"
-        "### 局限性与风险\n"
-        "- 论文没有解决什么，结论依赖哪些前提，可能有哪些偏差或适用边界。\n"
-        "### 复现与延伸启发\n"
+        "## 1. 一页速读\n"
+        "### 1.1 这篇论文在问什么？\n"
+        "一句话概括论文的核心研究问题。\n"
+        "### 1.2 作者的核心结论是什么？\n"
+        "- 列出 2-3 条最重要的结论，每条要注明证据来源（哪个章节/图表）。\n"
+        "### 1.3 这篇论文最值得记住的点\n"
+        "| 常见问题 | 论文给出的回答 |\n"
+        "|---|---|\n"
+        "| ... | ... |\n\n"
+        "## 2. 问题背景：为什么这篇论文值得读？\n"
+        "### 2.1 具体研究背景\n"
+        "- 论文试图解决什么具体问题？\n"
+        "- 为什么这个问题重要？引用引言中的具体理由。\n"
+        "### 2.2 论文真正想挑战的默认设定\n"
+        "- 指出论文挑战的主流观点或默认假设。\n"
+        "## 3. 论文的核心问题与研究设计\n"
+        "### 3.1 核心问题\n"
+        "### 3.2 研究框架或方法论\n"
+        "## 4. 方法拆解\n"
+        "### 4.1 技术细节\n"
+        "- 详细拆解每个模块的输入、输出、关键机制。\n"
+        "- 如有算法流程或公式，注明具体形式。\n"
+        "### 4.2 与现有方法的区别\n"
+        "## 5. 实验设计与结果\n"
+        "### 5.1 数据集与实验设置\n"
+        "### 5.2 主要结果\n"
+        "- 列出具体数字结果，引用对应表格/图表。\n"
+        "### 5.3 消融实验与控制变量\n"
+        "## 6. 优点\n"
+        "## 7. 不足与局限\n"
+        "### 7.1 实验覆盖的局限\n"
+        "### 7.2 偏差风险与应用限制\n"
+        "## 8. 复现与延伸启发\n"
         "- 如果读者要复现/继续做，最该关注哪些实现细节、实验抓手或后续问题。\n\n"
         "要求：\n"
         "- 每个二级标题下用 2-5 条项目符号。\n"
-        "- 尽量引用正文里的证据，不要写空泛赞美。\n"
-        "- 如果某项信息文中没有明确给出，要直接说明“文中未明确说明”。\n"
-        "- 最后单独输出一行“（完）”作为结束标记。"
+        "- 尽量引用正文里的证据，注明具体章节、表格编号或图表编号。\n"
+        "- 如果某项信息文中没有明确给出，要直接说明"文中未明确说明"。\n"
+        "- 最后单独输出一行"（完）"作为结束标记。"
     )
+
 
     messages = [{"role": "system", "content": system_prompt}]
     if source_text:
@@ -733,17 +772,22 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
     payload = {"title": title, "paper_text": source_text}
     user_text = json.dumps(payload, ensure_ascii=False)
     user_prompt = (
-        "请基于上面的 JSON 中的 title 和 paper_text，严格返回 JSON（不要输出任何其它文字）：\n"
-        "{\"tldr\":\"...\",\"research_question\":\"...\",\"core_idea\":\"...\",\"evidence\":\"...\",\"reading_guide\":\"...\"}\n"
+        "请基于上面的 JSON 中的 title 和 paper_text，严格返回 JSON（不要输出任何其它文字）。参考本地 paper-reading 技能的略读粒度：\n"
+        "{\"tldr\":\"...\",\"research_question\":\"...\",\"core_idea\":\"...\",\"evidence\":\"...\",\"reading_guide\":\"...\",\n"
+        "\"key_findings\":[\"...\",\"...\"],\n"
+        "\"limitations\":\"...\"}\n"
         "要求：\n"
         "- tldr：120-180 字，概括研究目标、方法抓手、主要发现、是否值得继续细读。\n"
         "- research_question：一句话点明论文到底在解决什么问题。\n"
         "- core_idea：一句话概括方法核心机制或技术路线。\n"
-        "- evidence：一句话指出最值得关注的实验/结果证据。\n"
-        "- reading_guide：一句话告诉读者若继续精读，优先看哪几部分以及为什么。\n"
-        "- 如果正文证据不足，允许写“从现有文本无法确认”，不要编造。\n"
+        "- evidence：1-2 句话指出最值得关注的实验/结果证据。\n"
+        "- reading_guide：1-2 句话告诉读者若继续精读，优先看哪几部分以及为什么。\n"
+        "- key_findings：列出 2-3 个关键发现，每个 20-50 字。\n"
+        "- limitations：简短描述论文的主要局限性（20-60 字）。\n"
+        "- 如果正文证据不足，允许写"从现有文本无法确认"，不要编造。\n"
         "Output must be strict JSON only, no markdown, no fences, no extra text."
     )
+
 
     schema = {
         "type": "object",
@@ -753,8 +797,10 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
             "core_idea": {"type": "string"},
             "evidence": {"type": "string"},
             "reading_guide": {"type": "string"},
+            "key_findings": {"type": "array", "items": {"type": "string"}},
+            "limitations": {"type": "string"},
         },
-        "required": ["tldr", "research_question", "core_idea", "evidence", "reading_guide"],
+        "required": ["tldr", "research_question", "core_idea", "evidence", "reading_guide", "key_findings", "limitations"],
         "additionalProperties": False,
     }
 
@@ -1535,12 +1581,14 @@ def process_paper(
     docs_dir: str,
     glance_only: bool = False,
     force_glance: bool = False,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, str]:
     title = (paper.get("title") or "").strip()
     arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
     md_path, txt_path, paper_id = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
     abstract_en = (paper.get("abstract") or "").strip()
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+    # Extract title_zh from paper data (populated by pipeline) or default to empty
+    known_zh_title = str(paper.get("title_zh") or "").strip()
 
     glance = ""
 
@@ -1560,6 +1608,9 @@ def process_paper(
             existing = ""
 
         existing_meta = _parse_front_matter(existing)
+        # Extract title_zh from existing front matter if available
+        if existing_meta and existing_meta.get("title_zh"):
+            known_zh_title = known_zh_title or str(existing_meta.get("title_zh") or "").strip()
         has_figures_json = bool(str(existing_meta.get("figures_json") or "").strip()) if existing_meta else False
         if not has_figures_json:
             figures = maybe_generate_paper_figures(
@@ -1605,6 +1656,8 @@ def process_paper(
                     zh_title, zh_abstract = translate_title_and_abstract_to_zh(
                         title, abstract_en
                     )
+                    if zh_title:
+                        known_zh_title = known_zh_title or zh_title
                     updated = existing
 
                     if (not has_zh_title) and zh_title:
@@ -1694,13 +1747,13 @@ def process_paper(
 
         if glance_only:
             # 只生成速览：不拉取 PDF、不做精读总结
-            return paper_id, title
+            return paper_id, title, known_zh_title
 
         if section == "deep":
             # 精读区：检查是否已有详细总结
             tail = extract_section_tail(existing, "论文详细总结（自动生成）")
             if tail:
-                return paper_id, title
+                return paper_id, title, known_zh_title
 
             # 生成详细总结
             pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
@@ -1708,10 +1761,10 @@ def process_paper(
             summary = generate_deep_summary(md_path, txt_path)
             if summary:
                 upsert_auto_block(md_path, "论文详细总结（自动生成）", summary)
-            return paper_id, title
+            return paper_id, title, known_zh_title
         else:
             # 速读区：不生成详细总结，只保留速览和摘要
-            return paper_id, title
+            return paper_id, title, known_zh_title
 
     # 新文件：如果只需要速览，则不拉取 PDF/Jina 文本，直接用元数据生成页面
     if glance_only:
@@ -1737,7 +1790,7 @@ def process_paper(
         os.makedirs(os.path.dirname(md_path), exist_ok=True)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(content)
-        return paper_id, title
+        return paper_id, title, known_zh_title
 
     # 新文件：生成完整内容
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
@@ -1752,6 +1805,8 @@ def process_paper(
         paper["_figure_assets"] = figures
 
     zh_title, zh_abstract = translate_title_and_abstract_to_zh(title, abstract_en)
+    if zh_title:
+        known_zh_title = known_zh_title or zh_title
     tags_list = build_tags_list(section, paper.get("llm_tags") or [])
     glance = generate_glance_overview(title, abstract_en, load_text_content(txt_path)) or build_glance_fallback(paper)
     if glance:
@@ -1769,7 +1824,7 @@ def process_paper(
             upsert_auto_block(md_path, "论文详细总结（自动生成）", summary)
     # 速读区：不生成额外的总结，只保留速览和摘要
 
-    return paper_id, title
+    return paper_id, title, known_zh_title
 
 
 def update_sidebar(
@@ -1786,6 +1841,7 @@ def update_sidebar(
         tags: List[Tuple[str, str]],
         route_href: str,
         evidence: str = "",
+        title_zh: str = "",
     ) -> str:
         score_text = "-"
         clean_tags: List[Dict[str, str]] = []
@@ -1810,6 +1866,9 @@ def update_sidebar(
             "score": score_text,
             "tags": clean_tags,
         }
+        safe_title_zh = str(title_zh or "").strip()
+        if safe_title_zh:
+            payload["title_zh"] = safe_title_zh
         safe_evidence = str(evidence or "").strip()
         if safe_evidence:
             payload["evidence"] = safe_evidence
@@ -1869,7 +1928,8 @@ def update_sidebar(
             safe_title = html.escape(title or paper_id)
             href = f"#/{paper_id}"
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
-            payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence)
+            title_zh = str(entry.get("title_zh") or "").strip()
+            payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence, title_zh)
             block.append(
                 "      * "
                 f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{href}" data-sidebar-item="{payload_json}">{safe_title}</a>\n'
@@ -1883,7 +1943,8 @@ def update_sidebar(
             safe_title = html.escape(title or paper_id)
             href = f"#/{paper_id}"
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
-            payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence)
+            title_zh = str(entry.get("title_zh") or "").strip()
+            payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence, title_zh)
             block.append(
                 "      * "
                 f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{href}" data-sidebar-item="{payload_json}">{safe_title}</a>\n'
@@ -1951,10 +2012,12 @@ def build_day_report_markdown(
         for idx, entry in enumerate(deep_entries, start=1):
             paper_id = str(entry.get("paper_id") or "").strip()
             safe_title = str(entry.get("title") or "").strip() or paper_id
+            title_zh = str(entry.get("title_zh") or "").strip()
             tags = entry.get("tags") or []
             score = _entry_score_text(tags)
             suffix = f"（{score}）" if score else ""
-            lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)}){suffix}")
+            display_title = f"{safe_title} / {title_zh}" if title_zh else safe_title
+            lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
             summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
             if summary_line:
                 lines.append(summary_line)
@@ -1967,10 +2030,12 @@ def build_day_report_markdown(
         for idx, entry in enumerate(quick_entries, start=1):
             paper_id = str(entry.get("paper_id") or "").strip()
             safe_title = str(entry.get("title") or "").strip() or paper_id
+            title_zh = str(entry.get("title_zh") or "").strip()
             tags = entry.get("tags") or []
             score = _entry_score_text(tags)
             suffix = f"（{score}）" if score else ""
-            lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)}){suffix}")
+            display_title = f"{safe_title} / {title_zh}" if title_zh else safe_title
+            lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
             summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
             if summary_line:
                 lines.append(summary_line)
@@ -2438,10 +2503,13 @@ def _parse_generated_md_to_meta(
             continue
         tags_compact.append(f"{kind}:{label}")
 
+    title_zh_value = _fallback_meta("title_zh", "Title_zh")
+
     return {
         "paper_id": paper_id,
         "section": section,
         "title_en": title_en,
+        "title_zh": str(title_zh_value or "").strip(),
         "authors": authors_line,
         "date": str(date_value or "").strip(),
         "pdf": str(pdf_value or "").strip(),
@@ -2613,7 +2681,7 @@ def main() -> None:
 
             paper_id = str(paper.get("id") or args.paper_id).strip()
             paper["paper_id"] = paper_id
-            _, paper_title = process_paper(
+            _, paper_title, _ = process_paper(
                 paper,
                 section,
                 single_date,
@@ -2717,7 +2785,7 @@ def main() -> None:
             for future in as_completed(futures):
                 index, paper = futures[future]
                 try:
-                    pid, title = future.result()
+                    pid, title, title_zh = future.result()
                 except Exception as e:
                     log(f"[WARN] 生成{section}论文失败：{e}")
                     continue
@@ -2729,6 +2797,7 @@ def main() -> None:
                         {
                             "paper_id": pid,
                             "title": title,
+                            "title_zh": title_zh,
                             "tags": section_tags,
                             "summary_cn": _resolve_entry_summary(paper),
                         },
@@ -2751,6 +2820,7 @@ def main() -> None:
                 {
                     "paper_id": pid,
                     "title": title,
+                    "title_zh": str(paper.get("title_zh") or "").strip(),
                     "tags": extract_sidebar_tags(paper),
                     "summary_cn": _resolve_entry_summary(paper),
                 }
@@ -2765,6 +2835,7 @@ def main() -> None:
                 {
                     "paper_id": pid,
                     "title": title,
+                    "title_zh": str(paper.get("title_zh") or "").strip(),
                     "tags": extract_sidebar_tags(paper),
                     "summary_cn": _resolve_entry_summary(paper),
                 }

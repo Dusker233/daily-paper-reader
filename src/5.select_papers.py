@@ -706,6 +706,8 @@ def sanitize_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         copied = dict(item)
         copied.pop("_source", None)
+        # 保留 title_zh，方便前端侧边栏渲染中文标题
+        copied.pop("_temp_score_breakdown", None)
         copied.pop("carry_days", None)
         cleaned.append(copied)
     return cleaned
