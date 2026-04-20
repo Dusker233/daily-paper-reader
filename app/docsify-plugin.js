@@ -2431,6 +2431,7 @@ window.$docsify = {
           const title = String(payload.title || a.textContent || '').trim();
           const link = String(payload.link || fallbackLink || href || '').trim();
           const score = String(payload.score || '').trim();
+          const titleZh = String(payload.title_zh || '').trim();
           const evidence = String((payload && payload.evidence) || '').trim();
           const tags = Array.isArray(payload.tags) ? payload.tags : [];
 
@@ -2450,8 +2451,11 @@ window.$docsify = {
             .filter(Boolean)
             .join(' ');
 
+          const titleHtml = titleZh
+            ? `<div class="dpr-sidebar-title">${escapeHtml(title)}</div><div class="dpr-sidebar-title-zh">${escapeHtml(titleZh)}</div>`
+            : `<div class="dpr-sidebar-title">${escapeHtml(title)}</div>`;
           a.innerHTML =
-            `<div class="dpr-sidebar-title">${escapeHtml(title)}</div>` +
+            titleHtml +
             `<div class="dpr-sidebar-link-line">${escapeHtml(evidence || '-')}</div>` +
             `<div class="dpr-sidebar-meta-line">` +
             `${scoreHtml}` +
@@ -3755,6 +3759,22 @@ window.$docsify = {
         }
         if (meta.score !== undefined && meta.score !== null) {
           lines.push(`<p><strong>Score</strong>: ${escapeHtml(String(meta.score))}</p>`);
+          // 显示各维度分数
+          const dims = [
+            { key: 'relevance_score', label: 'Relevance' },
+            { key: 'quality_score', label: 'Quality' },
+            { key: 'reliability_score', label: 'Reliability' },
+            { key: 'practicality_score', label: 'Practicality' },
+          ];
+          const dimParts = [];
+          dims.forEach(({ key, label }) => {
+            if (meta[key] !== undefined && meta[key] !== null) {
+              dimParts.push(`${label}: ${escapeHtml(String(meta[key]))}`);
+            }
+          });
+          if (dimParts.length > 0) {
+            lines.push(`<p class="paper-score-breakdown"><strong>Breakdown</strong>: ${dimParts.join(' / ')}</p>`);
+          }
         }
         lines.push('</div>');
 
