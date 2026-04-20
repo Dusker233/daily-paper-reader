@@ -547,7 +547,9 @@ def parse_glance_overview_fields(glance: str) -> Dict[str, str]:
         # Collect bullet items for key_findings list field
         if current_list_field == "key_findings":
             if line.startswith("- "):
-                fields["key_findings"] = fields.get("key_findings", "") + "\n" + line[2:]
+                if not isinstance(fields.get("key_findings"), list):
+                    fields["key_findings"] = []
+                fields["key_findings"].append(line[2:].strip())
                 continue
             else:
                 current_list_field = None

@@ -3786,30 +3786,30 @@ window.$docsify = {
         lines.push('');
 
         // 速览区域
-        if (meta.motivation || meta.method || meta.result || meta.conclusion) {
+        const glanceFields = [
+          { key: 'motivation', label: 'Motivation' },
+          { key: 'method', label: 'Method' },
+          { key: 'result', label: 'Result' },
+          { key: 'conclusion', label: 'Conclusion' },
+          { key: 'key_findings', label: 'Key Findings' },
+          { key: 'limitations', label: 'Limitations' },
+        ];
+        const hasAnyGlance = glanceFields.some(({ key }) => meta[key]);
+        if (hasAnyGlance) {
           lines.push('<div class="paper-glance-section">');
           lines.push('<div class="paper-glance-row">');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Motivation</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.motivation || '-')}</div>`);
-          lines.push('</div>');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Method</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.method || '-')}</div>`);
-          lines.push('</div>');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Result</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.result || '-')}</div>`);
-          lines.push('</div>');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Conclusion</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.conclusion || '-')}</div>`);
-          lines.push('</div>');
-
+          for (const { key, label } of glanceFields) {
+            const val = meta[key];
+            if (!val) continue;
+            lines.push('<div class="paper-glance-col">');
+            lines.push(`<div class="paper-glance-label">${escapeHtml(label)}</div>`);
+            if (Array.isArray(val)) {
+              lines.push(`<div class="paper-glance-content">${val.map(v => `<div>${escapeHtml(v)}</div>`).join('')}</div>`);
+            } else {
+              lines.push(`<div class="paper-glance-content">${escapeHtml(val)}</div>`);
+            }
+            lines.push('</div>');
+          }
           lines.push('</div>');
           lines.push('</div>');
           lines.push('');

@@ -373,8 +373,8 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         md = self.mod.build_markdown_content(paper, "quick", "", "", [])
         # round-trip: _parse_front_matter reads the YAML list written by build_markdown_content
         meta = self.mod._parse_front_matter(md)
-        # key_findings is stored as YAML inline list [Finding 1, Finding 2, Finding 3]
-        self.assertEqual(meta.get("key_findings"), ["Finding 1", "Finding 2", "Finding 3"])
+        # key_findings is stored as YAML inline list [第一个关键发现, 第二个关键发现, 第三个关键发现]
+        self.assertEqual(meta.get("key_findings"), ["第一个关键发现", "第二个关键发现", "第三个关键发现"])
         self.assertEqual(meta.get("limitations"), "主要局限性描述。")
 
         # round-trip through _parse_generated_md_to_meta
@@ -384,7 +384,7 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
             item = self.mod._parse_generated_md_to_meta(
                 tmp_dir, "paper.md", "quick", "test_source"
             )
-            self.assertEqual(item["key_findings"], ["Finding 1", "Finding 2", "Finding 3"])
+            self.assertEqual(item["key_findings"], ["第一个关键发现", "第二个关键发现", "第三个关键发现"])
             self.assertEqual(item["limitations"], "主要局限性描述。")
 
     def test_prepare_glance_source_text_respects_requested_budget(self):
