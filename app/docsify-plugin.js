@@ -738,8 +738,10 @@ window.$docsify = {
               ...fallbackArray(frontmatterPaperMeta.method, 'Method'),
               ...fallbackArray(frontmatterPaperMeta.result, 'Result'),
               ...fallbackArray(frontmatterPaperMeta.conclusion, 'Conclusion'),
+              ...fallbackArray(frontmatterPaperMeta.key_findings, 'Key Findings'),
+              ...fallbackArray(frontmatterPaperMeta.limitations, 'Limitations'),
             ]);
-            ['Motivation', 'Method', 'Result', 'Conclusion'].forEach((label) => {
+            ['Motivation', 'Method', 'Result', 'Conclusion', 'Key Findings', 'Limitations'].forEach((label) => {
               const key = label.toLowerCase();
               if (!glancePairs.has(key)) {
                 const value = normalizeTagValue(
@@ -794,6 +796,8 @@ window.$docsify = {
                 'method',
                 'result',
                 'conclusion',
+                'key_findings',
+                'limitations',
               ]),
             );
             if (glanceText) {
@@ -2431,6 +2435,7 @@ window.$docsify = {
           const title = String(payload.title || a.textContent || '').trim();
           const link = String(payload.link || fallbackLink || href || '').trim();
           const score = String(payload.score || '').trim();
+          const titleZh = String(payload.title_zh || '').trim();
           const evidence = String((payload && payload.evidence) || '').trim();
           const tags = Array.isArray(payload.tags) ? payload.tags : [];
 
@@ -2450,8 +2455,11 @@ window.$docsify = {
             .filter(Boolean)
             .join(' ');
 
+          const titleHtml = titleZh
+            ? `<div class="dpr-sidebar-title">${escapeHtml(title)}</div><div class="dpr-sidebar-title-zh">${escapeHtml(titleZh)}</div>`
+            : `<div class="dpr-sidebar-title">${escapeHtml(title)}</div>`;
           a.innerHTML =
-            `<div class="dpr-sidebar-title">${escapeHtml(title)}</div>` +
+            titleHtml +
             `<div class="dpr-sidebar-link-line">${escapeHtml(evidence || '-')}</div>` +
             `<div class="dpr-sidebar-meta-line">` +
             `${scoreHtml}` +
@@ -3755,6 +3763,22 @@ window.$docsify = {
         }
         if (meta.score !== undefined && meta.score !== null) {
           lines.push(`<p><strong>Score</strong>: ${escapeHtml(String(meta.score))}</p>`);
+          // 显示各维度分数
+          const dims = [
+            { key: 'relevance_score', label: 'Relevance' },
+            { key: 'quality_score', label: 'Quality' },
+            { key: 'reliability_score', label: 'Reliability' },
+            { key: 'practicality_score', label: 'Practicality' },
+          ];
+          const dimParts = [];
+          dims.forEach(({ key, label }) => {
+            if (meta[key] !== undefined && meta[key] !== null) {
+              dimParts.push(`${label}: ${escapeHtml(String(meta[key]))}`);
+            }
+          });
+          if (dimParts.length > 0) {
+            lines.push(`<p class="paper-score-breakdown"><strong>Breakdown</strong>: ${dimParts.join(' / ')}</p>`);
+          }
         }
         lines.push('</div>');
 
@@ -3762,30 +3786,30 @@ window.$docsify = {
         lines.push('');
 
         // 速览区域
-        if (meta.motivation || meta.method || meta.result || meta.conclusion) {
+        const glanceFields = [
+          { key: 'motivation', label: 'Motivation' },
+          { key: 'method', label: 'Method' },
+          { key: 'result', label: 'Result' },
+          { key: 'conclusion', label: 'Conclusion' },
+          { key: 'key_findings', label: 'Key Findings' },
+          { key: 'limitations', label: 'Limitations' },
+        ];
+        const hasAnyGlance = glanceFields.some(({ key }) => meta[key]);
+        if (hasAnyGlance) {
           lines.push('<div class="paper-glance-section">');
           lines.push('<div class="paper-glance-row">');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Motivation</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.motivation || '-')}</div>`);
-          lines.push('</div>');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Method</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.method || '-')}</div>`);
-          lines.push('</div>');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Result</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.result || '-')}</div>`);
-          lines.push('</div>');
-
-          lines.push('<div class="paper-glance-col">');
-          lines.push('<div class="paper-glance-label">Conclusion</div>');
-          lines.push(`<div class="paper-glance-content">${escapeHtml(meta.conclusion || '-')}</div>`);
-          lines.push('</div>');
-
+          for (const { key, label } of glanceFields) {
+            const val = meta[key];
+            if (!val) continue;
+            lines.push('<div class="paper-glance-col">');
+            lines.push(`<div class="paper-glance-label">${escapeHtml(label)}</div>`);
+            if (Array.isArray(val)) {
+              lines.push(`<div class="paper-glance-content">${val.map(v => `<div>${escapeHtml(v)}</div>`).join('')}</div>`);
+            } else {
+              lines.push(`<div class="paper-glance-content">${escapeHtml(val)}</div>`);
+            }
+            lines.push('</div>');
+          }
           lines.push('</div>');
           lines.push('</div>');
           lines.push('');
