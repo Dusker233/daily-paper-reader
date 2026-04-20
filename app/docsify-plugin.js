@@ -738,8 +738,10 @@ window.$docsify = {
               ...fallbackArray(frontmatterPaperMeta.method, 'Method'),
               ...fallbackArray(frontmatterPaperMeta.result, 'Result'),
               ...fallbackArray(frontmatterPaperMeta.conclusion, 'Conclusion'),
+              ...fallbackArray(frontmatterPaperMeta.key_findings, 'Key Findings'),
+              ...fallbackArray(frontmatterPaperMeta.limitations, 'Limitations'),
             ]);
-            ['Motivation', 'Method', 'Result', 'Conclusion'].forEach((label) => {
+            ['Motivation', 'Method', 'Result', 'Conclusion', 'Key Findings', 'Limitations'].forEach((label) => {
               const key = label.toLowerCase();
               if (!glancePairs.has(key)) {
                 const value = normalizeTagValue(
@@ -794,6 +796,8 @@ window.$docsify = {
                 'method',
                 'result',
                 'conclusion',
+                'key_findings',
+                'limitations',
               ]),
             );
             if (glanceText) {

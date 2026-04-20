@@ -518,6 +518,8 @@ GLANCE_FRONTMATTER_PRIORITY = [
     ("method", ("core_idea", "method")),
     ("result", ("evidence", "result")),
     ("conclusion", ("reading_guide", "conclusion")),
+    ("key_findings", ("key_findings",)),
+    ("limitations", ("limitations",)),
 ]
 
 
@@ -538,8 +540,24 @@ def _normalize_glance_label(label: str) -> str:
 
 def parse_glance_overview_fields(glance: str) -> Dict[str, str]:
     fields: Dict[str, str] = {}
-    for raw_line in str(glance or "").splitlines():
+    current_list_field: str | None = None
+    lines_iter = iter(str(glance or "").splitlines())
+    for raw_line in lines_iter:
         line = raw_line.strip().rstrip("\\").strip()
+        # Collect bullet items for key_findings list field
+        if current_list_field == "key_findings":
+            if line.startswith("- "):
+                fields["key_findings"] = fields.get("key_findings", "") + "\n" + line[2:]
+                continue
+            else:
+                current_list_field = None
+        # Detect start of a key_findings bullet list (empty value after label)
+        match = re.match(r"^\*\*([^*]+)\*\*[：:]?\s*$", line)
+        if match:
+            normalized = _normalize_glance_label(match.group(1))
+            if normalized == "key findings":
+                current_list_field = "key_findings"
+                continue
         match = re.match(r"^\*\*([^*]+)\*\*[：:](.+)$", line)
         if not match:
             continue
@@ -1544,7 +1562,16 @@ def build_markdown_content(
     for meta_key, candidate_keys in GLANCE_FRONTMATTER_PRIORITY:
         value = ""
         for field_key in candidate_keys:
-            value = str(glance_fields.get(field_key) or "").strip()
+            raw = glance_fields.get(field_key)
+            if raw is None:
+                continue
+            # key_findings is a list; write as YAML list
+            if field_key == "key_findings" and isinstance(raw, list):
+                items = [yaml_escape_value(str(v).strip()) for v in raw if str(v).strip()]
+                if items:
+                    lines.append(f"{meta_key}: [{', '.join(items)}]")
+                break
+            value = str(raw).strip()
             if value:
                 break
         if value:
@@ -2506,6 +2533,8 @@ def _parse_generated_md_to_meta(
     quality_score_value = fm_meta.get("quality_score")
     reliability_score_value = fm_meta.get("reliability_score")
     practicality_score_value = fm_meta.get("practicality_score")
+    key_findings_value = fm_meta.get("key_findings")
+    limitations_value = _fallback_meta("limitations", "Limitations")
     evidence_value = _fallback_meta("evidence", "Evidence")
     tldr_value = _fallback_meta("tldr", "TLDR")
     paper_source_value = str(fm_meta.get("source") or fm_meta.get("Source") or "").strip()
@@ -2537,6 +2566,8 @@ def _parse_generated_md_to_meta(
         "quality_score": quality_score_value,
         "reliability_score": reliability_score_value,
         "practicality_score": practicality_score_value,
+        "key_findings": key_findings_value,
+        "limitations": limitations_value,
         "evidence": str(evidence_value or "").strip(),
         "tldr": str(tldr_value or "").strip(),
         "tags": ", ".join(tags_compact),
