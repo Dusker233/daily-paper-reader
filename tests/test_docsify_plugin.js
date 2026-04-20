@@ -187,6 +187,44 @@ function testRenderPaperFromMetaIncludesSafePdfLinksAndFiltersUnsafeFigures() {
   assert.equal(html.includes('javascript:alert(1)'), false);
 }
 
+function testRenderPaperFromMetaRendersKeyFindingsAndLimitations() {
+  const html = renderPaperFromMeta({
+    title: 'Demo Paper',
+    authors: 'Alice, Bob',
+    date: '2026-04-15',
+    pdf: 'https://example.com/paper.pdf',
+    motivation: '研究动机描述',
+    method: '方法描述',
+    result: '结果描述',
+    conclusion: '结论描述',
+    key_findings: ['第一个关键发现', '第二个关键发现', '第三个关键发现'],
+    limitations: '主要局限性描述。',
+  });
+
+  assert.ok(html.includes('paper-glance-section'), 'glance section rendered');
+  assert.ok(html.includes('Key Findings'), 'Key Findings label rendered');
+  assert.ok(html.includes('Limitations'), 'Limitations label rendered');
+  assert.ok(html.includes('第一个关键发现'), 'first key finding rendered');
+  assert.ok(html.includes('第二个关键发现'), 'second key finding rendered');
+  assert.ok(html.includes('第三个关键发现'), 'third key finding rendered');
+  assert.ok(html.includes('主要局限性描述。'), 'limitations content rendered');
+}
+
+function testRenderPaperFromMetaRendersKeyFindingsAsListItems() {
+  const html = renderPaperFromMeta({
+    title: 'Demo Paper',
+    authors: 'Alice, Bob',
+    date: '2026-04-15',
+    pdf: 'https://example.com/paper.pdf',
+    key_findings: ['Finding A', 'Finding B'],
+    limitations: 'Limitation text.',
+  });
+
+  // Each bullet should appear as a separate div
+  assert.ok(html.includes('Finding A'), 'first bullet rendered');
+  assert.ok(html.includes('Finding B'), 'second bullet rendered');
+}
+
 function testLoadGithubTokenForGistUsesSecretSessionAccessor() {
   global.window.DPRSecretSession = {
     getGithubToken() {

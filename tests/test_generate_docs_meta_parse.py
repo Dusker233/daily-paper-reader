@@ -382,7 +382,7 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
             md_path = Path(tmp_dir) / "paper.md"
             md_path.write_text(md, encoding="utf-8")
             item = self.mod._parse_generated_md_to_meta(
-                tmp_dir, "paper.md", "quick", "test_source"
+                str(md_path), "paper.md", "quick", "test_source"
             )
             self.assertEqual(item["key_findings"], ["第一个关键发现", "第二个关键发现", "第三个关键发现"])
             self.assertEqual(item["limitations"], "主要局限性描述。")
