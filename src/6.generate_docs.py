@@ -1089,12 +1089,21 @@ def build_daily_brief_summary(
     if total_count == 0:
         return "> 今日无新推荐，系统未产出可展示论文。"
 
+    def _entry_score_or_fallback(entry: Dict[str, Any]) -> str:
+        score_val = entry.get("score")
+        if score_val is not None:
+            try:
+                return f"{float(score_val):.1f}/10"
+            except Exception:
+                return str(score_val)
+        tags = entry.get("tags") or []
+        return _entry_score_text(tags)
+
     def _format_preview_item(entry: Dict[str, Any]) -> str:
         paper_id = str(entry.get("paper_id") or "").strip()
         title = str(entry.get("title") or "").strip()
-        tags = entry.get("tags") or []
         name = (title or paper_id)
-        score = _entry_score_text(tags)
+        score = _entry_score_or_fallback(entry)
         return f"《{name}》（{score}）" if score else f"《{name}》"
 
     deep_preview = [_format_preview_item(entry) for entry in deep_entries[:2] if (entry.get("title") or entry.get("paper_id"))]
@@ -2073,7 +2082,7 @@ def build_day_report_markdown(
             safe_title = str(entry.get("title") or "").strip() or paper_id
             title_zh = str(entry.get("title_zh") or "").strip()
             tags = entry.get("tags") or []
-            score = _entry_score_text(tags)
+            score = _entry_score_or_fallback(entry)
             suffix = f"（{score}）" if score else ""
             display_title = title_zh if title_zh else safe_title
             lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
@@ -2091,7 +2100,7 @@ def build_day_report_markdown(
             safe_title = str(entry.get("title") or "").strip() or paper_id
             title_zh = str(entry.get("title_zh") or "").strip()
             tags = entry.get("tags") or []
-            score = _entry_score_text(tags)
+            score = _entry_score_or_fallback(entry)
             suffix = f"（{score}）" if score else ""
             display_title = title_zh if title_zh else safe_title
             lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
@@ -2855,13 +2864,6 @@ def main() -> None:
 
             for future in as_completed(futures):
                 index, paper = futures[future]
-                try:
-                    pid, title, title_zh = future.result()
-                except Exception as e:
-                    log(f"[WARN] 生成{section}论文失败：{e}")
-                    continue
-                paper_evidence_by_id[str((pid or "").strip())] = get_paper_sidebar_evidence(paper)
-                section_tags = extract_sidebar_tags(paper)
                 try:
                     pid, title, title_zh = future.result()
                 except Exception as e:

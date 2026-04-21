@@ -1235,7 +1235,7 @@ def process_request(
     seed_text = _extract_seed_text(request, docs_module)
     if ranked_related is not None:
         resolved_ranked_related = list(ranked_related)
-        rerank_status = "full_success"
+        rerank_status = "skipped"
     else:
         resolved_ranked_related, rerank_status = rank_related_papers(
             request,
