@@ -464,8 +464,8 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertIn("**Reading Guide**：", related_two_md)
             self.assertNotIn("## 精读", related_two_md)
             index_text = (workspace / "index.md").read_text(encoding="utf-8")
-            self.assertIn("seed-paper.md", index_text)
-            self.assertIn("related/", index_text)
+            self.assertIn("#/seed-papers/demo-request/seed-paper", index_text)
+            self.assertIn("#/seed-papers/demo-request/related/p", index_text)
 
     def test_render_seed_workspace_sanitizes_related_ids(self):
         with tempfile.TemporaryDirectory() as tmp:

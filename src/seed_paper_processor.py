@@ -336,7 +336,7 @@ def _build_related_records(selection: dict[str, Any]) -> list[dict[str, Any]]:
                 "include_quick": paper_key in quick_keys,
                 "include_deep": paper_key in deep_keys,
                 "score": paper.get("llm_score"),
-                "evidence": paper.get("evidence") or paper.get("tldr") or "",
+                "evidence": paper.get("canonical_evidence") or paper.get("llm_tldr_cn") or paper.get("llm_tldr") or paper.get("llm_tldr_en") or "",
             }
         )
     return records
@@ -403,13 +403,19 @@ def _render_related_pages(
 
 
 def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, str]]) -> str:
+    request_id = _normalize_request_id(request.get("request_id"))
     title = _paper_title_from_filename(request.get("file_name") or "")
     related_lines = []
     for page in related_pages:
         score_str = f" [{page.get('score', '-')}]" if page.get('score') else ""
         evidence_str = f" - {_escape_markdown_text(page.get('evidence', ''))}" if page.get('evidence') else ""
+        # Convert related/foo.md to #/seed-papers/{request_id}/related/foo
+        page_path = page.get('path', '')
+        if page_path.startswith('related/'):
+            slug = page_path[len('related/'):].replace('.md', '')
+            page_path = f"#/seed-papers/{request_id}/related/{slug}"
         related_lines.append(
-            f"- [{_escape_markdown_text(page['title'])}]({page['path']}){score_str}{evidence_str}"
+            f"- [{_escape_markdown_text(page['title'])}]({page_path}){score_str}{evidence_str}"
         )
     related_block = "\n".join(related_lines) if related_lines else "- None"
     return "\n".join(
@@ -421,7 +427,7 @@ def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, 
             f"- Related count: `{request.get('related_count')}`",
             "",
             "## Seed paper",
-            "- [Open seed paper](seed-paper.md)",
+            f"- [Open seed paper](#/seed-papers/{request_id}/seed-paper)",
             "",
             "## Related papers",
             related_block,
