@@ -2124,7 +2124,7 @@ def build_day_report_markdown(
             tags = entry.get("tags") or []
             score = _entry_score_or_fallback(entry)
             suffix = f"（{score}）" if score else ""
-            display_title = title_zh if title_zh else safe_title
+            display_title = _escape_markdown_text(title_zh if title_zh else safe_title)
             lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
             summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
             if summary_line:
@@ -2142,7 +2142,7 @@ def build_day_report_markdown(
             tags = entry.get("tags") or []
             score = _entry_score_or_fallback(entry)
             suffix = f"（{score}）" if score else ""
-            display_title = title_zh if title_zh else safe_title
+            display_title = _escape_markdown_text(title_zh if title_zh else safe_title)
             lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
             summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
             if summary_line:
