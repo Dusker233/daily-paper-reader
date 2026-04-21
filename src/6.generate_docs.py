@@ -1251,7 +1251,7 @@ def build_latest_report_section(
     if summary:
         lines.append("")
         lines.append("### 今日简报（AI）")
-        lines.append(summary)
+        lines.append(_escape_markdown_text(summary))
     if RANGE_DATE_RE.match(date_str):
         report_href = build_docsify_id_href(f"{date_str}/README")
     else:
@@ -2105,7 +2105,7 @@ def build_day_report_markdown(
     if summary:
         lines.append("")
         lines.append("## 今日简报（AI）")
-        lines.append(summary)
+        lines.append(_escape_markdown_text(summary))
     lines.append("")
 
     if not recommend_exists:
