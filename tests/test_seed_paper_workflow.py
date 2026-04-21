@@ -203,6 +203,21 @@ print(json.dumps(resolve_rerank_llm_config(default_model='qwen3-reranker-4b'), e
         self.assertIn('--docs-dir "${ARTIFACT_ROOT}/docs"', run_script)
         self.assertIn('--seed-mode "$SEED_MODE"', run_script)
 
+    def test_workflow_injects_workflow_llm_env_vars_for_explicit_semantics(self):
+        process_step = self._step_named("Process seed paper request")
+        env = process_step.get("env") or {}
+
+        # WORKFLOW_LLM_* must be explicitly injected so that Python runtime
+        # picks them up with "workflow" source semantics (not SUMMARY_* fallback).
+        self.assertEqual(env.get("WORKFLOW_LLM_API_KEY"), "${{ secrets.WORKFLOW_LLM_API_KEY }}")
+        self.assertEqual(env.get("WORKFLOW_LLM_BASE_URL"), "${{ secrets.WORKFLOW_LLM_BASE_URL }}")
+        self.assertEqual(env.get("WORKFLOW_LLM_MODEL"), "${{ secrets.WORKFLOW_LLM_MODEL }}")
+        # SUMMARY_* remain as fallback for cases where WORKFLOW_LLM_* secrets
+        # are not configured in the repo secrets.
+        self.assertEqual(env.get("SUMMARY_API_KEY"), "${{ secrets.SUMMARY_API_KEY }}")
+        self.assertEqual(env.get("SUMMARY_BASE_URL"), "${{ secrets.SUMMARY_BASE_URL }}")
+        self.assertEqual(env.get("SUMMARY_MODEL"), "${{ secrets.SUMMARY_MODEL }}")
+
     def test_workflow_enables_multi_source_rpc_fallback_for_hosted_seed_processing(self):
         process_step = self._step_named("Process seed paper request")
         env = process_step.get("env") or {}

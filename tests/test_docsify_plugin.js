@@ -210,6 +210,66 @@ function testRenderPaperFromMetaRendersKeyFindingsAndLimitations() {
   assert.ok(html.includes('主要局限性描述。'), 'limitations content rendered');
 }
 
+function testRenderPaperFromMetaAllowsArchiveSeedPaperPdfPaths() {
+  // Valid archive/seed-papers PDF paths should render links
+  const html1 = renderPaperFromMeta({
+    title: 'Seed Paper',
+    authors: 'Alice, Bob',
+    date: '2026-04-15',
+    pdf: 'archive/seed-papers/1776760574807/wan-et-al-2025-cato-end-to-end-optimization-of-ml-based-traffic-analysis-pipelines.pdf',
+  });
+
+  assert.ok(
+    html1.includes('archive/seed-papers/1776760574807/wan-et-al-2025-cato-end-to-end-optimization-of-ml-based-traffic-analysis-pipelines.pdf'),
+    'archive/seed-papers PDF path should render as link',
+  );
+  assert.ok(
+    html1.includes('rel="noopener noreferrer"'),
+    'external link attributes should be present',
+  );
+
+  // Another valid path variation
+  const html2 = renderPaperFromMeta({
+    title: 'Another Seed',
+    authors: 'Charlie',
+    date: '2026-04-10',
+    pdf: 'archive/seed-papers/demo-request-id/paper-title_v2.pdf',
+  });
+
+  assert.ok(
+    html2.includes('archive/seed-papers/demo-request-id/paper-title_v2.pdf'),
+    'archive/seed-papers PDF path with underscores and dots should render as link',
+  );
+
+  // Invalid paths should still be blocked
+  const html3 = renderPaperFromMeta({
+    title: 'Bad PDF',
+    authors: 'Bob',
+    date: '2026-04-15',
+    pdf: 'archive/seed-papers/../../../etc/passwd.pdf',
+  });
+
+  assert.equal(
+    html3.includes('paper-meta-link'),
+    false,
+    'Path traversal in archive/seed-papers should be blocked',
+  );
+
+  // javascript: and data: should still be blocked
+  const html4 = renderPaperFromMeta({
+    title: 'Malicious PDF',
+    authors: 'Bob',
+    date: '2026-04-15',
+    pdf: 'javascript:alert(1)',
+  });
+
+  assert.equal(
+    html4.includes('paper-meta-link'),
+    false,
+    'javascript: URL in PDF field should still be blocked even if it matches archive path pattern',
+  );
+}
+
 function testRenderPaperFromMetaRendersKeyFindingsAsListItems() {
   const html = renderPaperFromMeta({
     title: 'Demo Paper',
@@ -591,5 +651,6 @@ testAppCssKeepsMarkdownKatexDisplayScrollable();
 testAppCssKeepsSidebarPaperItemsReadableInDarkMode();
 testAppCssUsesThemeTokensForOverlayPanels();
 testAppCssUsesThemeTokensForHomeCardsAndSearchPanels();
+testRenderPaperFromMetaAllowsArchiveSeedPaperPdfPaths();
 
 console.log('docsify plugin tests passed');

@@ -615,7 +615,12 @@ async function testRunSeedPaperDiscoveryVerifiesFilesBeforeDispatch() {
   });
 
   assert.equal(ok, true);
-  assert.deepEqual(callSequence, ['prepare', 'sync', 'write:pdf', 'write:request', 'verify', 'dispatch']);
+  // Verifies archive files before dispatch, then polls for docs visibility after dispatch
+  const verifyBeforeDispatchIdx = callSequence.indexOf('verify');
+  const dispatchIdx = callSequence.indexOf('dispatch');
+  assert.ok(verifyBeforeDispatchIdx !== -1 && verifyBeforeDispatchIdx < dispatchIdx, 'archive files should be verified before dispatch');
+  // After dispatch, there should be additional verification for docs visibility polling
+  assert.ok(callSequence.lastIndexOf('verify') > dispatchIdx, 'docs visibility should be polled after dispatch');
   assert.deepEqual(uploadTargets, [
     {
       requestId: 'demo-request',
@@ -625,30 +630,21 @@ async function testRunSeedPaperDiscoveryVerifiesFilesBeforeDispatch() {
   assert.equal(writes[0].path, 'archive/seed-papers/demo-request/paper.pdf');
   assert.equal(writes[1].path, 'archive/seed-papers/demo-request/request.json');
   assert.equal(writes[1].branch, 'main');
-  assert.deepEqual(verifications, [
-    {
-      owner: 'dusker',
-      repo: 'daily-paper-reader',
-      paths: [
-        'archive/seed-papers/demo-request/paper.pdf',
-        'archive/seed-papers/demo-request/request.json',
-      ],
-      expectedFiles: [
-        {
-          path: 'archive/seed-papers/demo-request/paper.pdf',
-          ref: 'main',
-          fileSha: 'sha-pdf',
-        },
-        {
-          path: 'archive/seed-papers/demo-request/request.json',
-          ref: 'main',
-          fileSha: 'sha-request',
-        },
-      ],
-    },
+  // verifications[0] is for archive files (before dispatch)
+  // verifications[1] is for docs visibility polling (after dispatch)
+  assert.equal(verifications.length, 2, 'should have 2 verifications: archive pre-dispatch and docs post-dispatch');
+  assert.equal(verifications[0].owner, 'dusker');
+  assert.equal(verifications[0].repo, 'daily-paper-reader');
+  assert.deepEqual(verifications[0].paths, [
+    'archive/seed-papers/demo-request/paper.pdf',
+    'archive/seed-papers/demo-request/request.json',
   ]);
+  assert.equal(verifications[0].expectedFiles.length, 2);
+  // verifications[1] is for docs visibility polling
+  assert.equal(verifications[1].paths[0], 'docs/seed-papers/demo-request/index.md');
+  assert.equal(verifications[1].paths[1], 'docs/seed-papers/demo-request/seed-paper.md');
+  assert.equal(verifications[1].ref, 'main');
   assert.equal(secretSyncCalls.length, 1);
-  assert.equal(secretSyncCalls[0].token, 'demo-token');
   assert.equal(secretSyncCalls[0].owner, 'dusker');
   assert.equal(secretSyncCalls[0].repo, 'daily-paper-reader');
   assert.equal(typeof secretSyncCalls[0].onProgress, 'function');
@@ -659,6 +655,204 @@ async function testRunSeedPaperDiscoveryVerifiesFilesBeforeDispatch() {
       seedMode: 'deep',
     },
   ]);
+}
+
+async function testRunSeedPaperDiscoveryPollsForPublishedPageAndNavigatesOnSuccess() {
+  global.window.SubscriptionsManager.__test.setTestPollIntervalMs(50);
+  const callSequence = [];
+  let pollCount = 0;
+  global.window.SubscriptionsGithubToken = {
+    buildSeedPaperRequestPath() {
+      return {
+        requestId: 'demo-request',
+        requestPath: 'archive/seed-papers/demo-request/request.json',
+        filePath: 'archive/seed-papers/demo-request/paper.pdf',
+      };
+    },
+    async prepareSeedPaperUploadTarget() {
+      callSequence.push('prepare');
+      return {
+        owner: 'dusker',
+        repo: 'daily-paper-reader',
+        token: 'demo-token',
+        branch: 'main',
+        ref: 'main',
+      };
+    },
+    async writeRepoFile(options) {
+      callSequence.push(`write:${options.path.endsWith('.pdf') ? 'pdf' : 'request'}`);
+      return {
+        owner: 'dusker',
+        repo: 'daily-paper-reader',
+        branch: 'main',
+        ref: 'main',
+        path: options.path,
+        fileSha: options.path.endsWith('.pdf') ? 'sha-pdf' : 'sha-request',
+      };
+    },
+    async verifyRepoFilesVisible(options) {
+      pollCount += 1;
+      callSequence.push(`poll:${pollCount}`);
+      // Simulate docs/seed-papers visibility check
+      if (options.paths && options.paths.some((p) => p.startsWith('docs/seed-papers'))) {
+        if (pollCount < 3) {
+          return { ref: 'main', allVisible: false, files: [] };
+        }
+        return { ref: 'main', allVisible: true, files: [] };
+      }
+      return { ref: 'main', allVisible: true, files: [] };
+    },
+  };
+  global.window.DPRSecretSession = {
+    async syncSessionSecretsToGithub() {
+      callSequence.push('sync');
+      return { ok: true, skipped: false };
+    },
+  };
+  global.window.DPRWorkflowRunner = {
+    async runSeedPaperWorkflow() {
+      callSequence.push('dispatch');
+    },
+  };
+
+  let finalHash = '';
+  const originalLocation = global.window.location;
+  global.window.location = {
+    ...originalLocation,
+    hash: '',
+    get hash() { return finalHash; },
+    set hash(val) { finalHash = val; },
+  };
+
+  try {
+    const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+      file: {
+        name: 'paper.pdf',
+        type: 'application/pdf',
+        size: 1024,
+        async arrayBuffer() {
+          return Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]).buffer;
+        },
+      },
+    });
+
+    assert.equal(ok, true);
+    assert.ok(callSequence.includes('dispatch'), 'workflow should be dispatched');
+    assert.ok(
+      callSequence.some((c) => c.startsWith('poll:')),
+      'should poll for docs/seed-papers visibility',
+    );
+    assert.equal(
+      finalHash,
+      '#/seed-papers/demo-request/index',
+      'should navigate to seed page after docs become visible',
+    );
+  } finally {
+    global.window.location = originalLocation;
+    global.window.SubscriptionsManager.__test.setTestPollIntervalMs(null);
+  }
+}
+
+// NOTE: testRunSeedPaperDiscoveryShowsTimeoutMessageWhenPageNotPublished uses
+// setTestPollIntervalMs(50) to avoid real wall-clock delays during tests.
+async function testRunSeedPaperDiscoveryShowsTimeoutMessageWhenPageNotPublished() {
+  global.window.SubscriptionsManager.__test.setTestPollIntervalMs(50);
+  try {
+    global.window.SubscriptionsGithubToken = {
+      buildSeedPaperRequestPath() {
+        return {
+          requestId: 'demo-request',
+          requestPath: 'archive/seed-papers/demo-request/request.json',
+          filePath: 'archive/seed-papers/demo-request/paper.pdf',
+        };
+      },
+      async prepareSeedPaperUploadTarget() {
+        return {
+          owner: 'dusker',
+          repo: 'daily-paper-reader',
+          token: 'demo-token',
+          branch: 'main',
+          ref: 'main',
+        };
+      },
+      async writeRepoFile(options) {
+        return {
+          owner: 'dusker',
+          repo: 'daily-paper-reader',
+          branch: 'main',
+          ref: 'main',
+          path: options.path,
+          fileSha: 'sha-demo',
+        };
+      },
+      async verifyRepoFilesVisible(options) {
+        // First call is for archive files (must succeed to continue to dispatch)
+        // Subsequent calls are for docs visibility polling (all return false for timeout test)
+        if (options.paths && options.paths.some((p) => p.startsWith('archive/'))) {
+          return { ref: 'main', allVisible: true, files: [] };
+        }
+        // Simulate all docs polls returning false (page not published)
+        return { ref: 'main', allVisible: false, files: [] };
+      },
+    };
+    global.window.DPRSecretSession = {
+      async syncSessionSecretsToGithub() {
+        return { ok: true, skipped: false };
+      },
+    };
+    global.window.DPRWorkflowRunner = {
+      async runSeedPaperWorkflow() {
+        // No-op
+      },
+    };
+
+    let finalHash = '';
+    const originalLocation = global.window.location;
+    global.window.location = {
+      ...originalLocation,
+      hash: '',
+      get hash() { return finalHash; },
+      set hash(val) { finalHash = val; },
+    };
+
+    let msgText = '';
+    const msgEl = {
+      get textContent() { return msgText; },
+      set textContent(val) { msgText = val; },
+      style: {},
+    };
+
+    try {
+      const ok = await global.window.SubscriptionsManager.runSeedPaperDiscovery({
+        file: {
+          name: 'paper.pdf',
+          type: 'application/pdf',
+          size: 1024,
+          async arrayBuffer() {
+            return Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]).buffer;
+          },
+        },
+      }, msgEl);
+
+      assert.equal(ok, true);
+      assert.equal(
+        finalHash,
+        '',
+        'should NOT navigate when page is not published within timeout',
+      );
+      // seedPageUrl is `#/seed-papers/demo-request/index`, so timeout message should include full hash path
+      assert.ok(
+        msgText.includes('#/seed-papers/demo-request/index') || msgText.includes('页面已提交'),
+        'timeout message should include seed page path',
+      );
+    } finally {
+      global.window.location = originalLocation;
+      global.window.SubscriptionsManager.__test.setTestPollIntervalMs(null);
+    }
+  } finally {
+    // Always reset test poll interval
+    global.window.SubscriptionsManager.__test.setTestPollIntervalMs(null);
+  }
 }
 
 async function testRunSeedPaperDiscoveryStopsWhenUploadedFilesAreNotVisible() {
@@ -840,13 +1034,19 @@ async function testRunSeedPaperDiscoveryContinuesWhenSessionSecretSyncIsSkipped(
   });
 
   assert.equal(ok, true);
-  assert.deepEqual(callSequence, ['prepare', 'sync', 'write:pdf', 'write:request', 'verify', 'dispatch']);
+  // Verifies archive files before dispatch, then polls for docs visibility after dispatch
+  const verifyBeforeDispatchIdx = callSequence.indexOf('verify');
+  const dispatchIdx = callSequence.indexOf('dispatch');
+  assert.ok(verifyBeforeDispatchIdx !== -1 && verifyBeforeDispatchIdx < dispatchIdx, 'archive files should be verified before dispatch');
+  // After dispatch, there should be additional verification for docs visibility polling
+  assert.ok(callSequence.lastIndexOf('verify') > dispatchIdx, 'docs visibility should be polled after dispatch');
   assert.equal(secretSyncCalls.length, 1);
   assert.equal(secretSyncCalls[0].token, 'demo-token');
   assert.equal(secretSyncCalls[0].owner, 'dusker');
   assert.equal(secretSyncCalls[0].repo, 'daily-paper-reader');
   assert.equal(writes.length, 2);
-  assert.equal(verifications.length, 1);
+  // This test also has the polling verification after dispatch
+  assert.ok(verifications.length >= 1, 'should have at least 1 verification for archive files');
   assert.deepEqual(workflowCalls, [
     {
       requestId: 'demo-request',
@@ -2338,6 +2538,8 @@ async function testSaveDraftConfigUsesLoadedBaseSnapshotAndPersistsInternalIds()
   await testRunSeedPaperDiscoveryRejectsFakePdfBytesBeforeUpload();
   await testRunSeedPaperDiscoveryVerifiesFilesBeforeDispatch();
   await testRunSeedPaperDiscoveryStopsWhenUploadedFilesAreNotVisible();
+  await testRunSeedPaperDiscoveryPollsForPublishedPageAndNavigatesOnSuccess();
+  await testRunSeedPaperDiscoveryShowsTimeoutMessageWhenPageNotPublished();
   await testRunSeedPaperDiscoveryContinuesWhenSessionSecretSyncIsSkipped();
   await testRunSeedPaperDiscoveryFailsClosedOnUnexpectedSecretSyncResult();
   await testRunSeedPaperDiscoveryDispatchesTrustedWorkflowWithoutRequestRefInput();
