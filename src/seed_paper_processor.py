@@ -407,7 +407,7 @@ def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, 
     related_lines = []
     for page in related_pages:
         score_str = f" [{page.get('score', '-')}]" if page.get('score') else ""
-        evidence_str = f" - {page.get('evidence', '')}" if page.get('evidence') else ""
+        evidence_str = f" - {_escape_markdown_text(page.get('evidence', ''))}" if page.get('evidence') else ""
         related_lines.append(
             f"- [{_escape_markdown_text(page['title'])}]({page['path']}){score_str}{evidence_str}"
         )

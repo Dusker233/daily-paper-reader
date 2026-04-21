@@ -1090,6 +1090,35 @@ def _entry_score_or_fallback(entry: Dict[str, Any]) -> str:
     return _entry_score_text(tags)
 
 
+def _read_md_frontmatter_as_entry(
+    paper: dict,
+    docs_dir: str,
+    date_str: str,
+) -> dict:
+    """Read authoritative fields (title_zh, score, breakdown, evidence) from markdown front matter."""
+    title = (paper.get("title") or "").strip()
+    arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
+    md_path, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
+    meta: Dict[str, Any] = {}
+    if md_path and os.path.exists(md_path):
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                meta = _parse_front_matter(f.read())
+        except Exception:
+            pass
+    return {
+        "paper_id": pid,
+        "title": title,
+        "title_zh": meta.get("title_zh") or str(paper.get("title_zh") or "").strip() or "",
+        "score": meta.get("score"),
+        "relevance_score": meta.get("relevance_score"),
+        "quality_score": meta.get("quality_score"),
+        "reliability_score": meta.get("reliability_score"),
+        "practicality_score": meta.get("practicality_score"),
+        "evidence": meta.get("evidence") or get_paper_sidebar_evidence(paper),
+    }
+
+
 def build_daily_brief_summary(
     date_label: str,
     deep_entries: List[Dict[str, Any]],
@@ -2872,28 +2901,20 @@ def main() -> None:
                     continue
                 paper_evidence_by_id[str((pid or "").strip())] = get_paper_sidebar_evidence(paper)
                 section_tags = extract_sidebar_tags(paper)
-                # Re-read from markdown to get authoritative title_zh / score / breakdown
-                md_path, _, _ = prepare_paper_paths(docs_dir, date_str, title, str(paper.get("id") or paper.get("paper_id") or "").strip())
-                meta = {}
-                if md_path and os.path.exists(md_path):
-                    try:
-                        with open(md_path, "r", encoding="utf-8") as f:
-                            meta = _parse_front_matter(f.read())
-                    except Exception:
-                        pass
+                md_entry = _read_md_frontmatter_as_entry(paper, docs_dir, date_str)
                 results.append(
                     (
                         index,
                         {
                             "paper_id": pid,
                             "title": title,
-                            "title_zh": meta.get("title_zh") or title_zh or "",
-                            "score": meta.get("score"),
-                            "relevance_score": meta.get("relevance_score"),
-                            "quality_score": meta.get("quality_score"),
-                            "reliability_score": meta.get("reliability_score"),
-                            "practicality_score": meta.get("practicality_score"),
-                            "evidence": meta.get("evidence") or get_paper_sidebar_evidence(paper),
+                            "title_zh": md_entry.get("title_zh") or title_zh or "",
+                            "score": md_entry.get("score"),
+                            "relevance_score": md_entry.get("relevance_score"),
+                            "quality_score": md_entry.get("quality_score"),
+                            "reliability_score": md_entry.get("reliability_score"),
+                            "practicality_score": md_entry.get("practicality_score"),
+                            "evidence": md_entry.get("evidence") or get_paper_sidebar_evidence(paper),
                             "tags": section_tags,
                             "summary_cn": _resolve_entry_summary(paper),
                         },
@@ -2906,27 +2927,10 @@ def main() -> None:
     sidebar_evidence_by_id: Dict[str, str] = {}
 
     def _entry_from_md(paper: dict, docs_dir: str, date_str: str) -> dict:
-        """Read authoritative fields from markdown front matter."""
-        title = (paper.get("title") or "").strip()
-        arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
-        md_path, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
-        meta = {}
-        if md_path and os.path.exists(md_path):
-            try:
-                with open(md_path, "r", encoding="utf-8") as f:
-                    meta = _parse_front_matter(f.read())
-            except Exception:
-                pass
+        """Read authoritative fields from markdown front matter (plus computed fields)."""
+        md_entry = _read_md_frontmatter_as_entry(paper, docs_dir, date_str)
         return {
-            "paper_id": pid,
-            "title": title,
-            "title_zh": meta.get("title_zh") or str(paper.get("title_zh") or "").strip() or "",
-            "score": meta.get("score"),
-            "relevance_score": meta.get("relevance_score"),
-            "quality_score": meta.get("quality_score"),
-            "reliability_score": meta.get("reliability_score"),
-            "practicality_score": meta.get("practicality_score"),
-            "evidence": meta.get("evidence") or get_paper_sidebar_evidence(paper),
+            **md_entry,
             "tags": extract_sidebar_tags(paper),
             "summary_cn": _resolve_entry_summary(paper),
         }
