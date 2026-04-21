@@ -676,7 +676,12 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
         if LLM_CLIENT_ERROR:
             message = f"{message} 原因：{LLM_CLIENT_ERROR}"
         log(message)
-        return None
+        return (
+            "**精读总结暂不可用**\n\n"
+            "当前未配置 workflow LLM，无法生成精读总结。\n"
+            "请联系管理员配置 WORKFLOW_LLM 相关环境变量。\n"
+            "（完）"
+        )
     if not os.path.exists(md_file_path):
         return None
 
@@ -691,44 +696,15 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
         "对给定论文做结构化、深入、客观的总结。"
     )
     user_prompt = (
-        "请基于下面提供的论文内容，生成一段偏精读的中文总结。参考本地 paper-reading 技能的粒度，要求深入、结构完整、有证据支撑。\n"
-        "请严格按以下结构输出 Markdown：\n"
-        "## 1. 一页速读\n"
-        "### 1.1 这篇论文在问什么？\n"
-        "一句话概括论文的核心研究问题。\n"
-        "### 1.2 作者的核心结论是什么？\n"
-        "- 列出 2-3 条最重要的结论，每条要注明证据来源（哪个章节/图表）。\n"
-        "### 1.3 这篇论文最值得记住的点\n"
-        "| 常见问题 | 论文给出的回答 |\n"
-        "|---|---|\n"
-        "| ... | ... |\n\n"
-        "## 2. 问题背景：为什么这篇论文值得读？\n"
-        "### 2.1 具体研究背景\n"
-        "- 论文试图解决什么具体问题？\n"
-        "- 为什么这个问题重要？引用引言中的具体理由。\n"
-        "### 2.2 论文真正想挑战的默认设定\n"
-        "- 指出论文挑战的主流观点或默认假设。\n"
-        "## 3. 论文的核心问题与研究设计\n"
-        "### 3.1 核心问题\n"
-        "### 3.2 研究框架或方法论\n"
-        "## 4. 方法拆解\n"
-        "### 4.1 技术细节\n"
-        "- 详细拆解每个模块的输入、输出、关键机制。\n"
-        "- 如有算法流程或公式，注明具体形式。\n"
-        "### 4.2 与现有方法的区别\n"
-        "## 5. 实验设计与结果\n"
-        "### 5.1 数据集与实验设置\n"
-        "### 5.2 主要结果\n"
-        "- 列出具体数字结果，引用对应表格/图表。\n"
-        "### 5.3 消融实验与控制变量\n"
-        "## 6. 优点\n"
-        "## 7. 不足与局限\n"
-        "### 7.1 实验覆盖的局限\n"
-        "### 7.2 偏差风险与应用限制\n"
-        "## 8. 复现与延伸启发\n"
-        "- 如果读者要复现/继续做，最该关注哪些实现细节、实验抓手或后续问题。\n\n"
+        "请基于下面提供的论文内容，生成一段偏精读的中文总结。要求深入、有分析、有证据支撑，使用连贯的叙述风格而非提纲。\n\n"
+        "请用流畅的段落叙述形式撰写，不要使用项目符号列表或表格。具体撰写要点如下：\n\n"
+        "第一段（2-3句）：论文研究什么问题？研究背景是什么？为什么这个问题值得解决？引用引言中的具体动机。\n\n"
+        "第二段（3-5句）：论文提出什么方法？核心思想是什么？与其他方法相比有何创新或区别？如有技术细节或公式，描述其形式与作用。\n\n"
+        "第三段（3-5句）：实验如何验证？主要结果是什么？引用具体数字和对应图表。消融实验说明了什么？\n\n"
+        "第四段（2-3句）：论文的主要优点和局限性是什么？存在哪些偏差风险或应用限制？\n\n"
+        "第五段（1-2句）：如果读者要复现或继续研究，最应该关注哪些实现细节或后续问题？\n\n"
         "要求：\n"
-        "- 每个二级标题下用 2-5 条项目符号。\n"
+        "- 全程使用连贯段落叙述，不要用 bullet points、表格或分级标题。\n"
         "- 尽量引用正文里的证据，注明具体章节、表格编号或图表编号。\n"
         "- 如果某项信息文中没有明确给出，要直接说明\"文中未明确说明\"。\n"
         "- 最后单独输出一行\"（完）\"作为结束标记。"
@@ -1087,7 +1063,10 @@ def _resolve_entry_summary(paper: Dict[str, Any]) -> str:
 
 def _format_entry_summary_line(summary: str) -> str:
     text = str(summary or "").strip()
-    return f"   摘要：{text}" if text else ""
+    if not text:
+        return ""
+    escaped = _escape_markdown_text(text)
+    return f"   摘要：{escaped}"
 
 
 def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
@@ -1103,6 +1082,53 @@ def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
     return ""
 
 
+def _escape_markdown_text(value: Any) -> str:
+    """Escape markdown special characters to prevent injection in raw markdown."""
+    import re
+    text = str(value or "")
+    return re.sub(r"([\\`*_{}\[\]()#+!<>|-])", r"\\\1", text)
+
+
+def _entry_score_or_fallback(entry: Dict[str, Any]) -> str:
+    score_val = entry.get("score")
+    if score_val is not None:
+        try:
+            return f"{float(score_val):.1f}/10"
+        except Exception:
+            return str(score_val)
+    tags = entry.get("tags") or []
+    return _entry_score_text(tags)
+
+
+def _read_md_frontmatter_as_entry(
+    paper: dict,
+    docs_dir: str,
+    date_str: str,
+) -> dict:
+    """Read authoritative fields (title_zh, score, breakdown, evidence) from markdown front matter."""
+    title = (paper.get("title") or "").strip()
+    arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
+    md_path, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
+    meta: Dict[str, Any] = {}
+    if md_path and os.path.exists(md_path):
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                meta = _parse_front_matter(f.read())
+        except Exception:
+            pass
+    return {
+        "paper_id": pid,
+        "title": title,
+        "title_zh": meta.get("title_zh") or str(paper.get("title_zh") or "").strip() or "",
+        "score": meta.get("score"),
+        "relevance_score": meta.get("relevance_score"),
+        "quality_score": meta.get("quality_score"),
+        "reliability_score": meta.get("reliability_score"),
+        "practicality_score": meta.get("practicality_score"),
+        "evidence": meta.get("evidence") or get_paper_sidebar_evidence(paper),
+    }
+
+
 def build_daily_brief_summary(
     date_label: str,
     deep_entries: List[Dict[str, Any]],
@@ -1116,9 +1142,8 @@ def build_daily_brief_summary(
     def _format_preview_item(entry: Dict[str, Any]) -> str:
         paper_id = str(entry.get("paper_id") or "").strip()
         title = str(entry.get("title") or "").strip()
-        tags = entry.get("tags") or []
         name = (title or paper_id)
-        score = _entry_score_text(tags)
+        score = _entry_score_or_fallback(entry)
         return f"《{name}》（{score}）" if score else f"《{name}》"
 
     deep_preview = [_format_preview_item(entry) for entry in deep_entries[:2] if (entry.get("title") or entry.get("paper_id"))]
@@ -1226,7 +1251,7 @@ def build_latest_report_section(
     if summary:
         lines.append("")
         lines.append("### 今日简报（AI）")
-        lines.append(summary)
+        lines.append(_escape_markdown_text(summary))
     if RANGE_DATE_RE.match(date_str):
         report_href = build_docsify_id_href(f"{date_str}/README")
     else:
@@ -1239,7 +1264,7 @@ def build_latest_report_section(
     if deep_entries:
         for idx, entry in enumerate(deep_entries, start=1):
             paper_id = str(entry.get("paper_id") or "").strip()
-            safe_title = str(entry.get("title") or "").strip() or paper_id
+            safe_title = _escape_markdown_text(str(entry.get("title") or "").strip() or paper_id)
             tags = entry.get("tags") or []
             evidence = (paper_evidence_by_id.get(str(paper_id).strip(), "") or "").strip()
             lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)})  ")
@@ -1248,7 +1273,7 @@ def build_latest_report_section(
             if summary_line:
                 lines.append(summary_line)
             if evidence:
-                lines.append(f"   evidence：{evidence}")
+                lines.append(f"   evidence：{_escape_markdown_text(evidence)}")
     else:
         lines.append("- 本次无精读推荐。")
     lines.append("")
@@ -1256,7 +1281,7 @@ def build_latest_report_section(
     if quick_entries:
         for idx, entry in enumerate(quick_entries, start=1):
             paper_id = str(entry.get("paper_id") or "").strip()
-            safe_title = str(entry.get("title") or "").strip() or paper_id
+            safe_title = _escape_markdown_text(str(entry.get("title") or "").strip() or paper_id)
             tags = entry.get("tags") or []
             evidence = (paper_evidence_by_id.get(str(paper_id).strip(), "") or "").strip()
             lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)})  ")
@@ -1265,7 +1290,7 @@ def build_latest_report_section(
             if summary_line:
                 lines.append(summary_line)
             if evidence:
-                lines.append(f"   evidence：{evidence}")
+                lines.append(f"   evidence：{_escape_markdown_text(evidence)}")
     else:
         lines.append("- 本次无速读推荐。")
     lines.append("")
@@ -1886,6 +1911,11 @@ def update_sidebar(
         route_href: str,
         evidence: str = "",
         title_zh: str = "",
+        score: Any = None,
+        relevance_score: Any = None,
+        quality_score: Any = None,
+        reliability_score: Any = None,
+        practicality_score: Any = None,
     ) -> str:
         score_text = "-"
         clean_tags: List[Dict[str, str]] = []
@@ -1902,9 +1932,16 @@ def update_sidebar(
                 continue
             clean_tags.append({"kind": safe_kind, "label": safe_label})
 
+        # Prefer score from markdown over tag-extracted score
+        if score is not None:
+            try:
+                score_text = f"{float(score):.1f}"
+            except Exception:
+                score_text = str(score) if score else "-"
+
         arxiv_id = str(paper_id or "").strip().split("/")[-1]
         paper_link = f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else route_href
-        payload = {
+        payload: Dict[str, Any] = {
             "title": (title or "").strip() or paper_id,
             "link": paper_link,
             "score": score_text,
@@ -1916,6 +1953,15 @@ def update_sidebar(
         safe_evidence = str(evidence or "").strip()
         if safe_evidence:
             payload["evidence"] = safe_evidence
+        # Include breakdown scores from markdown
+        for k, v in [
+            ("relevance_score", relevance_score),
+            ("quality_score", quality_score),
+            ("reliability_score", reliability_score),
+            ("practicality_score", practicality_score),
+        ]:
+            if v is not None:
+                payload[k] = v
         return html.escape(json.dumps(payload, ensure_ascii=False), quote=True)
 
     effective_label = (date_label or "").strip() or format_date_str(date_str)
@@ -1973,7 +2019,16 @@ def update_sidebar(
             href = f"#/{paper_id}"
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
             title_zh = str(entry.get("title_zh") or "").strip()
-            payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence, title_zh)
+            payload_json = build_sidebar_item_payload(
+                paper_id, title, tags, href,
+                evidence=evidence,
+                title_zh=title_zh,
+                score=entry.get("score"),
+                relevance_score=entry.get("relevance_score"),
+                quality_score=entry.get("quality_score"),
+                reliability_score=entry.get("reliability_score"),
+                practicality_score=entry.get("practicality_score"),
+            )
             block.append(
                 "      * "
                 f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{href}" data-sidebar-item="{payload_json}">{safe_title}</a>\n'
@@ -1988,7 +2043,16 @@ def update_sidebar(
             href = f"#/{paper_id}"
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
             title_zh = str(entry.get("title_zh") or "").strip()
-            payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence, title_zh)
+            payload_json = build_sidebar_item_payload(
+                paper_id, title, tags, href,
+                evidence=evidence,
+                title_zh=title_zh,
+                score=entry.get("score"),
+                relevance_score=entry.get("relevance_score"),
+                quality_score=entry.get("quality_score"),
+                reliability_score=entry.get("reliability_score"),
+                practicality_score=entry.get("practicality_score"),
+            )
             block.append(
                 "      * "
                 f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{href}" data-sidebar-item="{payload_json}">{safe_title}</a>\n'
@@ -2041,7 +2105,7 @@ def build_day_report_markdown(
     if summary:
         lines.append("")
         lines.append("## 今日简报（AI）")
-        lines.append(summary)
+        lines.append(_escape_markdown_text(summary))
     lines.append("")
 
     if not recommend_exists:
@@ -2058,9 +2122,9 @@ def build_day_report_markdown(
             safe_title = str(entry.get("title") or "").strip() or paper_id
             title_zh = str(entry.get("title_zh") or "").strip()
             tags = entry.get("tags") or []
-            score = _entry_score_text(tags)
+            score = _entry_score_or_fallback(entry)
             suffix = f"（{score}）" if score else ""
-            display_title = f"{safe_title} / {title_zh}" if title_zh else safe_title
+            display_title = _escape_markdown_text(title_zh if title_zh else safe_title)
             lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
             summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
             if summary_line:
@@ -2076,9 +2140,9 @@ def build_day_report_markdown(
             safe_title = str(entry.get("title") or "").strip() or paper_id
             title_zh = str(entry.get("title_zh") or "").strip()
             tags = entry.get("tags") or []
-            score = _entry_score_text(tags)
+            score = _entry_score_or_fallback(entry)
             suffix = f"（{score}）" if score else ""
-            display_title = f"{safe_title} / {title_zh}" if title_zh else safe_title
+            display_title = _escape_markdown_text(title_zh if title_zh else safe_title)
             lines.append(f"{idx}. [{display_title}]({build_docsify_id_href(paper_id)}){suffix}")
             summary_line = _format_entry_summary_line(str(entry.get("summary_cn") or "").strip())
             if summary_line:
@@ -2847,13 +2911,20 @@ def main() -> None:
                     continue
                 paper_evidence_by_id[str((pid or "").strip())] = get_paper_sidebar_evidence(paper)
                 section_tags = extract_sidebar_tags(paper)
+                md_entry = _read_md_frontmatter_as_entry(paper, docs_dir, date_str)
                 results.append(
                     (
                         index,
                         {
                             "paper_id": pid,
                             "title": title,
-                            "title_zh": title_zh,
+                            "title_zh": md_entry.get("title_zh") or title_zh or "",
+                            "score": md_entry.get("score"),
+                            "relevance_score": md_entry.get("relevance_score"),
+                            "quality_score": md_entry.get("quality_score"),
+                            "reliability_score": md_entry.get("reliability_score"),
+                            "practicality_score": md_entry.get("practicality_score"),
+                            "evidence": md_entry.get("evidence") or get_paper_sidebar_evidence(paper),
                             "tags": section_tags,
                             "summary_cn": _resolve_entry_summary(paper),
                         },
@@ -2865,37 +2936,26 @@ def main() -> None:
 
     sidebar_evidence_by_id: Dict[str, str] = {}
 
+    def _entry_from_md(paper: dict, docs_dir: str, date_str: str) -> dict:
+        """Read authoritative fields from markdown front matter (plus computed fields)."""
+        md_entry = _read_md_frontmatter_as_entry(paper, docs_dir, date_str)
+        return {
+            **md_entry,
+            "tags": extract_sidebar_tags(paper),
+            "summary_cn": _resolve_entry_summary(paper),
+        }
+
     if args.sidebar_only:
         log_substep("6.2", "跳过生成文章（仅更新侧边栏）", "SKIP")
         for paper in deep_list:
-            title = (paper.get("title") or "").strip()
-            arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
-            _, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
-            sidebar_evidence_by_id[str(pid).strip()] = get_paper_sidebar_evidence(paper)
-            deep_entries.append(
-                {
-                    "paper_id": pid,
-                    "title": title,
-                    "title_zh": str(paper.get("title_zh") or "").strip(),
-                    "tags": extract_sidebar_tags(paper),
-                    "summary_cn": _resolve_entry_summary(paper),
-                }
-            )
+            entry = _entry_from_md(paper, docs_dir, date_str)
+            sidebar_evidence_by_id[str(entry["paper_id"]).strip()] = entry["evidence"]
+            deep_entries.append(entry)
 
         for paper in quick_list:
-            title = (paper.get("title") or "").strip()
-            arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
-            _, _, pid = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
-            sidebar_evidence_by_id[str(pid).strip()] = get_paper_sidebar_evidence(paper)
-            quick_entries.append(
-                {
-                    "paper_id": pid,
-                    "title": title,
-                    "title_zh": str(paper.get("title_zh") or "").strip(),
-                    "tags": extract_sidebar_tags(paper),
-                    "summary_cn": _resolve_entry_summary(paper),
-                }
-            )
+            entry = _entry_from_md(paper, docs_dir, date_str)
+            sidebar_evidence_by_id[str(entry["paper_id"]).strip()] = entry["evidence"]
+            quick_entries.append(entry)
         log_substep("6.3", "跳过生成文章（仅更新侧边栏）", "SKIP")
     else:
         log_substep("6.2", "生成精读区文章", "START")

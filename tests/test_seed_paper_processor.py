@@ -2183,7 +2183,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             ]
         )
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             request,
             seed_text="seed paper body text",
             retrieve_related=lambda req, seed_text: recall_payload,
@@ -2191,6 +2191,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             seed_identity={"seed-paper", "Seed Paper"},
         )
 
+        self.assertEqual(rerank_status, "full_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-a", "paper-b", "paper-c"])
         self.assertEqual([item["llm_score"] for item in ranked], [0.93, 0.87, 0.41])
         self.assertEqual(len(reranker.calls), 1)
@@ -2333,7 +2334,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
     def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_returns_no_scores(self):
         reranker = _StubReranker([])
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
@@ -2374,6 +2375,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             seed_identity={"seed-paper"},
         )
 
+        self.assertEqual(rerank_status, "degraded_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-1", "paper-2"])
         self.assertEqual([item["llm_score"] for item in ranked], [None, None])
         self.assertEqual(len(reranker.calls), 1)
@@ -2381,7 +2383,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
     def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_is_disabled(self):
         reranker = _FailingReranker(ValueError("rerank 未启用"))
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
@@ -2422,6 +2424,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             seed_identity={"seed-paper"},
         )
 
+        self.assertEqual(rerank_status, "degraded_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-2", "paper-1"])
         self.assertEqual([item["llm_score"] for item in ranked], [None, None])
         self.assertEqual(len(reranker.calls), 1)
@@ -2429,7 +2432,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
     def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_is_disabled_via_env_flag_reason(self):
         reranker = _FailingReranker(ValueError("RERANK_ENABLED=false"))
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
@@ -2479,7 +2482,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
         stderr_buffer = io.StringIO()
 
         with contextlib.redirect_stderr(stderr_buffer):
-            ranked = self.mod.rank_related_papers(
+            ranked, rerank_status = self.mod.rank_related_papers(
                 {
                     "request_id": "demo-request",
                     "file_name": "Seed Paper.pdf",
@@ -2520,6 +2523,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 seed_identity={"seed-paper"},
             )
 
+        self.assertEqual(rerank_status, "degraded_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-2", "paper-1"])
         self.assertIn("seed rerank unavailable, falling back to retrieval order: rerank disabled", stderr_buffer.getvalue())
 
@@ -2571,7 +2575,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
     def test_rank_related_papers_falls_back_to_retrieval_order_when_rerank_request_times_out(self):
         reranker = _FailingReranker(requests.exceptions.Timeout("rerank request timed out"))
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
@@ -2620,6 +2624,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             seed_identity={"seed-paper"},
         )
 
+        self.assertEqual(rerank_status, "degraded_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-3", "paper-1", "paper-2"])
         self.assertEqual([item["llm_score"] for item in ranked], [None, None, None])
         self.assertEqual(len(reranker.calls), 1)
@@ -2634,7 +2639,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             )
         )
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             {
                 "request_id": "demo-request",
                 "file_name": "Seed Paper.pdf",
@@ -2675,6 +2680,7 @@ class SeedPaperProcessorTest(unittest.TestCase):
             seed_identity={"seed-paper"},
         )
 
+        self.assertEqual(rerank_status, "degraded_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-2", "paper-1"])
         self.assertEqual([item["llm_score"] for item in ranked], [None, None])
         self.assertEqual(len(reranker.calls), 1)
@@ -2962,13 +2968,14 @@ class SeedPaperProcessorTest(unittest.TestCase):
             ]
         )
 
-        ranked = self.mod.rank_related_papers(
+        ranked, rerank_status = self.mod.rank_related_papers(
             request,
             seed_text="seed paper body text",
             retrieve_related=lambda req, seed_text: recall_payload,
             reranker=reranker,
         )
 
+        self.assertEqual(rerank_status, "full_success")
         self.assertEqual([item["id"] for item in ranked], ["paper-b", "paper-c"])
         self.assertEqual(
             reranker.calls[0]["query"],
