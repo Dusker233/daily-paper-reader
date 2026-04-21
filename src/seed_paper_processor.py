@@ -1113,7 +1113,8 @@ def rank_related_papers(
     retrieve_related: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     reranker: Any | None = None,
     seed_identity: set[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str]:
+    """Returns (ranked_papers, rerank_status) where rerank_status is 'full_success' or 'degraded_success'."""
     recall = (retrieve_related or retrieve_related_papers)(request, seed_text)
     papers_by_id = {str(paper_id): dict(paper or {}) for paper_id, paper in (recall.get("papers") or {}).items()}
     queries = list(recall.get("queries") or [])
@@ -1148,7 +1149,7 @@ def rank_related_papers(
         if not _is_rerank_fallback_error(exc):
             raise SeedPaperProcessingError(_error_message(exc) or "rerank failed") from exc
         _warn_rerank_fallback(exc)
-        return _build_retrieval_order_fallback(papers_by_id, filtered_ids)
+        return (_build_retrieval_order_fallback(papers_by_id, filtered_ids), "degraded_success")
 
     ordered: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -1169,13 +1170,13 @@ def rank_related_papers(
             )
         )
     if not ordered:
-        return _build_retrieval_order_fallback(papers_by_id, filtered_ids)
+        return (_build_retrieval_order_fallback(papers_by_id, filtered_ids), "degraded_success")
     for paper_id in filtered_ids:
         if paper_id in seen_ids:
             continue
         paper = dict(papers_by_id.get(paper_id) or {})
         ordered.append(_build_ranked_related_paper(paper_id, paper, None))
-    return ordered
+    return (ordered, "full_success")
 
 
 def _load_ranked_related_fixture(fixture_path: str) -> list[dict[str, Any]]:
@@ -1232,12 +1233,16 @@ def process_request(
 
     docs_module = generate_docs_module or _load_generate_docs_module()
     seed_text = _extract_seed_text(request, docs_module)
-    resolved_ranked_related = list(ranked_related) if ranked_related is not None else rank_related_papers(
-        request,
-        seed_text,
-        retrieve_related=retrieve_related,
-        reranker=reranker,
-    )
+    if ranked_related is not None:
+        resolved_ranked_related = list(ranked_related)
+        rerank_status = "full_success"
+    else:
+        resolved_ranked_related, rerank_status = rank_related_papers(
+            request,
+            seed_text,
+            retrieve_related=retrieve_related,
+            reranker=reranker,
+        )
     selection = select_related_outputs(resolved_ranked_related, mode=request["mode"], related_count=request["related_count"])
     if not _iter_unique_related(selection):
         raise SeedPaperProcessingError("selection produced no related outputs")
@@ -1256,6 +1261,7 @@ def process_request(
     return {
         "request": request,
         "seed_text": seed_text,
+        "rerank_status": rerank_status,
         **written,
     }
 
@@ -1296,6 +1302,7 @@ def main() -> None:
                 "mode": result["request"]["mode"],
                 "workspace_dir": result["workspace_dir"],
                 "index_path": result["index_path"],
+                "rerank_status": result["rerank_status"],
             },
             ensure_ascii=False,
             indent=2,
