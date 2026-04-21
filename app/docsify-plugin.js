@@ -3594,6 +3594,9 @@ window.$docsify = {
 
       const ALLOWED_REMOTE_URL_RE = /^https:\/\//i;
       const ALLOWED_RELATIVE_DOCS_ASSET_RE = /^(?:docs\/)?assets\/[a-z0-9/_\-.]+$/i;
+      // Allow archive/seed-papers/<id>/<file>.pdf as a safe PDF source path.
+      // Pattern must NOT match javascript:, data:, or traversal (..) paths.
+      const ALLOWED_SEED_PAPER_PDF_RE = /^archive\/seed-papers\/[a-z0-9][a-z0-9-]*\/[a-z0-9_\-.()]+\.pdf$/i;
 
       const normalizeSafeUrl = (value, { allowRelativeDocsAsset = false, allowRemote = true } = {}) => {
         const url = String(value || '').trim();
@@ -3752,7 +3755,8 @@ window.$docsify = {
           lines.push(`<p><strong>Source</strong>: ${escapeHtml(meta.source)}</p>`);
         }
         lines.push(`<p><strong>Date</strong>: ${escapeHtml(meta.date || 'Unknown')}</p>`);
-        const safePdfUrl = normalizeSafeUrl(meta.pdf);
+        const safePdfUrl = normalizeSafeUrl(meta.pdf) ||
+          (ALLOWED_SEED_PAPER_PDF_RE.test(meta.pdf) ? String(meta.pdf || '').trim() : '');
         if (safePdfUrl) {
           lines.push(
             `<p class="paper-meta-link-row"><span class="paper-meta-link-label"><strong>PDF</strong>:</span> <a class="paper-meta-link" href="${escapeHtml(safePdfUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(safePdfUrl)}</a></p>`

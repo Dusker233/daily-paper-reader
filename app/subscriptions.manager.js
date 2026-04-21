@@ -7,6 +7,8 @@
 window.SubscriptionsManager = (function () {
   const MAX_KEYWORDS_PER_PROFILE = 6;
   const MAX_INTENT_QUERIES_PER_PROFILE = 4;
+  // Test override for poll interval - set to small value (e.g. 50) to speed up tests
+  let __testPollIntervalMs__ = null;
   let overlay = null;
   let panel = null;
   let saveBtn = null;
@@ -795,12 +797,59 @@ window.SubscriptionsManager = (function () {
         requestPath: pathInfo.requestPath,
         seedMode: payload.mode,
       });
-      const finalTip = `已提交种子论文请求（${payload.related_count} 篇，模式：${payload.mode}）。`;
+      // Poll for published seed page visibility, then auto-navigate
       if (msgEl) {
-        msgEl.textContent = finalTip;
-        msgEl.style.color = '#080';
+        msgEl.textContent = '正在等待页面生成...';
+        msgEl.style.color = '#666';
       }
-      setQuickRunMessage(finalTip, '#080');
+      setQuickRunMessage('正在等待页面生成...', '#666');
+      const pollRequestId = pathInfo.requestId;
+      const owner = (requestWrite && requestWrite.owner) ? requestWrite.owner : undefined;
+      const repo = (requestWrite && requestWrite.repo) ? requestWrite.repo : undefined;
+      const branch = (requestWrite && (requestWrite.ref || requestWrite.branch))
+        ? (requestWrite.ref || requestWrite.branch)
+        : undefined;
+      const indexPath = `docs/seed-papers/${pollRequestId}/index.md`;
+      const seedPaperPath = `docs/seed-papers/${pollRequestId}/seed-paper.md`;
+      const maxPolls = 12;
+      const pollIntervalMs = __testPollIntervalMs__ || 10000;
+      let pageVisible = false;
+      for (let i = 0; i < maxPolls; i++) {
+        try {
+          const visibility = await window.SubscriptionsGithubToken.verifyRepoFilesVisible({
+            owner,
+            repo,
+            paths: [indexPath, seedPaperPath],
+            expectedFiles: [],
+            ref: branch,
+          });
+          if (visibility && visibility.allVisible === true) {
+            pageVisible = true;
+            break;
+          }
+        } catch (_e) {
+          // Continue polling on error
+        }
+        if (i < maxPolls - 1) {
+          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        }
+      }
+      const seedPageUrl = `#/seed-papers/${pollRequestId}/index`;
+      if (pageVisible) {
+        if (msgEl) {
+          msgEl.textContent = '页面已生成，正在跳转...';
+          msgEl.style.color = '#080';
+        }
+        setQuickRunMessage('页面已生成，正在跳转...', '#080');
+        window.location.hash = seedPageUrl;
+      } else {
+        const timeoutMsg = `种子论文页面已提交，但生成需要一些时间。请稍后手动访问：${seedPageUrl}`;
+        if (msgEl) {
+          msgEl.textContent = timeoutMsg;
+          msgEl.style.color = '#f80';
+        }
+        setQuickRunMessage(timeoutMsg, '#f80');
+      }
       return true;
     } catch (error) {
       console.error(error);
@@ -1767,6 +1816,9 @@ window.SubscriptionsManager = (function () {
       },
       setQuickFetchSubmissionStateForTest: (value) => {
         isQuickFetchSubmitting = !!value;
+      },
+      setTestPollIntervalMs: (ms) => {
+        __testPollIntervalMs__ = ms;
       },
       saveDraftConfig: () => saveDraftConfig(),
       getLoadedBaseConfig: () => cloneDeep(loadedBaseConfig || {}),
