@@ -1263,7 +1263,7 @@ def build_latest_report_section(
             if summary_line:
                 lines.append(summary_line)
             if evidence:
-                lines.append(f"   evidence：{evidence}")
+                lines.append(f"   evidence：{_escape_markdown_text(evidence)}")
     else:
         lines.append("- 本次无精读推荐。")
     lines.append("")
@@ -1280,7 +1280,7 @@ def build_latest_report_section(
             if summary_line:
                 lines.append(summary_line)
             if evidence:
-                lines.append(f"   evidence：{evidence}")
+                lines.append(f"   evidence：{_escape_markdown_text(evidence)}")
     else:
         lines.append("- 本次无速读推荐。")
     lines.append("")
