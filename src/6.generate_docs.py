@@ -1079,6 +1079,17 @@ def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
     return ""
 
 
+def _entry_score_or_fallback(entry: Dict[str, Any]) -> str:
+    score_val = entry.get("score")
+    if score_val is not None:
+        try:
+            return f"{float(score_val):.1f}/10"
+        except Exception:
+            return str(score_val)
+    tags = entry.get("tags") or []
+    return _entry_score_text(tags)
+
+
 def build_daily_brief_summary(
     date_label: str,
     deep_entries: List[Dict[str, Any]],
@@ -1088,16 +1099,6 @@ def build_daily_brief_summary(
 ) -> str:
     if total_count == 0:
         return "> 今日无新推荐，系统未产出可展示论文。"
-
-    def _entry_score_or_fallback(entry: Dict[str, Any]) -> str:
-        score_val = entry.get("score")
-        if score_val is not None:
-            try:
-                return f"{float(score_val):.1f}/10"
-            except Exception:
-                return str(score_val)
-        tags = entry.get("tags") or []
-        return _entry_score_text(tags)
 
     def _format_preview_item(entry: Dict[str, Any]) -> str:
         paper_id = str(entry.get("paper_id") or "").strip()

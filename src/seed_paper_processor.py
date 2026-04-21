@@ -1114,7 +1114,7 @@ def rank_related_papers(
     reranker: Any | None = None,
     seed_identity: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
-    """Returns (ranked_papers, rerank_status) where rerank_status is 'full_success' or 'degraded_success'."""
+    """Returns (ranked_papers, rerank_status) where rerank_status is 'full_success', 'degraded_success', or 'skipped'."""
     recall = (retrieve_related or retrieve_related_papers)(request, seed_text)
     papers_by_id = {str(paper_id): dict(paper or {}) for paper_id, paper in (recall.get("papers") or {}).items()}
     queries = list(recall.get("queries") or [])
