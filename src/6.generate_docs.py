@@ -1063,7 +1063,10 @@ def _resolve_entry_summary(paper: Dict[str, Any]) -> str:
 
 def _format_entry_summary_line(summary: str) -> str:
     text = str(summary or "").strip()
-    return f"   摘要：{text}" if text else ""
+    if not text:
+        return ""
+    escaped = _escape_markdown_text(text)
+    return f"   摘要：{escaped}"
 
 
 def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
@@ -1077,6 +1080,13 @@ def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
             except Exception:
                 return v
     return ""
+
+
+def _escape_markdown_text(value: Any) -> str:
+    """Escape markdown special characters to prevent injection in raw markdown."""
+    import re
+    text = str(value or "")
+    return re.sub(r"([\\`*_{}\[\]()#+!<>|-])", r"\\\1", text)
 
 
 def _entry_score_or_fallback(entry: Dict[str, Any]) -> str:
@@ -1254,7 +1264,7 @@ def build_latest_report_section(
     if deep_entries:
         for idx, entry in enumerate(deep_entries, start=1):
             paper_id = str(entry.get("paper_id") or "").strip()
-            safe_title = str(entry.get("title") or "").strip() or paper_id
+            safe_title = _escape_markdown_text(str(entry.get("title") or "").strip() or paper_id)
             tags = entry.get("tags") or []
             evidence = (paper_evidence_by_id.get(str(paper_id).strip(), "") or "").strip()
             lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)})  ")
@@ -1271,7 +1281,7 @@ def build_latest_report_section(
     if quick_entries:
         for idx, entry in enumerate(quick_entries, start=1):
             paper_id = str(entry.get("paper_id") or "").strip()
-            safe_title = str(entry.get("title") or "").strip() or paper_id
+            safe_title = _escape_markdown_text(str(entry.get("title") or "").strip() or paper_id)
             tags = entry.get("tags") or []
             evidence = (paper_evidence_by_id.get(str(paper_id).strip(), "") or "").strip()
             lines.append(f"{idx}. [{safe_title}]({build_docsify_id_href(paper_id)})  ")
