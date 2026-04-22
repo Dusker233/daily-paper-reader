@@ -31,13 +31,21 @@ class _StubGenerateDocs:
 
     @staticmethod
     def build_markdown_content(paper, section, zh_title, zh_abstract, tags_list):
+        score = paper.get("llm_score")
+        score_line = f"score: {score}\n" if score is not None else ""
         return "\n".join(
             [
+                "---",
+                f"title: {paper.get('title') or ''}",
+                f"authors: Unknown",
+                "date: Unknown",
+                f"link: {paper.get('link') or ''}",
+                f"tags: [{', '.join(tags_list)}]",
+                score_line,
+                "---",
                 f"# {paper.get('title') or ''}",
                 "",
                 f"section: {section}",
-                f"tags: {', '.join(tags_list)}",
-                f"link: {paper.get('link') or ''}",
                 "",
                 paper.get("abstract") or "",
             ]
@@ -61,6 +69,21 @@ class _StubGenerateDocs:
     @staticmethod
     def build_glance_fallback(paper):
         return f"fallback: {paper.get('title') or ''}"
+
+    @staticmethod
+    def parse_glance_overview_fields(glance):
+        """Parse glance overview text into structured fields."""
+        fields = {}
+        if not glance:
+            return fields
+        for line in glance.splitlines():
+            line = line.strip()
+            for label in ["TLDR", "Research Question", "Core Idea", "Evidence", "Reading Guide"]:
+                marker = f"**{label}**："
+                if marker in line:
+                    fields[label.lower().replace(" ", "_")] = line.split(marker, 1)[1].rstrip(" \\").strip()
+                    break
+        return fields
 
     @staticmethod
     def generate_deep_summary(md_path, txt_path):
@@ -464,8 +487,11 @@ class SeedPaperProcessorTest(unittest.TestCase):
             self.assertIn("**Reading Guide**：", related_two_md)
             self.assertNotIn("## 精读", related_two_md)
             index_text = (workspace / "index.md").read_text(encoding="utf-8")
-            self.assertIn("seed-paper.md", index_text)
-            self.assertIn("related/", index_text)
+            self.assertIn("#/seed-papers/demo-request/seed-paper", index_text)
+            self.assertIn("#/seed-papers/demo-request/related/p", index_text)
+            # Verify evidence from glance is synced back to front matter
+            self.assertIn("evidence:", related_one_md)
+            self.assertIn("tldr:", related_one_md)
 
     def test_render_seed_workspace_sanitizes_related_ids(self):
         with tempfile.TemporaryDirectory() as tmp:

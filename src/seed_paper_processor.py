@@ -248,6 +248,66 @@ def _upsert_auto_block(generate_docs_module: Any, md_path: Path, heading: str, c
     generate_docs_module.upsert_auto_block(str(md_path), heading, clean_content)
 
 
+def _upsert_frontmatter_evidence(generate_docs_module: Any, md_path: Path, glance_fields: dict[str, Any]) -> None:
+    """
+    Sync evidence/tldr from glance overview back into front matter fields.
+    This ensures the related page top meta (which reads front matter) gets the
+    structured evidence even though it was generated after the initial markdown write.
+    """
+    yaml_escape = getattr(generate_docs_module, "yaml_escape_value", lambda s: s)
+    # Read existing front matter
+    try:
+        with open(md_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except (OSError, IOError):
+        return
+
+    if not content.startswith("---"):
+        return
+
+    end_idx = content.find("\n---\n", 3)
+    if end_idx == -1:
+        return
+
+    fm_text = content[3:end_idx]
+    body = content[end_idx + 4:]
+
+    # Parse existing front matter lines
+    lines = fm_text.splitlines()
+    fm_dict = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            key, val = line.split(":", 1)
+            fm_dict[key.strip()] = val.strip()
+
+    # Sync from glance fields if front matter is missing these
+    if "evidence" not in fm_dict:
+        ev = glance_fields.get("evidence") or ""
+        if ev:
+            fm_dict["evidence"] = yaml_escape(str(ev))
+
+    if "tldr" not in fm_dict:
+        tldr = glance_fields.get("tldr") or ""
+        if tldr:
+            fm_dict["tldr"] = yaml_escape(str(tldr))
+
+    # Rebuild front matter
+    new_fm_lines = []
+    for k, v in fm_dict.items():
+        new_fm_lines.append(f"{k}: {v}")
+    new_fm = "\n".join(new_fm_lines)
+
+    new_content = "---\n" + new_fm + "\n---\n" + body
+    try:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except (OSError, IOError):
+        return
+
+
 def _render_seed_page(
     request: dict[str, Any],
     seed_text: str,
@@ -336,7 +396,7 @@ def _build_related_records(selection: dict[str, Any]) -> list[dict[str, Any]]:
                 "include_quick": paper_key in quick_keys,
                 "include_deep": paper_key in deep_keys,
                 "score": paper.get("llm_score"),
-                "evidence": paper.get("evidence") or paper.get("tldr") or "",
+                "evidence": paper.get("canonical_evidence") or paper.get("llm_tldr_cn") or paper.get("llm_tldr") or paper.get("llm_tldr_en") or "",
             }
         )
     return records
@@ -388,6 +448,10 @@ def _render_related_pages(
             if not _normalize_text(glance):
                 glance = generate_docs_module.build_glance_fallback(paper)
             _upsert_auto_block(generate_docs_module, md_path, "速览", glance)
+            # Sync glance evidence/tldr back into front matter so related page top meta can show it
+            if glance:
+                glance_fields = generate_docs_module.parse_glance_overview_fields(glance)
+                _upsert_frontmatter_evidence(generate_docs_module, md_path, glance_fields)
 
         if record["include_deep"]:
             deep_summary = generate_docs_module.generate_deep_summary(str(md_path), str(txt_path))
@@ -403,13 +467,19 @@ def _render_related_pages(
 
 
 def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, str]]) -> str:
+    request_id = _normalize_request_id(request.get("request_id"))
     title = _paper_title_from_filename(request.get("file_name") or "")
     related_lines = []
     for page in related_pages:
         score_str = f" [{page.get('score', '-')}]" if page.get('score') else ""
         evidence_str = f" - {_escape_markdown_text(page.get('evidence', ''))}" if page.get('evidence') else ""
+        # Convert related/foo.md to #/seed-papers/{request_id}/related/foo
+        page_path = page.get('path', '')
+        if page_path.startswith('related/'):
+            slug = page_path[len('related/'):].replace('.md', '')
+            page_path = f"#/seed-papers/{request_id}/related/{slug}"
         related_lines.append(
-            f"- [{_escape_markdown_text(page['title'])}]({page['path']}){score_str}{evidence_str}"
+            f"- [{_escape_markdown_text(page['title'])}]({page_path}){score_str}{evidence_str}"
         )
     related_block = "\n".join(related_lines) if related_lines else "- None"
     return "\n".join(
@@ -421,7 +491,7 @@ def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, 
             f"- Related count: `{request.get('related_count')}`",
             "",
             "## Seed paper",
-            "- [Open seed paper](seed-paper.md)",
+            f"- [Open seed paper](#/seed-papers/{request_id}/seed-paper)",
             "",
             "## Related papers",
             related_block,
