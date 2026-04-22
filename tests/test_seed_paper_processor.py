@@ -109,6 +109,29 @@ class _StubGenerateDocs:
             encoding="utf-8",
         )
 
+    # PR3: stubs for new skim body functions
+    @staticmethod
+    def generate_skim_body(title, abstract, paper_text="", max_retries=3):
+        return f"[skim body for {title}]"
+
+    @staticmethod
+    def _build_skim_body_fallback(title, abstract, paper_text=""):
+        return f"[fallback skeleton for {title}]"
+
+    @staticmethod
+    def upsert_skim_body_in_text(md_text, skim_body):
+        """Insert skim body before ## Abstract (or append at end)."""
+        if not skim_body:
+            return md_text
+        txt = md_text or ""
+        abstract_marker = "## Abstract"
+        if abstract_marker in txt:
+            idx = txt.index(abstract_marker)
+            before = txt[:idx].rstrip()
+            after = txt[idx:]
+            return f"{before}\n\n## 正文层速读\n{skim_body}\n\n---\n\n{after}"
+        return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
+
     @staticmethod
     def ensure_text_content(pdf_url, txt_path):
         _StubGenerateDocs.ensure_text_content_calls.append({"pdf_url": pdf_url, "txt_path": txt_path})

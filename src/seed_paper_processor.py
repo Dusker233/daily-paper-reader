@@ -473,6 +473,10 @@ def _render_related_pages(
         if skim_body:
             paper_with_body["_skim_body"] = skim_body
 
+        # PR3: Inline upsert via upsert_skim_body_in_text (called after build_markdown_content)
+        # Note: render_seed_workspace always recreates related/ dir, so existing-file migration
+        # path is only for re-render scenarios. The migration happens via upsert_skim_body_in_text
+        # on top of build_markdown_content output.
         md_content = generate_docs_module.build_markdown_content(
             paper_with_body,
             "related-paper",
@@ -481,11 +485,8 @@ def _render_related_pages(
             tags,
         )
 
-        # PR3: For existing files, use upsert_skim_body_in_text to migrate to inline position
-        if md_path.exists():
-            existing_content = md_path.read_text(encoding="utf-8")
-            if skim_body and hasattr(generate_docs_module, "upsert_skim_body_in_text"):
-                md_content = generate_docs_module.upsert_skim_body_in_text(existing_content, skim_body)
+        if hasattr(generate_docs_module, "upsert_skim_body_in_text"):
+            md_content = generate_docs_module.upsert_skim_body_in_text(md_content, skim_body)
         md_path.write_text(md_content, encoding="utf-8")
 
         # Upsert glance (速览) block - uses same paper_text for full-text priority

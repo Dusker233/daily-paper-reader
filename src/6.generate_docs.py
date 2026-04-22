@@ -947,13 +947,15 @@ def generate_skim_body(title: str, abstract: str, paper_text: str = "", max_retr
     生成论文正文层（skim body）。
     位于 ## 速览 和 ## Abstract 之间，粒度比速览更厚，明显轻于精读。
     优先基于全文生成，fallback 到 abstract 时也用新 skeleton。
-    """
-    if LLM_CLIENT is None:
-        return None
 
+    PR3 fix: LLM 不可用时也返回 4-section skeleton（不再返回 None）。
+    这确保 existing-file 路径在 LLM 不可用时也能落地新契约。
+    """
     source_text = _prepare_glance_source_text(abstract, paper_text, max_chars=15000)
-    if not source_text:
-        return None
+
+    if LLM_CLIENT is None or not source_text:
+        # PR3: fallback 到 skeleton，不返回 None（确保 existing-file 路径也能落地新契约）
+        return _build_skim_body_fallback(title, abstract, paper_text) or None
 
     system_prompt = "你是论文结构分析助手，请用中文输出论文正文层速读内容，帮助读者快速了解论文全貌。"
     payload = {"title": title, "source_text": source_text}
