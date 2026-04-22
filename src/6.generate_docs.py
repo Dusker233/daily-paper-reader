@@ -659,7 +659,7 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
     key = "## 速览"
     if key in txt:
         # 替换现有速览块
-        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\\n|\\n##\\s|\\Z)", re.S | re.M)
+        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\n|\n##\s|\Z)", re.S | re.M)
         return pattern.sub(rf"\\1{glance}\n", txt, count=1)
 
     abstract_idx = txt.find("## Abstract")
@@ -668,6 +668,36 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
         after = txt[abstract_idx:]
         return f"{before}\n\n## 速览\n{glance}\n\n---\n\n{after}"
     return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
+
+
+def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
+    """
+    在 Markdown 文本中插入/替换正文层速读区块（inline，非尾部 auto block）：
+    - 先移除已在任意位置的旧 ## 正文层速读 block
+    - 然后在 ## Abstract 之前插入新 block（归位到 inline 位置）
+    - 若没有 ## Abstract 则追加到末尾
+    - 保证新旧文件路径的 skim body 最终都落在 ## 速览 和 ## Abstract 之间
+    """
+    if not skim_body:
+        return md_text
+
+    txt = md_text or ""
+
+    # 1. 移除已在任意位置的旧 ## 正文层速读 block（包括完整 tail 残留）
+    #    Stop at top-level headings only (letter-prefixed like ## Abstract).
+    #    Internal numbered sections (## 1. / ## 2. ...) do NOT stop the scan.
+    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z]|\Z)", re.S)
+    txt = pattern.sub("", txt).rstrip()
+
+    # 2. 重新插入到 ## Abstract 之前（归位到 inline 位置）
+    abstract_marker = "## Abstract"
+    if abstract_marker in txt:
+        abstract_idx = txt.index(abstract_marker)
+        before = txt[:abstract_idx].rstrip()
+        after = txt[abstract_idx:]
+        return f"{before}\n\n## 正文层速读\n{skim_body}\n\n---\n\n{after}"
+    # 没有 ## Abstract：追加到末尾
+    return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
 
 
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
@@ -842,6 +872,141 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
                 log(f"[WARN] 速览生成失败（额度不足，停止重试）：{e}")
                 break
             log(f"[WARN] 速览生成失败（第 {attempt} 次）：{e}")
+            time.sleep(2 * attempt)
+    return None
+
+
+def _build_skim_body_fallback(title: str, abstract: str, paper_text: str = "") -> str:
+    """
+    当 LLM 不可用或生成失败时，基于 abstract/正文生成 4-section skim body skeleton。
+    满足 PR2 要求：fallback 也要沿用新的正文契约，不退回到旧摘要格式。
+    """
+    if not abstract and not paper_text:
+        return ""
+
+    # 基于 abstract 构建 4-section skeleton
+    abstract_text = str(abstract or paper_text or "").strip()
+
+    def first_sentence(text: str) -> str:
+        s = (text or "").strip()
+        if not s:
+            return ""
+        parts = re.split(r"(?<=[。！？.!?])\s+", s)
+        return (parts[0] if parts else s).strip()
+
+    def extract_sentences(text: str, count: int = 3) -> str:
+        parts = re.split(r"(?<=[。！？.!?])\s+", (text or "").strip())
+        return "。".join(p.strip() for p in parts[:count] if p.strip())
+
+    bg = first_sentence(abstract_text)
+    if not bg:
+        bg = "本文研究了相关研究问题并尝试给出解决方案。"
+
+    core = ""
+    if abstract_text:
+        m = re.search(r"(we (?:propose|present|introduce|develop|describe)[^.]{0,200})[。.]?", abstract_text, re.I)
+        if m:
+            core = m.group(1).strip()
+    if not core:
+        core = "核心方法与机制需要结合正文进一步确认。"
+
+    result = ""
+    if abstract_text:
+        m = re.search(r"(experiments?|results?|show|demonstrate|achieve)[^.]{0,200}?(\d+[%.:：\d]+|AUC|accuracy|performance)[^.]{0,100}?[。.]?", abstract_text, re.I)
+        if m:
+            result = m.group(0).strip()
+    if not result:
+        m = re.search(r"(实验|结果|表明|证明)[^.]{0,150}?[。.]", abstract_text)
+        if m:
+            result = m.group(0).strip()
+    if not result:
+        result = "从现有文本无法确认具体实验结果。"
+
+    limitation = ""
+    if abstract_text:
+        m = re.search(r"(limitation|weakness|concern|不足|局限)[^.]{0,150}?[。.]", abstract_text, re.I)
+        if m:
+            limitation = m.group(0).strip()
+    if not limitation:
+        limitation = "本文局限性与适用边界需回到正文进一步确认。"
+
+    return (
+        f"## 1. 问题与背景\n"
+        f"{bg}\n\n"
+        f"## 2. 核心思路 / 方法\n"
+        f"{core}\n\n"
+        f"## 3. 结果与结论\n"
+        f"{result}\n\n"
+        f"## 4. 局限与适用边界\n"
+        f"{limitation}"
+    )
+
+
+def generate_skim_body(title: str, abstract: str, paper_text: str = "", max_retries: int = 3) -> str | None:
+    """
+    生成论文正文层（skim body）。
+    位于 ## 速览 和 ## Abstract 之间，粒度比速览更厚，明显轻于精读。
+    优先基于全文生成，fallback 到 abstract 时也用新 skeleton。
+    """
+    if LLM_CLIENT is None:
+        return None
+
+    source_text = _prepare_glance_source_text(abstract, paper_text, max_chars=15000)
+    if not source_text:
+        return None
+
+    system_prompt = "你是论文结构分析助手，请用中文输出论文正文层速读内容，帮助读者快速了解论文全貌。"
+    payload = {"title": title, "source_text": source_text}
+    user_text = json.dumps(payload, ensure_ascii=False)
+    user_prompt = (
+        "请基于上面的 JSON 内容，严格按以下 4 个 section 输出 Markdown 正文（不要输出任何其它文字）：\n\n"
+        "## 1. 问题与背景\n"
+        "（2-4句）研究问题是什么？背景和动机是什么？为什么这个问题重要？\n\n"
+        "## 2. 核心思路 / 方法\n"
+        "（3-5句）论文提出了什么方法？核心机制或技术路线是什么？和其他方法相比有何创新？\n\n"
+        "## 3. 结果与结论\n"
+        "（2-4句）主要实验结果是什么？核心结论是什么？\n\n"
+        "## 4. 局限与适用边界\n"
+        "（1-3句）论文的主要局限是什么？适用边界在哪里？\n\n"
+        "要求：\n"
+        "- 使用连贯叙述风格，不要 bullet points、表格、分级标题。\n"
+        "- 优先引用正文里的具体细节；信息不足时写\"从现有文本无法确认\"，不要编造。\n"
+        "- 如果 paper_text 太短或质量不足，返回空字符串（不要强写）。\n"
+        "Output must be strict Markdown only, no JSON, no fences, no extra text."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_text},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = LLM_CLIENT.messages_create(
+                model=(LLM_CLIENT.model or "unknown"),
+                messages=messages,
+            )
+            content = (response.content or [{}])[0].get("text", "").strip()
+            if content:
+                # Basic validation: must contain at least 3 of the 4 section headings
+                heading_count = sum(
+                    1 for h in ["## 1.", "## 2.", "## 3.", "## 4."] if h in content
+                )
+                if heading_count >= 3:
+                    return content
+                log(f"[WARN] generate_skim_body 返回内容 section 不足（第 {attempt} 次）：{content[:100]}")
+        except Exception as e:
+            msg = str(e)
+            if (
+                "insufficient_user_quota" in msg
+                or "额度不足" in msg
+                or "insufficient quota" in msg
+                or ("403" in msg and "Forbidden" in msg)
+            ):
+                log(f"[WARN] skim body 生成失败（额度不足，停止重试）：{e}")
+                break
+            log(f"[WARN] skim body 生成失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
     return None
 
@@ -1607,11 +1772,17 @@ def build_markdown_content(
     lines.append("---")
     lines.append("")
 
-    # 正文部分：摘要
-    if zh_abstract:
-        lines.append("## 摘要")
-        lines.append(zh_abstract)
+    # 正文部分：优先 skim body，fallback 到新 skeleton（不再是旧摘要格式）
+    skim_body = paper.get("_skim_body", "").strip()
+    if skim_body:
+        lines.append(skim_body)
         lines.append("")
+    else:
+        # PR2: fallback 也要用新的 4-section 正文契约，不退回到旧摘要格式
+        fallback_body = _build_skim_body_fallback(title, abstract_en, "")
+        if fallback_body:
+            lines.append(fallback_body)
+            lines.append("")
 
     lines.append("## Abstract")
     lines.append(abstract_en)
@@ -1818,6 +1989,17 @@ def process_paper(
             # 只生成速览：不拉取 PDF、不做精读总结
             return paper_id, title, known_zh_title
 
+        # PR2: 更新现有 quick 文件时也生成 skim body
+        # 1. generate_skim_body 本身已内联 fallback，无 LLM 时也返回 skeleton
+        # 2. upsert_skim_body_in_text 负责把旧 tail block 迁回 inline 位置
+        with open(md_path, "r", encoding="utf-8") as f:
+            existing_content = f.read()
+        skim_body = generate_skim_body(title, abstract_en, load_text_content(txt_path))
+        if skim_body:
+            updated_content = upsert_skim_body_in_text(existing_content, skim_body)
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(updated_content)
+
         if section == "deep":
             # 精读区：检查是否已有详细总结
             tail = extract_section_tail(existing, "论文详细总结（自动生成）")
@@ -1854,6 +2036,10 @@ def process_paper(
         glance = generate_glance_overview(title, abstract_en, load_text_content(txt_path)) or build_glance_fallback(paper)
         if glance:
             paper["_glance_overview"] = glance
+        # PR2: glance_only 路径也生成 skim body
+        skim_body = generate_skim_body(title, abstract_en, load_text_content(txt_path))
+        if skim_body:
+            paper["_skim_body"] = skim_body
         tags_list = build_tags_list(section, paper.get("llm_tags") or [])
         content = build_markdown_content(paper, section, "", "", tags_list)
         os.makedirs(os.path.dirname(md_path), exist_ok=True)
@@ -1880,6 +2066,11 @@ def process_paper(
     glance = generate_glance_overview(title, abstract_en, load_text_content(txt_path)) or build_glance_fallback(paper)
     if glance:
         paper["_glance_overview"] = glance
+    # PR2: 生成 skim body（正文层）
+    paper_text = load_text_content(txt_path)
+    skim_body = generate_skim_body(title, abstract_en, paper_text)
+    if skim_body:
+        paper["_skim_body"] = skim_body
     content = build_markdown_content(paper, section, zh_title, zh_abstract, tags_list)
 
     os.makedirs(os.path.dirname(md_path), exist_ok=True)

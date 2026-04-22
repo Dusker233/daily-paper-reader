@@ -506,6 +506,150 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["model_override"], "summary-model")
         self.assertEqual(captured["kwargs"]["default_model"], "summary-model")
 
+    # ─── PR2: skim body regression tests ─────────────────────────────────────
+
+    def test_build_markdown_content_uses_skim_body_when_available(self):
+        """build_markdown_content: when _skim_body is present, use it instead of 摘要"""
+        paper = {
+            "title": "Test Paper",
+            "abstract": "This is the English abstract for testing.",
+            "_skim_body": (
+                "## 1. 问题与背景\n"
+                "We study the problem of X.\n\n"
+                "## 2. 核心思路 / 方法\n"
+                "We propose method Y to solve it.\n\n"
+                "## 3. 结果与结论\n"
+                "Experiments show Y outperforms baselines.\n\n"
+                "## 4. 局限与适用边界\n"
+                "The approach assumes linear data.\n"
+            ),
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        # 摘要 heading should NOT appear when skim body is used
+        self.assertNotIn("## 摘要", md)
+        self.assertIn("## 1. 问题与背景", md)
+        self.assertIn("## 2. 核心思路 / 方法", md)
+        self.assertIn("## 3. 结果与结论", md)
+        self.assertIn("## 4. 局限与适用边界", md)
+        self.assertIn("## Abstract", md)
+
+    def test_build_markdown_content_fallback_skim_body_skeleton_when_no_llm(self):
+        """build_markdown_content: fallback to 4-section skeleton when _skim_body is absent (no LLM)"""
+        paper = {
+            "title": "Test Paper",
+            "abstract": "This is the English abstract for testing.",
+            # _skim_body not set → fallback path
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        # Should NOT use old ## 摘要 format
+        self.assertNotIn("## 摘要", md)
+        # Should use new skeleton
+        self.assertIn("## 1. 问题与背景", md)
+        self.assertIn("## 2. 核心思路 / 方法", md)
+        self.assertIn("## 3. 结果与结论", md)
+        self.assertIn("## 4. 局限与适用边界", md)
+        self.assertIn("## Abstract", md)
+
+    def test_build_markdown_content_skim_body_before_abstract(self):
+        """build_markdown_content: skim body appears before ## Abstract"""
+        paper = {
+            "title": "Test Paper",
+            "abstract": "Short abstract text.",
+            "_skim_body": "## 1. 问题与背景\nResearch problem here.\n",
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        body_pos = md.index("## 1. 问题与背景")
+        abstract_pos = md.index("## Abstract")
+        self.assertLess(body_pos, abstract_pos, "skim body must appear before ## Abstract")
+
+    def test_skim_body_fallback_produces_all_four_sections(self):
+        """_build_skim_body_fallback: always produces all 4 sections even with short abstract"""
+        fallback = self.mod._build_skim_body_fallback(
+            "Test Title",
+            "We propose a novel method for solving the problem of X. "
+            "Experiments show our method achieves 95% accuracy.",
+            "",
+        )
+        self.assertIn("## 1. 问题与背景", fallback)
+        self.assertIn("## 2. 核心思路 / 方法", fallback)
+        self.assertIn("## 3. 结果与结论", fallback)
+        self.assertIn("## 4. 局限与适用边界", fallback)
+
+    def test_upsert_skim_body_in_text_inserts_before_abstract(self):
+        """upsert_skim_body_in_text: inserts inline skim body before ## Abstract"""
+        md = (
+            "## 速览\n"
+            "TLDR content.\n\n"
+            "---\n\n"
+            "## Abstract\n"
+            "This is the abstract.\n"
+        )
+        skim = (
+            "## 正文层速读\n"
+            "## 1. 问题与背景\n"
+            "Problem here.\n"
+        )
+        result = self.mod.upsert_skim_body_in_text(md, skim)
+        self.assertIn("## 正文层速读", result)
+        abstract_pos = result.index("## Abstract")
+        skim_pos = result.index("## 正文层速读")
+        self.assertLess(skim_pos, abstract_pos, "skim body must appear before ## Abstract")
+
+    def test_upsert_skim_body_in_text_replaces_existing_block(self):
+        """upsert_skim_body_in_text: replaces existing wrapper block"""
+        md = (
+            "## 速览\n"
+            "TLDR.\n\n"
+            "---\n\n"
+            "## Abstract\n"
+            "Old abstract.\n\n"
+            "## 正文层速读\n"
+            "OLD BODY CONTENT\n"
+        )
+        new_body = "## 1. 问题与背景\nNew content here.\n"
+        result = self.mod.upsert_skim_body_in_text(md, new_body)
+        self.assertIn("New content here.", result)
+        self.assertNotIn("OLD BODY CONTENT", result)
+
+    def test_upsert_skim_body_in_text_migrates_tail_block_to_inline(self):
+        """upsert_skim_body_in_text: migrates old tail ## 正文层速读 block to inline position"""
+        # 历史文件：完整 4-section tail block 追加在 ## Abstract 之后
+        md = (
+            "## 速览\n"
+            "TLDR.\n\n"
+            "---\n\n"
+            "## Abstract\n"
+            "Old abstract.\n\n"
+            "## 正文层速读\n"
+            "## 1. 问题与背景\n"
+            "Old bg.\n\n"
+            "## 2. 核心思路 / 方法\n"
+            "Old method.\n\n"
+            "## 3. 结果与结论\n"
+            "Old result.\n\n"
+            "## 4. 局限与适用边界\n"
+            "Old limitation.\n"
+        )
+        new_body = (
+            "## 1. 问题与背景\nMigrated bg.\n\n"
+            "## 2. 核心思路 / 方法\nMigrated method.\n\n"
+            "## 3. 结果与结论\nMigrated result.\n\n"
+            "## 4. 局限与适用边界\nMigrated limitation.\n"
+        )
+        result = self.mod.upsert_skim_body_in_text(md, new_body)
+        # tail block 的所有旧 section 必须被清除
+        self.assertNotIn("Old bg", result)
+        self.assertNotIn("Old method", result)
+        self.assertNotIn("Old result", result)
+        self.assertNotIn("Old limitation", result)
+        # 新 block 必须出现在 ## Abstract 之前
+        abstract_pos = result.index("## Abstract")
+        skim_pos = result.index("## 正文层速读")
+        self.assertLess(skim_pos, abstract_pos)
+        # ## Abstract 之后不能还有 ## 正文层速读 wrapper
+        after_abstract = result[abstract_pos:]
+        self.assertNotIn("## 正文层速读", after_abstract)
+
 
 if __name__ == "__main__":
     unittest.main()
