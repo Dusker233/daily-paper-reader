@@ -449,29 +449,18 @@ def _render_related_pages(
                     paper_text = ""
             # Fallback: use abstract if text extraction failed or no pdf_url
             if not paper_text:
-                if not txt_path.exists():
-                    txt_path.write_text(abstract, encoding="utf-8")
+                # PR3 fix: always write fallback to txt_path (even if file already exists from failed ensure_text_content)
+                txt_path.write_text(abstract, encoding="utf-8")
                 paper_text = abstract
 
-        # PR3: Generate skim body first (aligns with PR2 body contract)
-        # Store in paper["_skim_body"] so build_markdown_content uses it
+        # PR3: Generate skim body via build_markdown_content's own fallback path.
+        # DO NOT call generate_skim_body() here - that causes double-write:
+        #   - build_markdown_content already outputs fallback skeleton inline when _skim_body absent
+        #   - then upsert_skim_body_in_text would add another wrapper with SAME skeleton
+        # Result: two sets of 4-section body (inline + wrapper) = duplicate.
+        # Fix: let build_markdown_content handle fallback skeleton via its own _build_skim_body_fallback.
+        # Only need to upsert the wrapper block (handled after build_markdown_content below).
         skim_body = ""
-        if hasattr(generate_docs_module, "generate_skim_body"):
-            try:
-                skim_body = generate_docs_module.generate_skim_body(
-                    paper_title,
-                    abstract,
-                    paper_text,
-                ) or ""
-            except Exception:
-                skim_body = ""
-        if not skim_body and hasattr(generate_docs_module, "_build_skim_body_fallback"):
-            skim_body = generate_docs_module._build_skim_body_fallback(paper_title, abstract, paper_text)
-
-        # PR3: Build markdown WITHOUT _skim_body in paper dict.
-        # This ensures build_markdown_content outputs fallback skeleton (not inline skim body),
-        # so upsert_skim_body_in_text below always does insertion + old-wrapper removal in one pass.
-        # This avoids double-write: build_markdown_content(with _skim_body) + upsert wrapper = duplicate.
         paper_with_body = dict(paper)
         paper_with_body.pop("_skim_body", None)
 
