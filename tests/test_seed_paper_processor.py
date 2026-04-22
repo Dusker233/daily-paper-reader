@@ -3388,5 +3388,109 @@ class SeedPaperProcessorTest(unittest.TestCase):
                 self.mod._load_ranked_related_fixture(str(fixture_path))
 
 
+    # PR1 tests: seed_page_path / related_page_paths / related_count in main() output
+
+    def test_main_output_includes_seed_page_and_related_page_paths(self):
+        """main() JSON output should include seed_page_path, related_page_paths, related_count."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            (docs_dir / "README.md").write_text("# Home\n", encoding="utf-8")
+            (docs_dir / "_sidebar.md").write_text("* Home\n", encoding="utf-8")
+            request_path, pdf_path = self._write_request(
+                root,
+                {
+                    "file_name": "Seed Paper.pdf",
+                    "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                    "related_count": 1,
+                    "selected_tags": ["RL"],
+                    "mode": "both",
+                    "notes": "",
+                },
+            )
+            # Create a real PDF so extract_pdf_text() returns non-empty text
+            import fitz
+            doc = fitz.open()
+            page = doc.new_page(width=595, height=842)
+            page.insert_text((100, 400), "Seed paper text content.", fontsize=12)
+            doc.save(str(pdf_path))
+            doc.close()
+
+            # Write ranked-related fixture so live retrieval/rerank is bypassed
+            fixture = [
+                {
+                    "id": "paper-1",
+                    "title": "Related One",
+                    "abstract": "first abstract",
+                    "link": "https://example.com/p1.pdf",
+                    "llm_tags": ["RL"],
+                    "llm_score": 0.91,
+                }
+            ]
+            fixture_path = Path(tmp) / "fixture.json"
+            fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+            # Capture main() stdout
+            original_argv = list(sys.argv)
+            original_stdout = sys.stdout
+            try:
+                sys.argv = [
+                    "seed_paper_processor.py",
+                    "--request-path", str(request_path),
+                    "--root-dir", str(root),
+                    "--docs-dir", str(docs_dir),
+                    "--ranked-related-fixture", str(fixture_path),
+                ]
+                captured = io.StringIO()
+                sys.stdout = captured
+                self.mod.main()
+                captured_val = captured.getvalue()
+                # skip warning lines before JSON
+                json_start = captured_val.find('{')
+                output = json.loads(captured_val[json_start:])
+            finally:
+                sys.argv = original_argv
+                sys.stdout = original_stdout
+
+            self.assertIn("seed_page_path", output)
+            self.assertIn("related_page_paths", output)
+            self.assertIn("related_count", output)
+            self.assertEqual(output["related_count"], 1)
+            self.assertEqual(len(output["related_page_paths"]), 1)
+            self.assertIn("seed_page_path", output)
+
+    def test_render_seed_workspace_fails_if_selection_produces_zero_related_pages(self):
+        """render_seed_workspace should fail early when related selection is empty."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(Path(tmp) / "seed.pdf"),
+                "selected_tags": ["RL"],
+                "mode": "both",
+                "related_count": 1,
+                "notes": "",
+            }
+            # selection with quick_skim = [] and deep_dive = []
+            selection = {"quick_skim": [], "deep_dive": []}
+
+            with self.assertRaisesRegex(
+                self.mod.SeedPaperProcessingError,
+                r"no related pages generated",
+            ):
+                self.mod.render_seed_workspace(
+                    request,
+                    seed_text="seed paper text",
+                    selection=selection,
+                    docs_dir=str(docs_dir),
+                    generate_docs_module=_StubGenerateDocs,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
