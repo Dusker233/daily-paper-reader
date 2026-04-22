@@ -611,6 +611,30 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertIn("New content here.", result)
         self.assertNotIn("OLD BODY CONTENT", result)
 
+    def test_upsert_skim_body_in_text_migrates_tail_block_to_inline(self):
+        """upsert_skim_body_in_text: migrates old tail ## 正文层速读 block to inline position"""
+        # 历史文件：## 正文层速读 追加在 ## Abstract 之后（tail block）
+        md = (
+            "## 速览\n"
+            "TLDR.\n\n"
+            "---\n\n"
+            "## Abstract\n"
+            "Old abstract.\n\n"
+            "## 正文层速读\n"
+            "OLD TAIL BODY\n"
+        )
+        new_body = "## 1. 问题与背景\nMigrated content here.\n"
+        result = self.mod.upsert_skim_body_in_text(md, new_body)
+        # tail block 必须被移除
+        self.assertNotIn("OLD TAIL BODY", result)
+        # 新 block 必须出现在 ## Abstract 之前（inline 位置）
+        abstract_pos = result.index("## Abstract")
+        skim_pos = result.index("## 正文层速读")
+        self.assertLess(skim_pos, abstract_pos)
+        # ## Abstract 之后不能还有 ## 正文层速读
+        after_abstract = result[abstract_pos:]
+        self.assertNotIn("## 正文层速读", after_abstract)
+
 
 if __name__ == "__main__":
     unittest.main()
