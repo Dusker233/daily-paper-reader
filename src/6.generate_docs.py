@@ -683,8 +683,10 @@ def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
 
     txt = md_text or ""
 
-    # 1. 移除已在任意位置的旧 ## 正文层速读 block（包括 tail 残留）
-    pattern = re.compile(r"\n*## 正文层速读\s*\n.*?$(?=\n## |\Z)", re.S | re.M)
+    # 1. 移除已在任意位置的旧 ## 正文层速读 block（包括完整 tail 残留）
+    #    Stop at top-level headings only (letter-prefixed like ## Abstract).
+    #    Internal numbered sections (## 1. / ## 2. ...) do NOT stop the scan.
+    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z]|\Z)", re.S)
     txt = pattern.sub("", txt).rstrip()
 
     # 2. 重新插入到 ## Abstract 之前（归位到 inline 位置）

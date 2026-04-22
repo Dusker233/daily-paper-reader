@@ -613,7 +613,7 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
 
     def test_upsert_skim_body_in_text_migrates_tail_block_to_inline(self):
         """upsert_skim_body_in_text: migrates old tail ## 正文层速读 block to inline position"""
-        # 历史文件：## 正文层速读 追加在 ## Abstract 之后（tail block）
+        # 历史文件：完整 4-section tail block 追加在 ## Abstract 之后
         md = (
             "## 速览\n"
             "TLDR.\n\n"
@@ -621,17 +621,32 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
             "## Abstract\n"
             "Old abstract.\n\n"
             "## 正文层速读\n"
-            "OLD TAIL BODY\n"
+            "## 1. 问题与背景\n"
+            "Old bg.\n\n"
+            "## 2. 核心思路 / 方法\n"
+            "Old method.\n\n"
+            "## 3. 结果与结论\n"
+            "Old result.\n\n"
+            "## 4. 局限与适用边界\n"
+            "Old limitation.\n"
         )
-        new_body = "## 1. 问题与背景\nMigrated content here.\n"
+        new_body = (
+            "## 1. 问题与背景\nMigrated bg.\n\n"
+            "## 2. 核心思路 / 方法\nMigrated method.\n\n"
+            "## 3. 结果与结论\nMigrated result.\n\n"
+            "## 4. 局限与适用边界\nMigrated limitation.\n"
+        )
         result = self.mod.upsert_skim_body_in_text(md, new_body)
-        # tail block 必须被移除
-        self.assertNotIn("OLD TAIL BODY", result)
-        # 新 block 必须出现在 ## Abstract 之前（inline 位置）
+        # tail block 的所有旧 section 必须被清除
+        self.assertNotIn("Old bg", result)
+        self.assertNotIn("Old method", result)
+        self.assertNotIn("Old result", result)
+        self.assertNotIn("Old limitation", result)
+        # 新 block 必须出现在 ## Abstract 之前
         abstract_pos = result.index("## Abstract")
         skim_pos = result.index("## 正文层速读")
         self.assertLess(skim_pos, abstract_pos)
-        # ## Abstract 之后不能还有 ## 正文层速读
+        # ## Abstract 之后不能还有 ## 正文层速读 wrapper
         after_abstract = result[abstract_pos:]
         self.assertNotIn("## 正文层速读", after_abstract)
 
