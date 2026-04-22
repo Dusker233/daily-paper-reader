@@ -445,8 +445,8 @@ print(json.dumps(resolve_rerank_llm_config(default_model='qwen3-reranker-4b'), e
         self.assertIn('related_pages=("${WORKSPACE_DIR}/related/"*.md)', run_script)
         self.assertIn('if [ "${#related_pages[@]}" -lt 1 ]; then', run_script)
         self.assertIn('Seed workflow produced no related pages.', run_script)
-        self.assertIn('grep -q "seed-paper.md" "${WORKSPACE_DIR}/index.md"', run_script)
-        self.assertIn('grep -q "related/" "${WORKSPACE_DIR}/index.md"', run_script)
+        self.assertIn('grep -q "#/seed-papers/${REQUEST_ID}/seed-paper" "${WORKSPACE_DIR}/index.md"', run_script)
+        self.assertIn('grep -q "#/seed-papers/${REQUEST_ID}/related/" "${WORKSPACE_DIR}/index.md"', run_script)
 
     def test_workflow_inspect_step_rejects_malformed_request_json(self):
         inspect_step = self._step_named("Inspect request payload")

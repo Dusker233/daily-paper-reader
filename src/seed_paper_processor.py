@@ -517,6 +517,22 @@ def render_seed_workspace(
 
     seed_page = _render_seed_page(request, seed_text, workspace_dir, generate_docs_module)
     related_pages = _render_related_pages(selection, related_dir, generate_docs_module)
+
+    # PR1: Disk invariant check - fail early if related pages missing
+    actual_related_files = sorted([f.name for f in related_dir.glob("*.md")])
+    expected_count = len(related_pages)
+    actual_count = len(actual_related_files)
+    if actual_count != expected_count:
+        raise SeedPaperProcessingError(
+            f"related page count mismatch: expected {expected_count} (from selection), "
+            f"but found {actual_count} files on disk: {actual_related_files}"
+        )
+    if actual_count == 0:
+        raise SeedPaperProcessingError(
+            f"no related pages generated at {related_dir}; cannot publish seed request "
+            f"with zero related papers"
+        )
+
     index_path = workspace_dir / "index.md"
     index_path.write_text(_build_index_content(request, related_pages), encoding="utf-8")
 
@@ -1372,6 +1388,9 @@ def main() -> None:
                 "mode": result["request"]["mode"],
                 "workspace_dir": result["workspace_dir"],
                 "index_path": result["index_path"],
+                "seed_page_path": result.get("seed_page_path", ""),
+                "related_page_paths": result.get("related_page_paths", []),
+                "related_count": len(result.get("related_page_paths", [])),
                 "rerank_status": result["rerank_status"],
             },
             ensure_ascii=False,
