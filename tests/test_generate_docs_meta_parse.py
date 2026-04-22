@@ -506,6 +506,75 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["model_override"], "summary-model")
         self.assertEqual(captured["kwargs"]["default_model"], "summary-model")
 
+    # ─── PR2: skim body regression tests ─────────────────────────────────────
+
+    def test_build_markdown_content_uses_skim_body_when_available(self):
+        """build_markdown_content: when _skim_body is present, use it instead of 摘要"""
+        paper = {
+            "title": "Test Paper",
+            "abstract": "This is the English abstract for testing.",
+            "_skim_body": (
+                "## 1. 问题与背景\n"
+                "We study the problem of X.\n\n"
+                "## 2. 核心思路 / 方法\n"
+                "We propose method Y to solve it.\n\n"
+                "## 3. 结果与结论\n"
+                "Experiments show Y outperforms baselines.\n\n"
+                "## 4. 局限与适用边界\n"
+                "The approach assumes linear data.\n"
+            ),
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        # 摘要 heading should NOT appear when skim body is used
+        self.assertNotIn("## 摘要", md)
+        self.assertIn("## 1. 问题与背景", md)
+        self.assertIn("## 2. 核心思路 / 方法", md)
+        self.assertIn("## 3. 结果与结论", md)
+        self.assertIn("## 4. 局限与适用边界", md)
+        self.assertIn("## Abstract", md)
+
+    def test_build_markdown_content_fallback_skim_body_skeleton_when_no_llm(self):
+        """build_markdown_content: fallback to 4-section skeleton when _skim_body is absent (no LLM)"""
+        paper = {
+            "title": "Test Paper",
+            "abstract": "This is the English abstract for testing.",
+            # _skim_body not set → fallback path
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        # Should NOT use old ## 摘要 format
+        self.assertNotIn("## 摘要", md)
+        # Should use new skeleton
+        self.assertIn("## 1. 问题与背景", md)
+        self.assertIn("## 2. 核心思路 / 方法", md)
+        self.assertIn("## 3. 结果与结论", md)
+        self.assertIn("## 4. 局限与适用边界", md)
+        self.assertIn("## Abstract", md)
+
+    def test_build_markdown_content_skim_body_before_abstract(self):
+        """build_markdown_content: skim body appears before ## Abstract"""
+        paper = {
+            "title": "Test Paper",
+            "abstract": "Short abstract text.",
+            "_skim_body": "## 1. 问题与背景\nResearch problem here.\n",
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        body_pos = md.index("## 1. 问题与背景")
+        abstract_pos = md.index("## Abstract")
+        self.assertLess(body_pos, abstract_pos, "skim body must appear before ## Abstract")
+
+    def test_skim_body_fallback_produces_all_four_sections(self):
+        """_build_skim_body_fallback: always produces all 4 sections even with short abstract"""
+        fallback = self.mod._build_skim_body_fallback(
+            "Test Title",
+            "We propose a novel method for solving the problem of X. "
+            "Experiments show our method achieves 95% accuracy.",
+            "",
+        )
+        self.assertIn("## 1. 问题与背景", fallback)
+        self.assertIn("## 2. 核心思路 / 方法", fallback)
+        self.assertIn("## 3. 结果与结论", fallback)
+        self.assertIn("## 4. 局限与适用边界", fallback)
+
 
 if __name__ == "__main__":
     unittest.main()
