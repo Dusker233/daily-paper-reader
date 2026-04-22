@@ -248,6 +248,66 @@ def _upsert_auto_block(generate_docs_module: Any, md_path: Path, heading: str, c
     generate_docs_module.upsert_auto_block(str(md_path), heading, clean_content)
 
 
+def _upsert_frontmatter_evidence(generate_docs_module: Any, md_path: Path, glance_fields: dict[str, Any]) -> None:
+    """
+    Sync evidence/tldr from glance overview back into front matter fields.
+    This ensures the related page top meta (which reads front matter) gets the
+    structured evidence even though it was generated after the initial markdown write.
+    """
+    yaml_escape = getattr(generate_docs_module, "yaml_escape_value", lambda s: s)
+    # Read existing front matter
+    try:
+        with open(md_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except (OSError, IOError):
+        return
+
+    if not content.startswith("---"):
+        return
+
+    end_idx = content.find("\n---\n", 3)
+    if end_idx == -1:
+        return
+
+    fm_text = content[3:end_idx]
+    body = content[end_idx + 4:]
+
+    # Parse existing front matter lines
+    lines = fm_text.splitlines()
+    fm_dict = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            key, val = line.split(":", 1)
+            fm_dict[key.strip()] = val.strip()
+
+    # Sync from glance fields if front matter is missing these
+    if "evidence" not in fm_dict:
+        ev = glance_fields.get("evidence") or ""
+        if ev:
+            fm_dict["evidence"] = yaml_escape(str(ev))
+
+    if "tldr" not in fm_dict:
+        tldr = glance_fields.get("tldr") or ""
+        if tldr:
+            fm_dict["tldr"] = yaml_escape(str(tldr))
+
+    # Rebuild front matter
+    new_fm_lines = []
+    for k, v in fm_dict.items():
+        new_fm_lines.append(f"{k}: {v}")
+    new_fm = "\n".join(new_fm_lines)
+
+    new_content = "---\n" + new_fm + "\n---\n" + body
+    try:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except (OSError, IOError):
+        return
+
+
 def _render_seed_page(
     request: dict[str, Any],
     seed_text: str,
@@ -388,6 +448,10 @@ def _render_related_pages(
             if not _normalize_text(glance):
                 glance = generate_docs_module.build_glance_fallback(paper)
             _upsert_auto_block(generate_docs_module, md_path, "速览", glance)
+            # Sync glance evidence/tldr back into front matter so related page top meta can show it
+            if glance:
+                glance_fields = generate_docs_module.parse_glance_overview_fields(glance)
+                _upsert_frontmatter_evidence(generate_docs_module, md_path, glance_fields)
 
         if record["include_deep"]:
             deep_summary = generate_docs_module.generate_deep_summary(str(md_path), str(txt_path))
