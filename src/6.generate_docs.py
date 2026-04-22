@@ -659,7 +659,7 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
     key = "## 速览"
     if key in txt:
         # 替换现有速览块
-        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\n|\n##\s|\Z)", re.S | re.M)
+        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\\n|\\n##\\s|\\Z)", re.S | re.M)
         return pattern.sub(rf"\\1{glance}\n", txt, count=1)
 
     abstract_idx = txt.find("## Abstract")
@@ -668,36 +668,6 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
         after = txt[abstract_idx:]
         return f"{before}\n\n## 速览\n{glance}\n\n---\n\n{after}"
     return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
-
-
-def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
-    """
-    在 Markdown 文本中插入/替换正文层速读区块（inline，非尾部 auto block）：
-    - 先移除已在任意位置的旧 ## 正文层速读 block
-    - 然后在 ## Abstract 之前插入新 block（归位到 inline 位置）
-    - 若没有 ## Abstract 则追加到末尾
-    - 保证新旧文件路径的 skim body 最终都落在 ## 速览 和 ## Abstract 之间
-    """
-    if not skim_body:
-        return md_text
-
-    txt = md_text or ""
-
-    # 1. 移除已在任意位置的旧 ## 正文层速读 block（包括完整 tail 残留）
-    #    Stop at top-level headings only (letter-prefixed like ## Abstract).
-    #    Internal numbered sections (## 1. / ## 2. ...) do NOT stop the scan.
-    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z]|\Z)", re.S)
-    txt = pattern.sub("", txt).rstrip()
-
-    # 2. 重新插入到 ## Abstract 之前（归位到 inline 位置）
-    abstract_marker = "## Abstract"
-    if abstract_marker in txt:
-        abstract_idx = txt.index(abstract_marker)
-        before = txt[:abstract_idx].rstrip()
-        after = txt[abstract_idx:]
-        return f"{before}\n\n## 正文层速读\n{skim_body}\n\n---\n\n{after}"
-    # 没有 ## Abstract：追加到末尾
-    return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
 
 
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
@@ -1989,16 +1959,12 @@ def process_paper(
             # 只生成速览：不拉取 PDF、不做精读总结
             return paper_id, title, known_zh_title
 
-        # PR2: 更新现有 quick 文件时也生成 skim body
-        # 1. generate_skim_body 本身已内联 fallback，无 LLM 时也返回 skeleton
-        # 2. upsert_skim_body_in_text 负责把旧 tail block 迁回 inline 位置
-        with open(md_path, "r", encoding="utf-8") as f:
-            existing_content = f.read()
-        skim_body = generate_skim_body(title, abstract_en, load_text_content(txt_path))
-        if skim_body:
-            updated_content = upsert_skim_body_in_text(existing_content, skim_body)
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(updated_content)
+        # PR2: 更新现有 quick 文件时也生成 skim body（无条件，只要还没有）
+        existing_skim_body = extract_section_tail(existing, "正文层速读") if existing else ""
+        if not existing_skim_body:
+            skim_body = generate_skim_body(title, abstract_en, load_text_content(txt_path))
+            if skim_body:
+                upsert_auto_block(md_path, "正文层速读", skim_body)
 
         if section == "deep":
             # 精读区：检查是否已有详细总结
