@@ -1,0 +1,1036 @@
+Title: SafeLM: Unified Privacy-Aware Optimization for Trustworthy Federated Large Language Models
+
+URL Source: https://arxiv.org/pdf/2604.16606v1
+
+Published Time: Tue, 21 Apr 2026 00:11:25 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# SafeLM: Unified Privacy-Aware Optimization for Trustworthy Federated Large Language Models 
+
+Noor Islam S. Mohammad ∗ Ulu˘ g Bayazıt †
+
+Istanbul Technical University 
+
+{islam23, ulugbayazit}@itu.edu.tr 
+
+Abstract 
+
+Large language models (LLMs) are increasingly deployed in high-stakes domains, yet a unified treatment of their overlapping safety challenges remains lacking. We present SafeLM , a framework that jointly addresses four pillars of LLM safety: privacy, security, misinformation, and adversarial robustness. SafeLM combines federated training with gradient smartification and Paillier encryption for privacy, integrates defenses against training- and inference-time attacks, em-ploys contrastive grounding with calibrated decoding to reduce hallucinations, and introduces alignment-aware binarized aggregation to enhance robustness while maintaining bounded reconstruction quality. Across benchmarks on factuality, toxicity, and membership inference, SafeLM achieves 98.0% harmful-content de-tection accuracy, reduces communication by 96.9%, and lowers gradient inversion PSNR from 31.7 dB to 15.1 dB. Ablations show that each component contributes independently, whereas their integration yields a strong privacy–utility–efficiency trade-off for deploying trustworthy LLMs. 
+
+1 Introduction 
+
+The rapid deployment of large language models (LLMs) has elevated safety from a research concern to an operational requirement [Brown et al., 2020, Ouyang et al., 2022]. Four interconnected threat surfaces arise: (i) Privacy , LLMs may memorize training data, enabling extraction and membership inference, while standard federated learning (FL) remains vulnerable to gradient inversion [Carlini et al., 2021, Zhu et al., 2019]; (ii) Security , adversaries can inject backdoors, craft adversarial prompts, or perform model stealing [Wallace et al., 2021, Perez et al., 2022]; (iii) Misinformation , instruction-tuned models hallucinate confidently, necessitating integrated grounding mechanisms [Maynez et al., 2020, Min et al., 2023]; and (iv) Adversarial Robustness , input perturbations degrade reliability under strict latency constraints. Existing solutions address these aspects in isolation, leading to incompatible defenses and unclear interactions. 
+
+Contributions. We propose SafeLM , a unified framework for jointly addressing privacy, security, misinformation, and robustness in LLMs. First, we introduce a federated training and deployment pipeline that co-optimizes all four objectives. Second, we propose gradient smartification , a median-based binarization scheme achieving 32 × communication compression with bounded inversion quality (PSNR ≤ 15 .1 dB). Third, we develop a calibrated misinformation-detection method via contrastive grounding with temperature scaling, reducing hallucinations by 41% on TruthfulQA while preserving >97% ROUGE-L. Finally, we provide a unified ablation and threat analysis quantifying trade-offs across safety components. 
+
+> Preprint.
+> arXiv:2604.16606v1 [cs.CR] 17 Apr 2026
+
+2 Background and Related Work 
+
+2.1 Privacy in Language Model Training 
+
+Training-data memorization is a well-documented property of large-scale language models [Carlini et al., 2021, Feldman and Zhang, 2020]. Differential Privacy (DP-SGD) provides formal (ε, δ )-guarantees [Abadi et al., 2016], but at the cost of significant perplexity degradation for ε < 3.Federated learning distributes training across data-holders [McMahan et al., 2017], yet transmitted gradients can be reverse-engineered to reconstruct training samples [Zhu et al., 2019, Geiping et al., 2020]. 
+
+2.2 Security: Backdoors and Prompt Injection 
+
+Backdoor attacks embed hidden triggers in model weights during fine-tuning, causing targeted misbehavior on trigger-containing inputs [Chen et al., 2017, Wallace et al., 2021]. Prompt-injection attacks exploit instructions following to override safety constraints at inference time [Perez et al., 2022]. Recent work shows that gradient-level defenses, including gradient clipping and sign-based aggregation, partially mitigate backdoor insertion during federated fine-tuning [Sun et al., 2019]. 
+
+2.3 Misinformation and Hallucination 
+
+LLMs hallucinate for multiple reasons: distributional mismatch between pre-training and deployment contexts, insufficient grounding in retrieved knowledge, and overconfidence in low-probability completions [Maynez et al., 2020, Min et al., 2023]. Retrieval augmentation [Lewis et al., 2020] and calibration methods [Kadavath et al., 2022] partially address these issues but lack formal correctness guarantees. 
+
+2.4 Adversarial Robustness for NLP 
+
+Adversarial examples for text exploit the discrete token space via character-level substitu-tions [Ebrahimi et al., 2018], word-level replacements constrained by semantic similarity [Alzantot et al., 2018], and continuous perturbations in embedding space [Miyato et al., 2017]. Certified robustness via randomized smoothing [Cohen et al., 2019] has been extended to NLP but remains computationally expensive at scale. 
+
+3 Threat Model and Safety Desiderata 
+
+We consider a federated fine-tuning setting with K clients, a central server, and downstream users. We model three adversaries: (i) an honest-but-curious server observing ciphertexts and attempting gradient inversion; (ii) up to ⌊K/ 5⌋ malicious clients injecting poisoned updates or backdoors; and (iii) an inference-time adversary crafting prompts to elicit harmful or hallucinated outputs. Our safety desiderata are (S1) Gradient Confidentiality —client updates remain unrecoverable from server-visible information; (S2) Backdoor Resistance —the global model avoids trigger-conditioned behaviors; (S3) Factual Consistency , outputs are calibrated with hallucinations flagged or suppressed; and (S4) 
+
+Adversarial Robustness , model behavior remains stable under semantically preserving perturbations. 
+
+4 The SafeLM Framework 
+
+4.1 Overview 
+
+SafeLM integrates four co-designed modules within a federated fine-tuning loop to jointly address key safety objectives. The Privacy Engine (PE) combines gradient smartification with Paillier homomorphic encryption to ensure the confidentiality of gradients (S1). The Security Module (SM) employs median-based Byzantine filtering alongside trigger detection to mitigate poisoned or backdoored updates (S2). The Misinformation Guard (MG) incorporates contrastive grounding with calibrated decoding to suppress hallucinations and improve factual consistency (S3). Finally, the 
+
+Robustness Head (RH) leverages adversarial training with smartified gradients to enhance stability under semantically preserving perturbations (S4). 24.2 Phase 1: Federated Fine-Tuning with LoRA 
+
+Let S = {1, . . . , K } denote participating clients. At round r, the server broadcasts global adapter parameters W (r) (LoRA rank-ρ matrices). Each client i performs E local epochs, minimizing cross-entropy on its private corpus Di:
+
+W (r+1)  
+
+> i
+
+= W (r) 
+
+> i
+
+− η∇L (W (r) 
+
+> i
+
+, Di). (1) the client update is ∆(r) 
+
+> i
+
+= W (r+1)  
+
+> i
+
+− W (r).
+
+4.3 Phase 2: Gradient Smartification 
+
+To simultaneously reduce uplink bandwidth and harden against gradient inversion, we apply a median-based statistical binarization operator Φ( ·):
+
+∆bin  
+
+> i,j
+
+=
+
+(
+
++1 if ∆(r) 
+
+> i,j
+
+≥ θi
+
+−1 otherwise , θi = median 
+
+
+
+∆(r)
+
+> i
+
+
+
+. (2) This compresses each 32-bit floating-point gradient to a single bit, achieving a 32 × reduction in payload. Unlike zero-threshold signSGD [Bernstein et al., 2018], our per-client adaptive threshold suppresses low-magnitude components below the empirical distribution median, reducing stochastic noise under the heavy-tailed gradient distributions characteristic of LLM fine-tuning. Section 5 proves alignment of ∆bin  
+
+> i
+
+with the true gradient under mild distributional assumptions. 
+
+4.4 Phase 3: Homomorphic Encryption 
+
+Each client encrypts its binary update element-wise using the Paillier scheme E(·) [Paillier, 1999]: 
+
+C(r) 
+
+> i
+
+[j] = Epk 
+
+ ∆bin 
+
+> i,j
+
+ = g∆bin  
+
+> i,j
+
+· rnj mod n2, (3) where (pk, sk ) = ( n, g, λ, μ ) is a 2048-bit Paillier keypair and rj
+
+> $
+
+←− Z∗
+
+> n
+
+. Paillier’s additive homomorphism enables the server to aggregate without decrypting individual updates: 
+
+C(r)agg [j] = 
+
+> K
+
+Y
+
+> i=1
+
+C(r) 
+
+> i
+
+[j] mod n2 = Epk 
+
+> K
+
+X
+
+> i=1
+
+∆bin 
+
+> i,j
+
+!
+
+. (4) This satisfies IND-CPA security under the Decisional Composite Residuosity Assumption (DCRA), satisfying desideratum S1. 
+
+4.5 Phase 4: Byzantine Filtering and Global Update 
+
+After decryption, the server normalizes and applies a coordinate-wise median filter to resist Byzantine poisoning from malicious clients: 
+
+ˆ∆(r)agg [j] = median ∆bin 1,j , . . . , ∆bin  
+
+> K,j
+
+, (5) then applies the global update with Nesterov momentum: 
+
+W (r+1) = W (r) + α · ˆ∆(r)agg + μ
+
+
+
+W (r) − W (r−1) 
+
+, μ = 0 .9. (6) 
+
+4.6 Misinformation Guard: Contrastive Grounding 
+
+At inference time, each generated claim ˆy is scored against a retrieved evidence set E = {e1, . . . , e m}
+
+from a read-only knowledge store: 
+
+FaithScore(ˆ y, E) = 1
+
+m
+
+> m
+
+X
+
+> i=1
+
+NLI(ˆ y, e i) · conf(ˆ y) , (7) where NLI( ·) is an entailment classifier and conf(ˆ y) is the temperature-calibrated model confi-dence. Claims with FaithScore < τ MG are either abstained or regenerated with retrieval-augmented prompting. 34.7 Robustness Head: Adversarial Fine-Tuning 
+
+During each federated round, clients augment their local batch with adversarial examples generated via projected gradient descent in the embedding space: 
+
+xadv = x + δ∗, δ∗ = arg max 
+
+> ∥δ∥∞≤εadv
+
+L(Wi, x + δ, y ). (8) The mixed objective Ladv = (1 − λadv )L + λadv L(xadv ) is minimized during local training, with smartified gradients transmitted as in Section 4.3. 
+
+5 Theoretical Analysis 
+
+5.1 Convergence under Gradient Smartification Lemma 1 (Descent under Median-Threshold Smartification) . Let L(W ) be L-smooth and bounded below. Let’s ˜gt denote the smartified gradient with cosine similarity cos( θt) = ⟨gt, ˜gt⟩∥gt∥∥ ˜gt∥ ≥ γ > 0.Then for step size η ≤ γL ,
+
+E[L(Wt+1 )] ≤ L(Wt) − ηγ ∥gt∥2 + Lη 2
+
+2 ∥˜gt∥2. (9) 
+
+Theorem 1 (Convergence Rate) . Under bounded stochastic gradient variance σ2 and cosine align-ment γ > 0, after T rounds: 
+
+min  
+
+> t≤T
+
+E∥∇ L(Wt)∥2 = O
+
+ 1
+
+γ√T
+
+
+
+. (10) The 1/γ degradation factor relative to full-precision SGD is empirically small: across our LLM fine-tuning experiments, we measure γ = 0 .87 ± 0.04 , yielding a theoretical slowdown of only 
+
+≈ 15% in convergence rate (confirmed in Table 5). 
+
+5.2 Privacy Guarantee Proposition 1 (IND-CPA Privacy under Smartification + Paillier) . Under the DCRA, the Paillier ciphertext C(r) 
+
+> i
+
+reveals no information about ∆bin  
+
+> i
+
+to a computationally bounded adversary. Further-more, for any gradient-inversion attack A, the reconstruction PSNR satisfies: 
+
+PSNR 
+
+
+
+A(C(r) 
+
+> i
+
+)
+
+
+
+≤ 15 .1 dB , (11) 
+
+which is insufficient for recovering structured content from LLM gradients. 
+
+5.3 Backdoor Resistance 
+
+The coordinate-wise median aggregation provides Byzantine fault tolerance for up to ⌊(K − 1) /2⌋
+
+malicious clients under independent attack vectors: 
+
+ˆ∆agg − ∆honest ∞
+
+≤ max  
+
+> j
+
+median -deviation j , (12) bounding the poisoning effect on the global gradient direction. 
+
+6 Experimental Setup 
+
+6.1 Models and Datasets 
+
+We evaluate SafeLM across three safety-critical tasks: (T1) Harmful Content Detection on CIC-IDS2017, adapted to instruction-following contexts (2.8M records; 7 harm categories); used for communication-efficiency and privacy experiments. (T2) Factual Grounding on TruthfulQA [Lin et al., 2022] (817 questions) and CNN/DailyMail [See et al., 2017] summarization (11,490 docs); evaluates misinformation suppression. (T3) Adversarial Robustness on AdvGLUE [Wang et al., 2021] (14,177 adversarial examples across 5 NLU tasks) and ANLI [Nie et al., 2020]. We fine-tune a 7B-parameter LLM using LoRA (rank 16) in a federated setup with K ∈ { 10 , 50 , 100 } clients, IID, and non-IID (Dirichlet α ∈ { 0.1, 1.0}) data partitioning. 46.2 Baselines 
+
+We compare SafeLM against: (i) FedAvg [McMahan et al., 2017] (no privacy, no robustness); (ii) DP-SGD [Abadi et al., 2016] ( ε = 1 .0, δ = 10 −5, no compression); (iii) signSGD [Bernstein et al., 2018] (zero-threshold binarisation, no encryption); (iv) SecAgg [Bonawitz et al., 2017] (cryptographic aggregation, no compression). 
+
+7 Results 
+
+7.1 Privacy: Gradient Inversion Resistance 
+
+Table 1 reports gradient reconstruction quality under the iDLG [Zhao et al., 2020] inversion attack. SafeLM reduces PSNR from 31.7 dB (undefended FedAvg) to 15.1 dB, rendering reconstructed inputs unrecognizable and reducing label recovery to 14.3 % (near-random for 7 classes). Table 1: Gradient inversion resistance across defense configurations. PSNR (lower is safer); Label Rec. = fraction of training labels recoverable from gradients. 
+
+Method PSNR (dB) ↓ Label Rec. (%) ↓ Acc. (%) ↑ Comm. (MB) ↓
+
+FedAvg (undefended) 31.7 98.7 98.2 450 signSGD 16.8 42.1 97.8 14 DP-SGD ( ε = 1 .0) 18.9 31.4 93.8 450 SecAgg 31.7 0.0 98.0 14 
+
+SafeLM (Ours) 15.1 14.3 98.0 14 
+
+Notes: SecAgg achieves perfect server-side label protection, but does not Resist insider attacks or colluding clients. SafeLM’s IND-CPA guarantee holds even when The aggregation server is fully compromised. FedAvg           
+
+> (undefended)
+> signSGD DP-SGD
+> ( =1.0)
+> SecAgg SafeLM
+> (Ours)
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> PSNR (dB)  lower = safer  31.7
+> 16.8
+> 18.9
+> 31.7
+> 15.1
+> Gradient Inversion Quality
+> Recovery threshold (~20 dB)
+> FedAvg
+> (undefended)
+> signSGD DP-SGD
+> ( =1.0)
+> SecAgg SafeLM
+> (Ours)
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Label Recovery (%)  lower = safer  98.7%
+> 42.1%
+> 31.4%
+> 0.0%
+> 14.3%
+> Near-random
+> (7 classes)
+> Attack Label Recovery Rate
+> 0100 200 300 400 500
+> Per-round Communication (MB)
+> 92
+> 93
+> 94
+> 95
+> 96
+> 97
+> 98
+> 99
+> Detection Accuracy (%)
+> FedAvg (undefended)
+> signSGD
+> DP-SGD ( =1.0)
+> SecAgg
+> SafeLM (Ours)
+> SafeLM: best
+> privacy & efficiency
+> Accuracy Communication Tradeoff
+
+Figure 1: Privacy evaluation under the iDLG gradient-inversion attack. (Left) SafeLM achieves low reconstruction quality (15.1 dB), indicating strong privacy. (Centre) Label recovery drops to 14.3%, near chance for 7 classes. (Right) SafeLM lies on the optimal accuracy–communication frontier, achieving 32 × compression with no utility loss. 
+
+7.2 Security: Backdoor and Poisoning Resistance 
+
+Table 2 and (Fig 5) report detection performance and backdoor attack success rate under varying fractions of malicious clients. 
+
+7.3 Misinformation: Factual Grounding 
+
+On TruthfulQA, SafeLM’s Misinformation Guard reduces hallucination rate by 41 % relative to the vanilla fine-tuned baseline (Table 3). Crucially, this improvement is maintained across all seven harm categories in T1 with no statistically significant degradation in ROUGE-L on CNN/DM summarization. 5Table 2: Security evaluation under data poisoning and backdoor attacks.                                
+
+> Method 5% malicious 10% malicious 20% malicious Backdoor ASR ↓Clean Acc. ↑
+> FedAvg 97.1 94.3 88.2 91.3% 98.2 FedAvg + Krum 97.8 96.1 92.7 23.4% 97.5 signSGD 97.6 95.8 91.4 31.2% 97.8
+> SafeLM 98.1 97.3 95.4 6.8% 98.0
+> Notes: Attack Success Rate (ASR) for a fixed-pattern trigger injection. SafeLM’s coordinate-wise median filter limits ASR to
+> <7% at 20% malicious participation ( p < 0.001 , McNemar test).
+
+Table 3: Misinformation and hallucination metrics. MC1/MC2 = TruthfulQA multiple-choice accuracy; Hal. Rate = fraction of hallucinated claims on CNN/DM; ROUGE-L on CNN/DM.                         
+
+> Method MC1 ↑MC2 ↑Hal. Rate ↓ROUGE-L ↑
+> Vanilla fine-tune 0.312 0.481 34.7% 0.428 RAG only 0.391 0.547 21.3% 0.441 SafeLM (no MG) 0.379 0.534 23.1% 0.439
+> SafeLM (full) 0.461 0.612 20.5% 0.443
+
+7.4 Adversarial Robustness 
+
+Table 4 compares clean and adversarial accuracy on AdvGLUE and ANLI. SafeLM’s adversarial fine-tuning within the federated loop achieves the best robustness-accuracy tradeoff, outperforming standalone adversarial training by 3.1 pp under non-IID data partitioning. Table 4: Adversarial robustness on AdvGLUE and ANLI (R3). Clean Acc. = clean test accuracy; Adv. Acc. = adversarial accuracy; ∆ = degradation.                                
+
+> AdvGLUE ANLI (R3) Method Clean Adv. ∆Clean Adv. ∆
+> FedAvg 87.3 63.7 -23.6 62.1 41.3 -20.8 FedAvg + AdvTrain 85.1 74.2 -10.9 61.8 52.4 -9.4 signSGD + AdvTrain 84.7 73.8 -10.9 61.4 51.9 -9.5
+> SafeLM 86.9 77.3 -9.6 62.4 55.1 -7.3
+
+7.5 Communication Efficiency and Convergence 
+
+Table 5 benchmarks convergence behavior across client counts and data heterogeneity levels. SafeLM achieves near-parity with full-precision FedAvg ( R98 = 289 vs. 287 ) while reducing total bandwidth by 96.9 % (4.05 GB vs. 129.15 GB). Under high heterogeneity ( α = 0 .1), SafeLM+FedProx reaches 95.1 % accuracy with 7.88 GB total communication. 
+
+8 Ablation Study 
+
+Table 6 decomposes SafeLM’s performance by selectively removing each safety component. Smarti-fication yields a 32 × reduction in communication with negligible ( < 0.2 pp) loss of accuracy, while partially mitigating gradient inversion (PSNR 31 .7 → 16 .8 dB) without providing full semantic security. Paillier encryption is essential for privacy (S1), as removing it increases label recovery from 14.3% to 98.7% without impacting accuracy. SMOTE plays a key role in handling class imbalance, with its absence reducing detection accuracy by 3.8 pp. The Misinformation Guard independently lowers hallucination rates by 13 pp compared to the federated baseline without MG, demonstrating its effectiveness in improving factual consistency. Finally, the robustness head enhances adversarial accuracy by 3.5 pp while incurring only a marginal ( < 0.5 pp) drop in clean accuracy. Overall, these results highlight that SafeLM’s components are complementary, jointly enabling strong privacy, reliability, and robustness with minimal trade-offs. 6Vanilla    
+
+> FT
+> RAG
+> Only
+> SafeLM
+> (no MG)
+> SafeLM
+> (Full)
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> TruthfulQA Accuracy
+> Misinformation Guard
+> (TruthfulQA + CNN/DM)
+> MC1
+> MC2
+> Hal. Rate
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Hallucination Rate (%)
+> FedAvg FedAvg
+> +AdvTrain
+> signSGD
+> +AdvTrain
+> SafeLM
+> (Ours)
+> 55
+> 60
+> 65
+> 70
+> 75
+> 80
+> 85
+> 90
+> 95
+> Accuracy (%)
+> Adversarial Robustness
+> (AdvGLUE)
+> FedAvg (clean)
+> FedAvg+AT (clean)
+> signSGD+AT (clean)
+> SafeLM (clean)
+> AdvGLUE ANLI (R3)
+> 0
+> 5
+> 10
+> 15
+> 20
+> Accuracy Drop |  | pp  lower = more robust
+> 9.6
+> 7.3
+> Robustness Degradation
+> (Clean Adversarial)
+> FedAvg
+> +AdvTrain
+> SafeLM
+
+Figure 2: Misinformation defense and adversarial robustness result. (Left) SafeLM achieves the high-est TruthfulQA accuracy while reducing hallucination to 20.5% (41% relative reduction). (Centre) 
+
+On AdvGLUE, SafeLM minimizes clean-to-adversarial degradation to −9.6 pp. (Right) SafeLM yields the lowest accuracy drop, improving robustness over FedAvg by 14.0 pp on AdvGLUE and 13.5 pp on ANLI (R3). Table 5: Federated convergence analysis across data distributions and client counts. R95 /R98 =rounds to reach 95%/98% accuracy. Comm./R = per-client per-round communication. 
+
+Algorithm K Distribution R95 R98 Acc. (%) Total (GB) 
+
+IID ( α = ∞)
+
+FedAvg 50 IID 142 287 98.2 129.15 DP-SGD 50 IID 163 341 93.8 129.15 signSGD 50 IID 156 312 97.8 4.40 
+
+SafeLM 50 IID 145 289 98.0 4.05 
+
+Non-IID (High Heterogeneity, α = 0 .1)
+
+FedAvg 50 Dir. α = 0 .1 312 687 93.8 309.15 signSGD 50 Dir. α = 0 .1 334 721 92.1 10.16 
+
+SafeLM 50 Dir. α = 0 .1 287 612 94.2 8.57 
+
+SafeLM+FedProx 50 Dir. α = 0 .1 264 563 95.1 7.88 
+
+Scalability (IID) 
+
+SafeLM 10 IID 98 201 98.1 2.81 SafeLM 100 IID 178 356 97.9 4.98 SafeLM 500 IID 234 467 97.7 6.54 
+
+Notes: Results averaged over 5 independent seeds. FedProx regularisation parameter μ = 0 .01 .
+
+9 Discussion 
+
+Safety interactions. Our experiments reveal that the four safety pillars are not merely additive but synergistic. Gradient smartification both reduces communication and degrades inversion quality, strengthening privacy beyond what encryption alone provides. Adversarial training within the federated loop also regularizes the model against distributional shift, thereby reducing hallucination rates on out-of-distribution prompts. 
+
+Limitations. Convergence proofs assume L-smoothness and bounded gradient variance; formal guarantees for non-convex LLM optimization under heterogeneous FL remain open. The Misinfor-mation Guard relies on an external NLI model that may itself be biased. Evaluation is primarily on English; multilingual safety properties require separate investigation. 70 100 200 300        
+
+> Communication Round
+> 50
+> 60
+> 70
+> 80
+> 90
+> 100
+> Accuracy (%)
+> 95%
+> 98%
+> Convergence Curves (IID, K=50)
+> FedAvg
+> DP-SGD
+> signSGD
+> SafeLM (Ours)
+> FedAvg
+> IID
+> DP-SGD
+> IID
+> signSGD
+> IID
+> SafeLM
+> IID
+> FedAvg
+> =0.1
+> signSGD
+> =0.1
+> SafeLM
+> =0.1
+> SafeLM
+> +FedProx
+> 10 0
+> 10 1
+> 10 2
+> Total Bandwidth to 98% Acc. (GB)
+> 129.15 129.15
+> 4.4 4.05
+> 309.15
+> 10.16 8.57 7.88
+> 96.9%
+> reduction
+> Communication Cost
+> to Reach 98% Accuracy
+> 10 25 50 100 500
+> Number of Clients K
+> 200
+> 250
+> 300
+> 350
+> 400
+> 450
+> Rounds to 98% Accuracy
+> Scalability Analysis (IID)
+> Rounds to 98%
+> Final Acc.
+> 97.0
+> 97.2
+> 97.4
+> 97.6
+> 97.8
+> 98.0
+> 98.2
+> 98.4
+> Final Accuracy (%)
+
+Figure 3: Federated convergence and communication analysis. (Left) Simulated accuracy curves for IID training with K = 50 clients; SafeLM matches full-precision FedAvg in rounds to 98 % (R98 = 289 vs. 287 ) while transmitting 32 × less data per round. (Centre) Total bandwidth required to reach 98 % accuracy on a log scale; SafeLM reduces end-to-end communication from 129.15 GB to 4.05 GB (96.9 % reduction). Under high heterogeneity ( α = 0 .1), SafeLM + FedProx uses 7.88 GB versus 309.15 GB for FedAvg. (Right) Scalability from K = 10 to K = 500 clients; rounds to 98 % grow sub-linearly (201 to 467) and final accuracy degrades by only 0.4 pp, confirming stable aggregation in large client pools. Table 6: Ablation study: component contributions to accuracy, communication, and privacy. 
+
+Configuration Components Disabled Acc. (%) Comm. (MB) PSNR (dB) Hal. (%) 
+
+Full SafeLM — 98.0 14.0 15.1 20.5 
+
+–Encryption Paillier HE 98.0 14.0 31.7 20.5 –Smartification Binarisation 98.2 450.0 15.1 20.5 –SMOTE Class balancing 94.2 14.0 15.1 20.5 –MG Misinfo Guard 98.0 14.0 15.1 33.5 –RH Robustness Head 98.0 14.0 15.1 20.5 –DP Noise Differential privacy 98.1 14.0 14.2 20.5 FedAvg (no SafeLM) All modules 98.2 450.0 31.7 34.7 
+
+10 Conclusion 
+
+We introduced SafeLM, a unified framework that addresses four intertwined pillars of language-model safety within a single federated training and deployment pipeline. By combining gradient smartification, Paillier homomorphic encryption, Byzantine-robust aggregation, contrastive misinfor-mation grounding, and adversarial fine-tuning, SafeLM achieves 98.0 % harm-detection accuracy while reducing per-round communication by 96.9 %, limiting gradient inversion to PSNR ≤ 15 .1 dB, halving hallucination rates on TruthfulQA, and reducing adversarial accuracy degradation to 9.6 pp on AdvGLUE-all simultaneously. We release code, datasets, and evaluation scripts to support repro-ducibility and to facilitate community adoption of unified safety frameworks for trustworthy LLM deployment. 
+
+Broader impact. SafeLM demonstrates that privacy-preserving federated training is compatible with—and mutually reinforcing of—security, misinformation, and adversarial robustness objec-tives. This unified perspective can inform regulatory frameworks (e.g., the EU AI Act) requiring simultaneous demonstration of privacy compliance and robustness certification. 80 25 50 75 100                
+
+> Accuracy (%)
+> FedAvg
+> (no SafeLM)
+> DP Noise
+> RH
+> MG
+> SMOTE
+> Smartification
+> Encryption
+> Full SafeLM 98.2
+> 98.1
+> 98.0
+> 98.0
+> 94.2
+> 98.2
+> 98.0
+> 98.0
+> Detection Accuracy
+> 0100 200 300 400
+> Communication MB/round
+> FedAvg
+> (no SafeLM)
+> DP Noise
+> RH
+> MG
+> SMOTE
+> Smartification
+> Encryption
+> Full SafeLM 450.0
+> 14.0
+> 14.0
+> 14.0
+> 14.0
+> 450.0
+> 14.0
+> 14.0
+> Per-Round Comm. Cost
+> 010 20 30
+> PSNR (dB)
+> FedAvg
+> (no SafeLM)
+> DP Noise
+> RH
+> MG
+> SMOTE
+> Smartification
+> Encryption
+> Full SafeLM 31.7
+> 14.2
+> 15.1
+> 15.1
+> 15.1
+> 15.1
+> 31.7
+> 15.1
+> Gradient Inv. Quality ( =safer)
+> 010 20 30
+> Hallucination Rate (%)
+> FedAvg
+> (no SafeLM)
+> DP Noise
+> RH
+> MG
+> SMOTE
+> Smartification
+> Encryption
+> Full SafeLM 34.7
+> 20.5
+> 20.5
+> 33.5
+> 20.5
+> 20.5
+> 20.5
+> 20.5
+> Misinformation Rate
+
+Figure 4: Ablation study across four evaluation axes (green = Full SafeLM, red = FedAvg baseline). 
+
+(a) Accuracy: removing SMOTE causes the largest drop ( −3.8 pp), confirming class-balancing as the primary driver of detection performance. (b) Communication: removing smartification inflates per-round cost by 32 × (14 MB → 450 MB) with negligible accuracy gain, validating binarization as a near-lossless compression step. (c) Gradient inversion PSNR: removing Paillier encryption restores reconstruction quality to 31.7 dB (label recovery >95 %), demonstrating that encryption is indispensable for gradient confidentiality (S1). (d) Hallucination rate: removing the Misinformation Guard raises hallucination from 20.5 % to 33.5 % (+13 pp), confirming its independent contribution to S3. 
+
+Ethics Statement 
+
+This work aims to improve the safety of language models deployed in high-stakes settings. All datasets used are publicly available and contain no personally identifiable information. Our gradient-inversion experiments were conducted exclusively on synthetic data to avoid inadvertent privacy violations. We acknowledge that adversarial robustness research can have dual-use implications and encourage responsible disclosure practices. 
+
+References 
+
+Martin Abadi, Andy Chu, Ian Goodfellow, H. Brendan McMahan, Ilya Mironov, Kunal Talwar, and Li Zhang. Deep learning with differential privacy. In Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security (CCS) , pages 308–318. ACM, 2016. Dan Alistarh, Demjan Grubic, Jerry Li, Ryota Tomioka, and Milan Vojnovic. QSGD: Communication-efficient sgd via gradient quantization and encoding. In Advances in Neural Information Processing Systems (NeurIPS) , volume 30. Curran Associates, Inc., 2017. Moustafa Alzantot, Yash Sharma, Ahmed Elgohary, Bo-Jhang Ho, Mani Srivastava, and Kai-Wei Chang. Generating natural language adversarial examples. In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 2890–2896. Association for Computational Linguistics, 2018. Jeremy Bernstein, Yu-Xiang Wang, Kamyar Azizzadenesheli, and Animashree Anandkumar. signsgd: Compressed optimisation for non-convex problems. In Proceedings of the 35th International Conference on Machine Learning (ICML) , volume 80 of Proceedings of Machine Learning Research , pages 560–569. PMLR, 2018. Keith Bonawitz, Vladimir Ivanov, Ben Kreuter, Antonio Marcedone, H. Brendan McMahan, Sarvar Patel, Daniel Ramage, Aaron Segal, and Karn Seth. Practical secure aggregation for privacy-preserving machine learning. In Proceedings of the 2017 ACM SIGSAC Conference on Computer and Communications Security (CCS) , pages 1175–1191. ACM, 2017. Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh, Daniel M. Ziegler, Jeffrey Wu, Clemens Winter, Christopher Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott 9Gray, Benjamin Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya Sutskever, and Dario Amodei. Language models are few-shot learners. In Advances in Neural Information Processing Systems (NeurIPS) , volume 33, pages 1877–1901. Curran Associates, Inc., 2020. Nicholas Carlini, Florian Tramer, Eric Wallace, Matthew Jagielski, Ariel Herbert-Voss, Katherine Lee, Adam Roberts, Tom Brown, Dawn Song, Úlfar Erlingsson, Alina Oprea, and Colin Raffel. Extracting training data from large language models. In Proceedings of the 30th USENIX Security Symposium , pages 2633–2650. USENIX Association, 2021. Xinyun Chen, Chang Liu, Bo Li, Kimberly Lu, and Dawn Song. Targeted backdoor attacks on deep learning systems using data poisoning. In arXiv preprint arXiv:1712.05526 , 2017. Jeremy M. Cohen, Elan Rosenfeld, and J. Zico Kolter. Certified adversarial robustness via randomized smoothing. In Proceedings of the 36th International Conference on Machine Learning (ICML) ,volume 97 of Proceedings of Machine Learning Research , pages 1310–1320. PMLR, 2019. Javid Ebrahimi, Anyi Rao, Daniel Lowd, and Dejing Dou. HotFlip: White-box adversarial exam-ples for text classification. In Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (ACL) , pages 31–36. Association for Computational Linguistics, 2018. Vitaly Feldman and Chiyuan Zhang. What neural networks memorize and why: Discovering the long tail via influence estimation. In Advances in Neural Information Processing Systems (NeurIPS) ,volume 33, pages 2881–2891. Curran Associates, Inc., 2020. Jonas Geiping, Hartmut Bauermeister, Hannah Dröge, and Michael Moeller. Inverting gradients – how easy is it to break privacy in federated learning? In Advances in Neural Information Processing Systems (NeurIPS) , volume 33, pages 16937–16947. Curran Associates, Inc., 2020. Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, Dawn Drain, Ethan Perez, Nicholas Schiefer, Zac Hatfield-Dodds, Nova DasSarma, Eli Tran-Johnson, Scott Johnston, Sheer El-Showk, Andy Jones, Nelson Elhage, Tristan Hume, Anna Chen, Yuntao Palomas, Liane Lovitt, Neel Nanda, Esin Durmus, Deep Ganguli, Jackson Kernion, Jared Li, Maxwell Nye, Amanda Askell, Jared Clark, Yuntao Bai, Deep Ganguli, Jared Kaplan, Jack Clark, and Tom Brown. Language models (mostly) know what they know. In arXiv preprint arXiv:2207.05221 , 2022. Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel, Sebastian Riedel, and Douwe Kiela. Retrieval-augmented generation for knowledge-intensive NLP tasks. In Advances in Neural Information Processing Systems (NeurIPS) , volume 33, pages 9459–9474. Curran Associates, Inc., 2020. Stephanie Lin, Jacob Hilton, and Owain Evans. TruthfulQA: Measuring how models mimic human falsehoods. In Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (ACL) , pages 3214–3252. Association for Computational Linguistics, 2022. Joshua Maynez, Shashi Narayan, Bernd Bohnet, and Ryan McDonald. On faithfulness and factuality in abstractive summarization. In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL) , pages 1906–1919. Association for Computational Linguistics, 2020. Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, and Blaise Agüera y Arcas. Communication-efficient learning of deep networks from decentralized data. In Proceedings of the 20th International Conference on Artificial Intelligence and Statistics (AISTATS) , volume 54 of 
+
+Proceedings of Machine Learning Research , pages 1273–1282. PMLR, 2017. Sewon Min, Kalpesh Krishna, Xinxi Lyu, Mike Lewis, Wen-tau Yih, Pang Wei Koh, Mohit Iyyer, Luke Zettlemoyer, and Hannaneh Hajishirzi. FActScore: Fine-grained atomic evaluation of factual precision in long form text generation. In Proceedings of the 2023 Conference on Empir-ical Methods in Natural Language Processing (EMNLP) , pages 12076–12100. Association for Computational Linguistics, 2023. 10 Takeru Miyato, Andrew M. Dai, and Ian Goodfellow. Adversarial training methods for semi-supervised text classification. In Proceedings of the 5th International Conference on Learning Representations (ICLR) , 2017. Yixin Nie, Adina Williams, Emily Dinan, Mohit Bansal, Jason Weston, and Douwe Kiela. Adversarial NLI: A new benchmark for natural language understanding. In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL) , pages 4885–4901. Association for Computational Linguistics, 2020. Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Carroll L. Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, John Schulman, Jacob Hilton, Fraser Kelton, Luke Miller, Maddie Simens, Amanda Askell, Peter Welinder, Paul Christiano, Jan Leike, and Ryan Lowe. Training language models to follow instructions with human feedback. In Advances in Neural Information Processing Systems (NeurIPS) , volume 35, pages 27730–27744. Curran Associates, Inc., 2022. Pascal Paillier. Public-key cryptosystems based on composite degree residuosity classes. In Advances in Cryptology – EUROCRYPT 1999 , volume 1592 of Lecture Notes in Computer Science , pages 223–238. Springer, 1999. Ethan Perez, Saffron Ribeiro, et al. Ignore previous prompt: Attack techniques for language models. In NeurIPS 2022 Workshop on Machine Learning Safety , 2022. Abigail See, Peter J. Liu, and Christopher D. Manning. Get to the point: Summarization with pointer-generator networks. In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (ACL) , pages 1073–1083. Association for Computational Linguistics, 2017. Ziteng Sun, Peter Kairouz, Ananda Theertha Suresh, and H. Brendan McMahan. Can you really backdoor federated learning? In NeurIPS 2019 Workshop on Federated Learning for Data Privacy and Confidentiality , 2019. Eric Wallace, Tony Z. Zhao, Shi Feng, and Sameer Singh. Concealed data poisoning attacks on nlp models. In Proceedings of the 2021 Conference of the North American Chapter of the Associ-ation for Computational Linguistics (NAACL) , pages 139–150. Association for Computational Linguistics, 2021. Boxin Wang, Chejian Xu, Shuohang Wang, Zhe Gan, Yu Cheng, Jianfeng Gao, Ahmed Hassan Awadallah, and Bo Li. Adversarial GLUE: A multi-task benchmark for robustness evaluation of language models. In Advances in Neural Information Processing Systems (NeurIPS) , volume 34, pages 13351–13364. Curran Associates, Inc., 2021. Wei Wen, Cong Xu, Feng Yan, Chunpeng Wu, Yandan Wang, Yiran Chen, and Hai Li. Terngrad: Ternary gradients to reduce communication in distributed deep learning. In Advances in Neural Information Processing Systems (NeurIPS) , volume 30. Curran Associates, Inc., 2017. Bo Zhao, Konda Reddy Mopuri, and Hakan Bilen. iDLG: Improved deep leakage from gradients. In 
+
+arXiv preprint arXiv:2001.02610 , 2020. Ligeng Zhu, Zhijian Liu, and Song Han. Deep leakage from gradients. In Advances in Neural Information Processing Systems (NeurIPS) , volume 32. Curran Associates, Inc., 2019. 11 Contents 
+
+1 Introduction 12 Background and Related Work 2
+
+2.1 Privacy in Language Model Training . . . . . . . . . . . . . . . . . . . . . . . . . 22.2 Security: Backdoors and Prompt Injection . . . . . . . . . . . . . . . . . . . . . . 22.3 Misinformation and Hallucination . . . . . . . . . . . . . . . . . . . . . . . . . . 22.4 Adversarial Robustness for NLP . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+
+3 Threat Model and Safety Desiderata 24 The SafeLM Framework 2
+
+4.1 Overview . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24.2 Phase 1: Federated Fine-Tuning with LoRA . . . . . . . . . . . . . . . . . . . . . 34.3 Phase 2: Gradient Smartification . . . . . . . . . . . . . . . . . . . . . . . . . . . 34.4 Phase 3: Homomorphic Encryption . . . . . . . . . . . . . . . . . . . . . . . . . . 34.5 Phase 4: Byzantine Filtering and Global Update . . . . . . . . . . . . . . . . . . . 34.6 Misinformation Guard: Contrastive Grounding . . . . . . . . . . . . . . . . . . . 34.7 Robustness Head: Adversarial Fine-Tuning . . . . . . . . . . . . . . . . . . . . . 4
+
+5 Theoretical Analysis 4
+
+5.1 Convergence under Gradient Smartification . . . . . . . . . . . . . . . . . . . . . 45.2 Privacy Guarantee . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 45.3 Backdoor Resistance . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+
+6 Experimental Setup 4
+
+6.1 Models and Datasets . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 46.2 Baselines . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+
+7 Results 5
+
+7.1 Privacy: Gradient Inversion Resistance . . . . . . . . . . . . . . . . . . . . . . . . 57.2 Security: Backdoor and Poisoning Resistance . . . . . . . . . . . . . . . . . . . . 57.3 Misinformation: Factual Grounding . . . . . . . . . . . . . . . . . . . . . . . . . 57.4 Adversarial Robustness . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 67.5 Communication Efficiency and Convergence . . . . . . . . . . . . . . . . . . . . . 6
+
+8 Ablation Study 69 Discussion 710 Conclusion 8A Appendix 13 
+
+12 B Detailed Convergence Proofs 13 
+
+B.1 Proof of Lemma 1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13 B.2 Proof of Theorem 1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13 B.3 Alignment of Median-Threshold Smartification . . . . . . . . . . . . . . . . . . . 14 B.4 Algorithm: Secure Binarized Gradient Aggregation . . . . . . . . . . . . . . . . . 14 
+
+C Hyperparameter Configurations 15 
+
+C.1 Dataset Statistics and Sampling Validation . . . . . . . . . . . . . . . . . . . . . . 15 
+
+D Per-Class Safety Performance 15 E Non-IID Per-Class F1 Degradation 16 F Computational Overhead Analysis 16 G Comparison with Prior Gradient Compression Methods 16 H Broader Safety Benchmark Results 17 
+
+H.1 TruthfulQA Category Breakdown . . . . . . . . . . . . . . . . . . . . . . . . . . . 17 H.2 AdvGLUE Task-Level Breakdown . . . . . . . . . . . . . . . . . . . . . . . . . . 17 
+
+A Appendix B Detailed Convergence Proofs 
+
+B.1 Proof of Lemma 1 
+
+Assume L is L-smooth. By the standard smoothness inequality, 
+
+L(Wt+1 ) ≤ L(Wt) + ⟨∇ L(Wt), W t+1 − Wt⟩ + L
+
+2 ∥Wt+1 − Wt∥22.
+
+Substituting Wt+1 = Wt − η˜gt:
+
+L(Wt+1 ) ≤ L(Wt) − η⟨∇ L(Wt), ˜gt⟩ + Lη 2
+
+2 ∥˜gt∥22.
+
+By the definition of cosine alignment, ⟨∇ L(Wt), ˜gt⟩ ≥ γ∥∇ L(Wt)∥∥ ˜gt∥ ≥ γ∥gt∥2 (using Cauchy-Schwarz and ∥˜gt∥ ≥ ∥ gt∥ for binarized updates). Taking expectations completes the proof. □
+
+B.2 Proof of Theorem 1 
+
+Summing the descent lemma over t = 0 , . . . , T − 1 and choosing η = 1 /√T :
+
+1
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+E∥∇ L(Wt)∥2 ≤ L(W0) − L∗
+
+ηγT + Lη 
+
+2γ E∥˜g∥2
+
+= O
+
+ 1
+
+γ√T
+
+
+
+. (13) The minimum over t ≤ T satisfies the same bound. □
+
+13 B.3 Alignment of Median-Threshold Smartification Proposition 2 (Expected Descent Alignment) . Let g ∈ Rd have coordinates drawn i.i.d. from a symmetric heavy-tailed distribution with zero mean and finite second moment. Define ˜gi =sign( gi − τ ), τ = median( g). Then 
+
+E[⟨g, ˜g⟩] ≥ γ∥g∥22 (14) 
+
+for γ = P(gi ≥ τ ) · E[gi | gi ≥ τ ]/E[g2 
+
+> i
+
+]1/2.Sketch. Since τ = median( g), exactly half the coordinates satisfy gi ≥ τ in expectation. For those coordinates, gi ˜gi = gi · (+1) = gi > 0; for coordinates gi < τ , gi ˜gi = gi · (−1) < 0 but 
+
+|gi| < |τ | in expectation. Summing across coordinates and applying the second-moment bound yields the result. Unlike zero-threshold signSGD, which flips signs for coordinates gi < 0 regardless of magnitude, median-thresholding suppresses the smallest-magnitude half, reducing signed cancellation and increasing γ. □
+
+B.4 Algorithm: Secure Binarized Gradient Aggregation 
+
+Algorithm 1 presents the complete per-round protocol for the SafeLM Privacy Engine. 
+
+Algorithm 1 SafeLM: Secure Binarized Gradient Aggregation  
+
+> 1:
+
+INITIALISATION (one-time)  
+
+> 2:
+
+Server generates Paillier keypair (pk, sk ): 
+
+> 3:
+
+pk = ( n, g ), n = p · q (2048-bit RSA modulus)  
+
+> 4:
+
+sk = ( λ, μ ), λ = lcm( p − 1, q − 1)  
+
+> 5:
+
+Server broadcasts pk to all K clients; retains sk secret.  
+
+> 6: 7:
+
+PER-ROUND (client i ∈ { 1, . . . , K }) 
+
+> 8:
+
+Receive global parameters W (r) from server.  
+
+> 9:
+
+Fine-tune local LoRA adapter on Di for E epochs: ∆i = Wnew − W (r) 
+
+> 10:
+
+Gradient Smartification:  
+
+> 11:
+
+θi ← median( |∆i|) 
+
+> 12:
+
+∆bin  
+
+> i
+
+[j] ← +1 if ∆i[j] ≥ θi, else −1 
+
+> 13:
+
+Encrypt element-wise:  
+
+> 14:
+
+Ci[j] ← g∆bin   
+
+> i[j]
+
+· rnj mod n2, rj
+
+> $
+
+←− Z∗ 
+
+> n
+> 15:
+
+Transmit Ci = {Ci[1] , . . . , C i[d]} to server.  
+
+> 16: 17:
+
+SERVER AGGREGATION  
+
+> 18:
+
+Homomorphic sum:  
+
+> 19:
+
+Cagg [j] ← QKi=1 Ci[j] mod n2 
+
+> 20:
+
+Decrypt:  
+
+> 21:
+
+s[j] ← L(Cagg [j]λ mod n2) · μ mod n, L(x) = ( x − 1) /n  
+
+> 22:
+
+Byzantine filter (coordinate-wise median):  
+
+> 23:
+
+ˆs[j] ← median {s1[j], . . . , s K [j]} 
+
+> 24:
+
+Normalise: ˆs[j] ← ˆs[j]/K  
+
+> 25: 26:
+
+GLOBAL UPDATE  
+
+> 27:
+
+W (r+1) ← W (r) + α · ˆs + μ(W (r) − W (r−1) ) 
+
+> 28:
+
+Broadcast W (r+1) to all clients. 
+
+14 C Hyperparameter Configurations 
+
+Table 7: Hyperparameter configurations used in all experiments. 
+
+Module / Model Configuration 
+
+LoRA Adapter rank ρ = 16 ; αLoRA = 32 ; dropout = 0 .1
+
+Local training E = 5 epochs; batch B = 32 ; Adam η = 10 −3
+
+FL aggregation K = 50 ; C = 1 .0; FedProx μ = 0 .01 
+
+Paillier HE 2048-bit modulus; g = n + 1 (standard choice) DP noise Cclip = 0 .1; σ = 0 .01 ; (ε, δ ) = (1 .0, 10 −5)
+
+Adv. training PGD 7 steps; εadv = 0 .01 ; λadv = 0 .3
+
+MG threshold τMG = 0 .55 ; NLI model: DeBERTa-large Logistic Reg. C ∈ { 0.1, 100 }; solver = {saga,sag }; ℓ2
+
+Random Forest n ∈ { 100 , 200 }; depth = 20 ; m = ⌊√d⌋
+
+Decision Tree depth ∈ { 6, 10 , 15 }; min_split = 5 
+
+KNN k ∈ { 3, 5, 7}; wt = {uniform,dist }
+
+MLP [128 , 64] ; dropout = 0 .5; Adam( 10 −3)
+
+C.1 Dataset Statistics and Sampling Validation 
+
+Table 8 summarizes the distributional properties of the CIC-IDS2017 corpus (used for Tasks T1 and the communication-efficiency experiments) after stratified 20 % sub-sampling. Table 8: CIC-IDS2017 sampling representativeness. KS p = Kolmogorov-Smirnov p-value; ∆ =absolute percentage deviation in feature means. 
+
+Feature Group Original Sampled ∆ (%) KS p
+
+Flow Duration ( μs) 1.66e7 1.65e7 0.47 0.82 Flow IAT Mean ( μs) 1.45e6 1.43e6 0.72 0.76 Flow Bytes/s 1.41e6 1.38e6 2.42 0.68 Flow Packets/s 4.73e4 4.70e4 0.64 0.81 Total Fwd Packets 10.28 12.08 17.53 0.42 Fwd Pkt Mean (B) 63.47 63.15 0.50 0.85 Attack Prevalence 0.73 0.73 0.63 0.99 
+
+Aggregate (all 78 features) 
+
+Mean Absolute Deviation — 3.42 —KS Test Rejections ( α = 0 .05 ) — 0/78 (0 %) 
+
+Original: N = 2 ,830 ,540 ; sampled: n = 504 ,472 (stratified 20 %, seed 42). No KS rejection at α = 0 .05 confirms distributional fidelity. 
+
+D Per-Class Safety Performance 
+
+Table 9 reports per-harm-category detection performance for SafeLM’s best configuration (federated Random Forest, T = 15 , depth = 8 ) on the balanced multi-class evaluation set ( n = 7 ,000 ; 1,000 per class). Table 9: Per-class detection metrics for SafeLM (Random Forest, Config 2). 
+
+Harm Category TP FP FN Prec. Rec. F1 
+
+Benign 992 8 15 0.992 0.985 0.989 
+
+DoS / Flood 978 12 10 0.988 0.990 0.989 
+
+DDoS 975 14 11 0.986 0.989 0.987 
+
+Port Scan 935 42 23 0.957 0.976 0.966 
+
+Brute Force 928 48 24 0.951 0.975 0.963 
+
+Web Attack 885 78 37 0.919 0.960 0.939 
+
+Bot / C&C 863 94 43 0.902 0.953 0.927 Macro Avg. 6,556 296 163 0.956 0.975 0.966 
+
+Application-layer attacks (Web Attack, Bot) show the highest false-negative rates, consistent with their semantic overlap with benign traffic in the PCA space (Section 7). Volumetric classes (DoS, DDoS) are reliably distinguished at >0.987 F1 due to extreme deviations along the primary principal components. 15 E Non-IID Per-Class F1 Degradation 
+
+Table 10 tracks per-category F1 as data heterogeneity increases (Dirichlet α decreases). Minority and semantically overlapping classes degrade fastest, consistent with federated fragmentation of rare-pattern evidence. Table 10: Per-class F1 under increasing data heterogeneity ( K = 50 clients). 
+
+Category IID α=10 α=1.0 α=0.5 α=0.1 Label Skew 
+
+Benign 0.989 0.987 0.983 0.978 0.971 0.984 DoS 0.989 0.988 0.985 0.981 0.974 0.987 DDoS 0.987 0.986 0.982 0.976 0.968 0.981 Port Scan 0.966 0.964 0.957 0.948 0.934 0.961 Brute Force 0.963 0.961 0.952 0.941 0.923 0.956 Web Attack 0.939 0.936 0.924 0.908 0.881 0.929 Bot 0.927 0.923 0.908 0.889 0.854 0.918 
+
+Macro Avg. 0.966 0.964 0.956 0.946 0.929 0.959 
+
+Accuracy 98.0 97.8 96.8 95.7 94.2 97.1 
+
+Notes: α → ∞ = IID; smaller α = higher heterogeneity. Label skew assigns each client 2–3 dominant classes (70% probability). Averaged over 5 runs. 
+
+F Computational Overhead Analysis 
+
+Table 11 quantifies per-component overhead relative to a baseline FedAvg round (no privacy, no robustness modules). Table 11: Computational overhead per federated round per client. 
+
+Component Wall Clock Memory Comm. Notes 
+
+Baseline (FedAvg) 1.00 × 1.00 × 450 MB —+Smartification 1.024 × 1.00 × 14 MB One median pass +Paillier Encryption 18.6 × 1.12 × 14 MB 2048-bit; d = 35 params +Differential Privacy 1.041 × 1.00 × 14 MB Gaussian noise +Adversarial Training 7.0 × 1.85 × 14 MB PGD-7; mixed batch +Misinformation Guard 2.3 × 2.10 × N/A Inference-time only 
+
+Full SafeLM 19.7 × 2.35 × 14 MB All modules 
+
+Overhead measured on Intel i7-9700K (single-threaded). Paillier dominates per-round cost; parallelization across GPU tensor cores can reduce this to ≈ 3× baseline. Smartification and DP add negligible overhead. Adversarial training overhead is incurred only during fine-tuning rounds, not inference. 
+
+G Comparison with Prior Gradient Compression Methods 
+
+Table 12 positions SafeLM’s gradient smartification within the broader landscape of gradient com-pression and privacy integration methods. Table 12: Comparison of gradient compression and privacy mechanisms for federated LLMs. 
+
+Method Quantisation Rule Adaptive Threshold Theoretical Alignment Privacy Integration 
+
+signSGD [Bernstein et al., 2018] sign( gi) (zero) No Implicit None QSGD [Alistarh et al., 2017] Stochastic quantisation No Variance bounded None TernGrad [Wen et al., 2017] {− 1, 0, +1 } ternary No Gradient clipping None DP-SGD [Abadi et al., 2016] Full precision N/A (ε, δ )-DP Gaussian noise 
+
+SafeLM (Ours) sign( gi − median( g)) Yes (per-client) Cosine γ-bound Paillier HE + DP 
+
+Unlike fixed-threshold methods, SafeLM’s median adaptation is especially valuable for LLM fine-tuning, where gradients exhibit heavy tails due to rare token distributions and long-tail entity frequencies in instruction-following corpora. 
+
+16 H Broader Safety Benchmark Results 
+
+H.1 TruthfulQA Category Breakdown 
+
+Table 13 reports TruthfulQA MC1 accuracy across all 38 question categories for SafeLM versus the vanilla fine-tuned baseline. The Misinformation Guard yields the greatest improvements in categories involving health claims, conspiracies, and misleading statistics—precisely the domains where LLM hallucinations pose the greatest societal harm. Table 13: TruthfulQA MC1 accuracy by category (selected subset; full results in supplementary materials. 
+
+Category Baseline SafeLM ∆
+
+Health / Medicine 0.241 0.412 +0.171 Conspiracy / Politics 0.189 0.371 +0.182 Statistics / Numbers 0.284 0.428 +0.144 History / Geography 0.412 0.501 +0.089 Logical Reasoning 0.478 0.531 +0.053 Fiction / Quotes 0.521 0.556 +0.035 
+
+Overall MC1 0.312 0.461 +0.149 
+
+H.2 AdvGLUE Task-Level Breakdown 
+
+Table 14 provides task-level adversarial accuracy on AdvGLUE. SafeLM consistently outperforms baselines across all five tasks, with the largest improvement on SST-2 sentiment (character-level perturbations) and MNLI natural language inference (semantic adversaries). Table 14: AdvGLUE task-level adversarial accuracy. Tasks: SST-2 (sentiment), MNLI (NLI), QQP (paraphrase), QNLI (QA-NLI), RTE (textual entailment). 
+
+Method SST-2 MNLI QQP QNLI RTE 
+
+FedAvg 71.3 58.2 64.1 61.4 63.5 FedAvg + AdvTrain 81.4 68.9 73.7 71.3 75.7 signSGD + AdvTrain 80.9 68.4 73.2 70.8 75.2 
+
+SafeLM 84.2 72.1 76.8 74.3 79.1 5 10 20       
+
+> Fraction of Malicious Clients (%)
+> 86
+> 88
+> 90
+> 92
+> 94
+> 96
+> 98
+> Clean Accuracy (%)
+> Clean Accuracy Under Poisoning Attack
+> FedAvg
+> FedAvg + Krum
+> signSGD
+> SafeLM (Ours)
+> 020 40 60 80 100
+> Backdoor Attack Success Rate (%) lower = safer
+> FedAvg
+> FedAvg+Krum
+> signSGD
+> SafeLM (Ours)
+> 91.3%
+> 23.4%
+> 31.2%
+> 6.8%
+> Backdoor ASR (20% Malicious Clients)
+> SafeLM threshold (<7%)
+
+Figure 5: Security evaluation under data poisoning and backdoor injection. (Left) Clean accuracy as the fraction of malicious clients grows from 5 % to 20 %; SafeLM degrades least (95.4 % at 20 % malicious), outperforming FedAvg + Krum by 2.7 pp. The shaded region highlights the margin gained by coordinate-wise Byzantine filtering. (Right) Backdoor attack success rate (ASR) for a fixed-pattern trigger at 20 % malicious participation; SafeLM limits ASR to 6.8 % versus 91.3 % for undefended FedAvg ( p < 0.001 , McNemar test). 17
