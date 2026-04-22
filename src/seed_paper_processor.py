@@ -415,6 +415,18 @@ def _render_related_pages(
     related_dir: Path,
     generate_docs_module: Any,
 ) -> list[dict[str, str]]:
+    """
+    PR3: Refactored to use full-text priority + aligned with PR2 body contract.
+
+    Text source priority (per PR2 spec):
+    - Prefer: ensure_text_content(pdf_url, txt_path) → full text
+    - Fallback: abstract (never interrupt workspace for a single related failure)
+
+    Body contract (per PR2 spec):
+    - All related pages now have 4-section skim body (like main链路)
+    - Generated via generate_skim_body(), not abstract-only build_markdown_content
+    - Existing pages migrated via upsert_skim_body_in_text (inline, not tail)
+    """
     written: list[dict[str, str]] = []
     for record in _build_related_records(selection):
         paper = record["paper"]
@@ -422,29 +434,72 @@ def _render_related_pages(
         md_path = _build_related_output_path(related_dir, record["basename"], ".md")
         txt_path = _build_related_output_path(related_dir, record["basename"], ".txt")
         tags = list(paper.get("llm_tags") or [])
-        md_path.write_text(
-            generate_docs_module.build_markdown_content(
-                paper,
-                "related-paper",
-                paper_title,
-                _normalize_text(paper.get("abstract")),
-                tags,
-            ),
-            encoding="utf-8",
+        abstract = _normalize_text(paper.get("abstract"))
+        # Use validated URL for text extraction (only allowed hosts: arxiv, openreview, semanticscholar)
+        pdf_url = _validate_related_link(paper.get("link") or paper.get("pdf_url") or "")
+
+        # PR3: Prepare paper_text for both quick and deep modes
+        # Priority: full text (ensure_text_content) > abstract fallback
+        paper_text = ""
+        if record["include_quick"] or record["include_deep"]:
+            if pdf_url and hasattr(generate_docs_module, "ensure_text_content"):
+                try:
+                    paper_text = generate_docs_module.ensure_text_content(pdf_url, str(txt_path))
+                except Exception:
+                    paper_text = ""
+            # Fallback: use abstract if text extraction failed or no pdf_url
+            if not paper_text:
+                if not txt_path.exists():
+                    txt_path.write_text(abstract, encoding="utf-8")
+                paper_text = abstract
+
+        # PR3: Generate skim body first (aligns with PR2 body contract)
+        # Store in paper["_skim_body"] so build_markdown_content uses it
+        skim_body = ""
+        if hasattr(generate_docs_module, "generate_skim_body"):
+            try:
+                skim_body = generate_docs_module.generate_skim_body(
+                    paper_title,
+                    abstract,
+                    paper_text,
+                ) or ""
+            except Exception:
+                skim_body = ""
+        if not skim_body and hasattr(generate_docs_module, "_build_skim_body_fallback"):
+            skim_body = generate_docs_module._build_skim_body_fallback(paper_title, abstract, paper_text)
+
+        # PR3: Build markdown with _skim_body in paper dict (not abstract-only)
+        paper_with_body = dict(paper)
+        if skim_body:
+            paper_with_body["_skim_body"] = skim_body
+
+        md_content = generate_docs_module.build_markdown_content(
+            paper_with_body,
+            "related-paper",
+            paper_title,
+            abstract,
+            tags,
         )
 
-        paper_text = ""
-        if record["include_deep"]:
-            if not txt_path.exists():
-                txt_path.write_text(_normalize_text(paper.get("abstract")), encoding="utf-8")
-            paper_text = _normalize_text(txt_path.read_text(encoding="utf-8"))
+        # PR3: For existing files, use upsert_skim_body_in_text to migrate to inline position
+        if md_path.exists():
+            existing_content = md_path.read_text(encoding="utf-8")
+            if skim_body and hasattr(generate_docs_module, "upsert_skim_body_in_text"):
+                md_content = generate_docs_module.upsert_skim_body_in_text(existing_content, skim_body)
+        md_path.write_text(md_content, encoding="utf-8")
 
+        # Upsert glance (速览) block - uses same paper_text for full-text priority
         if record["include_quick"]:
-            glance = generate_docs_module.generate_glance_overview(
-                _normalize_text(paper.get("title")),
-                _normalize_text(paper.get("abstract")),
-                paper_text,
-            )
+            glance = ""
+            if hasattr(generate_docs_module, "generate_glance_overview"):
+                try:
+                    glance = generate_docs_module.generate_glance_overview(
+                        paper_title,
+                        abstract,
+                        paper_text,
+                    ) or ""
+                except Exception:
+                    glance = ""
             if not _normalize_text(glance):
                 glance = generate_docs_module.build_glance_fallback(paper)
             _upsert_auto_block(generate_docs_module, md_path, "速览", glance)
@@ -453,6 +508,7 @@ def _render_related_pages(
                 glance_fields = generate_docs_module.parse_glance_overview_fields(glance)
                 _upsert_frontmatter_evidence(generate_docs_module, md_path, glance_fields)
 
+        # Upsert deep summary (精读) block
         if record["include_deep"]:
             deep_summary = generate_docs_module.generate_deep_summary(str(md_path), str(txt_path))
             _upsert_auto_block(generate_docs_module, md_path, "精读", deep_summary)
