@@ -684,9 +684,10 @@ def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
     txt = md_text or ""
 
     # 1. 移除已在任意位置的旧 ## 正文层速读 block（包括完整 tail 残留）
-    #    Stop at top-level headings only (letter-prefixed like ## Abstract).
+    #    Stop at top-level headings (letter-prefixed like ## Abstract, OR Chinese auto blocks).
     #    Internal numbered sections (## 1. / ## 2. ...) do NOT stop the scan.
-    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z]|\Z)", re.S)
+    #    PR3 fix: also stop at Chinese headings like ## 精读 / ## 速览 to avoid swallowing them.
+    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z\u4e00-\u9fff]|\Z)", re.S)
     txt = pattern.sub("", txt).rstrip()
 
     # 2. 重新插入到 ## Abstract 之前（归位到 inline 位置）
@@ -1010,7 +1011,8 @@ def generate_skim_body(title: str, abstract: str, paper_text: str = "", max_retr
                 break
             log(f"[WARN] skim body 生成失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
-    return None
+    # PR3: All LLM failures (quota/error/validation) now fall back to skeleton
+    return _build_skim_body_fallback(title, abstract, paper_text) or None
 
 
 def build_glance_fallback(paper: Dict[str, Any]) -> str:

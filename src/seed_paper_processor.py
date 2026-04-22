@@ -468,10 +468,12 @@ def _render_related_pages(
         if not skim_body and hasattr(generate_docs_module, "_build_skim_body_fallback"):
             skim_body = generate_docs_module._build_skim_body_fallback(paper_title, abstract, paper_text)
 
-        # PR3: Build markdown with _skim_body in paper dict (not abstract-only)
+        # PR3: Build markdown WITHOUT _skim_body in paper dict.
+        # This ensures build_markdown_content outputs fallback skeleton (not inline skim body),
+        # so upsert_skim_body_in_text below always does insertion + old-wrapper removal in one pass.
+        # This avoids double-write: build_markdown_content(with _skim_body) + upsert wrapper = duplicate.
         paper_with_body = dict(paper)
-        if skim_body:
-            paper_with_body["_skim_body"] = skim_body
+        paper_with_body.pop("_skim_body", None)
 
         # PR3: Inline upsert via upsert_skim_body_in_text (called after build_markdown_content)
         # Note: render_seed_workspace always recreates related/ dir, so existing-file migration
