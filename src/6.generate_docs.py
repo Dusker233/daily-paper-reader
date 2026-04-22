@@ -659,7 +659,7 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
     key = "## 速览"
     if key in txt:
         # 替换现有速览块
-        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\\n|\\n##\\s|\\Z)", re.S | re.M)
+        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\n|\n##\s|\Z)", re.S | re.M)
         return pattern.sub(rf"\\1{glance}\n", txt, count=1)
 
     abstract_idx = txt.find("## Abstract")
@@ -668,6 +668,34 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
         after = txt[abstract_idx:]
         return f"{before}\n\n## 速览\n{glance}\n\n---\n\n{after}"
     return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
+
+
+def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
+    """
+    在 Markdown 文本中插入/替换正文层速读区块（inline，非尾部 auto block）：
+    - 若已存在 `## 正文层速读`，则替换该块内容
+    - 否则在 `## Abstract` 之前插入；若找不到则追加到末尾
+    - 两套契约（新文件 inline / 现有文件 upsert）最终落到同一位置
+    """
+    if not skim_body:
+        return md_text
+
+    txt = md_text or ""
+    key = "## 正文层速读"
+
+    if key in txt:
+        # 替换现有正文层速读块（直到下一个 ## 标题或文件末尾）
+        pattern = re.compile(r"(^## 正文层速读\s*\n)(.*?)(?=\n## |\Z)", re.S | re.M)
+        return pattern.sub(rf"\\1{skim_body}\n", txt, count=1)
+
+    # 未找到 wrapper：在 ## Abstract 之前插入
+    abstract_idx = txt.find("## Abstract")
+    if abstract_idx != -1:
+        before = txt[:abstract_idx].rstrip()
+        after = txt[abstract_idx:]
+        return f"{before}\n\n## 正文层速读\n{skim_body}\n\n---\n\n{after}"
+    # 没有 ## Abstract：追加到末尾
+    return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
 
 
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
@@ -1960,11 +1988,16 @@ def process_paper(
             return paper_id, title, known_zh_title
 
         # PR2: 更新现有 quick 文件时也生成 skim body（无条件，只要还没有）
+        # 新契约：使用 upsert_skim_body_in_text 替代 upsert_auto_block，保证 inline 位置
         existing_skim_body = extract_section_tail(existing, "正文层速读") if existing else ""
         if not existing_skim_body:
             skim_body = generate_skim_body(title, abstract_en, load_text_content(txt_path))
             if skim_body:
-                upsert_auto_block(md_path, "正文层速读", skim_body)
+                with open(md_path, "r", encoding="utf-8") as f:
+                    existing_content = f.read()
+                updated_content = upsert_skim_body_in_text(existing_content, skim_body)
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(updated_content)
 
         if section == "deep":
             # 精读区：检查是否已有详细总结

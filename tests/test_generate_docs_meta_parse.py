@@ -575,6 +575,42 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertIn("## 3. 结果与结论", fallback)
         self.assertIn("## 4. 局限与适用边界", fallback)
 
+    def test_upsert_skim_body_in_text_inserts_before_abstract(self):
+        """upsert_skim_body_in_text: inserts inline skim body before ## Abstract"""
+        md = (
+            "## 速览\n"
+            "TLDR content.\n\n"
+            "---\n\n"
+            "## Abstract\n"
+            "This is the abstract.\n"
+        )
+        skim = (
+            "## 正文层速读\n"
+            "## 1. 问题与背景\n"
+            "Problem here.\n"
+        )
+        result = self.mod.upsert_skim_body_in_text(md, skim)
+        self.assertIn("## 正文层速读", result)
+        abstract_pos = result.index("## Abstract")
+        skim_pos = result.index("## 正文层速读")
+        self.assertLess(skim_pos, abstract_pos, "skim body must appear before ## Abstract")
+
+    def test_upsert_skim_body_in_text_replaces_existing_block(self):
+        """upsert_skim_body_in_text: replaces existing wrapper block"""
+        md = (
+            "## 速览\n"
+            "TLDR.\n\n"
+            "---\n\n"
+            "## Abstract\n"
+            "Old abstract.\n\n"
+            "## 正文层速读\n"
+            "OLD BODY CONTENT\n"
+        )
+        new_body = "## 1. 问题与背景\nNew content here.\n"
+        result = self.mod.upsert_skim_body_in_text(md, new_body)
+        self.assertIn("New content here.", result)
+        self.assertNotIn("OLD BODY CONTENT", result)
+
 
 if __name__ == "__main__":
     unittest.main()
