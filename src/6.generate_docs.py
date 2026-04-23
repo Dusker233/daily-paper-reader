@@ -684,9 +684,10 @@ def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
     txt = md_text or ""
 
     # 1. 移除已在任意位置的旧 ## 正文层速读 block（包括完整 tail 残留）
-    #    Stop at top-level headings only (letter-prefixed like ## Abstract).
+    #    Stop at top-level headings (letter-prefixed like ## Abstract, OR Chinese auto blocks).
     #    Internal numbered sections (## 1. / ## 2. ...) do NOT stop the scan.
-    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z]|\Z)", re.S)
+    #    PR3 fix: also stop at Chinese headings like ## 精读 / ## 速览 to avoid swallowing them.
+    pattern = re.compile(r"\n## 正文层速读\s*\n.*?(?=\n## [A-Za-z\u4e00-\u9fff]|\Z)", re.S)
     txt = pattern.sub("", txt).rstrip()
 
     # 2. 重新插入到 ## Abstract 之前（归位到 inline 位置）
@@ -878,14 +879,15 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
 
 def _build_skim_body_fallback(title: str, abstract: str, paper_text: str = "") -> str:
     """
-    当 LLM 不可用或生成失败时，基于 abstract/正文生成 4-section skim body skeleton。
+    当 LLM 不可用或生成失败时，基于正文生成 4-section skim body skeleton。
     满足 PR2 要求：fallback 也要沿用新的正文契约，不退回到旧摘要格式。
+    PR3 fix: 全文优先（paper_text > abstract），而不是 abstract-first。
     """
     if not abstract and not paper_text:
         return ""
 
-    # 基于 abstract 构建 4-section skeleton
-    abstract_text = str(abstract or paper_text or "").strip()
+    # PR3 fix: 全文优先 fallback — 优先用 paper_text，abstract 只在 paper_text 不可用时补充
+    abstract_text = str(paper_text or abstract or "").strip()
 
     def first_sentence(text: str) -> str:
         s = (text or "").strip()
@@ -947,13 +949,15 @@ def generate_skim_body(title: str, abstract: str, paper_text: str = "", max_retr
     生成论文正文层（skim body）。
     位于 ## 速览 和 ## Abstract 之间，粒度比速览更厚，明显轻于精读。
     优先基于全文生成，fallback 到 abstract 时也用新 skeleton。
-    """
-    if LLM_CLIENT is None:
-        return None
 
+    PR3 fix: LLM 不可用时也返回 4-section skeleton（不再返回 None）。
+    这确保 existing-file 路径在 LLM 不可用时也能落地新契约。
+    """
     source_text = _prepare_glance_source_text(abstract, paper_text, max_chars=15000)
-    if not source_text:
-        return None
+
+    if LLM_CLIENT is None or not source_text:
+        # PR3: fallback 到 skeleton，不返回 None（确保 existing-file 路径也能落地新契约）
+        return _build_skim_body_fallback(title, abstract, paper_text) or None
 
     system_prompt = "你是论文结构分析助手，请用中文输出论文正文层速读内容，帮助读者快速了解论文全貌。"
     payload = {"title": title, "source_text": source_text}
@@ -1008,7 +1012,8 @@ def generate_skim_body(title: str, abstract: str, paper_text: str = "", max_retr
                 break
             log(f"[WARN] skim body 生成失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
-    return None
+    # PR3: All LLM failures (quota/error/validation) now fall back to skeleton
+    return _build_skim_body_fallback(title, abstract, paper_text) or None
 
 
 def build_glance_fallback(paper: Dict[str, Any]) -> str:
@@ -1679,6 +1684,7 @@ def build_markdown_content(
     zh_title: str,
     zh_abstract: str,
     tags_list: List[str],
+    paper_text: str = "",
 ) -> str:
     """
     生成论文 Markdown 内容，使用 YAML front matter 存储元数据。
@@ -1779,7 +1785,7 @@ def build_markdown_content(
         lines.append("")
     else:
         # PR2: fallback 也要用新的 4-section 正文契约，不退回到旧摘要格式
-        fallback_body = _build_skim_body_fallback(title, abstract_en, "")
+        fallback_body = _build_skim_body_fallback(title, abstract_en, paper_text)
         if fallback_body:
             lines.append(fallback_body)
             lines.append("")

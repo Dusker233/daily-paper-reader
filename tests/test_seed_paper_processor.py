@@ -24,32 +24,40 @@ def _load_module(module_name: str, path: pathlib.Path):
 class _StubGenerateDocs:
     ensure_text_content_calls = []
     glance_calls = []
+    generate_skim_body_calls = []
 
     @staticmethod
     def extract_pdf_text(pdf_path):
         return f"extracted from {Path(pdf_path).name}"
 
     @staticmethod
-    def build_markdown_content(paper, section, zh_title, zh_abstract, tags_list):
+    def build_markdown_content(paper, section, zh_title, zh_abstract, tags_list, paper_text=""):
+        """Stub matching real build_markdown_content. Produces fallback skeleton when _skim_body absent."""
         score = paper.get("llm_score")
         score_line = f"score: {score}\n" if score is not None else ""
-        return "\n".join(
-            [
-                "---",
-                f"title: {paper.get('title') or ''}",
-                f"authors: Unknown",
-                "date: Unknown",
-                f"link: {paper.get('link') or ''}",
-                f"tags: [{', '.join(tags_list)}]",
-                score_line,
-                "---",
-                f"# {paper.get('title') or ''}",
-                "",
-                f"section: {section}",
-                "",
-                paper.get("abstract") or "",
-            ]
-        )
+        skim_body = paper.get("_skim_body", "").strip()
+        lines = [
+            "---",
+            f"title: {paper.get('title') or ''}",
+            "authors: Unknown",
+            "date: Unknown",
+            f"link: {paper.get('link') or ''}",
+            f"tags: [{', '.join(tags_list)}]",
+            score_line,
+            "---",
+            f"# {paper.get('title') or ''}",
+            "",
+            f"section: {section}",
+            "",
+        ]
+        if skim_body:
+            lines.append(skim_body)
+            lines.append("")
+        else:
+            lines.append("[fallback skeleton based on abstract]")
+            lines.append("")
+        lines.extend(["## Abstract", paper.get("abstract") or ""])
+        return "\n".join(lines)
 
     @staticmethod
     def generate_glance_overview(title, abstract, paper_text="", max_retries=3):
@@ -108,6 +116,32 @@ class _StubGenerateDocs:
             existing + f"\n\n## {heading}\n{content}\n",
             encoding="utf-8",
         )
+
+    # PR3: stubs for new skim body functions
+    @staticmethod
+    def generate_skim_body(title, abstract, paper_text="", max_retries=3):
+        _StubGenerateDocs.generate_skim_body_calls.append(
+            {"title": title, "abstract": abstract, "paper_text": paper_text, "max_retries": max_retries}
+        )
+        return f"[skim body for {title}]"
+
+    @staticmethod
+    def _build_skim_body_fallback(title, abstract, paper_text=""):
+        return f"[fallback skeleton for {title}]"
+
+    @staticmethod
+    def upsert_skim_body_in_text(md_text, skim_body):
+        """Insert skim body before ## Abstract (or append at end)."""
+        if not skim_body:
+            return md_text
+        txt = md_text or ""
+        abstract_marker = "## Abstract"
+        if abstract_marker in txt:
+            idx = txt.index(abstract_marker)
+            before = txt[:idx].rstrip()
+            after = txt[idx:]
+            return f"{before}\n\n## 正文层速读\n{skim_body}\n\n---\n\n{after}"
+        return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
 
     @staticmethod
     def ensure_text_content(pdf_url, txt_path):
@@ -3151,6 +3185,208 @@ class SeedPaperProcessorTest(unittest.TestCase):
             related_txt = workspace / "related" / "p1.txt"
             self.assertEqual(related_txt.read_text(encoding="utf-8"), "deep abstract only")
             self.assertEqual(_StubGenerateDocs.ensure_text_content_calls, [])
+
+    def test_render_seed_workspace_related_fulltext_paper_text_used_in_skim_body(self):
+        """PR3 positive regression: allowlisted URL -> ensure_text_content -> skim body uses paper_text, not abstract."""
+        # Use a separate stub class so we can reset state and use distinct full-text marker
+        class _FullTextStubGenerateDocs:
+            ensure_text_content_calls = []
+            glance_calls = []
+            generate_skim_body_calls = []
+
+            @staticmethod
+            def extract_pdf_text(pdf_path):
+                return f"extracted from {Path(pdf_path).name}"
+
+            FULLTEXT_MARKER = "UNIQUE_FULLTEXT_MARKER_12345"
+
+            @staticmethod
+            def ensure_text_content(pdf_url, txt_path):
+                _FullTextStubGenerateDocs.ensure_text_content_calls.append(
+                    {"pdf_url": pdf_url, "txt_path": txt_path}
+                )
+                Path(txt_path).write_text(
+                    f"FULL TEXT CONTENT: {_FullTextStubGenerateDocs.FULLTEXT_MARKER} "
+                    "This is the full paper text with method details, "
+                    "experimental results showing 95% accuracy, "
+                    "and limitations discussed in section 4.",
+                    encoding="utf-8",
+                )
+                return Path(txt_path).read_text(encoding="utf-8")
+
+            @staticmethod
+            def build_markdown_content(paper, section, zh_title, zh_abstract, tags_list, paper_text=""):
+                score = paper.get("llm_score")
+                score_line = f"score: {score}\n" if score is not None else ""
+                skim_body = paper.get("_skim_body", "").strip()
+                lines = [
+                    "---",
+                    f"title: {paper.get('title') or ''}",
+                    "authors: Unknown",
+                    "date: Unknown",
+                    f"link: {paper.get('link') or ''}",
+                    f"tags: [{', '.join(tags_list)}]",
+                    score_line,
+                    "---",
+                    f"# {paper.get('title') or ''}",
+                    "",
+                    f"section: {section}",
+                    "",
+                ]
+                if skim_body:
+                    lines.append(skim_body)
+                    lines.append("")
+                else:
+                    lines.append("[fallback skeleton based on abstract]")
+                    lines.append("")
+                lines.extend(["## Abstract", paper.get("abstract") or ""])
+                return "\n".join(lines)
+
+            @staticmethod
+            def generate_glance_overview(title, abstract, paper_text="", max_retries=3):
+                _FullTextStubGenerateDocs.glance_calls.append(
+                    {"title": title, "abstract": abstract, "paper_text": paper_text}
+                )
+                return f"**TLDR**: {title} fulltext={paper_text[:30]}..."
+
+            @staticmethod
+            def build_glance_fallback(paper):
+                return f"fallback: {paper.get('title')}"
+
+            @staticmethod
+            def parse_glance_overview_fields(glance):
+                fields = {}
+                if not glance:
+                    return fields
+                for line in glance.splitlines():
+                    line = line.strip()
+                    for label in ["TLDR", "Research Question", "Core Idea", "Evidence", "Reading Guide"]:
+                        marker = f"**{label}**："
+                        if marker in line:
+                            fields[label.lower().replace(" ", "_")] = line.split(marker, 1)[1].rstrip(" \\").strip()
+                            break
+                return fields
+
+            @staticmethod
+            def generate_deep_summary(md_path, txt_path):
+                return "### 问题定义\ndeep from txt"
+
+            @staticmethod
+            def upsert_auto_block(md_path, heading, content):
+                path = Path(md_path)
+                existing = path.read_text(encoding="utf-8") if path.exists() else ""
+                path.write_text(
+                    existing + f"\n\n## {heading}\n{content}\n",
+                    encoding="utf-8",
+                )
+
+            @staticmethod
+            def generate_skim_body(title, abstract, paper_text="", max_retries=3):
+                _FullTextStubGenerateDocs.generate_skim_body_calls.append(
+                    {"title": title, "abstract": abstract, "paper_text": paper_text}
+                )
+                # Return skeleton that includes a paper_text signal so we can verify it was used
+                if _FullTextStubGenerateDocs.FULLTEXT_MARKER in (paper_text or ""):
+                    return (
+                        f"## 1. 问题与背景\n"
+                        f"FULLTEXT_EVIDENCE: {paper_text[:50]}...\n\n"
+                        f"## 2. 核心思路 / 方法\n"
+                        f"Method from full text: {paper_text[:30]}...\n\n"
+                        f"## 3. 结果与结论\n"
+                        f"Results from full text: {paper_text[:30]}...\n\n"
+                        f"## 4. 局限与适用边界\n"
+                        f"Limitations from full text."
+                    )
+                return f"[skim body for {title} from abstract]"
+
+            @staticmethod
+            def _build_skim_body_fallback(title, abstract, paper_text=""):
+                if _FullTextStubGenerateDocs.FULLTEXT_MARKER in (paper_text or ""):
+                    return f"[fallback FULLTEXT: {paper_text[:50]}...]"
+                return f"[fallback for {title} from abstract]"
+
+            @staticmethod
+            def upsert_skim_body_in_text(md_text, skim_body):
+                if not skim_body:
+                    return md_text
+                txt = md_text or ""
+                abstract_marker = "## Abstract"
+                if abstract_marker in txt:
+                    idx = txt.index(abstract_marker)
+                    before = txt[:idx].rstrip()
+                    after = txt[idx:]
+                    return f"{before}\n\n## 正文层速读\n{skim_body}\n\n---\n\n{after}"
+                return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            seed_pdf = root / "archive" / "seed-papers" / "demo-request" / "seed-paper.pdf"
+            seed_pdf.parent.mkdir(parents=True, exist_ok=True)
+            seed_pdf.write_bytes(b"%PDF-1.4\n")
+
+            request = {
+                "request_id": "demo-request",
+                "file_name": "Seed Paper.pdf",
+                "source_path": "archive/seed-papers/demo-request/seed-paper.pdf",
+                "seed_pdf_path": str(seed_pdf),
+                "selected_tags": ["RL"],
+                "mode": "deep",
+                "related_count": 1,
+                "notes": "",
+            }
+            selection = {
+                "deep_dive": [
+                    {
+                        "id": "p1",
+                        "title": "Related One",
+                        "abstract": "ABSTRACT_ONLY: this is abstract method A and 11% improvement",
+                        "link": "https://arxiv.org/abs/1234.5678",
+                        "llm_tags": ["query:RL"],
+                    }
+                ],
+                "quick_skim": [],
+            }
+
+            self.mod.render_seed_workspace(
+                request,
+                seed_text="seed paper full text",
+                selection=selection,
+                docs_dir=str(docs_dir),
+                generate_docs_module=_FullTextStubGenerateDocs,
+            )
+
+            workspace = docs_dir / "seed-papers" / "demo-request"
+            related_md = workspace / "related" / "p1.md"
+
+            # Verify: ensure_text_content was called with the arxiv URL
+            self.assertEqual(len(_FullTextStubGenerateDocs.ensure_text_content_calls), 1)
+            self.assertIn(
+                "arxiv.org",
+                _FullTextStubGenerateDocs.ensure_text_content_calls[0]["pdf_url"],
+            )
+
+            # Verify: generate_skim_body was called with paper_text (not just abstract)
+            self.assertEqual(len(_FullTextStubGenerateDocs.generate_skim_body_calls), 1)
+            skim_call = _FullTextStubGenerateDocs.generate_skim_body_calls[0]
+            self.assertEqual(skim_call["abstract"], "ABSTRACT_ONLY: this is abstract method A and 11% improvement")
+            self.assertIn(
+                _FullTextStubGenerateDocs.FULLTEXT_MARKER,
+                skim_call["paper_text"],
+                f"generate_skim_body should receive full-text paper_text, got: {skim_call['paper_text'][:50]}",
+            )
+
+            # Verify: .txt file contains full text (not abstract)
+            related_txt = workspace / "related" / "p1.txt"
+            txt_content = related_txt.read_text(encoding="utf-8")
+            self.assertIn(_FullTextStubGenerateDocs.FULLTEXT_MARKER, txt_content)
+            self.assertNotIn("ABSTRACT_ONLY", txt_content)
+
+            # Verify: generated markdown skim body section contains full-text evidence
+            md_content = related_md.read_text(encoding="utf-8")
+            self.assertIn("FULLTEXT_EVIDENCE", md_content)
+            self.assertIn("Method from full text", md_content)
 
     def test_process_request_rejects_empty_seed_text(self):
         with tempfile.TemporaryDirectory() as tmp:
