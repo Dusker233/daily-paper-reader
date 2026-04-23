@@ -879,14 +879,15 @@ def generate_glance_overview(title: str, abstract: str, paper_text: str = "", ma
 
 def _build_skim_body_fallback(title: str, abstract: str, paper_text: str = "") -> str:
     """
-    当 LLM 不可用或生成失败时，基于 abstract/正文生成 4-section skim body skeleton。
+    当 LLM 不可用或生成失败时，基于正文生成 4-section skim body skeleton。
     满足 PR2 要求：fallback 也要沿用新的正文契约，不退回到旧摘要格式。
+    PR3 fix: 全文优先（paper_text > abstract），而不是 abstract-first。
     """
     if not abstract and not paper_text:
         return ""
 
-    # 基于 abstract 构建 4-section skeleton
-    abstract_text = str(abstract or paper_text or "").strip()
+    # PR3 fix: 全文优先 fallback — 优先用 paper_text，abstract 只在 paper_text 不可用时补充
+    abstract_text = str(paper_text or abstract or "").strip()
 
     def first_sentence(text: str) -> str:
         s = (text or "").strip()
@@ -1683,6 +1684,7 @@ def build_markdown_content(
     zh_title: str,
     zh_abstract: str,
     tags_list: List[str],
+    paper_text: str = "",
 ) -> str:
     """
     生成论文 Markdown 内容，使用 YAML front matter 存储元数据。
@@ -1783,7 +1785,7 @@ def build_markdown_content(
         lines.append("")
     else:
         # PR2: fallback 也要用新的 4-section 正文契约，不退回到旧摘要格式
-        fallback_body = _build_skim_body_fallback(title, abstract_en, "")
+        fallback_body = _build_skim_body_fallback(title, abstract_en, paper_text)
         if fallback_body:
             lines.append(fallback_body)
             lines.append("")
