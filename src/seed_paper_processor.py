@@ -436,7 +436,13 @@ def _render_related_pages(
         tags = list(paper.get("llm_tags") or [])
         abstract = _normalize_text(paper.get("abstract"))
         # Use validated URL for text extraction (only allowed hosts: arxiv, openreview, semanticscholar)
-        pdf_url = _validate_related_link(paper.get("link") or paper.get("pdf_url") or "")
+        # PR3 fix: if link fails validation, fall back to pdf_url field
+        link_url = _normalize_text(paper.get("link") or "")
+        pdf_url_field = _normalize_text(paper.get("pdf_url") or "")
+        if link_url:
+            pdf_url = _validate_related_link(link_url) or (pdf_url_field if pdf_url_field and _validate_related_link(pdf_url_field) else "")
+        else:
+            pdf_url = _validate_related_link(pdf_url_field)
 
         # PR3: Prepare paper_text for both quick and deep modes
         # Priority: full text (ensure_text_content) > abstract fallback
@@ -453,14 +459,23 @@ def _render_related_pages(
                 txt_path.write_text(abstract, encoding="utf-8")
                 paper_text = abstract
 
-        # PR3: Related page uses full-text for glance via generate_glance_overview(paper_text).
-        # For skim body: let build_markdown_content handle inline skeleton via its own
-        # _build_skim_body_fallback, then upsert_skim_body_in_text adds the wrapper.
-        # Note: build_markdown_content already outputs fallback skeleton inline when _skim_body absent.
-        # We skip calling generate_skim_body() here to avoid duplicate skeleton + wrapper.
+        # PR3: Generate skim body using full paper_text (全文优先)
+        # generate_skim_body() returns skeleton from LLM or _build_skim_body_fallback
+        # This skim body is stored in paper["_skim_body"] and used by build_markdown_content
         skim_body = ""
+        if hasattr(generate_docs_module, "generate_skim_body"):
+            try:
+                skim_body = generate_docs_module.generate_skim_body(
+                    paper_title,
+                    abstract,
+                    paper_text,
+                ) or ""
+            except Exception:
+                skim_body = ""
+
         paper_with_body = dict(paper)
-        paper_with_body.pop("_skim_body", None)
+        if skim_body:
+            paper_with_body["_skim_body"] = skim_body
 
         md_content = generate_docs_module.build_markdown_content(
             paper_with_body,
@@ -468,10 +483,17 @@ def _render_related_pages(
             paper_title,
             abstract,
             tags,
+            paper_text,  # PR3 fix: pass paper_text for fallback path
         )
 
-        if hasattr(generate_docs_module, "upsert_skim_body_in_text"):
-            md_content = generate_docs_module.upsert_skim_body_in_text(md_content, skim_body)
+        # PR3 fix: DO NOT call upsert_skim_body_in_text here.
+        # render_seed_workspace() always clears and recreates the related/ directory,
+        # so all related files are NEW — no old ## 正文层速读 wrapper exists to migrate.
+        # build_markdown_content() with _skim_body already outputs inline skeleton
+        # (positioned before ## Abstract). Calling upsert_skim_body_in_text would
+        # add a ## 正文层速读 wrapper around the same skeleton, creating double-write.
+        # Old-wrapper migration for seed paper files is handled separately in
+        # process_paper() → upsert_skim_body_in_text().
         md_path.write_text(md_content, encoding="utf-8")
 
         # Upsert glance (速览) block - uses same paper_text for full-text priority
