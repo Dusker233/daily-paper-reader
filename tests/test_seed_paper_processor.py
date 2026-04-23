@@ -30,26 +30,33 @@ class _StubGenerateDocs:
         return f"extracted from {Path(pdf_path).name}"
 
     @staticmethod
-    def build_markdown_content(paper, section, zh_title, zh_abstract, tags_list):
+    def build_markdown_content(paper, section, zh_title, zh_abstract, tags_list, paper_text=""):
+        """Stub matching real build_markdown_content. Produces fallback skeleton when _skim_body absent."""
         score = paper.get("llm_score")
         score_line = f"score: {score}\n" if score is not None else ""
-        return "\n".join(
-            [
-                "---",
-                f"title: {paper.get('title') or ''}",
-                f"authors: Unknown",
-                "date: Unknown",
-                f"link: {paper.get('link') or ''}",
-                f"tags: [{', '.join(tags_list)}]",
-                score_line,
-                "---",
-                f"# {paper.get('title') or ''}",
-                "",
-                f"section: {section}",
-                "",
-                paper.get("abstract") or "",
-            ]
-        )
+        skim_body = paper.get("_skim_body", "").strip()
+        lines = [
+            "---",
+            f"title: {paper.get('title') or ''}",
+            "authors: Unknown",
+            "date: Unknown",
+            f"link: {paper.get('link') or ''}",
+            f"tags: [{', '.join(tags_list)}]",
+            score_line,
+            "---",
+            f"# {paper.get('title') or ''}",
+            "",
+            f"section: {section}",
+            "",
+        ]
+        if skim_body:
+            lines.append(skim_body)
+            lines.append("")
+        else:
+            lines.append("[fallback skeleton based on abstract]")
+            lines.append("")
+        lines.extend(["## Abstract", paper.get("abstract") or ""])
+        return "\n".join(lines)
 
     @staticmethod
     def generate_glance_overview(title, abstract, paper_text="", max_retries=3):
