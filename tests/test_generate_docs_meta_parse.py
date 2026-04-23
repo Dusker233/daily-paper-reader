@@ -650,6 +650,130 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         after_abstract = result[abstract_pos:]
         self.assertNotIn("## 正文层速读", after_abstract)
 
+    def test_build_deep_summary_fallback_produces_eight_sections(self):
+        """_build_deep_summary_fallback: returns 8-section skeleton aligned with archive/mineshark_report.md"""
+        result = self.mod._build_deep_summary_fallback(
+            title="Test Paper",
+            abstract="This is a test abstract about a machine learning method.",
+            paper_text="Full paper text with experimental results showing 95% accuracy and baselines compared.",
+        )
+        # Must contain all 8 sections
+        self.assertIn("## 1. TLDR", result)
+        self.assertIn("## 2. 核心故事与贡献", result)
+        self.assertIn("## 3. 相关工作与定位", result)
+        self.assertIn("## 4. 方法详解", result)
+        self.assertIn("## 5. 实验分析", result)
+        self.assertIn("## 6. 局限性与风险", result)
+        self.assertIn("## 7. 复现与后续问题", result)
+        self.assertIn("## 8. 直接证据与待验证项", result)
+        # paper_text (not just abstract) should be used
+        self.assertIn("Full paper text", result)
+        # [需验证] markers should be present for unconfirmable claims
+        self.assertIn("[需验证]", result)
+
+    def test_build_deep_summary_fallback_works_without_paper_text(self):
+        """_build_deep_summary_fallback: works with abstract only when paper_text unavailable"""
+        result = self.mod._build_deep_summary_fallback(
+            title="Test Paper",
+            abstract="This is a test abstract about a machine learning method.",
+            paper_text="",
+        )
+        self.assertIn("## 1. TLDR", result)
+        self.assertIn("## 8. 直接证据与待验证项", result)
+        # Should still produce valid structure without full text
+        self.assertIn("This is a test abstract", result)
+
+    def test_build_deep_summary_fallback_returns_skeleton_when_no_input(self):
+        """_build_deep_summary_fallback: returns 8-section skeleton even when both abstract and paper_text are empty"""
+        result = self.mod._build_deep_summary_fallback(
+            title="Test Paper",
+            abstract="",
+            paper_text="",
+        )
+        # Must still produce all 8 sections (with default placeholder content)
+        self.assertIn("## 1. TLDR", result)
+        self.assertIn("## 8. 直接证据与待验证项", result)
+        self.assertNotEqual(result, "")
+
+    def test_build_deep_summary_fallback_no_fabricated_section_refs(self):
+        """_build_deep_summary_fallback: fallback skeleton must NOT fabricate section/table references as evidence.
+
+        Reviewer R1: "见正文 Section X / Table X" 占位符伪装成已对齐正文的直接证据，
+        违反 tutorial:309-313 规范（缺证据时应显式写 [需验证] 或"文中未明确说明"）。
+        """
+        result = self.mod._build_deep_summary_fallback(
+            title="Test Paper",
+            abstract="A method is proposed.",
+            paper_text="",
+        )
+        # Must NOT contain "见正文 Section X" style fabrications
+        self.assertNotIn("见正文 Section X", result)
+        self.assertNotIn("见正文 Section Y", result)
+        self.assertNotIn("见正文 Section Z", result)
+        self.assertNotIn("见正文 Section X.X", result)
+        self.assertNotIn("见正文 Table X", result)
+        self.assertNotIn("见正文 Discussion", result)
+        self.assertNotIn("见正文 Limitations", result)
+        self.assertNotIn("见正文 Future Work", result)
+        self.assertNotIn("见正文\n", result)
+        # Must still contain [需验证] markers per tutorial spec
+        self.assertIn("[需验证]", result)
+
+    def test_generate_deep_summary_partial_output_falls_back_to_skeleton(self):
+        """generate_deep_summary: partial LLM output (no （完）marker) must fall back to complete skeleton.
+
+        Reviewer R2: if LLM returns non-empty but incomplete output (no （完）），function must
+        fall back to _build_deep_summary_fallback() to honor the "固定 8-section 结构" contract.
+        """
+        # Write a fake md file with valid frontmatter
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
+            f.write("---\ntitle: Test Paper\n---\n\n## Abstract\nThis is a test abstract.\n")
+            md_path = f.name
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+                f.write("Full paper text content.")
+                txt_path = f.name
+            try:
+                # Mock LLM client to return partial output (no （完）marker)
+                original_client = self.mod.LLM_CLIENT
+                partial_response = (
+                    "## 1. TLDR\nTest paper.\n\n"
+                    "## 2. 核心故事与贡献\nProposed a method.\n\n"
+                    "## 3. 相关工作与定位\nRelated work here.\n\n"
+                    "## 4. 方法详解\nMethod details.\n\n"
+                    "## 5. 实验分析\n## 6. 局限性与风险\n## 7. 复现与后续问题\n## 8. 直接证据与待验证项\n"
+                    # No （完）— this is partial output
+                )
+
+                class PartialStubLLMClient:
+                    def __init__(self, *args, **kwargs):
+                        self.kwargs = {}
+
+                    def chat(self, *args, **kwargs):
+                        return {"content": partial_response}
+
+                    def chat_structured(self, *args, **kwargs):
+                        return {}
+
+                self.mod.LLM_CLIENT = PartialStubLLMClient()
+
+                with patch.object(self.mod, "call_blt_text", return_value=partial_response):
+                    result = self.mod.generate_deep_summary(md_path, txt_path, max_retries=1)
+
+                # Must fall back to full skeleton, not return the partial output
+                self.assertIsNotNone(result)
+                # Complete skeleton has all 8 sections
+                self.assertIn("## 1. TLDR", result)
+                self.assertIn("## 8. 直接证据与待验证项", result)
+                # Partial output's section 3 should NOT be present (we got the full skeleton instead)
+                # The fallback uses different content for section 3, so check that the partial's specific
+                # text is not present
+                self.assertNotIn("Related work here.", result)
+            finally:
+                Path(txt_path).unlink()
+        finally:
+            Path(md_path).unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

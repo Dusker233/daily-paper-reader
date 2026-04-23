@@ -701,44 +701,156 @@ def upsert_skim_body_in_text(md_text: str, skim_body: str) -> str:
     return (txt.rstrip() + f"\n\n## 正文层速读\n{skim_body}\n").rstrip() + "\n"
 
 
+def _build_deep_summary_fallback(title: str, abstract: str, paper_text: str = "") -> str:
+    """
+    当 LLM 不可用或生成失败时，基于 abstract/paper_text 生成精读总结的 8-section skeleton。
+    PR4: 对齐 archive/mineshark_report.md 的精读结构。
+    """
+    abstract_text = str(paper_text or abstract or "").strip()
+
+    def extract_sentences(text: str, count: int = 3) -> str:
+        if not text:
+            return ""
+        parts = re.split(r"(?<=[。！？.!?])\s+", text.strip())
+        return "。".join(p.strip() for p in parts[:count] if p.strip())
+
+    # Section 1: TLDR — 2-3句
+    bg = extract_sentences(abstract_text, 2)
+    if not bg:
+        bg = "本论文研究了相关重要问题。"
+
+    tldr = (
+        f"## 1. TLDR\n\n"
+        f"{bg}\n\n"
+        f"**关键词**：研究问题 | 核心方法 | 主要贡献\n\n"
+    )
+
+    # Section 2: 核心故事与贡献
+    contribution = ""
+    if abstract_text:
+        m = re.search(r"(propose|present|introduce|develop|方法|提出|构建|设计)[^.。，]{0,200}?[。.]?", abstract_text, re.I)
+        if m:
+            contribution = m.group(0).strip()
+    if not contribution:
+        contribution = "核心贡献需要结合正文进一步确认。"
+    core = (
+        f"## 2. 核心故事与贡献\n\n"
+        f"{contribution}\n\n"
+        f"**主要贡献点**（摘要描述）：\n"
+        f"- 贡献一：[需验证]\n"
+        f"- 贡献二：[需验证]\n\n"
+    )
+
+    # Section 3: 相关工作与定位
+    related = (
+        f"## 3. 相关工作与定位\n\n"
+        f"本工作与以下方向相关：\n"
+        f"- 规则/签名检测类方法：[需验证]\n"
+        f"- 统计特征类方法：[需验证]\n"
+        f"- 学习式方法：[需验证]\n\n"
+        f"**定位**：本文与这些方法的核心区别在于……[需验证]\n\n"
+    )
+
+    # Section 4: 方法详解
+    method = (
+        f"## 4. 方法详解\n\n"
+        f"**核心方法**（从摘要提取）：\n"
+        f"{extract_sentences(abstract_text, 3)}\n\n"
+        f"**技术细节**：[需验证]\n"
+        f"**实现路径**：[需验证]\n\n"
+    )
+
+    # Section 5: 实验分析
+    experiment = (
+        f"## 5. 实验分析\n\n"
+        f"**主要实验结果**：[需验证]\n"
+        f"- 指标一：[需验证]\n"
+        f"- 指标二：[需验证]\n\n"
+        f"**消融实验**：[需验证]\n\n"
+    )
+
+    # Section 6: 局限性与风险
+    limitation = (
+        f"## 6. 局限性与风险\n\n"
+        f"- 假设约束：[需验证]\n"
+        f"- 应用边界：[需验证]\n"
+        f"- 潜在风险：[需验证]\n\n"
+    )
+
+    # Section 7: 复现与后续问题
+    reproduction = (
+        f"## 7. 复现与后续问题\n\n"
+        f"**复现重点**：[需验证]\n"
+        f"**后续研究方向**：[需验证]\n\n"
+    )
+
+    # Section 8: 直接证据与待验证项
+    evidence = (
+        f"## 8. 直接证据与待验证项\n\n"
+        f"- 主要结论来源：[需验证]\n"
+        f"- [需验证] 具体数值：\n"
+        f"- [需验证] 方法有效性：\n\n"
+    )
+
+    return tldr + core + related + method + experiment + limitation + reproduction + evidence
+
+
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
+    """
+    生成论文精读总结（8-section 结构，对齐 archive/mineshark_report.md）。
+    PR4: 从"5段叙述"升级为 8-section 固定结构。
+    8 sections: TLDR / 核心故事与贡献 / 相关工作与定位 / 方法详解 / 实验分析 / 局限性与风险 / 复现与后续问题 / 直接证据与待验证项
+    """
+    if not os.path.exists(md_file_path):
+        return None
+
+    # 从 md 提取 title 和 abstract
+    with open(md_file_path, "r", encoding="utf-8") as f:
+        paper_md_content = strip_auto_sections(f.read())
+    # 从 front matter 提取 title
+    title_match = re.search(r"^title:\s*(.+)$", paper_md_content, re.MULTILINE)
+    title = title_match.group(1).strip() if title_match else ""
+    # 从 md 提取 abstract
+    abstract_match = re.search(r"^## Abstract$\n(.+)$", paper_md_content, re.MULTILINE)
+    abstract_en = abstract_match.group(1).strip() if abstract_match else ""
+
+    paper_txt_content = load_text_content(txt_file_path)
+    source_text = _prepare_glance_source_text("", paper_txt_content, max_chars=20000)
+
     if LLM_CLIENT is None:
         message = "[WARN] 未配置 workflow LLM，跳过精读总结。"
         if LLM_CLIENT_ERROR:
             message = f"{message} 原因：{LLM_CLIENT_ERROR}"
         log(message)
-        return (
-            "**精读总结暂不可用**\n\n"
-            "当前未配置 workflow LLM，无法生成精读总结。\n"
-            "请联系管理员配置 WORKFLOW_LLM 相关环境变量。\n"
-            "（完）"
-        )
-    if not os.path.exists(md_file_path):
-        return None
-
-    with open(md_file_path, "r", encoding="utf-8") as f:
-        paper_md_content = strip_auto_sections(f.read())
-
-    paper_txt_content = load_text_content(txt_file_path)
-    source_text = _prepare_glance_source_text("", paper_txt_content, max_chars=20000)
+        # PR4 fallback: 返回 8-section skeleton，不再是简单不可用提示
+        return _build_deep_summary_fallback(title, abstract_en, source_text)
 
     system_prompt = (
-        "你是一名资深学术论文分析助手，请使用中文、以 Markdown 形式，"
-        "对给定论文做结构化、深入、客观的总结。"
+        "你是资深学术论文分析助手，用中文输出、对齐 archive/mineshark_report.md 的精读报告格式。"
     )
     user_prompt = (
-        "请基于下面提供的论文内容，生成一段偏精读的中文总结。要求深入、有分析、有证据支撑，使用连贯的叙述风格而非提纲。\n\n"
-        "请用流畅的段落叙述形式撰写，不要使用项目符号列表或表格。具体撰写要点如下：\n\n"
-        "第一段（2-3句）：论文研究什么问题？研究背景是什么？为什么这个问题值得解决？引用引言中的具体动机。\n\n"
-        "第二段（3-5句）：论文提出什么方法？核心思想是什么？与其他方法相比有何创新或区别？如有技术细节或公式，描述其形式与作用。\n\n"
-        "第三段（3-5句）：实验如何验证？主要结果是什么？引用具体数字和对应图表。消融实验说明了什么？\n\n"
-        "第四段（2-3句）：论文的主要优点和局限性是什么？存在哪些偏差风险或应用限制？\n\n"
-        "第五段（1-2句）：如果读者要复现或继续研究，最应该关注哪些实现细节或后续问题？\n\n"
+        "请基于下面提供的论文内容，生成精读总结，严格按以下 8 个 section 输出 Markdown：\n\n"
+        "## 1. TLDR\n"
+        "2-3 句概述论文核心贡献，语言精炼。关键词一行。\n\n"
+        "## 2. 核心故事与贡献\n"
+        "分 2-3 个子点：问题与动机、核心洞察、主要贡献。引用引言具体数字/结论。\n\n"
+        "## 3. 相关工作与定位\n"
+        "用表格或列表对比本工作与 prior work 的维度差异（特征/场景/误报处理/部署验证等）。\n\n"
+        "## 4. 方法详解\n"
+        "核心方法（附关键公式或架构描述）；用小标题分模块说明。允许 bullet list。\n\n"
+        "## 5. 实验分析\n"
+        "主实验结果（引 Table/Figure 编号）；消融实验说明；强调核心发现。允许表格。\n\n"
+        "## 6. 局限性与风险\n"
+        "分点列出：假设约束、应用边界、潜在风险。各 1-2 句。\n\n"
+        "## 7. 复现与后续问题\n"
+        "复现重点关注 2-3 个实现细节；后续研究 1-2 个方向。\n\n"
+        "## 8. 直接证据与待验证项\n"
+        "列出 3-5 条有页码/表格编号的直接证据；[需验证] 标记无法从正文直接确认的结论。\n\n"
         "要求：\n"
-        "- 全程使用连贯段落叙述，不要用 bullet points、表格或分级标题。\n"
-        "- 尽量引用正文里的证据，注明具体章节、表格编号或图表编号。\n"
-        "- 如果某项信息文中没有明确给出，要直接说明\"文中未明确说明\"。\n"
-        "- 最后单独输出一行\"（完）\"作为结束标记。"
+        "- 允许使用小标题、bullet list、表格；避免纯无结构长段落。\n"
+        "- 引证据时注明：见正文 Section X / Table X / Figure X。\n"
+        "- 信息不足处写「[需验证]」或「见正文」，不编造。\n"
+        "- 最后一行输出「（完）」作为结束标记。"
     )
 
 
@@ -776,7 +888,15 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
         except Exception as e:
             log(f"[WARN] 精读总结失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
-    return last or None
+    # PR4: 只有包含"（完）"的完整 8-section 输出才被接受；partial output 必须回退到 skeleton
+    #    这确保了"固定 8-section 结构"contract不被 LLM partial output 破坏
+    if last and "（完）" in last:
+        return last
+    if last:
+        log("[WARN] 精读总结 LLM 生成了不完整的 8-section（无（完）标记），改用 skeleton fallback。")
+    else:
+        log("[WARN] 精读总结 LLM 生成失败，改用 8-section skeleton fallback。")
+    return _build_deep_summary_fallback(title, abstract_en, source_text)
 
 
 def generate_glance_overview(title: str, abstract: str, paper_text: str = "", max_retries: int = 3) -> str | None:
