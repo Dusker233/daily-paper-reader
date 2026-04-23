@@ -3861,7 +3861,24 @@ window.$docsify = {
 
         // 生成论文页面 HTML + 正文
         const paperHtml = renderPaperFromMeta(meta);
-        return paperHtml + body;
+
+        // 转精读按钮：仅在 skim 页（无 deep summary）显示
+        const hasSkim = /## 正文层速读/.test(body);
+        const hasDeep = /## 论文详细总结（自动生成）/.test(body);
+        const showDeepButton = hasSkim && !hasDeep;
+        const file = vm && vm.route ? vm.route.file : '';
+        const paperId = file ? file.replace(/\.md$/i, '') : '';
+        const deepButtonHtml = showDeepButton
+          ? `<div class="paper-deep-upgrade-row" style="margin:12px 0;text-align:center;">
+               <button id="dpr-deep-upgrade-btn" class="dpr-deep-btn" data-paper-id="${escapeHtml(paperId)}"
+                 style="background:#4CAF50;color:#fff;border:none;border-radius:6px;padding:10px 24px;font-size:15px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2);">
+                 转精读 ✨
+               </button>
+               <div id="dpr-deep-status" style="margin-top:6px;font-size:13px;color:#888;display:none;"></div>
+             </div>`
+          : '';
+
+        return paperHtml + deepButtonHtml + body;
       });
 
       // --- Docsify 生命周期钩子 ---
@@ -3910,6 +3927,41 @@ window.$docsify = {
         // 论文页左右切换：更新导航列表并绑定事件（只绑定一次）
         updateNavState();
         ensureNavHandlers();
+
+        // 转精读按钮事件绑定
+        (function bindDeepUpgradeButton() {
+          const btn = document.getElementById('dpr-deep-upgrade-btn');
+          const statusEl = document.getElementById('dpr-deep-status');
+          if (!btn || btn._deepBound) return;
+          btn._deepBound = true;
+          btn.addEventListener('click', async function () {
+            if (!window.DPRWorkflowRunner || typeof window.DPRWorkflowRunner.runWorkflowByKey !== 'function') {
+              if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '工作流触发器未加载。'; statusEl.style.color = '#c00'; }
+              return;
+            }
+            const paperId = btn.getAttribute('data-paper-id') || '';
+            if (!paperId) {
+              if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '无法确定论文路径。'; statusEl.style.color = '#c00'; }
+              return;
+            }
+            const paperPath = 'docs/' + paperId + '.md';
+            btn.disabled = true;
+            btn.textContent = '处理中…';
+            if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '正在触发转精读工作流…'; statusEl.style.color = '#888'; }
+            try {
+              await window.DPRWorkflowRunner.runWorkflowByKey('seed-paper-deep-single', {
+                paper_path: paperPath,
+              });
+              if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '转精读工作流已触发，等待完成…'; statusEl.style.color = '#4CAF50'; }
+              // Button will auto-restore after workflow completes (page refresh)
+            } catch (err) {
+              if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '触发失败：' + (err.message || String(err)); statusEl.style.color = '#c00'; }
+              btn.disabled = false;
+              btn.textContent = '转精读 ✨';
+            }
+          });
+        })();
+
         // 预取相邻论文的 Markdown（利用浏览器 cache，让切换更丝滑）
         prefetchAdjacent();
 

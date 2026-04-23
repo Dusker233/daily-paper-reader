@@ -30,6 +30,12 @@ window.DPRWorkflowRunner = (function () {
       name: '上传论文关联发现',
       desc: '触发 seed-paper-related 工作流（上传种子论文请求 → 关联论文处理）。',
     },
+    {
+      key: 'seed-paper-deep-single',
+      id: 'seed-paper-deep-single.yml',
+      name: '转精读（单篇）',
+      desc: '从 skim 页升级到 deep summary（单篇论文）。',
+    },
   ];
 
   const QUICK_FETCH_PRESETS = {
