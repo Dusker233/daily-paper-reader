@@ -453,21 +453,15 @@ def _render_related_pages(
                 txt_path.write_text(abstract, encoding="utf-8")
                 paper_text = abstract
 
-        # PR3: Generate skim body via build_markdown_content's own fallback path.
-        # DO NOT call generate_skim_body() here - that causes double-write:
-        #   - build_markdown_content already outputs fallback skeleton inline when _skim_body absent
-        #   - then upsert_skim_body_in_text would add another wrapper with SAME skeleton
-        # Result: two sets of 4-section body (inline + wrapper) = duplicate.
-        # Fix: let build_markdown_content handle fallback skeleton via its own _build_skim_body_fallback.
-        # Only need to upsert the wrapper block (handled after build_markdown_content below).
+        # PR3: Related page uses full-text for glance via generate_glance_overview(paper_text).
+        # For skim body: let build_markdown_content handle inline skeleton via its own
+        # _build_skim_body_fallback, then upsert_skim_body_in_text adds the wrapper.
+        # Note: build_markdown_content already outputs fallback skeleton inline when _skim_body absent.
+        # We skip calling generate_skim_body() here to avoid duplicate skeleton + wrapper.
         skim_body = ""
         paper_with_body = dict(paper)
         paper_with_body.pop("_skim_body", None)
 
-        # PR3: Inline upsert via upsert_skim_body_in_text (called after build_markdown_content)
-        # Note: render_seed_workspace always recreates related/ dir, so existing-file migration
-        # path is only for re-render scenarios. The migration happens via upsert_skim_body_in_text
-        # on top of build_markdown_content output.
         md_content = generate_docs_module.build_markdown_content(
             paper_with_body,
             "related-paper",
