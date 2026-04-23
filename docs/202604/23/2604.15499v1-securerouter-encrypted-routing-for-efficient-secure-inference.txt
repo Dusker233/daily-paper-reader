@@ -1,0 +1,351 @@
+Title: SecureRouter: Encrypted Routing for Efficient Secure Inference
+
+URL Source: https://arxiv.org/pdf/2604.15499v1
+
+Published Time: Mon, 20 Apr 2026 00:13:53 GMT
+
+Number of Pages: 8
+
+Markdown Content:
+# SecureRouter: Encrypted Routing for Efficient Secure Inference 
+
+# Yukuan Zhang 
+
+University of Central Florida Orlando, Florida, USA yukuan.zhang@ucf.edu 
+
+# Mengxin Zheng 
+
+University of Central Florida Orlando, Florida, USA mengxin.zheng@ucf.edu 
+
+# Qian Lou 
+
+University of Central Florida Orlando, Florida, USA qian.lou@ucf.edu 
+
+## Abstract 
+
+Cryptographically secure neural network inference typically relies on secure computing techniques such as Secure Multi-Party Compu-tation (MPC), enabling cloud servers to process client inputs without decrypting them. Although prior privacy-preserving inference sys-tems co-design network optimizations with MPC, they remain slow and costly, limiting real-world deployment. A major bottleneck is their use of a single, fixed transformer model for all encrypted inputs, ignoring that different inputs require different model sizes to balance efficiency and accuracy. We present SecureRouter , an end-to-end en-crypted routing and inference framework that accelerates secure transformer inference through input-adaptive model selection under encryption. SecureRouter establishes a unified encrypted pipeline that integrates a secure router with an MPC-optimized model pool, enabling coordinated routing, inference, and protocol execution while preserving full data and model confidentiality. The framework includes training-phase and inference-phase components: an MPC-cost-aware secure router that predicts per-model utility and cost from encrypted features, and an MPC-optimized model pool whose architectures and quantization schemes are co-trained to minimize MPC communication and computation overhead. Compared to prior work, SecureRouter achieves a latency reduction by 1.95 × with neg-ligible accuracy loss, offering a practical path toward scalable and efficient secure AI inference. Our open-source implementation is available at : https://github.com/UCF-ML-Research/SecureRouter 
+
+## 1 Introduction 
+
+State-of-the-art Transformer models such as XLNet [ 45 ] and AL-BERT [ 17 ] have become indispensable in modern NLP applications. However, deploying these models in sensitive domains—including medicine and finance—raises serious privacy concerns. To address these risks, Secure Multi-Party Computation (MPC) has emerged as a foundational technique for Privacy-Preserving Machine Learn-ing (PPML) [ 8 , 16 , 19 , 31 ], enabling cloud servers to process client inputs without ever decrypting them. In this setting, clients secret-share their data across two or more non-colluding servers, which collaborate to execute the inference protocol directly over encrypted shares. This design ensures that neither the raw inputs nor the model parameters are ever exposed in plaintext. Despite these strong confidentiality guarantees, the practical adoption of MPC-based inference remains limited due to its pro-hibitive computational cost. The dominant bottleneck arises from non-linear operations such as GeLU and Softmax, which are trivial in plaintext but account for over 77% of secure inference time [ 26 ]. As a consequence, a standard BERT BASE model that runs in under one second in plaintext can exceed 60 seconds under MPC [ 18 ]. Recent     
+
+> DAC ’26, Long Beach, CA, USA
+> 2026. Data
+> Client
+> Server
+> Cryptographic
+> Protocol
+> MPC Optimized Model Pool
+> Secure
+> Router
+> Data
+> Client
+> Server
+> Cryptographic
+> Protocol
+> Fixed MPC Model
+> (a) (b)
+
+Figure 1: Comparison of (a) a current MPC framework uti-lizing a single, fixed model, with (b) our proposed framework, which introduces a Secure Router to dynamically select an appropriate model from an MPC Model Pool. 
+
+frameworks including MPCFormer [ 18 ] and SecFormer [ 26 ] alleviate part of this overhead by optimizing or approximating non-linear components. However, these systems still follow a single-model de-sign, as shown in Figure 1(a): every encrypted input is processed by the same fixed Transformer, regardless of its difficulty or compu-tational demand. This paradigm forces all queries—easy and hard alike—through the same expensive computation and fails to resolve the core trade-off between the accuracy of larger models and the latency benefits of smaller ones. In plaintext inference, this inefficiency is commonly resolved using input-adaptive inference , or model routing [15 , 39 ]. Instead of relying on a single model, plaintext systems maintain a pool of heterogeneous LLMs and use a lightweight router to select, per in-put, the smallest model capable of maintaining accuracy. However, these methods are fundamentally unsuitable for MPC: they assume full plaintext visibility, and their cost metrics rely on FLOPs or API pricing, whereas MPC cost is dominated by communication rounds, cryptographic primitives, and non-linear operations—not parameter count alone. A key challenge in extending routing to the encrypted setting is that both training and inference must operate under MPC constraints. During training, the framework must construct MPC-optimized model pools whose architectures and quantization schemes are op-timized for secure computation, rather than plaintext FLOPs. The router itself must learn to predict model utility and cost from statistics  
+
+> 1
+> arXiv:2604.15499v1 [cs.CR] 16 Apr 2026 DAC ’26, June 2026, Long Beach, CA, USA Yukuan Zhang, Mengxin Zheng, and Qian Lou
+
+derived from encrypted data, despite never observing raw inputs. At the same time, the system must define an MPC-relevant cost model— capturing communication overhead, multiplication counts, and non-linear activation costs—that meaningfully differs from plaintext cost. During inference, these components must be tightly integrated: the router must operate on secret-shared embeddings, its decisions must remain encrypted, and the selected model must be retrieved obliv-iously and executed within the MPC protocol. Designing a pipeline that combines these elements efficiently, without revealing the in-put or the routing choice, forms the central technical difficulty of encrypted routing. To bridge this gap, we present SecureRouter , an end-to-end en-crypted routing and inference framework that accelerates secure Transformer inference through input-adaptive model selection un-der encryption. As illustrated in Figure 1(b), SecureRouter introduces a Secure Router that adaptively selects the most efficient model from a secret-shared MPC Model Pool without revealing either the input or the routing decision. SecureRouter establishes a unified encrypted pipeline that integrates (1) an MPC-cost-aware router capable of pre-dicting per-model utility and cost directly from encrypted features, and (2) an MPC-optimized model pool whose architectures and quan-tization schemes are co-trained to minimize secure communication and computation overhead. 
+
+Contributions. Our contributions are listed as follows: 
+
+• Unified Encrypted Routing Framework. We design the first end-to-end MPC-based routing pipeline that jointly or-chestrates encrypted routing, oblivious model retrieval, and secure Transformer inference while preserving full input, decision, and model confidentiality. 
+
+• MPC-Cost-Aware Router and Model Pool Co-Design. 
+
+We introduce an MPC-cost-aware router trained to predict model utility and execution cost from encrypted statistics, and a co-trained model pool optimized to reduce MPC com-munication and non-linear computation overhead. 
+
+• Practical Efficiency Gains. SecureRouter achieves up to 
+
+1.95 × lower inference latency with negligible accuracy loss across GLUE tasks compared to fixed-model MPC base-lines, providing a practical path toward scalable and efficient privacy-preserving Transformer inference. 
+
+## 2 Background and Related Work 2.1 Threat Model 
+
+Consistent with established privacy-preserving inference frame-works, we adopt the standard semi-honest (or honest-but-curious) threat model [ 9 , 24 , 25 , 46 , 47 ]. In this setting, all participating par-ties—including the client and the computing servers—strictly adhere to the specified protocol instructions and do not tamper with the data or computation. However, they are considered adversarial in that they may inspect execution transcripts and intermediate memory states in an attempt to infer sensitive information about the private inputs or model parameters. 
+
+## 2.2 Secure Multi-party Computation for Neural Networks 
+
+Secure Multi-party Computation provides a cryptographic frame-work for multiple parties to collaboratively compute a function over their private data without revealing the inputs to one another. The robust privacy guarantees protect both the data and model weights. A significant body of work has explored the implementation of var-ious neural networks, including Transformer models, within secure computation frameworks [ 16 , 29 –31 , 36 , 41 ]. Rather than develop-ing a new MPC system, this paper introduces an end-to-end MPC router designed to accelerate Transformer inference, with the goal of portability across existing MPC frameworks. To enforce this privacy, the existing frameworks relies on secret sharing schemes [ 3, 10 ]. We specifically utilize additive secret shar-ing over a ring Z𝐿 . In this scheme, a secret value 𝑥 is decomposed into two random shares, ⟨𝑥 ⟩1 and ⟨𝑥 ⟩2, which are distributed to the user and the model provider, respectively. This decomposition satis-fies 𝑥 = ⟨𝑥 ⟩1 +⟨ 𝑥 ⟩2 (mod 𝐿 ). This mechanism ensures information-theoretic security, as possessing a single share reveals no information regarding the underlying secret 𝑥 , while the combination of shares allows for the reconstruction of the original value. While linear operations (such as addition) can be computed locally by summing individual shares, non-linear operations like multipli-cation require cryptographic protocols involving communication. A standard approach for secure multiplication utilizes Beaver triples [ 1]. Given secret-shared inputs 𝑥 and 𝑦 , and a pre-generated secret-shared triple (𝑎,𝑏,𝑐 ) where 𝑐 =𝑎𝑏 , the parties compute the masked differences 𝜖 =𝑥 −𝑎 and 𝛿 =𝑦 −𝑏 locally. These masked values are exchanged to reconstruct the plaintext 𝜖 and 𝛿 . The product 𝑧 =𝑥𝑦 is then computed as a linear combination of the public masked values and the private shares: 𝑧 =𝑐 +𝜖𝑏 +𝛿𝑎 +𝜖𝛿 .Beyond arithmetic computation, conditional execution on private data requires Oblivious Transfer (OT) [ 5, 32 ]. OT is a fundamental cryptographic primitive that allows a receiver to select and retrieve a specific element from a dataset of sender without revealing the selection index to the sender, while ensuring the receiver gains no information about the unselected elements. Once our secure router determines the optimal expert index in a secret-shared format, we utilize OT-based protocols to selectively retrieve the corresponding model parameters from the encrypted model pool. 
+
+## 2.3 The Transformer Pre-training and Fine-tuning Paradigm 
+
+The Transformer architecture has become a cornerstone of mod-ern machine learning, demonstrating state-of-the-art performance across diverse domains. Initially revolutionizing Natural Language Processing [ 2, 12 , 17 , 23 , 35 , 45 ], its principles have since been suc-cessfully adapted for computer vision [ 4, 21 , 33 ] and other modalities [22 , 37 ]. A dominant paradigm for the application of these models is a two-stage strategy: (1) pre-training on a massive, general-purpose dataset to learn broad data representations, followed by (2) fine-tuning on a smaller, task-specific downstream dataset. This pre-training and fine-tuning methodology has proven highly effective and is widely adopted [20, 34, 40, 43].  
+
+> 2SecureRouter: Encrypted Routing for Efficient Secure Inference DAC ’26, June 2026, Long Beach, CA, USA
+
+## 2.4 Routing-based Inference 
+
+The Mixture of Experts (MoE) architecture is a form of conditional computation designed to increase model capacity without a pro-portional rise in computational cost [ 6, 14 , 38 ]. A trainable gating network or router [ 44 ] learns to dynamically select a sparse subset of these experts (e.g., the top 1 or 2) for input. While classical MoE im-plementations typically involve equally-sized internal sub-models, modern approaches employ sparse activation strategies to rigorously minimize computational overhead [ 39 ]. This paradigm has recently been extended to coarse-grained MoEs, where each expert consti-tutes a full, standalone Large Language Model (LLM) rather than an internal sub-layer, thereby enabling the dynamic routing of inputs across a heterogeneous pool of complete models [ 15 , 39 ]. This strat-egy avoids over-paying for simple tasks, ensuring that expensive, high-cost models are used sparingly, only on the (relatively) few hard inputs [ 15 ]. This concept can be viewed as a coarse-grained MoE (Mix-ture of Experts), where each expert is a full LLM. Pioneering MoE ar-chitectures like the Switch Transformer [ 6] and Mixtral [ 14 ] leverage similar sparse routing mechanisms internally to reduce computation. 
+
+## 2.5 Gumbel-Softmax 
+
+A fundamental challenge in training routing mechanisms, such as those in MoE models, is the need to make discrete, non-differentiable choices (e.g., select expert 1 or select expert 3). Gradient-based op-timization via backpropagation, however, requires a continuous and differentiable computation path. The Gumbel-Softmax trick, also introduced concurrently as the Concrete distribution [ 13 , 27 ], pro-vides a solution. It is a reparameterization technique that creates a continuous and differentiable relaxation of a discrete categorical distribution. 
+
+## 3 SecureRouter 
+
+In this section, we present the SecureRouter framework, an end-to-end system for privacy-preserving inference. The core of this framework, illustrated in Figure 2, is to employ a cost-aware router in MPC environment that dynamically selects the optimal model from a MPC optimized model pool based on the specific query. 
+
+## 3.1 System Overview 
+
+We will begin with a high-level Framework which shows the work-flow of our SecureRouter. Following this, we will examine the specific mechanics of the secure Inference Protocol used during the online phase and the Generator (training) process used to build the router which balances accuracy and cost after training in the offline phase. 
+
+## 3.2 SecureRouter Framework 
+
+As illustrated in Figure 2, SecureRouter establishes a unified en-crypted pipeline operating in two distinct phases. During the of-fline phase , the system focuses on optimizing the components for the specific constraints of secure computing. In step 1○, the MPC-cost-aware secure router is trained to predict per-model utility and execution cost directly from features. Parallel to this, in step 2○, the MPC-optimized model pool is constructed. Here, diverse transformer architectures are co-trained and quantized to explicitly minimize MPC communication and computation overhead, before being converted into secret-shared formats for secure deployment. User     
+
+> MPC Engine
+> Private Data
+> Embedding
+> Secret
+> Sharing
+> MPC Optimized
+> Model Pool
+> Secret
+> Sharing
+> MPC Cost
+> Aware Router
+> MPC Routing MPC Inference
+> End -to -End Privacy Inference Service Provider
+> Online
+> Offline
+> MPC Router
+> Generator
+> New Model
+> e.g., GPT
+> Dataset
+> Training ①
+> ②
+
+Figure 2: An illustration of our proposed secure router framework, divided into an offline training phase and an online inference phase. The diagram simplifies the architecture to focus on the User and the End-to-End Privacy Inference Service Provider. 
+
+Transitioning to the online phase , the framework executes input-adaptive secure inference. When the system receives secret-shared input embeddings from the user, the router dynamically selects the optimal model index from the pool based on the input’s character-istics and the learned cost-utility policy. Subsequently, the selected MPC-optimized model executes the inference protocol. This coor-dinated pipeline ensures that the user’s private input, the routing decision, and the model parameters remain cryptographically confi-dential throughout the computation, with the final encrypted results returned via the MPC Engine. 
+
+## 3.3 SecureRouter Inference Protocol Client  Server              
+
+> Embedding(Eb)
+> Eb[0]
+> Online Phase
+> SecretSharing(Eb)
+> Eb[0] ×W[0] + R[0]
+> Secure Argmax()
+> ReLU()&Dropout()
+> Model Pool
+> Results SecretSharing(Results)
+> Party 0 Party 1
+> Eb[1]
+> Eb[1] ×W[1] + R[1]
+> Eb[0] ×W[0] + R[0] Eb[1] ×W[1] + R[1]
+> Selection[0] Selection[1]
+> Eb Model[0] Model[1]
+> Offline Phase
+> Model
+> Pool
+> Dataset
+> Training
+
+Figure 3: The online inference protocol, illustrating the 2-Party Computation (2PC) flow between the Client and the 
+
+Server (Party 0 and Party 1 ).  
+
+> 3DAC ’26, June 2026, Long Beach, CA, USA Yukuan Zhang, Mengxin Zheng, and Qian Lou
+
+The online inference protocol, detailed in Figure 3, commences when the client processes their private data to generate an embed-ding e. This embedding is then transformed into secret shares [e]0
+
+and [e]1. These shares are distributed to two non-colluding server parties, Party 0 and Party 1, respectively. Upon receiving the shares, the server parties collaboratively exe-cute the privacy-preserving routing mechanism using a pre-trained router policy from the offline phase. Specifically, Party 0 computes 
+
+[e]0 × [ W]0 + [ R]0 while Party 1 computes [e]1 × [ W]1 + [ R]1,where [W] and [R] are the secret-shared weights and biases of the router policy learned during the offline training phase. These linear transformations are followed by secure non-linear activations (ReLU and Dropout), forming a secret-shared two-layer neural network that evaluates routing decisions. The outputs from both parties are then fed into a secure argmax protocol, which cryptographically computes the index of the optimal model. The selection result, maintained in secret-shared format ( [𝑆𝑒𝑙𝑒𝑐𝑡𝑖𝑜𝑛 ]0
+
+and [𝑆𝑒𝑙𝑒𝑐𝑡𝑖𝑜𝑛 ]1), is used to retrieve the corresponding model pa-rameters from the MPC optimized model pool via oblivious transfer. The system then executes the main MPC inference using the original embedding shares ( [e]0 and [e]1) and the privately retrieved model parameters ( [Model ]0 and [Model ]1). The final inference results remain in secret-shared state ( [y]0 and [y]1) and are sent back to the client. Only the client, upon recombining the shares, can reconstruct the final plaintext result. 
+
+## 3.4 SecureRouter Generator 
+
+The offline training process for the Router Generator is illustrated in Figure 4. This phase is critical for the joint optimization of the MPC-cost-aware Router (e.g., BERT Tiny + a lightweight MLP) and the MPC-optimized Model Pool. As highlighted in our contributions, this process co-trains the router to make cost-aware decisions while simultaneously tuning the expert architectures and their quantiza-tion parameters to minimize MPC overhead. Input 
+
+> Bert
+> Embedding
+> Summary
+> output
+> Sequence
+> output
+> Offline Training
+> MPC Router
+> Generator
+> MPC Optimized
+> Model Pool
+> Gumbel
+> Softmax
+> 𝐿 𝑡𝑎𝑠𝑘
+> 𝐿 𝑏𝑎𝑙𝑎𝑛𝑐𝑒 𝐿 𝑐𝑜𝑠𝑡
+> activate
+> Activated
+> Model
+> Summary
+> Model
+> 𝐿 𝑓𝑢𝑛𝑐𝑡𝑖𝑜𝑛
+
+Figure 4: The offline training architecture for the Router Generator. The BERT embedding trains the MPC-cost-aware aware Router via a Summary Model and serves as input to the MPC optimized model pool. The router’s Gumbel Softmax selection computes routing losses ( 𝐿 𝑐𝑜𝑠𝑡 , 𝐿 𝑏𝑎𝑙𝑎𝑛𝑐𝑒 ), activates an expert model, and produces task loss ( 𝐿 𝑡𝑎𝑠𝑘 ) for joint router-expert training. 
+
+The training data flow commences when an input is processed to generate a BERT embedding e. This embedding is subsequently utilized along two parallel computational branches. In the expert path, the complete embedding sequence is forwarded to the MPC optimized model pool, where it becomes accessible for processing by any of the expert models (e.g., different BERT vari-ants). Concurrently, in the router path, the embedding is first passed through a summary model(e.g. BERT Tiny) to produce a condensed representation. This summarized output serves as the input to the MPC Router Generator, which generates selection logits. To enable end-to-end differentiable training, these logits are processed through a Gumbel Softmax function, providing a continuous relaxation of the discrete expert selection process and facilitating gradient-based optimization of the router’s decision-making mechanism via back-propagation. The Gumbel Softmax output is used to calculate a composite loss function ( 𝐿 𝑓 𝑢𝑛𝑐𝑡𝑖𝑜𝑛 ) and to produce the final task prediction. The training is guided by three distinct loss components, as detailed in the provided images. 
+
+3.4.1 The Main Task Loss ( 𝐿 𝑡𝑎𝑠𝑘 ). The primary objective function ensures that the integrated system—comprising both the router and the expert models—achieves accurate classification performance. The final prediction 𝑌 𝑝𝑟𝑒𝑑 is computed as a weighted aggregation of outputs from all experts 𝐸 𝑖 in the MPC optimized model pool, where the weights 𝑔 𝑖 correspond to the probabilities generated by the router’s Gumbel Softmax operation: 
+
+𝑌 𝑝𝑟𝑒𝑑 =
+
+> 𝑘
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑔 𝑖 ·𝐸 𝑖 (𝑥 ) (1) where 𝑘 denotes the total number of expert models, 𝐸 𝑖 (𝑥 ) represents the output of the 𝑖 -th expert model, and 𝑔 𝑖 is the routing probability for expert 𝑖 .The task loss is computed using the cross-entropy loss between the predicted distribution and the ground truth labels: 
+
+𝐿 𝑡𝑎𝑠𝑘 =CrossEntropyLoss (𝑌 𝑝𝑟𝑒𝑑 ,𝑌 𝑡𝑟𝑢𝑒 ) (2) 
+
+3.4.2 The Load Balancing Loss ( 𝐿 𝑏𝑎𝑙𝑎𝑛𝑐𝑒 ). The load balancing objec-tive is designed to promote uniform utilization of all expert models by the MPC Router across a training batch, thereby preventing mode collapse where the router converges to selecting only a subset of available experts. This loss is computed using the squared coefficient of variation of the expert utilization distribution. For each expert 𝑖 ∈ { 1,...,𝑘 }, the aggregate load 𝐿 𝑖 over a batch 𝐵 
+
+is defined as the sum of routing probabilities assigned to that expert across all samples: 
+
+𝐿 𝑖 =∑︁  
+
+> 𝑥 ∈𝐵
+
+𝑔 𝑖 (𝑥 ) (3) where 𝑔 𝑖 (𝑥 ) denotes the routing probability assigned to expert 𝑖 for input 𝑥 .The load balancing loss is then formulated as the squared co-efficient of variation of the expert loads, quantifying the relative dispersion of utilization across experts: 
+
+𝐿 𝑏𝑎𝑙𝑎𝑛𝑐𝑒 = Var (𝐿 1,...,𝐿 𝑘 )[Mean (𝐿 1,...,𝐿 𝑘 )] 2 (4) This formulation penalizes uneven expert utilization, encourag-ing the router to maintain a balanced distribution of samples across the MPC optimized model pool during training.  
+
+> 4SecureRouter: Encrypted Routing for Efficient Secure Inference DAC ’26, June 2026, Long Beach, CA, USA
+
+3.4.3 The Cost-Aware Loss ( 𝐿 𝑐𝑜𝑠𝑡 ). The cost-aware objective func-tion incentivizes the MPC Router to favor computationally efficient expert models during selection. To reflect the computational con-straints of secure multi-party computation, we define the cost met-ric 𝑐 𝑖 for each expert 𝑖 as the empirical inference time measured within the MPC environment. For instance, smaller models incur lower communication and computation costs in MPC execution (e.g., 
+
+𝑐 BERT-small =1.0, 𝑐 BERT-base =2.5). For a given input 𝑥 , the expected computational cost is formulated as the weighted sum of individual expert costs, where the weights correspond to the routing probabilities: ExpectedCost (𝑥 ) =
+
+> 𝑘
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑔 𝑖 (𝑥 ) · 𝑐 𝑖 (5) where 𝑔 𝑖 (𝑥 ) denotes the routing probability assigned to expert 𝑖 for input 𝑥 , and 𝑐 𝑖 represents the MPC inference time cost of expert 𝑖 .The cost-aware loss is then computed as the mean expected cost over the entire training batch 𝐵 :
+
+𝐿 𝑐𝑜𝑠𝑡 = 1
+
+|𝐵 |∑︁ 𝑥 ∈𝐵 
+
+ExpectedCost (𝑥 ) (6) As illustrated in Figure 4, the load balancing loss 𝐿 𝑏𝑎𝑙𝑎𝑛𝑐𝑒 and the cost-aware loss 𝐿 𝑐𝑜𝑠𝑡 are aggregated into a unified routing objective 
+
+𝐿 𝑓 𝑢𝑛𝑐𝑡𝑖𝑜𝑛 , which, in conjunction with the task loss 𝐿 𝑡𝑎𝑠𝑘 , governs the joint optimization of both the router and expert models throughout the offline training phase. 
+
+## 4 Experiments 
+
+This section showcases the effectiveness of SecureRouter through experiments. We begin with the experiment setup and then report the performance assessment results in performance comparison .
+
+## 4.1 Experimental Setup 
+
+Implementation. Our system, SecureRouter, was implemented using the Crypten framework, a semi-honest, secret-sharing-based platform for privacy-preserving machine learning. The hardware configurations for our experiments are offline and online phases. The offline training and router generation were performed on a single server equipped with an INTEL(R) XEON(R) GOLD 6526Y CPU, 32GB of system memory, and one NVIDIA H100 GPU. The 
+
+online inference protocol was evaluated in a simulated two-party computation (2PC) environment, which comprised two local servers. Each of these servers was equipped with an NVIDIA 3090 GPU, and the two parties were interconnected via a 10 Gbps network. 
+
+Models. The experimental models in MPC optimized model pool are standard BERT architectures sourced from the HuggingFace Transformers library, selected to represent a range of computational scales. The most compact model, BERT-tiny, features 2 Transformer encoder layers, a hidden size of 128, 2 attention heads, and approxi-mately 4.4 million parameters. The foundational BERT-Base version comprises 12 layers, a hidden size of 768, 12 attention heads, and 110 million parameters. Finally, BERT-Large, an expanded iteration, is configured with 24 layers, a hidden size of 1024, 16 attention heads, and approximately 340 million parameters, enabling it to capture more intricate language patterns. 
+
+Datasets. To ensure a comprehensive and reliable evaluation, we conduct experiments across a diverse suite of benchmarks drawn from the General Language Understanding Evaluation (GLUE) dataset [ 42 ]. This collection includes the MNLI, QQP, SST-2, RTE, MRPC, CoLA, STS-B, and QNLI tasks, which intentionally span a variety of evaluation metrics. Specifically, performance is measured using accuracy (for MNLI, RTE, SST-2, and QNLI), the F1 score (for MRPC and QQP), the Matthews correlation coefficient (for CoLA), and the average of Pearson and Spearman correlations (for STS-B). 
+
+Baselines for Comparison. We establish two primary sets of base-lines for our experimental evaluation. The first baseline consists of a standard Hugging Face Transformer model [ 7 , 11 , 28 ] fine-tuned on the target dataset, with its secure inference performance evaluated using the Crypten framework. The second set of baselines follows the setting in SecFormer [ 26 ], for which we report the individual, fine-tuned performance of each redesigned model that is included in our MPC optimized model pool. 
+
+## 4.2 Performance Comparison 
+
+We present our primary results in Table 2. Comparing our MPC-cost-aware Router + MPC optimized model pool with the BERT-Large fine-tuned baseline, our framework exhibits a significant perfor-mance improvement.            
+
+> Method MNLI 393k QQP 363k QNLI 108k SST-2 67k CoLA 8.5k STS-B 5.7k MRPC 3.5k RTE 2.5k Average Speed-up
+> BERT-Large fine-tuned 86.64 88.08 92.24 93.46 63.35 90.36 91.62 75.45 1x SecureRouter + MPC optimized model pool
+> 86.73
+> (1.21x) 88.05 (1.95x) 92.00 (1.20x) 93.10 (1.73x) 59.10 (1.22x) 89.02 (1.30x)
+> 91.78
+> (1.16x) 75.09 (1.49x) 1.53x
+
+Table 1: Performance comparison of BERT Large and SecureRouter. Bolded numbers indicate best results;Values in parentheses represent the inference speed-up of our MLP Router + MPC optimized model pool method relative to the BERT-Large fine-tuned baseline for each task. 
+
+For instance, on MNLI, our model (86.73) slightly outperforms the baseline (86.64), and on QQP, it achieves a 1.95x speed-up with a neg-ligible performance trade-off (88.05 vs. 88.08). The most significant speed-ups are observed on QQP (1.95x) and SST-2 (1.73x), validat-ing our approach’s ability to dynamically allocate resources and accelerate secure inference with minimal impact on model quality. Furthermore, the results highlight a distinct relationship between task characteristics and router effectiveness. Tasks centered on se-mantic similarity and inference, such as MRPC and QQP, benefit sig-nificantly from our architecture, yielding either unexpected perfor-mance gains (as seen in MRPC, +0.16) or massive speed-ups (1.95x on QQP). Conversely, the performance dip observed on CoLA (59.10 vs. 63.35) suggests that tasks requiring strict syntactic and grammatical precision may be more sensitive to the reduced capacity of selected models in the pool. Despite this specific trade-off, the method’s abil-ity to increase accuracy on the massive MNLI dataset (+0.09) while providing a 1.21x speed-up confirms that the SecureRouter effec-tively identifies ’easy’ samples in large-scale semantic workloads, optimizing the cost-accuracy pareto frontier. SecureRoute consistently outperforms the state-of-the-art Sec-Former framework across all evaluated tasks, reducing the average inference latency by nearly 50% while operating within the same          
+
+> 5DAC ’26, June 2026, Long Beach, CA, USA Yukuan Zhang, Mengxin Zheng, and Qian Lou
+> Method QNLI 108k CoLA 8.5k STS-B 5.7k MRPC 3.5k RTE 2.5k Average Speed-up
+> SecFormer BERT-Large 37.75s 37.75s 37.75s 37.75s 37.75s 1x SecureRouter + MPC optimized model pool 19.6s (1.92x) 18.50s (2.04x) 20.62s (1.83x) 19.26s (1.96x) 17.23s (2.19x) 1.95x
+
+Table 2: Inference Latency and Speed-up Comparison on GLUE Benchmarks. Following the experimental setting of SecFormer [ 26 ], we measure the end-to-end inference time (in seconds) for a single sample. 
+
+secure experimental constraints. Extensive profiling reveals that the extent of the speed-up is inversely correlated with the inherent dif-ficulty of the dataset, confirming the router’s ability to successfully exploit sample redundancy. It not only achieves a high efficiency gain of 2.19 × on simpler tasks like RTE by utilizing smaller experts but also maintains strict accuracy on semantically complex tasks like STS-B, necessitating a more conservative speed-up of 1.83 ×. SecureRoute demonstrates a sophisticated capacity for adaptive resource alloca-tion, offering a dynamic solution that promises to minimize MPC overhead on easy samples while automatically scaling to meet the rigorous demands of challenging inputs. 
+
+## 4.3 Time efficiency 
+
+Given the significant computational overhead of conducting end-to-end MPC inference for every sample in the GLUE benchmark, we report the projected speed-up based on router profiling. To calculate this, we first measured the unitary inference latency for each expert model (Tiny, Base, Large) within our MPC environment. We then ran the SecureRoute router on the test set to obtain the distribution of expert selections for each task. The average speed-up is calculated as the ratio of the baseline cost (running BERT-Large for all 𝑁 samples) to the weighted sum of the costs of the selected experts, plus the overhead of the router itself: Speed-up = 𝑁 ×𝐶 Large 
+
+Í𝑁 𝑖 =1 (𝐶 selected (𝑖 ) +𝐶 router )
+
+where 𝐶 Large is the MPC latency of the baseline model, and 𝐶 selected (𝑖 )
+
+is the latency of the model chosen by the router for the 𝑖 -th sample. For example, in the result of RTE dataset, in Table 3, We can find that our SecureRouter is significantly more efficient than the BERT-Large fine-tuned baseline. Specifically, our approach achieves an average run-ning time of 133.92s in each result in the evaluation set, which is 1.49x faster than the baseline’s 199.78s. This significant speedup is achieved with only a minimal 0.36% drop in accuracy (75.09% vs. 75.45%). These advantages stem from our router-based MPC optimized model pool. Instead of processing every sample with the full BERT-Large model (which has an expert distribution of [0, 0, 100]), our MPC-cost-aware Router dynamically distributes the workload. As shown in the expert distribution [16.9, 28.3, 54.8] , the model is able to route a large portion of samples to the more efficient Tiny and Base experts, with only 54.8% of samples requiring the full BERT-Large model. This dynamic routing significantly reduces the average inference cost. A detailed time breakdown of the individual compo-nents is shown in Table 4. This table lists the running times for the Method Accuracy (%) Expert Distribution [Tiny, base, Large] Running Time(s) BERT Large fine-tuned 75.45 [0,0,100] 199.78 SecureRouter + MPC optimized model pool 75.09 [16.9, 28.3, 54.8] 133.92 
+
+Table 3: Performance comparison on RTE dataset. Running time is the average of time for the evaluation with fine-tuned BERT Large. Model SecureRouter BERT_tiny BERT_base BERT_large             
+
+> Running Time(s) 4.17 4.11 69.71 199.78 Communication Volume(GB) 1.86 1.86 58.50 156.31 Memory Usage(MB) 39.12 38.00 1054.00 3114.00
+
+Table 4: Comparison of baseline Model Running Time(s), Communication Volume(GB) and Memory Usage(MB) with SecureRouter in 2-PC environment 
+
+SecureRouter (4.17s) with 1.86 GB communication volume as well as the inference costs for each expert in the pool: BERT tiny (4.11s) with 1.86 GB communication volume, BERT base (69.71s) with 58.50 GB communication volume, and BERT large (199.78s) with 156.31GB communication volume. Critically, the memory footprint analysis re-veals that our routing mechanism introduces negligible overhead to the system. As detailed in Table 4, the SecureRouter consumes 38.20 MB of memory, a marginal increase of only 1.12 MB (approximately 3%) over the standalone BERT_tiny expert (38.00 MB). This confirms that the overhead imposed by the routing logic and model manage-ment is computationally lightweight. Furthermore, when contrasted with the memory demands of standard dense models—1054.00 MB for BERT_base and 3114.00 MB for BERT_large—our approach main-tains a memory profile comparable to the smallest expert in the pool. This demonstrates that SecureRouter achieves dynamic inference ac-celeration without incurring the prohibitive memory costs typically associated with deploying larger or ensemble-based architectures in secure inference environments. 
+
+## 5 Conclusion 
+
+In this paper, first, we present SecureRoute, an end-to-end encrypted routing and inference framework designed to enable efficient and accurate MPC-based Transformer instead of using fixed model. Sec-ondly, we detail the online inference protocol, where two servers to use secret-shared input embeddings from the client to privately select and execute an optimal model. Lastly, in the offline process, we introduce an MPC cost aware secure router training algorithm to predict inference cost and utility from encrypted inputs. Extensive experiments on the GLUE benchmark demonstrate that SecureRoute achieves significant speedups over static baselines without compro-mising model accuracy. Ultimately, this work establishes a scalable path for deploying large-scale, privacy-preserving AI services in latency-critical applications. 
+
+> 6
+
+SecureRouter: Encrypted Routing for Efficient Secure Inference DAC ’26, June 2026, Long Beach, CA, USA 
+
+## References 
+
+[1] Donald Beaver. 1991. Efficient multiparty protocols using circuit randomization. In Annual International Cryptology Conference . Springer, 420–432. [2] Kevin Clark, Minh-Thang Luong, Quoc V. Le, and Christopher D. Manning. 2020. ELECTRA: Pre-training Text Encoders as Discriminators Rather Than Generators. In International Conference on Learning Representations (ICLR) .[3] Ivan Damgård, Valerio Pastro, Nigel Smart, and Sarah Zakarias. 2012. Multiparty computation from somewhat homomorphic encryption. In Annual Cryptology Conference . Springer, 643–662. [4] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer, Georg Heigold, Sylvain Gelly, Jakob Uszkoreit, and Era Strubell. 2020. An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale. arXiv preprint arXiv:2010.11929 (2020). [5] Shimon Even, Oded Goldreich, and Abraham Lempel. 1985. A Randomized Protocol for Signing Contracts. Commun. ACM 28, 6 (1985), 637–647. [6] William Fedus, Barret Zoph, and Noam Shazeer. 2022. Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research 23, 120 (2022), 1–39. http://jmlr.org/papers/v23/21-0998.html [7] Elias Frantar, Eldar Kurtic, and Dan Alistarh. 2021. M-FAC: Efficient Matrix-Free Approximations of Second-Order Information. Advances in Neural Information Processing Systems 35 (2021). [8] Ran Gilad-Bachrach, Nathan Dowlin, Kim Laine, Kristin Lauter, Michael Naehrig, and John Wernsing. 2016. CryptoNets: Applying Neural Networks to Encrypted Data with High Throughput and Accuracy. In Proceedings of the 33rd International Conference on Machine Learning (ICML) (PMLR, Vol. 48) . 1135–1144. [9] Oded Goldreich, Silvio Micali, and Avi Wigderson. 1987. How to Play Any Mental Game. In Proceedings of the Nineteenth Annual ACM Symposium on Theory of Computing . 218–229. [10] Oded Goldreich, Silvio Micali, and Avi Wigderson. 2019. How to play any mental game, or a completeness theorem for protocols with honest majority. In Providing Sound Foundations for Cryptography: On the Work of Shafi Goldwasser and Silvio Micali . ACM, 307–328. [11] Haoyu He, Xingjian Shi, Jonas Mueller, Zha Sheng, Mu Li, and George Karypis. 2021. Distiller: A Systematic Study of Model Distillation Methods in Natural Language Processing. arXiv:2109.11105 [cs.CL] https://arxiv.org/abs/2109.11105 [12] Yen-Chang Hsu, Ting Hua, Sungen Chang, Qian Lou, Yilin Shen, and Hongxia Jin. 2022. Language model compression with weighted low-rank factorization. In International Conference on Learning Representations (ICLR 2022) .[13] Eric Jang, Shixiang Gu, and Ben Poole. 2017. Categorical Reparameterization with Gumbel-Softmax. arXiv preprint arXiv:1611.01144 (2017). [14] Albert Q. Jiang, Alexandre Sablayrolles, Arthur Roux, Arthur Mensch, Blanche Savary, Chris Bamford, Devendra Singh Chaplot, Diego de las Casas, Emma Bou Hanna, Florian Bressand, et al . 2024. Mixtral of Experts. arXiv preprint arXiv:2401.04088 (2024). [15] Wittawat Jitkrittum, Jeevesh Juneja, Alec Go, et al . 2025. Universal model routing for efficient LLM inference. arXiv preprint arXiv:2502.08773 (2025). [16] Brian Knott, Wan-Duo Kurt Lee, Samuel Ranellucci, Mariana Raykova, David Schultz, Matthew D. Smart, and Luciano van der Maaten. 2021. CrypTen: Secure Multi-Party Computation Meets Machine Learning. In Advances in Neural Information Processing Systems (NeurIPS) .[17] Zhenzhong Lan, Mingda Chen, Sebastian Goodman, Kevin Gimpel, Piyush Sharma, and Radu Soricut. 2019. ALBERT: A Lite BERT for Self-supervised Learning of Language Representations. arXiv preprint arXiv:1909.11942 (2019). [18] Dacheng Li, Rulin Shao, Hongyi Wang, Han Guo, Eric P. Xing, and Hao Zhang. 2023. MPCFormer: Fast, Performant and Private Transformer Inference with MPC. In The Eleventh International Conference on Learning Representations (ICLR) .https://openreview.net/forum?id=CWmvjOEhgH-[19] Jian Liu, Hongsheng Ju, Qi Wang, and Qian Wang. 2017. MiniONN: A System for Scalable Privacy-Preserving Machine Learning. In Proceedings of the 2017 ACM SIGSAC Conference on Computer and Communications Security (CCS) . 1413–1429. [20] Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Mandar Joshi, Danqi Chen, Omer Levy, Mike Lewis, Luke Zettlemoyer, and Veselin Stoyanov. 2019. RoBERTa: A Robustly Optimized BERT Pretraining Approach. arXiv preprint arXiv:1907.11692 
+
+(2019). [21] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Georgia Gkioxari, Ross Girshick, Kaiming He, and Xiang Li. 2021. Swin Transformer: Hierarchical Vision Transformer using Shifted Windows. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) . 10012–10022. [22] Qian Lou, Yen-Chang Hsu, Burak Uzkent, Ting Hua, Yilin Shen, and Hongxia Jin. 2022. Lite-MDETR: A Lightweight Multi-Modal Detector. In IEEE Conference on Computer Vision and Pattern Recognition (CVPR 2022) .[23] Qian Lou, Ting Hua, Yen-Chang Hsu, Yilin Shen, and Hongxia Jin. 2022. DictFormer: Tiny Transformer with Shared Dictionary. In International Conference on Learning Representations (ICLR 2022) .[24] Qian Lou and Lei Jiang. 2019. SHE: A Fast and Accurate Deep Neural Network for Encrypted Data. In Advances in Neural Information Processing Systems (NeurIPS) 2019 . 10035–10043. [25] Qian Lou, Yilin Shen, Hongxi Jin, and Lei Jiang. 2021. SAFENet: A Secure, Accurate and Fast Neural Network Inference. (2021). [26] Jinglong Luo, Yehong Zhang, Zhuo Zhang, Jiaqi Zhang, Xin Mu, Hui Wang, Yue Yu, and Zenglin Xu. 2024. SecFormer: Fast and Accurate Privacy-Preserving Inference for Transformer Models via SMPC. In Findings of the Association for Computational Linguistics: ACL 2024 . Association for Computational Linguistics. https://aclanthology.org/2024.findings-acl.790 [27] Chris J. Maddison, Andriy Mnih, and Yee Whye Teh. 2017. The Concrete Distribution: A Continuous Relaxation of Discrete Random Variables. In 
+
+International Conference on Learning Representations (ICLR) .[28] Yoshitomo Matsubara. 2023. torchdistill Meets Hugging Face Libraries for Reproducible, Coding-Free Deep Learning Studies: A Case Study on NLP. In Pro-ceedings of the 3rd Workshop for Natural Language Processing Open Source Software (NLP-OSS 2023) . Empirical Methods in Natural Language Processing, 153–164. [29] Pratyush Mishra, Ryan Lehmkuhl, Akshayaram Srinivasan, et al . 2020. Delphi: A privacy-preserving framework for deep-learning inference. In 29th USENIX Security Symposium (USENIX Security 20) . 1045–1062. [30] Payman Mohassel and Peter Rindal. 2018. Aby3: A mixed protocol framework for machine learning. In Proceedings of the 2018 ACM SIGSAC Conference on Computer and Communications Security (CCS) . 35–52. [31] Payman Mohassel and Yupeng Zhang. 2017. SecureML: A System for Scalable Privacy-Preserving Machine Learning. In 2017 IEEE Symposium on Security and Privacy (SP) . IEEE, 19–38. [32] Michael O. Rabin. 1981. How to Exchange Secrets with Oblivious Transfer. 
+
+Harvard University Technical Report TR-81 (1981). [33] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sameer Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al .2021. Learning Transferable Visual Models From Natural Language Supervision. In International Conference on Machine Learning (ICML) . 8748–8763. [34] Alec Radford, Karthik Narasimhan, Tim Salimans, and Ilya Sutskever. 2018. Im-proving Language Understanding by Generative Pre-Training. OpenAI Blog (2018). [35] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J. Liu. 2020. Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer. Journal of Machine Learning Research 21, 140 (2020), 1–67. [36] M. Sadegh Riazi, Christian Kerschbaum, and Esha Stevie Ghasemishirazi. 2018. Chameleon: A hybrid secure computation framework for machine learning. In 
+
+Proceedings of the 2018 Asia Conference on Computer and Communications Security (ASIACCS) . 637–650. [37] Lior Sharir, Av Noy, and Yoav Goldberg. 2021. Video-A-R: A Video Auto-Regressive Model. In International Conference on Machine Learning (ICML) . 9503–9513. [38] Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc V. Le, Geoffrey Hinton, and Jeff Dean. 2017. Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer. In International Conference on Learning Representations (ICLR) .[39] Reza Shirkavand, Peiran Yu, Shangqian Gao, and Heng Huang. 2025. Cost-Aware Contrastive Routing for LLMS. arXiv preprint arXiv:2508.12491 (2025). arXiv:2508.12491 [cs.LG] [40] Iulia Turc, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. Exploring the Limits of Knowledge Distillation for BERT. arXiv preprint arXiv:1910.01108 
+
+(2019). [41] Sameer Wagh, Divya Gupta, and Nishanth Chandran. 2019. Securenn: 3-party secure computation for neural network training. Proceedings on Privacy Enhancing Technologies 2019, 3 (2019), 26–49. [42] Alex Wang, Amanpreet Singh, Julian Michael, Felix Hill, Omer Levy, and Samuel R. Bowman. 2WELCOME. GLUE: A Multi-Task Benchmark and Analysis Platform for Natural Language Understanding. In International Conference on Learning Representations (ICLR) .[43] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond, Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf, Morgan Funtowicz, Joe Davison, Sam Shleifer, et al . 2019. HuggingFace’s Transformers: State-of-the-art Natural Language Processing. arXiv preprint arXiv:1910.03771 (2019). [44] Jiaqi Xue, Qian Lou, Jiarong Xing, and Heng Huang. 2026. R2-Router: A New Paradigm for LLM Routing with Reasoning. arXiv preprint arXiv:2602.02823 (2026). [45] Zhilin Yang, Zihang Dai, Yiming Yang, Jaime Carbonell, Ruslan Salakhutdinov, and Quoc V Le. 2019. XLNet: Generalized Autoregressive Pretraining for Language Understanding. arXiv preprint arXiv:1906.08237 (2019). [46] Yancheng Zhang, Jiaqi Xue, Mengxin Zheng, Mimi Xie, Mingzhe Zhang, Lei Jiang, and Qian Lou. 2025. CipherPrune: Efficient and Scalable Private Transformer Inference. arXiv preprint arXiv:2502.16782 (2025). [47] Yancheng Zhang, Mengxin Zheng, Yuzhang Shang, Xun Chen, and Qian Lou. 2024. Heprune: Fast private training of deep neural networks with encrypted data prun-ing. Advances in Neural Information Processing Systems 37 (2024), 51063–51084. 7DAC ’26, June 2026, Long Beach, CA, USA Yukuan Zhang, Mengxin Zheng, and Qian Lou 
+
+## A Expert Pool Scalability 
+
+We investigate the impact of expert pool size 𝐾 on routing qual-ity. Starting from the default 3-expert pool (Tiny, Base, Large), we construct pools of 𝐾 ∈ { 2, 3, 4, 5} experts by adding intermediate BERT variants (Small, Mini). All configurations use the same router architecture, training hyperparameters, and cost-aware loss weights (𝛼 =0.05 , 𝛽 =0.08 ) on the MRPC task to ensure a controlled compar-ison. 
+
+K Expert Pool Costs F1 Acc. 
+
+2 Tiny, Large [2, 13] 89.75 85.05 3 Tiny, Base, Large [2, 7, 13] 90.14 85.78 
+
+4 Tiny, Small, Base, Large [2, 4, 7, 13] 89.23 84.31 5 Tiny, Mini, Small, Base, Large [2, 3, 4, 7, 13] 89.19 84.31 
+
+Table 5: Expert pool scalability on MRPC. 𝐾 =3 achieves the best accuracy–efficiency balance; adding more experts introduces routing ambiguity without improving quality. 
+
+As shown in Table 5, the 3-expert pool ( 𝐾 =3) achieves the best F1 of 90.14. The 2-expert pool ( 𝐾 =2) lacks a mid-range expert, forcing the router to choose between two extremes and reducing F1 by 0.39. Adding a fourth or fifth expert ( 𝐾 =4,5) does not improve quality; the additional mid-range models overlap in capacity, increasing rout-ing ambiguity without providing complementary coverage. This confirms that a small, well-separated expert pool is sufficient for effective cost-aware routing. 
+
+## B Cost Sensitivity Analysis 
+
+To validate that the router’s behavior is genuinely driven by the cost-aware loss 𝐿 cost rather than memorized heuristics, we vary the expert cost vector while keeping all other training conditions fixed (MRPC, 𝐾 =3, 𝛼 =0.05 , 𝛽 =0.08 ). 
+
+Cost Profile Costs F1 Acc. Tiny Route% Large Route% 
+
+Baseline [2, 7, 13] 89.70 84.80 15.9 61.8 Scale ×0.7 [1.4, 4.9, 9.1] 90.53 86.52 11.3 50.7 Scale ×1.5 [3, 10.5, 19.5] 90.34 86.27 13.2 48.0 Flat [5.1, 7.3, 9.5] 90.88 87.01 6.6 63.5 Steep [1, 7, 19.5] 90.10 85.78 13.0 45.8 Reversed [13, 7, 2] 91.48 87.99 2.7 90.4 
+
+Table 6: Cost sensitivity analysis on MRPC. The router adapts its expert selection in response to different cost vectors, confirming that 𝐿 cost drives routing behavior. 
+
+Table 6 reveals clear cost-responsive routing behavior. Under the 
+
+Steep profile, where the Large expert is 19.5 × more expensive than Tiny, the router aggressively reduces Large usage to 45.8%, compared to 61.8% under the Baseline profile. Under the Flat profile, where all experts have similar costs, the cost penalty becomes negligible and the router defaults to accuracy-maximizing selections (F1 = 90.88). The Reversed configuration—where Tiny is the most expensive and Large is the cheapest—causes the router to route 90.4% of queries to Large, yielding the highest F1 of 91.48. These results confirm that the cost-aware loss effectively steers routing decisions according to the provided cost structure, rather than relying on fixed architectural biases.
