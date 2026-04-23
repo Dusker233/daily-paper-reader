@@ -737,18 +737,18 @@ def _build_deep_summary_fallback(title: str, abstract: str, paper_text: str = ""
         f"## 2. 核心故事与贡献\n\n"
         f"{contribution}\n\n"
         f"**主要贡献点**（摘要描述）：\n"
-        f"- 贡献一：见正文 Section X\n"
-        f"- 贡献二：见正文 Section Y\n\n"
+        f"- 贡献一：[需验证]\n"
+        f"- 贡献二：[需验证]\n\n"
     )
 
     # Section 3: 相关工作与定位
     related = (
         f"## 3. 相关工作与定位\n\n"
         f"本工作与以下方向相关：\n"
-        f"- 规则/签名检测类方法：见正文 Section Z\n"
-        f"- 统计特征类方法：见正文 Section Z\n"
-        f"- 学习式方法：见正文 Section Z\n\n"
-        f"**定位**：本文与这些方法的核心区别在于……（见正文）\n\n"
+        f"- 规则/签名检测类方法：[需验证]\n"
+        f"- 统计特征类方法：[需验证]\n"
+        f"- 学习式方法：[需验证]\n\n"
+        f"**定位**：本文与这些方法的核心区别在于……[需验证]\n\n"
     )
 
     # Section 4: 方法详解
@@ -756,40 +756,40 @@ def _build_deep_summary_fallback(title: str, abstract: str, paper_text: str = ""
         f"## 4. 方法详解\n\n"
         f"**核心方法**（从摘要提取）：\n"
         f"{extract_sentences(abstract_text, 3)}\n\n"
-        f"**技术细节**：见正文 Section X\n"
-        f"**实现路径**：见正文 Section X.X\n\n"
+        f"**技术细节**：[需验证]\n"
+        f"**实现路径**：[需验证]\n\n"
     )
 
     # Section 5: 实验分析
     experiment = (
         f"## 5. 实验分析\n\n"
-        f"**主要实验结果**：见正文 Table X / Figure X\n"
-        f"- 指标一：见正文\n"
-        f"- 指标二：见正文\n\n"
-        f"**消融实验**：见正文 Section X\n\n"
+        f"**主要实验结果**：[需验证]\n"
+        f"- 指标一：[需验证]\n"
+        f"- 指标二：[需验证]\n\n"
+        f"**消融实验**：[需验证]\n\n"
     )
 
     # Section 6: 局限性与风险
     limitation = (
         f"## 6. 局限性与风险\n\n"
-        f"- 假设约束：见正文 Discussion\n"
-        f"- 应用边界：见正文 Section X\n"
-        f"- 潜在风险：见正文 Limitations\n\n"
+        f"- 假设约束：[需验证]\n"
+        f"- 应用边界：[需验证]\n"
+        f"- 潜在风险：[需验证]\n\n"
     )
 
     # Section 7: 复现与后续问题
     reproduction = (
         f"## 7. 复现与后续问题\n\n"
-        f"**复现重点**：见正文 Section X\n"
-        f"**后续研究方向**：见正文 Future Work\n\n"
+        f"**复现重点**：[需验证]\n"
+        f"**后续研究方向**：[需验证]\n\n"
     )
 
     # Section 8: 直接证据与待验证项
     evidence = (
         f"## 8. 直接证据与待验证项\n\n"
-        f"- 主要结论来源：见正文 Section X，Table X\n"
-        f"- [需验证] 具体数值：见正文\n"
-        f"- [需验证] 方法有效性：见正文\n\n"
+        f"- 主要结论来源：[需验证]\n"
+        f"- [需验证] 具体数值：\n"
+        f"- [需验证] 方法有效性：\n\n"
     )
 
     return tldr + core + related + method + experiment + limitation + reproduction + evidence
@@ -888,10 +888,14 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
         except Exception as e:
             log(f"[WARN] 精读总结失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
-    # PR4: LLM 失败时返回 8-section skeleton，不返回 None（确保 deep summary 也能落地）
-    if last:
+    # PR4: 只有包含"（完）"的完整 8-section 输出才被接受；partial output 必须回退到 skeleton
+    #    这确保了"固定 8-section 结构"contract不被 LLM partial output 破坏
+    if last and "（完）" in last:
         return last
-    log("[WARN] 精读总结 LLM 生成失败，改用 8-section skeleton fallback。")
+    if last:
+        log("[WARN] 精读总结 LLM 生成了不完整的 8-section（无（完）标记），改用 skeleton fallback。")
+    else:
+        log("[WARN] 精读总结 LLM 生成失败，改用 8-section skeleton fallback。")
     return _build_deep_summary_fallback(title, abstract_en, source_text)
 
 
