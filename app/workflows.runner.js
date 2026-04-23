@@ -596,7 +596,7 @@ window.DPRWorkflowRunner = (function () {
       if (!hasRendered) {
         recentEl.innerHTML = '<div style="color:#999;">正在加载最近运行记录...</div>';
       } else {
-        // 刷新时不要清空现有内容，避免“闪一下再出现”的观感
+        // 刷新时不要清空现有内容，避免"闪一下再出现"的观感
         recentEl.classList.add('is-loading');
       }
       const byWorkflow = {};
@@ -671,6 +671,7 @@ window.DPRWorkflowRunner = (function () {
   };
 
   const dispatchAndMonitor = async (workflow, extraInputs, dispatchOptions = {}) => {
+    try {
     const wf = workflow || {};
     const workflowFile = String(wf.id || '');
     if (!workflowFile) {
@@ -680,7 +681,7 @@ window.DPRWorkflowRunner = (function () {
     }
     const token = loadGithubToken();
     if (!token) {
-      const err = new Error('未检测到 GitHub Token：请在”密钥配置”或”GitHub Token”处完成配置。');
+      const err = new Error('未检测到 GitHub Token：请在"密钥配置"或"GitHub Token"处完成配置。');
       setStatus(err.message, '#c00');
       throw err;
     }
@@ -695,8 +696,8 @@ window.DPRWorkflowRunner = (function () {
       const err = new Error('当前仓库不是 GitHub Fork，无法使用上游同步。');
       setStatus(err.message, '#c00');
       runsEl.innerHTML =
-        '<div style=”color:#c00;”>当前仓库不是 Fork 仓库，Upstream Sync 不会运行。</div>' +
-        `<div style=”margin-top:8px;”><a class=”arxiv-tool-btn” style=”padding:6px 10px; text-decoration:none;” target=”_blank” href=”https://github.com/${owner}/${repo}/fork”>前往 Fork 当前仓库</a></div>`;
+        '<div style="color:#c00;">当前仓库不是 Fork 仓库，Upstream Sync 不会运行。</div>' +
+        `<div style="margin-top:8px;"><a class="arxiv-tool-btn" style="padding:6px 10px; text-decoration:none;" target="_blank" href="https://github.com/${owner}/${repo}/fork">前往 Fork 当前仓库</a></div>`;
       throw err;
     }
 
@@ -833,7 +834,13 @@ window.DPRWorkflowRunner = (function () {
       } else {
         runsEl.innerHTML = `<div style="color:#c00;">${escapeHtml(msg)}</div>`;
       }
-      throw e;  // re-throw so caller can handle failure
+      return Promise.reject(e);
+    }
+    } catch (e) {
+      // Outer catch: convert any synchronous throw (from early validation
+      // checks) into a rejected promise so callers never get synchronous throws.
+      console.error(e);
+      return Promise.reject(e);
     }
   };
 
@@ -940,7 +947,7 @@ window.DPRWorkflowRunner = (function () {
           `运行已结束：${run.conclusion || 'completed'}`,
           run.conclusion === 'success' ? '#080' : '#c00',
         );
-        // run 状态结束后，刷新“最近运行”列表，确保 completed/success 等状态能及时反映
+        // run 状态结束后，刷新"最近运行"列表，确保 completed/success 等状态能及时反映
         if (prevStateKey !== stateKey) {
           loadRecentRuns();
         }
