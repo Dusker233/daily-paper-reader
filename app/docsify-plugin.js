@@ -3866,7 +3866,6 @@ window.$docsify = {
         const hasSkim = /## 正文层速读/.test(body);
         const hasDeep = /## 论文详细总结（自动生成）/.test(body);
         const showDeepButton = hasSkim && !hasDeep;
-        const file = vm && vm.route ? vm.route.file : '';
         const paperId = file ? file.replace(/\.md$/i, '') : '';
         const deepButtonHtml = showDeepButton
           ? `<div class="paper-deep-upgrade-row" style="margin:12px 0;text-align:center;">

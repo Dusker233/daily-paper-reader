@@ -674,26 +674,30 @@ window.DPRWorkflowRunner = (function () {
     const wf = workflow || {};
     const workflowFile = String(wf.id || '');
     if (!workflowFile) {
-      setStatus('工作流配置缺失，无法触发。', '#c00');
-      return;
+      const err = new Error('工作流配置缺失，无法触发。');
+      setStatus(err.message, '#c00');
+      throw err;
     }
     const token = loadGithubToken();
     if (!token) {
-      setStatus('未检测到 GitHub Token：请在“密钥配置”或“GitHub Token”处完成配置。', '#c00');
-      return;
+      const err = new Error('未检测到 GitHub Token：请在”密钥配置”或”GitHub Token”处完成配置。');
+      setStatus(err.message, '#c00');
+      throw err;
     }
     const repoContext = await resolveRepoContext(token);
     const { owner, repo } = repoContext;
     if (!owner || !repo) {
-      setStatus('无法推断目标仓库：请确认 GitHub Token 有效，或使用 xxx.github.io/仓库名/ 访问。', '#c00');
-      return;
+      const err = new Error('无法推断目标仓库：请确认 GitHub Token 有效，或使用 xxx.github.io/仓库名/ 访问。');
+      setStatus(err.message, '#c00');
+      throw err;
     }
     if (wf.key === 'sync' && repoContext.isFork === false) {
-      setStatus('当前仓库不是 GitHub Fork，无法使用上游同步。', '#c00');
+      const err = new Error('当前仓库不是 GitHub Fork，无法使用上游同步。');
+      setStatus(err.message, '#c00');
       runsEl.innerHTML =
-        '<div style="color:#c00;">当前仓库不是 Fork 仓库，Upstream Sync 不会运行。</div>' +
-        `<div style="margin-top:8px;"><a class="arxiv-tool-btn" style="padding:6px 10px; text-decoration:none;" target="_blank" href="https://github.com/${owner}/${repo}/fork">前往 Fork 当前仓库</a></div>`;
-      return;
+        '<div style=”color:#c00;”>当前仓库不是 Fork 仓库，Upstream Sync 不会运行。</div>' +
+        `<div style=”margin-top:8px;”><a class=”arxiv-tool-btn” style=”padding:6px 10px; text-decoration:none;” target=”_blank” href=”https://github.com/${owner}/${repo}/fork”>前往 Fork 当前仓库</a></div>`;
+      throw err;
     }
 
     setStatus(`正在检查工作流状态：${wf.name || workflowFile} ...`, '#666', { waiting: true });
@@ -717,14 +721,12 @@ window.DPRWorkflowRunner = (function () {
           const r = activeRuns[0];
           const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${r.id}`;
           const statusText = statusZhMap[r.status] || r.status;
-          setStatus(
-            `已有正在运行的工作流（#${r.run_number || r.id}，状态：${statusText}），请等待完成后再触发。`,
-            '#c00',
-          );
+          const err = new Error(`已有正在运行的工作流（#${r.run_number || r.id}，状态：${statusText}），请等待完成后再触发。`);
+          setStatus(err.message, '#c00');
           runsEl.innerHTML =
             `<div style="color:#c00;">同一时间只允许运行一个该工作流实例，请等待当前运行结束。</div>` +
             `<div style="margin-top:8px;"><a class="arxiv-tool-btn" style="padding:6px 10px; text-decoration:none;" target="_blank" href="${runUrl}">查看当前运行</a></div>`;
-          return;
+          throw err;
         }
       }
 
@@ -799,9 +801,10 @@ window.DPRWorkflowRunner = (function () {
       }
 
       if (!run || !run.id) {
-        setStatus('已触发，但未能在短时间内找到对应的运行记录。建议打开 Actions 页面查看。', '#c00');
+        const err = new Error('已触发，但未能在短时间内找到对应的运行记录。建议打开 Actions 页面查看。');
+        setStatus(err.message, '#c00');
         runsEl.innerHTML = `<div style="color:#666;">请在 GitHub Actions 查看：<a target="_blank" href="https://github.com/${owner}/${repo}/actions">打开 Actions</a></div>`;
-        return;
+        throw err;
       }
 
       activeRun = { owner, repo, runId: run.id, token };
@@ -830,6 +833,7 @@ window.DPRWorkflowRunner = (function () {
       } else {
         runsEl.innerHTML = `<div style="color:#c00;">${escapeHtml(msg)}</div>`;
       }
+      throw e;  // re-throw so caller can handle failure
     }
   };
 
@@ -952,8 +956,9 @@ window.DPRWorkflowRunner = (function () {
   const runWorkflowByKey = async (workflowKey, extraInputs, dispatchOptions) => {
     const wf = getWorkflowByKey(workflowKey);
     if (!wf) {
-      setStatus('未找到对应的工作流配置。', '#c00');
-      return;
+      const err = new Error('未找到对应的工作流配置。');
+      setStatus(err.message, '#c00');
+      throw err;
     }
     open();
     return dispatchAndMonitor(wf, extraInputs, dispatchOptions);
