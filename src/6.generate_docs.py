@@ -2529,6 +2529,158 @@ def list_day_report_links(docs_dir: str) -> List[Tuple[str, str]]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------------
+# Atom feed generation
+# ---------------------------------------------------------------------------------------------------
+
+def _parse_generated_at_from_readme(readme_path: str) -> str:
+    """Parse RFC3339 timestamp from the '生成时间' line in a README.md file."""
+    if not os.path.exists(readme_path):
+        return ""
+    try:
+        with open(readme_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if "生成时间" in line or "生成：" in line:
+                    # Expected: "- 生成时间：2026-04-21 20:46:20 UTC" or similar
+                    m = re.search(r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[^\n]*)", line)
+                    if m:
+                        ts = m.group(1).strip()
+                        try:
+                            dt = datetime.fromisoformat(ts.replace(" ", "T"))
+                            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        except ValueError:
+                            pass
+    except Exception:
+        pass
+    return ""
+
+
+def _read_day_report_summary(readme_path: str) -> str:
+    """Extract the AI summary paragraph from a day report README."""
+    if not os.path.exists(readme_path):
+        return ""
+    try:
+        with open(readme_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Try to find the "AI 简报" or "AI summary" section
+        m = re.search(r"(?:AI\s*简报|AI\s*summary|今日简报)[:：]?\s*\n((?:>{0,1}.*\n)+)", content, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        # Fall back: first paragraph after front-matter --- markers
+        paragraphs = re.split(r"\n{2,}", content)
+        for para in paragraphs:
+            para = para.strip()
+            if para and not para.startswith("---") and not para.startswith("#") and len(para) > 20:
+                return para[:300]
+    except Exception:
+        pass
+    return ""
+
+
+def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -> str:
+    """Build Atom feed XML content with recent daily reports as items."""
+    site_url = str(site_url or "").strip().rstrip("/")
+    if not site_url:
+        site_url = "https://daily-paper-reader.example.com"
+
+    entries_data: List[Dict[str, str]] = []
+
+    # Enumerate historical day reports using existing helper
+    day_links = list_day_report_links(docs_dir)
+
+    for date_label, href in day_links:
+        if len(entries_data) >= max_items:
+            break
+        # date_label format: "YYYY-MM-DD" or "YYYY-MM-DD ~ YYYY-MM-DD"
+        label = date_label.strip()
+        date8 = label[:10].replace("-", "") if label else ""
+        if not date8 or len(date8) != 8:
+            continue
+
+        # Build absolute URL: site_url/#/YYYY/MM/DD/README
+        ym = date8[:6]
+        day = date8[6:]
+        abs_url = f"{site_url}/#//{ym}/{day}/README"
+
+        # Find the README path
+        readme_path = os.path.join(docs_dir, ym, day, "README.md")
+        if not os.path.exists(readme_path):
+            # Try range directory
+            range_dirs = [d for d in os.listdir(docs_dir) if re.fullmatch(r"\d{8}-\d{8}", d)]
+            for rd in range_dirs:
+                rp = os.path.join(docs_dir, rd, "README.md")
+                if os.path.exists(rp):
+                    readme_path = rp
+                    break
+
+        updated = _parse_generated_at_from_readme(readme_path)
+        if not updated:
+            # Derive from date_label
+            try:
+                dt = datetime.fromisoformat(label[:10])
+                updated = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                updated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        summary = _read_day_report_summary(readme_path)
+
+        import hashlib
+        entry_id = f"urn:uuid:{hashlib.sha256(date8.encode()).hexdigest()[:32]}"
+
+        entries_data.append({
+            "title": f"日报 · {label[:10]}",
+            "link": abs_url,
+            "updated": updated,
+            "id": entry_id,
+            "summary": summary,
+        })
+
+    # Build XML
+    feed_updated = entries_data[0]["updated"] if entries_data else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    import hashlib
+    feed_id = f"urn:uuid:{hashlib.sha256(b'daily-paper-reader-feed')[:16].hex()}"
+
+    xml_lines: List[str] = []
+    xml_lines.append('<?xml version="1.0" encoding="utf-8"?>')
+    xml_lines.append('<feed xmlns="http://www.w3.org/2005/Atom">')
+    xml_lines.append(f"  <title>每日论文推荐 · Daily Paper Reader</title>")
+    xml_lines.append(f"  <subtitle>每日 AI 论文推荐与精读指南</subtitle>")
+    xml_lines.append(f'  <link href="{site_url}/feed.xml" rel="self"/>')
+    xml_lines.append(f'  <link href="{site_url}/"/>')
+    xml_lines.append(f"  <updated>{feed_updated}</updated>")
+    xml_lines.append(f"  <id>{feed_id}</id>")
+
+    for entry in entries_data:
+        xml_lines.append("  <entry>")
+        xml_lines.append(f"    <title>{entry['title']}</title>")
+        xml_lines.append(f'    <link href="{entry["link"]}"/>')
+        xml_lines.append(f"    <updated>{entry['updated']}</updated>")
+        xml_lines.append(f"    <id>{entry['id']}</id>")
+        if entry["summary"]:
+            # Escape XML special chars
+            summary_esc = (
+                entry["summary"]
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+            )
+            xml_lines.append(f"    <summary>{summary_esc}</summary>")
+        xml_lines.append("  </entry>")
+
+    xml_lines.append("</feed>")
+    return "\n".join(xml_lines)
+
+
+def write_atom_feed(docs_dir: str, site_url: str, max_items: int = 30) -> str:
+    """Write Atom feed to docs/feed.xml, return path."""
+    content = build_atom_feed_content(docs_dir, site_url, max_items)
+    feed_path = os.path.join(docs_dir, "feed.xml")
+    with open(feed_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return feed_path
+
+
 def build_home_readme_content(
     docs_dir: str,
     date_str: str,
@@ -3305,6 +3457,15 @@ def main() -> None:
     )
     log(f"[OK] day report saved: {day_readme}")
     log(f"[OK] home README synced: {home_readme}")
+
+    log_substep("6.4.1", "生成每日 Atom 订阅源", "START")
+    site_url = os.getenv("DPR_SITE_URL", "").strip() or "https://daily-paper-reader.example.com"
+    try:
+        feed_path = write_atom_feed(docs_dir, site_url, max_items=30)
+        log(f"[OK] Atom feed written: {feed_path}")
+    except Exception as e:
+        log(f"[WARN] 生成 Atom 订阅源失败：{e}")
+    log_substep("6.4.1", "生成每日 Atom 订阅源", "END")
     log_substep("6.4", "生成当日日报并同步首页 README", "END")
 
     sidebar_path = os.path.join(docs_dir, "_sidebar.md")
