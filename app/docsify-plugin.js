@@ -3877,7 +3877,7 @@ window.$docsify = {
              </div>`
           : '';
 
-        return paperHtml + deepButtonHtml + body;
+        return paperHtml + deepButtonHtml + '\n' + body;
       });
 
       // --- Docsify 生命周期钩子 ---
