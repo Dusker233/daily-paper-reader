@@ -2622,10 +2622,6 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
         if not os.path.exists(readme_path):
             readme_path = os.path.join(docs_dir, route.split("/")[0], "README.md")
 
-        # Build date8 from route for UUID (use first segment for range)
-        first_segment = route.split("/")[0]
-        date8 = first_segment.replace("-", "")[:8]
-
         updated = _parse_generated_at_from_readme(readme_path)
         if not updated:
             try:
@@ -2636,8 +2632,8 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
 
         summary = _read_day_report_summary(readme_path)
 
-        import hashlib
-        entry_id = f"urn:uuid:{hashlib.sha256(date8.encode()).hexdigest()[:32]}"
+        # Build entry_id from full route (unique per report, not per month)
+        entry_id = f"urn:uuid:{hashlib.sha256(route.encode()).hexdigest()[:32]}"
 
         entries_data.append({
             "title": f"日报 · {label[:10]}",
@@ -2649,8 +2645,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
 
     # Build XML
     feed_updated = entries_data[0]["updated"] if entries_data else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    import hashlib
-    feed_id = f"urn:uuid:{hashlib.sha256(b'daily-paper-reader-feed')[:16].hex()}"
+    feed_id = f"urn:uuid:{hashlib.sha256(b'daily-paper-reader-feed').digest()[:16].hex()}"
 
     xml_lines: List[str] = []
     xml_lines.append('<?xml version="1.0" encoding="utf-8"?>')
