@@ -2542,11 +2542,20 @@ def _parse_generated_at_from_readme(readme_path: str) -> str:
             for line in f:
                 if "生成时间" in line or "生成：" in line:
                     # Expected: "- 生成时间：2026-04-21 20:46:20 UTC" or similar
-                    m = re.search(r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[^\n]*)", line)
+                    m = re.search(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s*([^\s]*)", line)
                     if m:
-                        ts = m.group(1).strip()
+                        date_part = m.group(1)
+                        time_part = m.group(2)
+                        tz_part = m.group(3).strip()
+                        # Build ISO format: replace space with T, strip UTC/Z suffix
+                        iso = f"{date_part}T{time_part}"
+                        # Normalize trailing zone: UTC/+00:00 -> Z
+                        if tz_part.upper() in ("UTC", "Z", "+00:00"):
+                            iso += "Z"
+                        elif tz_part.startswith("+") or tz_part.startswith("-"):
+                            iso += tz_part
                         try:
-                            dt = datetime.fromisoformat(ts.replace(" ", "T"))
+                            dt = datetime.fromisoformat(iso)
                             return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                         except ValueError:
                             pass
@@ -2591,31 +2600,34 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
     for date_label, href in day_links:
         if len(entries_data) >= max_items:
             break
-        # date_label format: "YYYY-MM-DD" or "YYYY-MM-DD ~ YYYY-MM-DD"
+
         label = date_label.strip()
-        date8 = label[:10].replace("-", "") if label else ""
-        if not date8 or len(date8) != 8:
-            continue
+        # href format from list_day_report_links:
+        #   - range:  "/20260311-20260409/README"
+        #   - single: "/202604/21/README"
+        # Strip leading "/" and ".md" -> "20260311-20260409/README" or "202604/21/README"
+        route = href.strip("/").replace(".md", "", 1).replace("\\", "/")
 
-        # Build absolute URL: site_url/#/YYYY/MM/DD/README
-        ym = date8[:6]
-        day = date8[6:]
-        abs_url = f"{site_url}/#//{ym}/{day}/README"
+        # Build absolute URL: site_url/# + href
+        abs_url = f"{site_url}/#{href}"
 
-        # Find the README path
-        readme_path = os.path.join(docs_dir, ym, day, "README.md")
+        # Derive README path from route
+        if "/" in route and "-" in route.split("/")[0]:
+            # Range dir: "20260311-20260409/README"
+            readme_path = os.path.join(docs_dir, route.replace("/README", "/README.md").replace("/", os.sep))
+        else:
+            # Single day: "202604/21/README"
+            readme_path = os.path.join(docs_dir, route.replace("/README", "/README.md").replace("/", os.sep))
+
         if not os.path.exists(readme_path):
-            # Try range directory
-            range_dirs = [d for d in os.listdir(docs_dir) if re.fullmatch(r"\d{8}-\d{8}", d)]
-            for rd in range_dirs:
-                rp = os.path.join(docs_dir, rd, "README.md")
-                if os.path.exists(rp):
-                    readme_path = rp
-                    break
+            readme_path = os.path.join(docs_dir, route.split("/")[0], "README.md")
+
+        # Build date8 from route for UUID (use first segment for range)
+        first_segment = route.split("/")[0]
+        date8 = first_segment.replace("-", "")[:8]
 
         updated = _parse_generated_at_from_readme(readme_path)
         if not updated:
-            # Derive from date_label
             try:
                 dt = datetime.fromisoformat(label[:10])
                 updated = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
