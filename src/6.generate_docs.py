@@ -2,14 +2,15 @@
 # Step 6：根据推荐结果生成 Docs（精读区 / 速读区），并更新侧边栏。
 
 import argparse
+import hashlib
 import html
 import json
 import math
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-import re
 import tempfile
 import time
 import xml.etree.ElementTree as ET
