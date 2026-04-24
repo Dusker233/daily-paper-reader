@@ -993,7 +993,9 @@ window.SubscriptionsManager = (function () {
       return;
     }
 
-    window.DPRWorkflowRunner.runWorkflowByKey('reset-content');
+    window.DPRWorkflowRunner.runWorkflowByKey('reset-content').catch(function(err) {
+      if (msgEl) { msgEl.textContent = '触发失败：' + (err.message || String(err)); msgEl.style.color = '#c00'; }
+    });
     if (msgEl) {
       msgEl.textContent = '已发起删除并重置任务，已触发工作流。';
       msgEl.style.color = '#080';
