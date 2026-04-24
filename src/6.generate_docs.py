@@ -2571,10 +2571,31 @@ def _read_day_report_summary(readme_path: str) -> str:
     try:
         with open(readme_path, "r", encoding="utf-8") as f:
             content = f.read()
-        # Try to find the "AI 简报" or "AI summary" section
-        m = re.search(r"(?:AI\s*简报|AI\s*summary|今日简报)[:：]?\s*\n((?:>{0,1}.*\n)+)", content, re.IGNORECASE)
+        # Try to find the AI brief section — heading formats in this repo:
+        # ## 今日简报（AI） or ## AI 简报 or ## 今日简报
+        # Content starts on the line(s) after the heading (up to the next ## heading or end)
+        # Match heading then collect non-heading, non-metadata lines
+        heading_patterns = [
+            r"##\s*今日简报[（(][^）)]+[）)]\s*\n",
+            r"##\s*AI\s*简报\s*\n",
+            r"##\s*今日简报\s*\n",
+        ]
+        combined = "|".join(f"({p})" for p in heading_patterns)
+        m = re.search(combined, content, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
+            # Extract content after the heading
+            start = m.end()
+            # Find the next ## heading or end of content
+            next_heading = re.search(r"\n##\s+\w", content[start:])
+            if next_heading:
+                summary_text = content[start : start + next_heading.start()].strip()
+            else:
+                summary_text = content[start:].strip()
+            # Strip the leading bullet metadata lines if present
+            lines = summary_text.split("\n")
+            content_lines = [l for l in lines if not re.match(r"^\s*[-*]\s*(生成时间|当次推荐|精读区|速读区)", l)]
+            if content_lines:
+                return "\n".join(content_lines)[:300]
         # Fall back: first paragraph after front-matter --- markers
         paragraphs = re.split(r"\n{2,}", content)
         for para in paragraphs:
