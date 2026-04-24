@@ -2658,7 +2658,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
         entry_id = f"urn:uuid:{hashlib.sha256(route.encode()).hexdigest()[:32]}"
 
         entries_data.append({
-            "title": f"日报 · {label[:10]}",
+            "title": f"日报 · {label}",
             "link": abs_url,
             "updated": updated,
             "id": entry_id,
