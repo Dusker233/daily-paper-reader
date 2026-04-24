@@ -2643,6 +2643,9 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
             "summary": summary,
         })
 
+    # Sort entries by updated timestamp descending so the feed is newest-first
+    entries_data.sort(key=lambda e: e["updated"], reverse=True)
+
     # Build XML
     feed_updated = entries_data[0]["updated"] if entries_data else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     feed_id = f"urn:uuid:{hashlib.sha256(b'daily-paper-reader-feed').digest()[:16].hex()}"
