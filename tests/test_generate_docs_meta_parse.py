@@ -775,5 +775,41 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
             Path(md_path).unlink()
 
 
+    def test_strip_markdown_fence_removes_outer_wrapper(self):
+        """_strip_markdown_fence removes a wrapping ```markdown ... ``` fence."""
+        fenced = "```markdown\n## 1. TLDR\nfoo\n## 2. 核心故事\nbar\n```"
+        result = self.mod._strip_markdown_fence(fenced)
+        self.assertNotIn("```markdown", result)
+        self.assertNotIn("```", result)
+        self.assertIn("## 1. TLDR", result)
+        self.assertIn("## 2. 核心故事", result)
+
+    def test_strip_markdown_fence_bare_fence(self):
+        """_strip_markdown_fence strips a bare ``` ... ``` wrapper too."""
+        fenced = "```\n## 1. TLDR\nfoo\n```"
+        result = self.mod._strip_markdown_fence(fenced)
+        self.assertNotIn("```", result)
+        self.assertIn("## 1. TLDR", result)
+        self.assertIn("foo", result)
+
+    def test_strip_markdown_fence_no_fence_unchanged(self):
+        """_strip_markdown_fence leaves plain markdown untouched."""
+        plain = "## 1. TLDR\nfoo"
+        self.assertEqual(self.mod._strip_markdown_fence(plain), plain)
+
+    def test_upsert_auto_block_strips_markdown_fence(self):
+        """upsert_auto_block must strip outer markdown fence before writing."""
+        md_path = "/tmp/test_fence.md"
+        fenced = "```markdown\n## 1. TLDR\nfoo\n```"
+        try:
+            Path(md_path).write_text("# Title\n\nBody\n", encoding="utf-8")
+            self.mod.upsert_auto_block(md_path, "论文详细总结（自动生成）", fenced)
+            result = Path(md_path).read_text(encoding="utf-8")
+            self.assertNotIn("```markdown", result)
+            self.assertIn("## 论文详细总结（自动生成）", result)
+            self.assertIn("## 1. TLDR", result)
+        finally:
+            Path(md_path).unlink(missing_ok=True)
+
 if __name__ == "__main__":
     unittest.main()

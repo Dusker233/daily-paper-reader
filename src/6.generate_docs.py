@@ -622,12 +622,36 @@ def load_text_content(txt_path: str) -> str:
         return ""
 
 
+def _strip_markdown_fence(text: str) -> str:
+    """Remove an outer ```...``` fence wrapping the entire content.
+
+    Some LLMs return their full response wrapped in a single fenced code
+    block (e.g. ```markdown\n...\n```). When such content is written into a
+    docs page, Docsify's marked renderer treats the whole block as a literal
+    code block and the inner Markdown stops being rendered as HTML. This
+    helper strips ONLY the outermost wrapping fence; any code blocks that are
+    legitimately nested inside the content are preserved untouched.
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    opener_match = re.match(r"^```([A-Za-z0-9_+-]*)\n", stripped)
+    if not opener_match:
+        return text
+    body = stripped[opener_match.end():]
+    body_rstripped = body.rstrip()
+    if not body_rstripped.endswith("```"):
+        return text
+    return body_rstripped[:-3].rstrip()
+
+
 def upsert_auto_block(md_path: str, heading: str, content: str) -> None:
     """
     将自动生成内容写入 md：
     - 若已存在同名 heading，则替换从该块开始到文件末尾
     - 否则追加到文件末尾
     """
+    content = _strip_markdown_fence(content)
     key = f"## {heading}"
     block = f"\n\n---\n\n{key}\n\n{content}".rstrip() + "\n"
 
@@ -824,7 +848,7 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
             message = f"{message} 原因：{LLM_CLIENT_ERROR}"
         log(message)
         # PR4 fallback: 返回 8-section skeleton，不再是简单不可用提示
-        return _build_deep_summary_fallback(title, abstract_en, source_text)
+        return _strip_markdown_fence(_build_deep_summary_fallback(title, abstract_en, source_text))
 
     system_prompt = (
         "你是资深学术论文分析助手，用中文输出、对齐 archive/mineshark_report.md 的精读报告格式。"
@@ -872,7 +896,7 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
             if os.getenv("DPR_DEBUG_STEP6") == "1":
                 log(f"[DEBUG][STEP6] deep_summary attempt={attempt} len={len(summary)} tail={summary[-20:]!r}")
             if "（完）" in summary:
-                return summary
+                return _strip_markdown_fence(summary)
             # 续写一次：避免输出被截断
             cont_messages = [
                 {"role": "system", "content": system_prompt},
@@ -885,19 +909,19 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
             if os.getenv("DPR_DEBUG_STEP6") == "1":
                 log(f"[DEBUG][STEP6] deep_summary_cont attempt={attempt} len={len(cont)} merged_tail={merged[-20:]!r}")
             if "（完）" in merged:
-                return merged
+                return _strip_markdown_fence(merged)
         except Exception as e:
             log(f"[WARN] 精读总结失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
     # PR4: 只有包含"（完）"的完整 8-section 输出才被接受；partial output 必须回退到 skeleton
     #    这确保了"固定 8-section 结构"contract不被 LLM partial output 破坏
     if last and "（完）" in last:
-        return last
+        return _strip_markdown_fence(last)
     if last:
         log("[WARN] 精读总结 LLM 生成了不完整的 8-section（无（完）标记），改用 skeleton fallback。")
     else:
         log("[WARN] 精读总结 LLM 生成失败，改用 8-section skeleton fallback。")
-    return _build_deep_summary_fallback(title, abstract_en, source_text)
+    return _strip_markdown_fence(_build_deep_summary_fallback(title, abstract_en, source_text))
 
 
 def generate_glance_overview(title: str, abstract: str, paper_text: str = "", max_retries: int = 3) -> str | None:
