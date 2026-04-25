@@ -2518,12 +2518,17 @@ window.$docsify = {
       // 侧边栏/正文的论文页标题条：英文右侧，中文左侧，中间竖线
       const isPaperRouteFile = (file) => {
         const f = String(file || '');
-        return /^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README\.md$).+\.md$/i.test(f);
+        if (/^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README\.md$).+\.md$/i.test(f)) return true;
+        // seed paper / related pages (but NOT index.md which is a hub)
+        if (/^seed-papers\/[^/]+\/(?!index\.md$).+\.md$/i.test(f)) return true;
+        return false;
       };
 
       const isReportRouteFile = (file) => {
         const f = String(file || '');
-        return /^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README\.md$/i.test(f);
+        if (/^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README\.md$/i.test(f)) return true;
+        if (/^seed-papers\/[^/]+\/index\.md$/i.test(f)) return true;
+        return false;
       };
 
       const fitTextToBox = (el, minPx, maxPx) => {
@@ -2923,7 +2928,10 @@ window.$docsify = {
         // 匹配论文页：
         // - 传统路径：#/YYYYMM/DD/slug
         // - 区间路径：#/YYYYMMDD-YYYYMMDD/slug
-        return /^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README$).+/i.test(h);
+        if (/^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README$).+/i.test(h)) return true;
+        // seed paper / related pages (but NOT index)
+        if (/^#\/seed-papers\/[^/]+\/(?!index$).+/i.test(h)) return true;
+        return false;
       };
 
       const isReportHref = (href) => {
