@@ -1,6 +1,6 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">使用教程</a>
-* <a class="dpr-sidebar-root-link" href="docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>
+* <a class="dpr-sidebar-root-link" href="https://dusker233.github.io/daily-paper-reader/docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>
 * Daily Papers
   * 2026-04-24 <!--dpr-date:20260424-->
     * 精读区

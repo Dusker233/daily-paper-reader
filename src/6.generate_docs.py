@@ -2633,7 +2633,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
     """Build Atom feed XML content with recent daily reports as items."""
     site_url = str(site_url or "").strip().rstrip("/")
     if not site_url:
-        site_url = "https://daily-paper-reader.example.com"
+        site_url = "https://dusker233.github.io/daily-paper-reader"
 
     entries_data: List[Dict[str, str]] = []
 
@@ -3512,7 +3512,7 @@ def main() -> None:
     log(f"[OK] home README synced: {home_readme}")
 
     log_substep("6.4.1", "生成每日 Atom 订阅源", "START")
-    site_url = os.getenv("DPR_SITE_URL", "").strip() or "https://daily-paper-reader.example.com"
+    site_url = os.getenv("DPR_SITE_URL", "").strip() or "https://dusker233.github.io/daily-paper-reader"
     try:
         feed_path = write_atom_feed(docs_dir, site_url, max_items=30)
         log(f"[OK] Atom feed written: {feed_path}")

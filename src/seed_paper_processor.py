@@ -644,7 +644,7 @@ def update_seed_navigation(docs_dir: str, request_id: str, title: str) -> None:
         [
             SEED_NAV_START,
             "* Seed Papers",
-            f"  * [{clean_title}](#/seed-papers/{clean_request_id}/index)",
+            f'  * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/{clean_request_id}/index">{clean_title}</a>',
             SEED_NAV_END,
         ]
     )
