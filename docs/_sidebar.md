@@ -1,6 +1,6 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">使用教程</a>
-* <a class="dpr-sidebar-root-link" href="https://dusker233.github.io/daily-paper-reader/docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>
+* <a class="dpr-sidebar-root-link" href="RSS_FEED_URL_PLACEHOLDER" target="_blank" rel="noopener">RSS 订阅</a>
 * Daily Papers
   * 2026-04-24 <!--dpr-date:20260424-->
     * 精读区
@@ -318,5 +318,5 @@
 
 <!--dpr-seed-papers:start-->
 * Seed Papers
-  * [Wan et al.   2025   CATO End to end optimization of ML based traffic analysis pipelines](#/seed-papers/1777113876678/index)
+  <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/1777113876678/index">Wan et al.   2025   CATO End to end optimization of ML based traffic analysis pipelines</a>
 <!--dpr-seed-papers:end-->

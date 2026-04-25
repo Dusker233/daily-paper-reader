@@ -2417,7 +2417,7 @@ def update_sidebar(
         feed_url = f"{site_url.rstrip('/')}/docs/feed.xml"
         rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
         for i, line in enumerate(lines):
-            if 'RSS 订阅' in line or 'href="docs/feed.xml"' in line or "href='docs/feed.xml'" in line:
+            if 'RSS_FEED_URL_PLACEHOLDER' in line:
                 lines[i] = rss_link + "\n"
                 break
 
