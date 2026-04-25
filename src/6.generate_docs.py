@@ -1108,11 +1108,8 @@ def generate_skim_body(title: str, abstract: str, paper_text: str = "", max_retr
 
     for attempt in range(1, max_retries + 1):
         try:
-            response = LLM_CLIENT.messages_create(
-                model=(LLM_CLIENT.model or "unknown"),
-                messages=messages,
-            )
-            content = (response.content or [{}])[0].get("text", "").strip()
+            response = LLM_CLIENT.chat(messages=messages)
+            content = (response.get("content") or "").strip()
             if content:
                 # Basic validation: must contain at least 3 of the 4 section headings
                 heading_count = sum(

@@ -891,8 +891,16 @@ window.$docsify = {
         });
 
       // 公共工具：在指定元素上渲染公式
-      const renderMathInEl = (el) => {
-        if (!window.renderMathInElement || !el) return;
+      // 修复 race condition：KaTeX 脚本带 defer，可能在 docsify doneEach 首次触发时
+      // 尚未加载完成；这里增加最多 3 次重试（每次 100ms 延迟），确保公式最终被渲染。
+      const renderMathInEl = (el, retriesLeft = 3) => {
+        if (!el) return;
+        if (!window.renderMathInElement) {
+          if (retriesLeft > 0) {
+            setTimeout(() => renderMathInEl(el, retriesLeft - 1), 100);
+          }
+          return;
+        }
         window.renderMathInElement(el, {
           delimiters: [
             { left: '$$', right: '$$', display: true },

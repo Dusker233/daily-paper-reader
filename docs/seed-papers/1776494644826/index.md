@@ -5,7 +5,7 @@
 - Related count: `5`
 
 ## Seed paper
-- [Open seed paper](seed-paper.md)
+- [Open seed paper](#/seed-papers/1776494644826/seed-paper)
 
 ## Related papers
 - None
