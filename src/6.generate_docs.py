@@ -2708,7 +2708,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
     xml_lines.append('<feed xmlns="http://www.w3.org/2005/Atom">')
     xml_lines.append(f"  <title>每日论文推荐 · Daily Paper Reader</title>")
     xml_lines.append(f"  <subtitle>每日 AI 论文推荐与精读指南</subtitle>")
-    xml_lines.append(f'  <link href="{site_url}/feed.xml" rel="self"/>')
+    xml_lines.append(f'  <link href="{site_url}/docs/feed.xml" rel="self"/>')
     xml_lines.append(f'  <link href="{site_url}/"/>')
     xml_lines.append(f"  <updated>{feed_updated}</updated>")
     xml_lines.append(f"  <id>{feed_id}</id>")

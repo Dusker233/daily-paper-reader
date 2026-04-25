@@ -536,8 +536,9 @@ def _render_related_pages(
         md_path.write_text(md_content, encoding="utf-8")
 
         # Upsert glance (速览) block - uses same paper_text for full-text priority
+        glance = ""
+        glance_fields: dict[str, str] = {}
         if record["include_quick"]:
-            glance = ""
             if hasattr(generate_docs_module, "generate_glance_overview"):
                 try:
                     glance = generate_docs_module.generate_glance_overview(
