@@ -2418,7 +2418,9 @@ def update_sidebar(
         rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
         for i, line in enumerate(lines):
             if 'RSS_FEED_URL_PLACEHOLDER' in line:
-                lines[i] = rss_link + "\n"
+                # Preserve list-item prefix if present (e.g. "* <a ...")
+                prefix = line[:line.find('<a')] if '<a' in line else ''
+                lines[i] = prefix + rss_link + "\n"
                 break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
