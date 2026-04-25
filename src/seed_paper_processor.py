@@ -317,7 +317,12 @@ def _upsert_frontmatter_evidence(generate_docs_module: Any, md_path: Path, glanc
     if "key_findings" not in fm_dict:
         key_findings = glance_fields.get("key_findings") or ""
         if key_findings:
-            fm_dict["key_findings"] = yaml_escape(str(key_findings))
+            if isinstance(key_findings, list):
+                # Serialize as YAML inline sequence: [item1, item2]
+                items = [yaml_escape(str(item)) for item in key_findings]
+                fm_dict["key_findings"] = "[" + ", ".join(items) + "]"
+            else:
+                fm_dict["key_findings"] = yaml_escape(str(key_findings))
 
     if "limitations" not in fm_dict:
         limitations = glance_fields.get("limitations") or ""

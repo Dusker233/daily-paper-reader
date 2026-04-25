@@ -2242,6 +2242,7 @@ def update_sidebar(
     quick_entries: List[Dict[str, Any]],
     paper_evidence_by_id: Dict[str, str],
     date_label: str | None = None,
+    site_url: str | None = None,
 ) -> None:
     def build_sidebar_item_payload(
         paper_id: str,
@@ -2410,6 +2411,15 @@ def update_sidebar(
             del lines[i]
             continue
         i += 1
+
+    # Inject DPR_SITE_URL-based RSS link if site_url is provided
+    if site_url:
+        feed_url = f"{site_url.rstrip('/')}/docs/feed.xml"
+        rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
+        for i, line in enumerate(lines):
+            if 'RSS 订阅' in line or 'href="docs/feed.xml"' in line or "href='docs/feed.xml'" in line:
+                lines[i] = rss_link + "\n"
+                break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
@@ -3531,6 +3541,7 @@ def main() -> None:
             quick_entries,
             sidebar_evidence_by_id,
             date_label=args.sidebar_date_label,
+            site_url=site_url,
         )
         log_substep("6.5", "更新侧边栏", "END")
     else:

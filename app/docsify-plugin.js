@@ -2939,7 +2939,10 @@ window.$docsify = {
         // 匹配日报页：
         // - 传统路径：#/YYYYMM/DD/README
         // - 区间路径：#/YYYYMMDD-YYYYMMDD/README
-        return /^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README$/i.test(h);
+        if (/^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README$/i.test(h)) return true;
+        // seed index pages
+        if (/^#\/seed-papers\/[^/]+\/index$/i.test(h)) return true;
+        return false;
       };
 
       const isPaperHrefFallback = (href) => {
