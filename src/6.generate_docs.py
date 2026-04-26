@@ -2425,6 +2425,14 @@ def update_sidebar(
                 prefix = line[:line.find('<a')] if '<a' in line else ''
                 lines[i] = prefix + rss_link + "\n"
                 break
+    else:
+        # No DPR_SITE_URL: replace with relative path so local/fork previews work
+        rss_link = '<a class="dpr-sidebar-root-link" href="docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>'
+        for i, line in enumerate(lines):
+            if 'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line:
+                prefix = line[:line.find('<a')] if '<a' in line else ''
+                lines[i] = prefix + rss_link + "\n"
+                break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)

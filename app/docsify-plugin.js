@@ -2953,11 +2953,14 @@ window.$docsify = {
       const collectPaperHrefsFromSidebar = () => {
         const nav = document.querySelector('.sidebar-nav');
         if (!nav) return [];
-        const links = Array.from(nav.querySelectorAll('a[href]'));
+        const links = [
+          ...Array.from(nav.querySelectorAll('a[href]')),
+          ...Array.from(nav.querySelectorAll('a[data-dpr-hash]')),
+        ];
         const out = [];
         const seen = new Set();
         links.forEach((a) => {
-          const href = a.getAttribute('href') || '';
+          const href = a.getAttribute('data-dpr-hash') || a.getAttribute('href') || '';
           if (!isPaperHref(href)) return;
           const norm = normalizeHref(href);
           if (seen.has(norm)) return;
