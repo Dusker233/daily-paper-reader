@@ -2417,7 +2417,10 @@ def update_sidebar(
         feed_url = f"{site_url.rstrip('/')}/docs/feed.xml"
         rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
         for i, line in enumerate(lines):
-            if 'RSS_FEED_URL_PLACEHOLDER' in line:
+            # Replace if placeholder OR existing RSS sidebar link (structurally match)
+            if 'RSS_FEED_URL_PLACEHOLDER' in line or (
+                'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line
+            ):
                 # Preserve list-item prefix if present (e.g. "* <a ...")
                 prefix = line[:line.find('<a')] if '<a' in line else ''
                 lines[i] = prefix + rss_link + "\n"
@@ -2645,7 +2648,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
     """Build Atom feed XML content with recent daily reports as items."""
     site_url = str(site_url or "").strip().rstrip("/")
     if not site_url:
-        site_url = "https://dusker233.github.io/daily-paper-reader"
+        site_url = os.getenv("DPR_SITE_URL", "").strip()
 
     entries_data: List[Dict[str, str]] = []
 
@@ -3524,12 +3527,16 @@ def main() -> None:
     log(f"[OK] home README synced: {home_readme}")
 
     log_substep("6.4.1", "生成每日 Atom 订阅源", "START")
-    site_url = os.getenv("DPR_SITE_URL", "").strip() or "https://dusker233.github.io/daily-paper-reader"
-    try:
-        feed_path = write_atom_feed(docs_dir, site_url, max_items=30)
-        log(f"[OK] Atom feed written: {feed_path}")
-    except Exception as e:
-        log(f"[WARN] 生成 Atom 订阅源失败：{e}")
+    site_url = os.getenv("DPR_SITE_URL", "").strip() or None
+    if site_url:
+        try:
+            feed_path = write_atom_feed(docs_dir, site_url, max_items=30)
+            log(f"[OK] Atom feed written: {feed_path}")
+        except Exception as e:
+            log(f"[WARN] 生成 Atom 订阅源失败：{e}")
+    else:
+        feed_path = None
+        log(f"[WARN] DPR_SITE_URL not set, skipping Atom feed generation")
     log_substep("6.4.1", "生成每日 Atom 订阅源", "END")
     log_substep("6.4", "生成当日日报并同步首页 README", "END")
 

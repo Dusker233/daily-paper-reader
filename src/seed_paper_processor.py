@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import importlib.util
 import json
 import os
@@ -701,7 +702,7 @@ def update_seed_navigation(docs_dir: str, request_id: str, title: str) -> None:
         [
             SEED_NAV_START,
             "* Seed Papers",
-            f'  * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/{clean_request_id}/index">{clean_title}</a>',
+            f'  * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/{clean_request_id}/index">{html.escape(clean_title)}</a>',
             SEED_NAV_END,
         ]
     )
