@@ -2972,6 +2972,7 @@ window.$docsify = {
         const nav = document.querySelector('.sidebar-nav');
         if (nav) {
           links.push(...Array.from(nav.querySelectorAll('a[href]')));
+          links.push(...Array.from(nav.querySelectorAll('a[data-dpr-hash]')));
         }
         const main = document.querySelector('.markdown-section');
         if (main) {
@@ -2980,7 +2981,8 @@ window.$docsify = {
         const out = [];
         const seen = new Set();
         links.forEach((a) => {
-          const href = a.getAttribute('href') || '';
+          // Prefer data-dpr-hash for virtual links, fall back to href
+          const href = a.getAttribute('data-dpr-hash') || a.getAttribute('href') || '';
           if (!isReportHref(href)) return;
           const norm = normalizeHref(href);
           if (seen.has(norm)) return;

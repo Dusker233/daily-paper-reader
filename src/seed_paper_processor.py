@@ -283,51 +283,43 @@ def _upsert_frontmatter_evidence(generate_docs_module: Any, md_path: Path, glanc
             key, val = line.split(":", 1)
             fm_dict[key.strip()] = val.strip()
 
-    # Sync from glance fields if front matter is missing these
-    if "evidence" not in fm_dict:
-        ev = glance_fields.get("evidence") or ""
-        if ev:
-            fm_dict["evidence"] = yaml_escape(str(ev))
+    # Sync from glance fields - ALWAYS overwrite with glance-derived values
+    # since glance is the authoritative summary (not canonical_evidence placeholders)
+    ev = glance_fields.get("evidence") or ""
+    if ev:
+        fm_dict["evidence"] = yaml_escape(str(ev))
 
-    if "tldr" not in fm_dict:
-        tldr = glance_fields.get("tldr") or ""
-        if tldr:
-            fm_dict["tldr"] = yaml_escape(str(tldr))
+    tldr = glance_fields.get("tldr") or ""
+    if tldr:
+        fm_dict["tldr"] = yaml_escape(str(tldr))
 
-    if "motivation" not in fm_dict:
-        motivation = glance_fields.get("motivation") or ""
-        if motivation:
-            fm_dict["motivation"] = yaml_escape(str(motivation))
+    motivation = glance_fields.get("motivation") or ""
+    if motivation:
+        fm_dict["motivation"] = yaml_escape(str(motivation))
 
-    if "method" not in fm_dict:
-        method = glance_fields.get("method") or ""
-        if method:
-            fm_dict["method"] = yaml_escape(str(method))
+    method = glance_fields.get("method") or ""
+    if method:
+        fm_dict["method"] = yaml_escape(str(method))
 
-    if "result" not in fm_dict:
-        result = glance_fields.get("result") or ""
-        if result:
-            fm_dict["result"] = yaml_escape(str(result))
+    result = glance_fields.get("result") or ""
+    if result:
+        fm_dict["result"] = yaml_escape(str(result))
 
-    if "conclusion" not in fm_dict:
-        conclusion = glance_fields.get("conclusion") or ""
-        if conclusion:
-            fm_dict["conclusion"] = yaml_escape(str(conclusion))
+    conclusion = glance_fields.get("conclusion") or ""
+    if conclusion:
+        fm_dict["conclusion"] = yaml_escape(str(conclusion))
 
-    if "key_findings" not in fm_dict:
-        key_findings = glance_fields.get("key_findings") or ""
-        if key_findings:
-            if isinstance(key_findings, list):
-                # Serialize as YAML inline sequence: [item1, item2]
-                items = [yaml_escape(str(item)) for item in key_findings]
-                fm_dict["key_findings"] = "[" + ", ".join(items) + "]"
-            else:
-                fm_dict["key_findings"] = yaml_escape(str(key_findings))
+    key_findings = glance_fields.get("key_findings") or ""
+    if key_findings:
+        if isinstance(key_findings, list):
+            items = [yaml_escape(str(item)) for item in key_findings]
+            fm_dict["key_findings"] = "[" + ", ".join(items) + "]"
+        else:
+            fm_dict["key_findings"] = yaml_escape(str(key_findings))
 
-    if "limitations" not in fm_dict:
-        limitations = glance_fields.get("limitations") or ""
-        if limitations:
-            fm_dict["limitations"] = yaml_escape(str(limitations))
+    limitations = glance_fields.get("limitations") or ""
+    if limitations:
+        fm_dict["limitations"] = yaml_escape(str(limitations))
 
     # Rebuild front matter
     new_fm_lines = []
