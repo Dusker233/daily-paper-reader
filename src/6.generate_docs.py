@@ -2417,21 +2417,23 @@ def update_sidebar(
         feed_url = f"{site_url.rstrip('/')}/docs/feed.xml"
         rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
         for i, line in enumerate(lines):
-            # Replace if placeholder OR existing RSS sidebar link (structurally match)
-            if 'RSS_FEED_URL_PLACEHOLDER' in line or (
+            # Replace if comment placeholder OR existing RSS sidebar link (structurally match)
+            if '<!--DPR_RSS' in line or (
                 'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line
             ):
                 # Preserve list-item prefix if present (e.g. "* <a ...")
-                prefix = line[:line.find('<a')] if '<a' in line else ''
+                prefix = line[:line.find('<')] if '<' in line else ''
                 lines[i] = prefix + rss_link + "\n"
                 break
     else:
-        # No DPR_SITE_URL: replace with relative path so local/fork previews work
-        rss_link = '<a class="dpr-sidebar-root-link" href="docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>'
+        # No DPR_SITE_URL: leave neutralized placeholder comment
+        rss_placeholder = '<!--DPR_RSS_LINK: set DPR_SITE_URL to enable RSS-->'
         for i, line in enumerate(lines):
-            if 'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line:
-                prefix = line[:line.find('<a')] if '<a' in line else ''
-                lines[i] = prefix + rss_link + "\n"
+            if '<!--DPR_RSS' in line or (
+                'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line
+            ):
+                prefix = line[:line.find('<')] if '<' in line else ''
+                lines[i] = prefix + rss_placeholder + "\n"
                 break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:

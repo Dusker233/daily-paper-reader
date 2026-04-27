@@ -689,7 +689,10 @@ def update_seed_navigation(docs_dir: str, request_id: str, title: str) -> None:
     sidebar_text = sidebar_path.read_text(encoding="utf-8") if sidebar_path.exists() else ""
 
     clean_request_id = _normalize_request_id(request_id)
+    # Markdown-escaped title for README markdown link
     clean_title = _escape_markdown_text(title) or clean_request_id
+    # Raw title with HTML escaping for HTML anchor in sidebar
+    raw_title = title or clean_request_id
     readme_block = "\n".join(
         [
             SEED_NAV_START,
@@ -702,7 +705,7 @@ def update_seed_navigation(docs_dir: str, request_id: str, title: str) -> None:
         [
             SEED_NAV_START,
             "* Seed Papers",
-            f'  * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/{clean_request_id}/index">{html.escape(clean_title)}</a>',
+            f'  * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/{clean_request_id}/index">{html.escape(raw_title)}</a>',
             SEED_NAV_END,
         ]
     )

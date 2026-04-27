@@ -2957,6 +2957,12 @@ window.$docsify = {
           ...Array.from(nav.querySelectorAll('a[href]')),
           ...Array.from(nav.querySelectorAll('a[data-dpr-hash]')),
         ];
+        // Also scan .markdown-section for seed paper / related links rendered in content
+        const main = document.querySelector('.markdown-section');
+        if (main) {
+          links.push(...Array.from(main.querySelectorAll('a[href]')));
+          links.push(...Array.from(main.querySelectorAll('a[data-dpr-hash]')));
+        }
         const out = [];
         const seen = new Set();
         links.forEach((a) => {
