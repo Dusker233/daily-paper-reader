@@ -3056,7 +3056,9 @@ window.$docsify = {
             // and parsing the seed index page to populate the cache.
             // Use regex to extract markdown links directly since DOMParser
             // on 'text/markdown' may not create proper <a> elements.
-            const indexUrl = `./seed-papers/${reqId}/index.md`;
+            const docsBase = (window.$docsify && typeof window.$docsify.basePath === 'string') ? window.$docsify.basePath : 'docs/';
+            const safeBase = /\/$/.test(docsBase) ? docsBase : `${docsBase}/`;
+            const indexUrl = `./${safeBase}seed-papers/${reqId}/index.md`;
             fetch(indexUrl).then((res) => {
               if (!res.ok) return;
               return res.text();
