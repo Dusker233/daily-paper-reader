@@ -3039,7 +3039,9 @@ window.$docsify = {
 
         const link =
           nav.querySelector(`a[href="${targetHref}"]`) ||
-          nav.querySelector(`a[href="${targetHref.replace(/^#\//, '#/')}"]`);
+          nav.querySelector(`a[href="${targetHref.replace(/^#\//, '#/')}"]`) ||
+          nav.querySelector(`a[data-dpr-hash="${targetHref}"]`) ||
+          nav.querySelector(`a[data-dpr-hash="${targetHref.replace(/^#\//, '#/')}"]`);
         if (!link) return;
 
         const item = link.closest('li') || link;
