@@ -2664,6 +2664,9 @@ window.$docsify = {
         currentReportHref: '',
         lastNavTs: 0,
         lastNavSource: '', // 'click' | 'key' | 'wheel' | 'swipe' | ''
+        // Per-request-id cache for seed-paper/related sibling links.
+        // Keyed by request_id (e.g. "1777113876678"). Value is ordered list of hrefs.
+        seedPaperCache: {},
       };
 
       const DPR_SIDEBAR_CENTER_STATE = {
@@ -3017,7 +3020,39 @@ window.$docsify = {
         const seenReport = new Set(existingReport);
         for (const h of freshReport) { if (!seenReport.has(h)) { existingReport.push(h); } }
         DPR_NAV_STATE.reportHrefs = existingReport;
+
+        // Per-request cache for seed sibling links (seed-paper / related pages).
+        // On seed index page: parse all sibling links and cache them.
+        // On seed/related page: populate paperHrefs from cache for fresh sessions.
         const file = vm && vm.route ? vm.route.file : '';
+        const seedIndexMatch = file && /^seed-papers\/([^/]+)\/index\.md$/i.test(file);
+        const seedChildMatch = file && /^seed-papers\/([^/]+)\/(?!index\.md).+\.md$/i.test(file);
+        if (seedIndexMatch) {
+          const reqId = seedIndexMatch[1];
+          const main = document.querySelector('.markdown-section');
+          const siblingLinks = [];
+          if (main) {
+            main.querySelectorAll('a[href]').forEach((a) => {
+              const href = a.getAttribute('href') || '';
+              if (isPaperHref(href)) {
+                siblingLinks.push(normalizeHref(href));
+              }
+            });
+          }
+          if (siblingLinks.length) {
+            DPR_NAV_STATE.seedPaperCache[reqId] = siblingLinks;
+          }
+        } else if (seedChildMatch) {
+          const reqId = seedChildMatch[1];
+          const cached = DPR_NAV_STATE.seedPaperCache[reqId];
+          if (cached && cached.length) {
+            const existing = DPR_NAV_STATE.paperHrefs || [];
+            const seen = new Set(existing);
+            for (const h of cached) { if (!seen.has(h)) { existing.push(h); } }
+            DPR_NAV_STATE.paperHrefs = existing;
+          }
+        }
+
         if (file && isPaperRouteFile(file)) {
           DPR_NAV_STATE.currentHref = normalizeHref('#/' + String(file).replace(/\.md$/i, ''));
         } else {

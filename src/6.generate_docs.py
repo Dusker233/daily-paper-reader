@@ -2426,11 +2426,16 @@ def update_sidebar(
                 lines[i] = prefix + rss_link + "\n"
                 break
     else:
-        # No DPR_SITE_URL: remove RSS line entirely so sidebar has no empty bullet
-        lines = [l for l in lines if not (
-            '<!--DPR_RSS' in l or
-            ('class="dpr-sidebar-root-link"' in l and 'RSS 订阅' in l)
-        )]
+        # No DPR_SITE_URL: replace RSS line with stable marker so later production
+        # runs still have a slot to rewrite. Avoids empty bullet from HTML comment.
+        for i, line in enumerate(lines):
+            if '<!--DPR_RSS' in line or (
+                'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line
+            ):
+                # Preserve list-item prefix and keep a replaceable marker
+                prefix = line[:line.find('<')] if '<' in line else ''
+                lines[i] = f"{prefix}* <!--DPR_RSS_LINK-->\n"
+                break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
