@@ -2436,13 +2436,22 @@ def update_sidebar(
                     lines.insert(i + 1, f"* {rss_link}\n")
                     break
     else:
-        # No DPR_SITE_URL: remove the RSS line entirely so there is no visible
-        # empty bullet in the sidebar. The insertion path in the `if site_url`
-        # branch handles restoring the link in later production runs.
-        lines = [l for l in lines if not (
-            '<!--DPR_RSS' in l or
-            ('class="dpr-sidebar-root-link"' in l and 'RSS 订阅' in l)
-        )]
+        # No DPR_SITE_URL: replace the RSS line with a restorable placeholder
+        # so later production runs can inject the feed link back. Remove the
+        # visible RSS entry but keep a marker so the `if site_url` branch
+        # has something to match on restoration.
+        for i, line in enumerate(lines):
+            if '<!--DPR_RSS' in line:
+                # Preserve the list-item prefix (e.g. "* ") and replace with a
+                # comment marker that the `if site_url` branch can detect.
+                prefix = line[:line.find('<!--')].rstrip()
+                lines[i] = f"{prefix}<!--DPR_RSS-->\n"
+                break
+            elif 'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line:
+                # Preserve list-item prefix (e.g. "* ") and replace with marker
+                prefix = line[:line.find('<')].rstrip()
+                lines[i] = f"{prefix}<!--DPR_RSS-->\n"
+                break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)

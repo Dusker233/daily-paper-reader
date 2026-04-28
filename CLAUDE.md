@@ -1,0 +1,5 @@
+- reviewer is responsible for PR review, inline comments, checking Actions status, and merging approved PRs.
+- implementer is responsible for code changes, commit, push, opening PRs, checking Actions failures, and fixing workflows when needed.
+- reviewer should not make code changes unless explicitly requested.
+- implementer should not merge its own PR unless explicitly instructed.
+- use role-specific wrappers for all GitHub-related commands.

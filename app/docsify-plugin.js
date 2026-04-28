@@ -3054,21 +3054,24 @@ window.$docsify = {
           } else {
             // Cache miss (direct load / fresh session): bootstrap by fetching
             // and parsing the seed index page to populate the cache.
+            // Use regex to extract markdown links directly since DOMParser
+            // on 'text/markdown' may not create proper <a> elements.
             const indexUrl = `./seed-papers/${reqId}/index.md`;
             fetch(indexUrl).then((res) => {
               if (!res.ok) return;
               return res.text();
             }).then((text) => {
               if (!text) return;
-              const parser = new DOMParser();
-              const doc = parser.parseFromString(text, 'text/markdown');
+              // Extract markdown links: [label](url) or [label](#/path)
+              const linkRegex = /\[([^\]]*)\]\(([^)]+)\)/g;
               const links = [];
-              doc.querySelectorAll('a[href]').forEach((a) => {
-                const href = a.getAttribute('href') || '';
+              let match;
+              while ((match = linkRegex.exec(text)) !== null) {
+                const href = match[2] || '';
                 if (isPaperHref(href)) {
                   links.push(normalizeHref(href));
                 }
-              });
+              }
               if (links.length) {
                 DPR_NAV_STATE.seedPaperCache[reqId] = links;
                 // Populate paperHrefs from newly bootstrapped cache
