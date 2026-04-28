@@ -3002,8 +3002,21 @@ window.$docsify = {
       };
 
       const updateNavState = () => {
-        DPR_NAV_STATE.paperHrefs = collectPaperHrefsFromSidebar();
-        DPR_NAV_STATE.reportHrefs = collectReportHrefsFromSidebar();
+        // Accumulate paperHrefs across route changes so links discovered on one
+        // page (e.g. seed-index listing all related papers) persist after
+        // navigating into a child page where those sibling links leave the DOM.
+        const existingPaper = DPR_NAV_STATE.paperHrefs || [];
+        const freshPaper = collectPaperHrefsFromSidebar();
+        const seenPaper = new Set(existingPaper);
+        for (const h of freshPaper) { if (!seenPaper.has(h)) { existingPaper.push(h); } }
+        DPR_NAV_STATE.paperHrefs = existingPaper;
+
+        // Same accumulation for reportHrefs
+        const existingReport = DPR_NAV_STATE.reportHrefs || [];
+        const freshReport = collectReportHrefsFromSidebar();
+        const seenReport = new Set(existingReport);
+        for (const h of freshReport) { if (!seenReport.has(h)) { existingReport.push(h); } }
+        DPR_NAV_STATE.reportHrefs = existingReport;
         const file = vm && vm.route ? vm.route.file : '';
         if (file && isPaperRouteFile(file)) {
           DPR_NAV_STATE.currentHref = normalizeHref('#/' + String(file).replace(/\.md$/i, ''));

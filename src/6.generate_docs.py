@@ -2426,15 +2426,11 @@ def update_sidebar(
                 lines[i] = prefix + rss_link + "\n"
                 break
     else:
-        # No DPR_SITE_URL: leave neutralized placeholder comment
-        rss_placeholder = '<!--DPR_RSS_LINK: set DPR_SITE_URL to enable RSS-->'
-        for i, line in enumerate(lines):
-            if '<!--DPR_RSS' in line or (
-                'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line
-            ):
-                prefix = line[:line.find('<')] if '<' in line else ''
-                lines[i] = prefix + rss_placeholder + "\n"
-                break
+        # No DPR_SITE_URL: remove RSS line entirely so sidebar has no empty bullet
+        lines = [l for l in lines if not (
+            '<!--DPR_RSS' in l or
+            ('class="dpr-sidebar-root-link"' in l and 'RSS 订阅' in l)
+        )]
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
