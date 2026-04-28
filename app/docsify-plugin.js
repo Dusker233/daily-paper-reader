@@ -3046,10 +3046,38 @@ window.$docsify = {
           const reqId = seedChildMatch[1];
           const cached = DPR_NAV_STATE.seedPaperCache[reqId];
           if (cached && cached.length) {
+            // Cache hit: populate paperHrefs from cached sibling list
             const existing = DPR_NAV_STATE.paperHrefs || [];
             const seen = new Set(existing);
             for (const h of cached) { if (!seen.has(h)) { existing.push(h); } }
             DPR_NAV_STATE.paperHrefs = existing;
+          } else {
+            // Cache miss (direct load / fresh session): bootstrap by fetching
+            // and parsing the seed index page to populate the cache.
+            const indexUrl = `./seed-papers/${reqId}/index.md`;
+            fetch(indexUrl).then((res) => {
+              if (!res.ok) return;
+              return res.text();
+            }).then((text) => {
+              if (!text) return;
+              const parser = new DOMParser();
+              const doc = parser.parseFromString(text, 'text/markdown');
+              const links = [];
+              doc.querySelectorAll('a[href]').forEach((a) => {
+                const href = a.getAttribute('href') || '';
+                if (isPaperHref(href)) {
+                  links.push(normalizeHref(href));
+                }
+              });
+              if (links.length) {
+                DPR_NAV_STATE.seedPaperCache[reqId] = links;
+                // Populate paperHrefs from newly bootstrapped cache
+                const existing = DPR_NAV_STATE.paperHrefs || [];
+                const seen = new Set(existing);
+                for (const h of links) { if (!seen.has(h)) { existing.push(h); } }
+                DPR_NAV_STATE.paperHrefs = existing;
+              }
+            }).catch(() => { /* silently ignore bootstrap failures */ });
           }
         }
 
