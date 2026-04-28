@@ -2416,6 +2416,7 @@ def update_sidebar(
     if site_url:
         feed_url = f"{site_url.rstrip('/')}/docs/feed.xml"
         rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
+        replaced = False
         for i, line in enumerate(lines):
             # Replace if comment placeholder OR existing RSS sidebar link (structurally match)
             if '<!--DPR_RSS' in line or (
@@ -2424,7 +2425,16 @@ def update_sidebar(
                 # Preserve list-item prefix if present (e.g. "* <a ...")
                 prefix = line[:line.find('<')] if '<' in line else ''
                 lines[i] = prefix + rss_link + "\n"
+                replaced = True
                 break
+        # If no existing RSS slot found, insert a new RSS list item right after
+        # the tutorial entry so the link appears in the right position.
+        if not replaced:
+            for i, line in enumerate(lines):
+                if 'data-dpr-hash="#/tutorial/README"' in line:
+                    # Insert RSS entry as the next top-level list item
+                    lines.insert(i + 1, f"* {rss_link}\n")
+                    break
     else:
         # No DPR_SITE_URL: replace RSS line with stable marker so later production
         # runs still have a slot to rewrite. Avoids empty bullet from HTML comment.
