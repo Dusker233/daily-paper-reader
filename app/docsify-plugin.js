@@ -3025,8 +3025,8 @@ window.$docsify = {
         // On seed index page: parse all sibling links and cache them.
         // On seed/related page: populate paperHrefs from cache for fresh sessions.
         const file = vm && vm.route ? vm.route.file : '';
-        const seedIndexMatch = file && /^seed-papers\/([^/]+)\/index\.md$/i.test(file);
-        const seedChildMatch = file && /^seed-papers\/([^/]+)\/(?!index\.md).+\.md$/i.test(file);
+        const seedIndexMatch = file && file.match(/^seed-papers\/([^/]+)\/index\.md$/i);
+        const seedChildMatch = file && file.match(/^seed-papers\/([^/]+)\/(?!index\.md).+\.md$/i);
         if (seedIndexMatch) {
           const reqId = seedIndexMatch[1];
           const main = document.querySelector('.markdown-section');

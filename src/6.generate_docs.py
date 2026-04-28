@@ -2432,9 +2432,8 @@ def update_sidebar(
             if '<!--DPR_RSS' in line or (
                 'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line
             ):
-                # Preserve list-item prefix and keep a replaceable marker
-                prefix = line[:line.find('<')] if '<' in line else ''
-                lines[i] = f"{prefix}* <!--DPR_RSS_LINK-->\n"
+                # Write stable marker directly — no prefix preservation needed
+                lines[i] = "* <!--DPR_RSS_LINK-->\n"
                 break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
