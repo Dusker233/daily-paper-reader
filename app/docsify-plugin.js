@@ -3112,8 +3112,8 @@ window.$docsify = {
           }
         }
 
-        // 兜底：按当前路由 href 匹配
-        const href = DPR_NAV_STATE.currentHref || '';
+        // 兜底：按当前路由 href 匹配（优先 paper href，fallback 到 report href）
+        const href = DPR_NAV_STATE.currentHref || DPR_NAV_STATE.currentReportHref || '';
         if (!href) return;
         centerSidebarOnHref(href);
       };
