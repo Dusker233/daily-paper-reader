@@ -2436,15 +2436,13 @@ def update_sidebar(
                     lines.insert(i + 1, f"* {rss_link}\n")
                     break
     else:
-        # No DPR_SITE_URL: replace RSS line with stable marker so later production
-        # runs still have a slot to rewrite. Avoids empty bullet from HTML comment.
-        for i, line in enumerate(lines):
-            if '<!--DPR_RSS' in line or (
-                'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line
-            ):
-                # Write stable marker directly — no prefix preservation needed
-                lines[i] = "* <!--DPR_RSS_LINK-->\n"
-                break
+        # No DPR_SITE_URL: remove the RSS line entirely so there is no visible
+        # empty bullet in the sidebar. The insertion path in the `if site_url`
+        # branch handles restoring the link in later production runs.
+        lines = [l for l in lines if not (
+            '<!--DPR_RSS' in l or
+            ('class="dpr-sidebar-root-link"' in l and 'RSS 订阅' in l)
+        )]
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
