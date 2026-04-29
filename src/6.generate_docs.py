@@ -2761,9 +2761,14 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
         xml_lines.append(f"    <updated>{entry['updated']}</updated>")
         xml_lines.append(f"    <id>{entry['id']}</id>")
         if entry["summary"]:
+            # Normalize markdown escaping before XML escaping
+            summary_text = (
+                entry["summary"]
+                .replace("\\", "")  # strip literal backslashes from markdown blockquote escaping
+            )
             # Escape XML special chars
             summary_esc = (
-                entry["summary"]
+                summary_text
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
@@ -3577,21 +3582,17 @@ def main() -> None:
     log_substep("6.4", "生成当日日报并同步首页 README", "END")
 
     sidebar_path = os.path.join(docs_dir, "_sidebar.md")
-    if deep_entries or quick_entries or site_url:
-        log_substep("6.5", "更新侧边栏", "START")
-        update_sidebar(
-            sidebar_path,
-            date_str,
-            deep_entries,
-            quick_entries,
-            sidebar_evidence_by_id,
-            date_label=args.sidebar_date_label,
-            site_url=site_url,
-        )
-        log_substep("6.5", "更新侧边栏", "END")
-    else:
-        log_substep("6.5", "更新侧边栏", "SKIP")
-        log("[INFO] 本次无推荐论文，不写入 Sidebar 日期目录。")
+    log_substep("6.5", "更新侧边栏", "START")
+    update_sidebar(
+        sidebar_path,
+        date_str,
+        deep_entries,
+        quick_entries,
+        sidebar_evidence_by_id,
+        date_label=args.sidebar_date_label,
+        site_url=site_url,
+    )
+    log_substep("6.5", "更新侧边栏", "END")
 
     log_substep("6.6", "生成可下载元数据索引（JSON）", "START")
     try:
