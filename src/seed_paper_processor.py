@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import importlib.util
 import json
 import os
@@ -26,6 +27,7 @@ MAX_NOTES_LENGTH = 400
 MAX_QUERY_KEYWORDS = 24
 MAX_QUERY_TEXT_LENGTH = 800
 REQUEST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+ARXIV_VERSION_RE = re.compile(r"^(\d{4}\.\d{4,6})v\d+$")
 COMMON_QUERY_STOPWORDS = {
     "a",
     "an",
@@ -283,16 +285,43 @@ def _upsert_frontmatter_evidence(generate_docs_module: Any, md_path: Path, glanc
             key, val = line.split(":", 1)
             fm_dict[key.strip()] = val.strip()
 
-    # Sync from glance fields if front matter is missing these
-    if "evidence" not in fm_dict:
-        ev = glance_fields.get("evidence") or ""
-        if ev:
-            fm_dict["evidence"] = yaml_escape(str(ev))
+    # Sync from glance fields - ALWAYS overwrite with glance-derived values
+    # since glance is the authoritative summary (not canonical_evidence placeholders)
+    ev = glance_fields.get("evidence") or ""
+    if ev:
+        fm_dict["evidence"] = yaml_escape(str(ev))
 
-    if "tldr" not in fm_dict:
-        tldr = glance_fields.get("tldr") or ""
-        if tldr:
-            fm_dict["tldr"] = yaml_escape(str(tldr))
+    tldr = glance_fields.get("tldr") or ""
+    if tldr:
+        fm_dict["tldr"] = yaml_escape(str(tldr))
+
+    motivation = glance_fields.get("motivation") or ""
+    if motivation:
+        fm_dict["motivation"] = yaml_escape(str(motivation))
+
+    method = glance_fields.get("method") or ""
+    if method:
+        fm_dict["method"] = yaml_escape(str(method))
+
+    result = glance_fields.get("result") or ""
+    if result:
+        fm_dict["result"] = yaml_escape(str(result))
+
+    conclusion = glance_fields.get("conclusion") or ""
+    if conclusion:
+        fm_dict["conclusion"] = yaml_escape(str(conclusion))
+
+    key_findings = glance_fields.get("key_findings") or ""
+    if key_findings:
+        if isinstance(key_findings, list):
+            items = [yaml_escape(str(item)) for item in key_findings]
+            fm_dict["key_findings"] = "[" + ", ".join(items) + "]"
+        else:
+            fm_dict["key_findings"] = yaml_escape(str(key_findings))
+
+    limitations = glance_fields.get("limitations") or ""
+    if limitations:
+        fm_dict["limitations"] = yaml_escape(str(limitations))
 
     # Rebuild front matter
     new_fm_lines = []
@@ -339,20 +368,30 @@ def _render_seed_page(
     )
 
     mode = _normalize_mode(request.get("mode"))
+    seed_glance_fields: dict[str, str] = {}
     if mode in {"skim", "both"}:
         glance = generate_docs_module.generate_glance_overview(title, clean_seed_text, clean_seed_text)
         if not _normalize_text(glance):
             glance = generate_docs_module.build_glance_fallback(paper)
         _upsert_auto_block(generate_docs_module, md_path, "速览", glance)
+        if glance:
+            seed_glance_fields = generate_docs_module.parse_glance_overview_fields(glance)
+            _upsert_frontmatter_evidence(generate_docs_module, md_path, seed_glance_fields)
     if mode in {"deep", "both"}:
         deep_summary = generate_docs_module.generate_deep_summary(str(md_path), str(txt_path))
         _upsert_auto_block(generate_docs_module, md_path, "精读", deep_summary)
 
-    return md_path
+    return md_path, seed_glance_fields
 
 
 def _related_key(paper: dict[str, Any]) -> str:
-    return _normalize_text(paper.get("id")) or _normalize_text(paper.get("title"))
+    raw_id = _normalize_text(paper.get("id"))
+    if raw_id:
+        m = ARXIV_VERSION_RE.match(raw_id)
+        if m:
+            return m.group(1)
+        return raw_id
+    return _normalize_text(paper.get("title"))
 
 
 def _iter_unique_related(selection: dict[str, Any]) -> list[dict[str, Any]]:
@@ -497,8 +536,9 @@ def _render_related_pages(
         md_path.write_text(md_content, encoding="utf-8")
 
         # Upsert glance (速览) block - uses same paper_text for full-text priority
+        glance = ""
+        glance_fields: dict[str, str] = {}
         if record["include_quick"]:
-            glance = ""
             if hasattr(generate_docs_module, "generate_glance_overview"):
                 try:
                     glance = generate_docs_module.generate_glance_overview(
@@ -526,24 +566,49 @@ def _render_related_pages(
             "path": f"related/{md_path.name}",
             "score": record.get("score"),
             "evidence": record.get("evidence") or "",
+            "tldr": glance_fields.get("tldr") or "" if glance else "",
         })
     return written
 
 
-def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, str]]) -> str:
+def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, str]], seed_glance_fields: dict[str, str] | None = None) -> str:
     request_id = _normalize_request_id(request.get("request_id"))
     title = _paper_title_from_filename(request.get("file_name") or "")
+
+    # Build seed paper section with glance fields (tldr, evidence, etc.)
+    seed_lines = [f"- [Open seed paper](#/seed-papers/{request_id}/seed-paper)"]
+    if seed_glance_fields:
+        tldr = seed_glance_fields.get("tldr") or ""
+        evidence = seed_glance_fields.get("evidence") or ""
+        method = seed_glance_fields.get("method") or ""
+        result = seed_glance_fields.get("result") or ""
+        conclusion = seed_glance_fields.get("conclusion") or ""
+        if tldr:
+            seed_lines.append(f"  - TLDR: {_escape_markdown_text(tldr)}")
+        if evidence:
+            seed_lines.append(f"  - Evidence: {_escape_markdown_text(evidence)}")
+        if method:
+            seed_lines.append(f"  - Method: {_escape_markdown_text(method)}")
+        if result:
+            seed_lines.append(f"  - Result: {_escape_markdown_text(result)}")
+        if conclusion:
+            seed_lines.append(f"  - Conclusion: {_escape_markdown_text(conclusion)}")
+    seed_block = "\n".join(seed_lines)
+
+    # Build related papers section
     related_lines = []
     for page in related_pages:
         score_str = f" [{page.get('score', '-')}]" if page.get('score') else ""
-        evidence_str = f" - {_escape_markdown_text(page.get('evidence', ''))}" if page.get('evidence') else ""
+        # Prefer tldr from generated glance; fall back to raw evidence
+        related_tldr = page.get('tldr') or page.get('evidence') or ""
+        tldr_str = f" - {_escape_markdown_text(related_tldr)}" if related_tldr else ""
         # Convert related/foo.md to #/seed-papers/{request_id}/related/foo
         page_path = page.get('path', '')
         if page_path.startswith('related/'):
             slug = page_path[len('related/'):].replace('.md', '')
             page_path = f"#/seed-papers/{request_id}/related/{slug}"
         related_lines.append(
-            f"- [{_escape_markdown_text(page['title'])}]({page_path}){score_str}{evidence_str}"
+            f"- [{_escape_markdown_text(page['title'])}]({page_path}){score_str}{tldr_str}"
         )
     related_block = "\n".join(related_lines) if related_lines else "- None"
     return "\n".join(
@@ -555,7 +620,7 @@ def _build_index_content(request: dict[str, Any], related_pages: list[dict[str, 
             f"- Related count: `{request.get('related_count')}`",
             "",
             "## Seed paper",
-            f"- [Open seed paper](#/seed-papers/{request_id}/seed-paper)",
+            seed_block,
             "",
             "## Related papers",
             related_block,
@@ -579,7 +644,7 @@ def render_seed_workspace(
         shutil.rmtree(related_dir)
     related_dir.mkdir(parents=True, exist_ok=True)
 
-    seed_page = _render_seed_page(request, seed_text, workspace_dir, generate_docs_module)
+    seed_page, seed_glance_fields = _render_seed_page(request, seed_text, workspace_dir, generate_docs_module)
     related_pages = _render_related_pages(selection, related_dir, generate_docs_module)
 
     # PR1: Disk invariant check - fail early if related pages missing
@@ -598,7 +663,7 @@ def render_seed_workspace(
         )
 
     index_path = workspace_dir / "index.md"
-    index_path.write_text(_build_index_content(request, related_pages), encoding="utf-8")
+    index_path.write_text(_build_index_content(request, related_pages, seed_glance_fields), encoding="utf-8")
 
     return {
         "workspace_dir": str(workspace_dir),
@@ -631,7 +696,10 @@ def update_seed_navigation(docs_dir: str, request_id: str, title: str) -> None:
     sidebar_text = sidebar_path.read_text(encoding="utf-8") if sidebar_path.exists() else ""
 
     clean_request_id = _normalize_request_id(request_id)
+    # Markdown-escaped title for README markdown link
     clean_title = _escape_markdown_text(title) or clean_request_id
+    # Raw title with HTML escaping for HTML anchor in sidebar
+    raw_title = title or clean_request_id
     readme_block = "\n".join(
         [
             SEED_NAV_START,
@@ -644,7 +712,7 @@ def update_seed_navigation(docs_dir: str, request_id: str, title: str) -> None:
         [
             SEED_NAV_START,
             "* Seed Papers",
-            f"  * [{clean_title}](#/seed-papers/{clean_request_id}/index)",
+            f'  * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/seed-papers/{clean_request_id}/index">{html.escape(raw_title)}</a>',
             SEED_NAV_END,
         ]
     )

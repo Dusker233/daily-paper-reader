@@ -2518,12 +2518,17 @@ window.$docsify = {
       // 侧边栏/正文的论文页标题条：英文右侧，中文左侧，中间竖线
       const isPaperRouteFile = (file) => {
         const f = String(file || '');
-        return /^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README\.md$).+\.md$/i.test(f);
+        if (/^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README\.md$).+\.md$/i.test(f)) return true;
+        // seed paper / related pages (but NOT index.md which is a hub)
+        if (/^seed-papers\/[^/]+\/(?!index\.md$).+\.md$/i.test(f)) return true;
+        return false;
       };
 
       const isReportRouteFile = (file) => {
         const f = String(file || '');
-        return /^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README\.md$/i.test(f);
+        if (/^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README\.md$/i.test(f)) return true;
+        if (/^seed-papers\/[^/]+\/index\.md$/i.test(f)) return true;
+        return false;
       };
 
       const fitTextToBox = (el, minPx, maxPx) => {
@@ -2659,6 +2664,9 @@ window.$docsify = {
         currentReportHref: '',
         lastNavTs: 0,
         lastNavSource: '', // 'click' | 'key' | 'wheel' | 'swipe' | ''
+        // Per-request-id cache for seed-paper/related sibling links.
+        // Keyed by request_id (e.g. "1777113876678"). Value is ordered list of hrefs.
+        seedPaperCache: {},
       };
 
       const DPR_SIDEBAR_CENTER_STATE = {
@@ -2923,7 +2931,10 @@ window.$docsify = {
         // 匹配论文页：
         // - 传统路径：#/YYYYMM/DD/slug
         // - 区间路径：#/YYYYMMDD-YYYYMMDD/slug
-        return /^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README$).+/i.test(h);
+        if (/^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README$).+/i.test(h)) return true;
+        // seed paper / related pages (but NOT index)
+        if (/^#\/seed-papers\/[^/]+\/(?!index$).+/i.test(h)) return true;
+        return false;
       };
 
       const isReportHref = (href) => {
@@ -2931,7 +2942,10 @@ window.$docsify = {
         // 匹配日报页：
         // - 传统路径：#/YYYYMM/DD/README
         // - 区间路径：#/YYYYMMDD-YYYYMMDD/README
-        return /^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README$/i.test(h);
+        if (/^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/README$/i.test(h)) return true;
+        // seed index pages
+        if (/^#\/seed-papers\/[^/]+\/index$/i.test(h)) return true;
+        return false;
       };
 
       const isPaperHrefFallback = (href) => {
@@ -2942,11 +2956,20 @@ window.$docsify = {
       const collectPaperHrefsFromSidebar = () => {
         const nav = document.querySelector('.sidebar-nav');
         if (!nav) return [];
-        const links = Array.from(nav.querySelectorAll('a[href]'));
+        const links = [
+          ...Array.from(nav.querySelectorAll('a[href]')),
+          ...Array.from(nav.querySelectorAll('a[data-dpr-hash]')),
+        ];
+        // Also scan .markdown-section for seed paper / related links rendered in content
+        const main = document.querySelector('.markdown-section');
+        if (main) {
+          links.push(...Array.from(main.querySelectorAll('a[href]')));
+          links.push(...Array.from(main.querySelectorAll('a[data-dpr-hash]')));
+        }
         const out = [];
         const seen = new Set();
         links.forEach((a) => {
-          const href = a.getAttribute('href') || '';
+          const href = a.getAttribute('data-dpr-hash') || a.getAttribute('href') || '';
           if (!isPaperHref(href)) return;
           const norm = normalizeHref(href);
           if (seen.has(norm)) return;
@@ -2961,6 +2984,7 @@ window.$docsify = {
         const nav = document.querySelector('.sidebar-nav');
         if (nav) {
           links.push(...Array.from(nav.querySelectorAll('a[href]')));
+          links.push(...Array.from(nav.querySelectorAll('a[data-dpr-hash]')));
         }
         const main = document.querySelector('.markdown-section');
         if (main) {
@@ -2969,7 +2993,8 @@ window.$docsify = {
         const out = [];
         const seen = new Set();
         links.forEach((a) => {
-          const href = a.getAttribute('href') || '';
+          // Prefer data-dpr-hash for virtual links, fall back to href
+          const href = a.getAttribute('data-dpr-hash') || a.getAttribute('href') || '';
           if (!isReportHref(href)) return;
           const norm = normalizeHref(href);
           if (seen.has(norm)) return;
@@ -2980,9 +3005,87 @@ window.$docsify = {
       };
 
       const updateNavState = () => {
-        DPR_NAV_STATE.paperHrefs = collectPaperHrefsFromSidebar();
-        DPR_NAV_STATE.reportHrefs = collectReportHrefsFromSidebar();
+        // Accumulate paperHrefs across route changes so links discovered on one
+        // page (e.g. seed-index listing all related papers) persist after
+        // navigating into a child page where those sibling links leave the DOM.
+        const existingPaper = DPR_NAV_STATE.paperHrefs || [];
+        const freshPaper = collectPaperHrefsFromSidebar();
+        const seenPaper = new Set(existingPaper);
+        for (const h of freshPaper) { if (!seenPaper.has(h)) { existingPaper.push(h); } }
+        DPR_NAV_STATE.paperHrefs = existingPaper;
+
+        // Same accumulation for reportHrefs
+        const existingReport = DPR_NAV_STATE.reportHrefs || [];
+        const freshReport = collectReportHrefsFromSidebar();
+        const seenReport = new Set(existingReport);
+        for (const h of freshReport) { if (!seenReport.has(h)) { existingReport.push(h); } }
+        DPR_NAV_STATE.reportHrefs = existingReport;
+
+        // Per-request cache for seed sibling links (seed-paper / related pages).
+        // On seed index page: parse all sibling links and cache them.
+        // On seed/related page: populate paperHrefs from cache for fresh sessions.
         const file = vm && vm.route ? vm.route.file : '';
+        const seedIndexMatch = file && file.match(/^seed-papers\/([^/]+)\/index\.md$/i);
+        const seedChildMatch = file && file.match(/^seed-papers\/([^/]+)\/(?!index\.md).+\.md$/i);
+        if (seedIndexMatch) {
+          const reqId = seedIndexMatch[1];
+          const main = document.querySelector('.markdown-section');
+          const siblingLinks = [];
+          if (main) {
+            main.querySelectorAll('a[href]').forEach((a) => {
+              const href = a.getAttribute('href') || '';
+              if (isPaperHref(href)) {
+                siblingLinks.push(normalizeHref(href));
+              }
+            });
+          }
+          if (siblingLinks.length) {
+            DPR_NAV_STATE.seedPaperCache[reqId] = siblingLinks;
+          }
+        } else if (seedChildMatch) {
+          const reqId = seedChildMatch[1];
+          const cached = DPR_NAV_STATE.seedPaperCache[reqId];
+          if (cached && cached.length) {
+            // Cache hit: populate paperHrefs from cached sibling list
+            const existing = DPR_NAV_STATE.paperHrefs || [];
+            const seen = new Set(existing);
+            for (const h of cached) { if (!seen.has(h)) { existing.push(h); } }
+            DPR_NAV_STATE.paperHrefs = existing;
+          } else {
+            // Cache miss (direct load / fresh session): bootstrap by fetching
+            // and parsing the seed index page to populate the cache.
+            // Use regex to extract markdown links directly since DOMParser
+            // on 'text/markdown' may not create proper <a> elements.
+            const docsBase = (window.$docsify && typeof window.$docsify.basePath === 'string') ? window.$docsify.basePath : 'docs/';
+            const safeBase = /\/$/.test(docsBase) ? docsBase : `${docsBase}/`;
+            const indexUrl = `./${safeBase}seed-papers/${reqId}/index.md`;
+            fetch(indexUrl).then((res) => {
+              if (!res.ok) return;
+              return res.text();
+            }).then((text) => {
+              if (!text) return;
+              // Extract markdown links: [label](url) or [label](#/path)
+              const linkRegex = /\[([^\]]*)\]\(([^)]+)\)/g;
+              const links = [];
+              let match;
+              while ((match = linkRegex.exec(text)) !== null) {
+                const href = match[2] || '';
+                if (isPaperHref(href)) {
+                  links.push(normalizeHref(href));
+                }
+              }
+              if (links.length) {
+                DPR_NAV_STATE.seedPaperCache[reqId] = links;
+                // Populate paperHrefs from newly bootstrapped cache
+                const existing = DPR_NAV_STATE.paperHrefs || [];
+                const seen = new Set(existing);
+                for (const h of links) { if (!seen.has(h)) { existing.push(h); } }
+                DPR_NAV_STATE.paperHrefs = existing;
+              }
+            }).catch(() => { /* silently ignore bootstrap failures */ });
+          }
+        }
+
         if (file && isPaperRouteFile(file)) {
           DPR_NAV_STATE.currentHref = normalizeHref('#/' + String(file).replace(/\.md$/i, ''));
         } else {
@@ -3004,7 +3107,9 @@ window.$docsify = {
 
         const link =
           nav.querySelector(`a[href="${targetHref}"]`) ||
-          nav.querySelector(`a[href="${targetHref.replace(/^#\//, '#/')}"]`);
+          nav.querySelector(`a[href="${targetHref.replace(/^#\//, '#/')}"]`) ||
+          nav.querySelector(`a[data-dpr-hash="${targetHref}"]`) ||
+          nav.querySelector(`a[data-dpr-hash="${targetHref.replace(/^#\//, '#/')}"]`);
         if (!link) return;
 
         const item = link.closest('li') || link;
@@ -3075,8 +3180,8 @@ window.$docsify = {
           }
         }
 
-        // 兜底：按当前路由 href 匹配
-        const href = DPR_NAV_STATE.currentHref || '';
+        // 兜底：按当前路由 href 匹配（优先 paper href，fallback 到 report href）
+        const href = DPR_NAV_STATE.currentHref || DPR_NAV_STATE.currentReportHref || '';
         if (!href) return;
         centerSidebarOnHref(href);
       };

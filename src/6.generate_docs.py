@@ -2242,6 +2242,7 @@ def update_sidebar(
     quick_entries: List[Dict[str, Any]],
     paper_evidence_by_id: Dict[str, str],
     date_label: str | None = None,
+    site_url: str | None = None,
 ) -> None:
     def build_sidebar_item_payload(
         paper_id: str,
@@ -2348,7 +2349,16 @@ def update_sidebar(
         del lines[day_idx:end]
 
     block: List[str] = [day_heading]
-    if deep_entries:
+    if not deep_entries and not quick_entries:
+        # No-paper day: emit a clickable README entry so the report is reachable from sidebar
+        if len(date_str) == 8 and "-" not in date_str:
+            report_href = "#/" + date_str[:6] + "/" + date_str[6:] + "/README"
+        elif "-" in date_str:
+            report_href = "#/" + date_str + "/README"
+        else:
+            report_href = "#/" + date_str + "/README"
+        block.append("    * [日报](" + report_href + ")\n")
+    elif deep_entries:
         block.append("    * 精读区\n")
         for entry in deep_entries:
             paper_id = str(entry.get("paper_id") or "").strip()
@@ -2397,9 +2407,6 @@ def update_sidebar(
                 f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{href}" data-sidebar-item="{payload_json}">{safe_title}</a>\n'
             )
 
-    insert_idx = daily_idx + 1
-    lines[insert_idx:insert_idx] = block
-
     # 清理历史 Sidebar 中遗留的“日报”入口
     i = daily_idx + 1
     while i < len(lines):
@@ -2410,6 +2417,50 @@ def update_sidebar(
             del lines[i]
             continue
         i += 1
+
+    insert_idx = daily_idx + 1
+    lines[insert_idx:insert_idx] = block
+
+    # Inject DPR_SITE_URL-based RSS link if site_url is provided
+    if site_url:
+        feed_url = f"{site_url.rstrip('/')}/docs/feed.xml"
+        rss_link = f'<a class="dpr-sidebar-root-link" href="{feed_url}" target="_blank" rel="noopener">RSS 订阅</a>'
+        replaced = False
+        for i, line in enumerate(lines):
+            # Replace if comment placeholder OR existing RSS sidebar link (structurally match)
+            if '<!--DPR_RSS' in line or (
+                'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line and 'feed.xml' in line
+            ):
+                # Preserve list-item prefix if present (e.g. "* <a ...")
+                prefix = line[:line.find('<')] if '<' in line else ''
+                lines[i] = prefix + rss_link + "\n"
+                replaced = True
+                break
+        # If no existing RSS slot found, insert a new RSS list item right after
+        # the tutorial entry so the link appears in the right position.
+        if not replaced:
+            for i, line in enumerate(lines):
+                if 'data-dpr-hash="#/tutorial/README"' in line:
+                    # Insert RSS entry as the next top-level list item
+                    lines.insert(i + 1, f"* {rss_link}\n")
+                    break
+    else:
+        # No DPR_SITE_URL: replace the RSS line with a restorable placeholder
+        # so later production runs can inject the feed link back. Remove the
+        # visible RSS entry but keep a marker so the `if site_url` branch
+        # has something to match on restoration.
+        for i, line in enumerate(lines):
+            if '<!--DPR_RSS' in line:
+                # Preserve the list-item prefix (e.g. "* ") and replace with a
+                # comment marker that the `if site_url` branch can detect.
+                prefix = line[:line.find('<!--')].rstrip()
+                lines[i] = f"{prefix}<!--DPR_RSS-->\n"
+                break
+            elif 'class="dpr-sidebar-root-link"' in line and 'RSS 订阅' in line:
+                # Preserve list-item prefix (e.g. "* ") and replace with marker
+                prefix = line[:line.find('<')].rstrip()
+                lines[i] = f"{prefix}<!--DPR_RSS-->\n"
+                break
 
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
@@ -2633,7 +2684,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
     """Build Atom feed XML content with recent daily reports as items."""
     site_url = str(site_url or "").strip().rstrip("/")
     if not site_url:
-        site_url = "https://daily-paper-reader.example.com"
+        site_url = os.getenv("DPR_SITE_URL", "").strip()
 
     entries_data: List[Dict[str, str]] = []
 
@@ -2698,7 +2749,7 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
     xml_lines.append('<feed xmlns="http://www.w3.org/2005/Atom">')
     xml_lines.append(f"  <title>每日论文推荐 · Daily Paper Reader</title>")
     xml_lines.append(f"  <subtitle>每日 AI 论文推荐与精读指南</subtitle>")
-    xml_lines.append(f'  <link href="{site_url}/feed.xml" rel="self"/>')
+    xml_lines.append(f'  <link href="{site_url}/docs/feed.xml" rel="self"/>')
     xml_lines.append(f'  <link href="{site_url}/"/>')
     xml_lines.append(f"  <updated>{feed_updated}</updated>")
     xml_lines.append(f"  <id>{feed_id}</id>")
@@ -2710,9 +2761,14 @@ def build_atom_feed_content(docs_dir: str, site_url: str, max_items: int = 30) -
         xml_lines.append(f"    <updated>{entry['updated']}</updated>")
         xml_lines.append(f"    <id>{entry['id']}</id>")
         if entry["summary"]:
+            # Normalize markdown escaping before XML escaping
+            summary_text = (
+                entry["summary"]
+                .replace("\\", "")  # strip literal backslashes from markdown blockquote escaping
+            )
             # Escape XML special chars
             summary_esc = (
-                entry["summary"]
+                summary_text
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
@@ -3512,30 +3568,31 @@ def main() -> None:
     log(f"[OK] home README synced: {home_readme}")
 
     log_substep("6.4.1", "生成每日 Atom 订阅源", "START")
-    site_url = os.getenv("DPR_SITE_URL", "").strip() or "https://daily-paper-reader.example.com"
-    try:
-        feed_path = write_atom_feed(docs_dir, site_url, max_items=30)
-        log(f"[OK] Atom feed written: {feed_path}")
-    except Exception as e:
-        log(f"[WARN] 生成 Atom 订阅源失败：{e}")
+    site_url = os.getenv("DPR_SITE_URL", "").strip() or None
+    if site_url:
+        try:
+            feed_path = write_atom_feed(docs_dir, site_url, max_items=30)
+            log(f"[OK] Atom feed written: {feed_path}")
+        except Exception as e:
+            log(f"[WARN] 生成 Atom 订阅源失败：{e}")
+    else:
+        feed_path = None
+        log(f"[WARN] DPR_SITE_URL not set, skipping Atom feed generation")
     log_substep("6.4.1", "生成每日 Atom 订阅源", "END")
     log_substep("6.4", "生成当日日报并同步首页 README", "END")
 
     sidebar_path = os.path.join(docs_dir, "_sidebar.md")
-    if deep_entries or quick_entries:
-        log_substep("6.5", "更新侧边栏", "START")
-        update_sidebar(
-            sidebar_path,
-            date_str,
-            deep_entries,
-            quick_entries,
-            sidebar_evidence_by_id,
-            date_label=args.sidebar_date_label,
-        )
-        log_substep("6.5", "更新侧边栏", "END")
-    else:
-        log_substep("6.5", "更新侧边栏", "SKIP")
-        log("[INFO] 本次无推荐论文，不写入 Sidebar 日期目录。")
+    log_substep("6.5", "更新侧边栏", "START")
+    update_sidebar(
+        sidebar_path,
+        date_str,
+        deep_entries,
+        quick_entries,
+        sidebar_evidence_by_id,
+        date_label=args.sidebar_date_label,
+        site_url=site_url,
+    )
+    log_substep("6.5", "更新侧边栏", "END")
 
     log_substep("6.6", "生成可下载元数据索引（JSON）", "START")
     try:
