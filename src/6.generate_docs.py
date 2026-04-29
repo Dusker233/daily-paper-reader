@@ -2354,7 +2354,7 @@ def update_sidebar(
         if len(date_str) == 8 and "-" not in date_str:
             report_href = "#/" + date_str[:6] + "/" + date_str[6:] + "/README"
         elif "-" in date_str:
-            report_href = "#/" + date_str[:date_str.find("-")] + "-" + date_str + "/README"
+            report_href = "#/" + date_str + "/README"
         else:
             report_href = "#/" + date_str + "/README"
         block.append("    * [日报](" + report_href + ")\n")
@@ -2407,9 +2407,6 @@ def update_sidebar(
                 f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{href}" data-sidebar-item="{payload_json}">{safe_title}</a>\n'
             )
 
-    insert_idx = daily_idx + 1
-    lines[insert_idx:insert_idx] = block
-
     # 清理历史 Sidebar 中遗留的“日报”入口
     i = daily_idx + 1
     while i < len(lines):
@@ -2420,6 +2417,9 @@ def update_sidebar(
             del lines[i]
             continue
         i += 1
+
+    insert_idx = daily_idx + 1
+    lines[insert_idx:insert_idx] = block
 
     # Inject DPR_SITE_URL-based RSS link if site_url is provided
     if site_url:
