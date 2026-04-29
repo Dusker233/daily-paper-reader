@@ -1,7 +1,8 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">使用教程</a>
-* <a class="dpr-sidebar-root-link" href="docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>
+* <a class="dpr-sidebar-root-link" href="https://dusker233.github.io/daily-paper-reader/docs/feed.xml" target="_blank" rel="noopener">RSS 订阅</a>
 * Daily Papers
+  * 2026-04-28 <!--dpr-date:20260428-->
   * 2026-04-24 <!--dpr-date:20260424-->
     * 精读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202604/24/2604.20483v1-forecasting-individual-netflows-using-a-predictive-masked-graph-autoencoder" data-sidebar-item="{&quot;title&quot;: &quot;Forecasting Individual NetFlows using a Predictive Masked Graph Autoencoder&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2604.20483v1-forecasting-individual-netflows-using-a-predictive-masked-graph-autoencoder&quot;, &quot;score&quot;: &quot;8.5&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;q7&quot;}], &quot;title_zh&quot;: &quot;基于预测掩码图自编码器的个体NetFlow预测&quot;, &quot;evidence&quot;: &quot;使用图神经网络预测网络流量&quot;, &quot;relevance_score&quot;: &quot;9.0&quot;, &quot;quality_score&quot;: &quot;8.5&quot;, &quot;reliability_score&quot;: &quot;8.0&quot;, &quot;practicality_score&quot;: &quot;7.5&quot;}">Forecasting Individual NetFlows using a Predictive Masked Graph Autoencoder</a>

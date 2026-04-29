@@ -5,7 +5,12 @@ authors: Unknown
 date: Unknown
 pdf: archive/seed-papers/1777113876678/wan-et-al-2025-cato-end-to-end-optimization-of-ml-based-traffic-analysis-pipelines.pdf
 tags: [LLM, Deep Learning]
+evidence: 实验显示CATO可将推理延迟降低至0.1秒以内，零损耗吞吐量提高3.7倍，同时提升模型预测性能。
+tldr: 本文提出了CATO框架，旨在优化基于机器学习的网络流量分析管道的端到端性能，兼顾模型预测能力和系统效率。作者采用多目标贝叶斯优化，自动生成可在真实网络中部署的最优管道。实验结果显示，CATO在延迟降低、吞吐量提升和模型性能上均显著优于现有特征优化方法，展示了在高性能网络环境下可行性，值得精读。
+key_findings: [CATO显著降低了端到端推理延迟，最多可达3600×提升。, 零损耗吞吐量提升3.7倍，同时保持或提高模型预测准确性。, 多目标优化结合特征选择与流量深度策略可有效平衡系统成本与预测性能。]
+limitations: 只在校园网络环境和部分离线数据上验证，实际大规模部署效果尚不明确。
 ---
+
 
 ## 1. 问题与背景
 This paper is included in the 

@@ -3568,7 +3568,7 @@ def main() -> None:
     log_substep("6.4", "生成当日日报并同步首页 README", "END")
 
     sidebar_path = os.path.join(docs_dir, "_sidebar.md")
-    if deep_entries or quick_entries:
+    if deep_entries or quick_entries or site_url:
         log_substep("6.5", "更新侧边栏", "START")
         update_sidebar(
             sidebar_path,
