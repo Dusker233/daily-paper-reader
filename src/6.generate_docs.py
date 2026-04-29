@@ -2349,7 +2349,16 @@ def update_sidebar(
         del lines[day_idx:end]
 
     block: List[str] = [day_heading]
-    if deep_entries:
+    if not deep_entries and not quick_entries:
+        # No-paper day: emit a clickable README entry so the report is reachable from sidebar
+        if len(date_str) == 8 and "-" not in date_str:
+            report_href = "#/" + date_str[:6] + "/" + date_str[6:] + "/README"
+        elif "-" in date_str:
+            report_href = "#/" + date_str[:date_str.find("-")] + "-" + date_str + "/README"
+        else:
+            report_href = "#/" + date_str + "/README"
+        block.append("    * [日报](" + report_href + ")\n")
+    elif deep_entries:
         block.append("    * 精读区\n")
         for entry in deep_entries:
             paper_id = str(entry.get("paper_id") or "").strip()
