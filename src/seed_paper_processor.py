@@ -27,6 +27,7 @@ MAX_NOTES_LENGTH = 400
 MAX_QUERY_KEYWORDS = 24
 MAX_QUERY_TEXT_LENGTH = 800
 REQUEST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+ARXIV_VERSION_RE = re.compile(r"^(\d{4}\.\d{4,6})v\d+$")
 COMMON_QUERY_STOPWORDS = {
     "a",
     "an",
@@ -384,7 +385,13 @@ def _render_seed_page(
 
 
 def _related_key(paper: dict[str, Any]) -> str:
-    return _normalize_text(paper.get("id")) or _normalize_text(paper.get("title"))
+    raw_id = _normalize_text(paper.get("id"))
+    if raw_id:
+        m = ARXIV_VERSION_RE.match(raw_id)
+        if m:
+            return m.group(1)
+        return raw_id
+    return _normalize_text(paper.get("title"))
 
 
 def _iter_unique_related(selection: dict[str, Any]) -> list[dict[str, Any]]:

@@ -14,4 +14,3 @@
 - [Quantifying data reuse in proteomics using PRIDE downloads statistics and a semi\-supervised LLM\-based framework](#/seed-papers/1777113876678/related/biorxiv-10-64898-2026-04-16-718670-v1)
 - [Forecasting Individual NetFlows using a Predictive Masked Graph Autoencoder](#/seed-papers/1777113876678/related/2604.20483v1)
 - [Expanding P\-NET, a multi\-purpose biologically informed deep learning framework](#/seed-papers/1777113876678/related/biorxiv-10-64898-2026-04-19-719454-v1)
-- [Forecasting Individual NetFlows using a Predictive Masked Graph Autoencoder](#/seed-papers/1777113876678/related/2604.20483v2)
