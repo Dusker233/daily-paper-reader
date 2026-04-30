@@ -1,0 +1,331 @@
+Title: NODE: Network Wide Top-K Flows in the Data Plane
+
+URL Source: https://arxiv.org/pdf/2604.23778v1
+
+Published Time: Tue, 28 Apr 2026 01:09:31 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# NODE: Network Wide Top-K Flows in the Data Plane 
+
+Eitan Stein 
+
+The Open University of Israel 
+
+Israel 
+
+Lior Zeno 
+
+Technion 
+
+Israel 
+
+Shir Landau Feibish 
+
+University of Haifa 
+
+Israel 
+
+Abstract —Monitoring network traffic is crucial for most network tasks, such as, identifying and blocking attacks, pinpointing failures and engineering and rerouting heavy traffic to maintain high throughput. One important metric when monitoring the traffic is finding the top-k heavy flows, that is the k heaviest flows in the traffic. Programmable networks allow performing advanced network analysis right in the data plane. In recent years, various solutions have been proposed for efficiently finding the top-k heavy flows within a single switch. However, at times we may need to find the global top-k flows. Existing solutions for global top-k detection use a centralized controller that collects and aggregates the measurements performed in each of the switches. Yet, the process of sending information to the control plane and then having the controller send back the information to the switches can be very lengthy. In order to be able to detect and mitigate short-lived events, solutions that work completely within the data plane are needed. In this paper we present NODE, a network-wide top-k detection algorithm that operates exclusively in the data plane. NODE allows the switches to aggregate information from all other switches in the network, and ensures that eventually all switches hold an identical global top-k table. We show that NODE manages to detect global top-k flows on both synthetic and real traces, with a recall rate of over 95% while using less than 300KB per switch. 
+
+1. I NTRODUCTION 
+
+Networks require real-time monitoring for a wide range of uses such as traffic engineering and identifying failures and threats. [4], [7], [10], [11], [14], [16]. One of the common monitoring tasks is to identify the top-k flows. This can be useful in routing decisions, for example, as improved routing of heavy flows may alleviate congestion and increase network throughput [16], [25] . Identifying the top-k flows can also assist in detecting and mitigating volumetric attacks such as DDoS [22]. Furthermore, with the advancement of programmable networks, many solutions have been de-veloped for performing network monitoring right inside the data plane. Finding top-k flows in a programmable switch is challenging due to the harsh constraints on memory and processing, yet, there are existing solutions for finding top-k flows [6] that can be deployed on a programmable switch. However, these solutions are only suitable for a single switch, whereas some tasks require finding the network-wide top-k flows. In existing solutions, in order to find network-wide top-k flows, each switch processes the traffic that it sees, and then additional processing needs to be performed 
+
+collectively . Some solutions use samples that are either collected in the switch [5] or sent to the collector indi-vidually [2], [28]. Due to the high overhead incurred by collecting these samples, often only a limited amount of packets are sampled (e.g. 1 in 30K [24]), which reduces the accuracy of the measurement. In other solutions, in order to avoid sampling, some processing is performed in the data plane to identify the locally heavy flows [17]– [19], [21]. The processed information is then sent to a centralized controller that aggregates the data, and then passes the information of the network-wide top-k flows back to the switches as needed. This too is not optimal, as interaction with the controller may take a long time and thus is not suitable for time-sensitive measurements, such as short lived bursts. Furthermore, having each switch calculate the top-k flows locally can miss network wide heavy flows that spread across the network and are ‘small’ in some or all individual switches. Looking for such smaller flows locally will incur significant overhead in either switch resources or communication or both. In order to find top-k flows only within the data plane, switches need a mechanism for sharing information. Swish [29] is a shared state management system in the data plane, it can be used to maintain a distributed Count-Min Sketch (CMS) [15]. Each switch maintains a local CMS, and the Swish framework distributes the information from each local CMS to all other switches. Each switch then merges the sketches locally to get a combined network-wide CMS. In this man-ner Swish enables finding network-wide heavy hitter flows completely in the data plane. Furthermore, Swish [29] achieves better speed by an order of magnitude compared to using a centralized controller to obtain the combined sketches. However, this mechanism is not suited for finding top-k flows. CMS only maintains counters, and not flow IDs. Furthermore, flow IDs are required to extract the flow count estimation from the sketch. Thus a different solution is needed for finding network-wide top-k flows. 
+
+The NODE framework. We present NODE (Net-
+
+> arXiv:2604.23778v1 [cs.NI] 26 Apr 2026
+
+work wide tOp-k in the Data planE) a system for finding network-wide top-k flows completely in the data plane. NODE maintains the local top-k flows in each switch and then both distributes and aggregates them in the data plane, without controller assistance. More specifically, in order to find the network-wide top-k flows, NODE performs three main tasks: 1) NODE creates a local top-k table in each switch independently; 2) NODE builds on Swish to share the local top-k tables from each of the switches among all the other switches, in order to find the global counters of local flows. 3) In each switch, NODE merges the information found in all of the local top-k tables, to eventually form a global top-k table in every switch in the network; NODE performs the entire process completely within the data plane and does not require a central controller or collector to aggregate the information. Furthermore, we implement NODE on a simulated testbed and in P4 code for the Intel Tofino Wedge-100 programmable switch [1], and evaluate the effect of various parameters on NODE’s performance, as well as compare it to controller based solutions. In the following, we provide the background § 2, in § 3 we list the challenges of merging network-wide data in the data plane, and §4 describes the NODE frame-work. Finally, we show results of NODE’s evaluation (§ 6) and finish with a conclusion (§ 7). 2. B ACKGROUND AND RELATED WORK 
+
+We provide the background needed for understanding NODE’s design and functionality. We describe the pro-cessing restrictions of the data plane, and give a short overview of the existing solutions for finding top-k flows both in and out of the data plane, as well as methods for information sharing in the data plane. 
+
+A. Data Plane Restrictions 
+
+For network hardware to process packets at line rate (i.e., Tbps speed), they must impose harsh restrictions on both the memory resources and the computation done in packet processing. Programmable switches (such as PISA [13]) have a feed-forward packet processing pipeline comprised of a sequence of a small number of stages. Each stage has its own limited amount of unique memory, to enable stateful computations. Access to this memory (read/write operation) must be done when the packet is being processed by each stage. For example: a packet cannot access the memory of stage i while being processed in a different stage j. Additionally, the amount of memory that can be accessed in any stage while processing the packet is very limited. If additional processing on the packet is required, the packet may be recirculated to the beginning of the pipeline, however performing too many recirculations can affect through-put as it requires the switch to processes the packet again. 
+
+B. Finding Top-K Flows in the Data Plane 
+
+There have been various solutions proposed for find-ing top-k flows and heavy hitters. We describe some of these works as they will help to understand the choices made in designing NODE. 
+
+Space Saving. Space Saving [23] is a well known technique that maintains a subset of the items in the stream and a counter for each member of the subset. When a new packet with ID x is processed, if x is in the subset, its associated counter is incremented by 1. If x is not saved in the subset, the algorithm finds the member with the smallest counter (i.e. M inCount ) in the subset and replaces that member with x and increments its counter by 1. Although Space Saving succeeds in finding heavy flows (if their frequency is high enough compared to the size of the stream), it may over-estimate the frequency. This is especially significant in small flows that may be given a very high frequency estimation. 
+
+RAP. Random Admission Policy [9] expands on the same idea but, upon seeing an ID that is not in the subset, instead of always replacing the entry with the lowest counter, it will only replace it with a certain probability (the exact probability is 1/(M inCount + 1) ). This cancels some of the noise (excess counter increases) by low frequency flows and thus reduces the flow count overestimation. 
+
+HashPipe. Both Space Saving and RAP find top-k flows but they cannot work within the restrictions of the data plane. The main obstacle is obtaining the smallest counter. In order to find this counter, we must sort the items or access all of the counters to find the minimum. This would require many more memory accesses than are available. Furthermore, after finding the minimum counter we would need to access the proper stage where it is stored to change the corresponding ID. HashPipe [26] was the first solution for finding top-k flows in the data plane. To avoid looking for the minimum across all counters, HashPipe uses a table that is divided into 
+
+d separate vectors, each with its own hash table, placed in separate stages, which are used to create a rolling minimum . For each vector, the packet will be hashed into a single location based on the packet ID. If the ID in the vector matches the packet’s ID, the counter in the vector is incremented. Each packet will also maintain an additional ID and counter in packet metadata, which will be used to maintain the minimum. That is, if the IDs in the packet and vector don’t match, the counters are compared. If the counter in the packet is larger than the counter in the vector, the algorithm replaces the values in the vector with the ID and counter carried by the packet and continues processing the packet with the ID of the smaller flow and its counter, so that the minimum values will eventually ’roll’ out of the table. HashPipe’s algorithm suffers from one main issue. Precision [6], [8] shows that HashPipe does not meet the requirements to run on programmable switches. Since it requires both accessing the ID before the counter to decide whether to increment the counter, but also requires to access counters before IDs to compare the counters to decide whether to switch the packet ID and the saved ID. 
+
+Precision. In order to create a top-k algorithm that can run on programmable switches, Precision [6], [8] builds on both RAP and HashPipe by using a similar structure to HashPipe’s table while handling packets similarly to RAP. When each packet reaches the hash table in the j-th vector, it is hashed (just like in Hash-Pipe) to check if its ID matches the ID in the vector. If the IDs match, the associated counter is incremented. If a match is not found in any of the vectors it will recirculate to replace the smallest observed counter with probability 1/(M inCount + 1) . This way there are no excessive recirculations. Note that Precision can run on programmable switches since it always first checks the ID and only then handles the counter. 
+
+Controller based network-wide top-k. Several solu-tions have been proposed for finding network-wide top-k flows [5], [17]–[19]. Some of these solutions include data plane analytics in programmable switch networks which can be used for finding top-k flows, however these solutions depend on either pulling or pushing data to a centralized controller which builds the network-wide top-k list and sends this list to all switches. We wish to find network-wide top-k completely in the data plane in order to create the table faster as seen in the comparison between Swish and a centralized controller [29]. FlowRadar [21] is a known controller based algorithm for finding network-wide heavy hitters. FlowRadar maintains a Bloom filter [12] and an array of encoded flows. When a new packet arrives it checks the bloom filter to see if it is a new flow or not. If the flow is new, it encodes the flow ID into several array locations via hashing. The encoding result is a XOR of the existing value in the array with the packet’s flow ID. Then it increments the counters saved in those slots. If the flow is not new, it only increments the counters in the hashed cells. FlowRadar sends this array frequently to the controller which decodes the flows and sends back network-wide information. Due to FlowRadar’s implementation and frequent controller updates, it is likely to find all flows, and especially heavy flows as long as it has enough memory. 
+
+C. Information Sharing in the Data Plane. 
+
+There are solutions that require sharing data between switches in the network. Most solutions either share only limited amount of data [20], or use the control plane for assistance. That is, they communicate information from switches to the controller which processes it and sends relevant information to other switches [17]–[19], [21], [27]. Sharing large amounts of data between switches 
+
+completely in the data plane is more challenging as it requires both communicating the information in the face of errors and processing the information with the limited resources of the data plane. 
+
+Using Swish to exchange data between switches in the data plane. Swish [29] is a mechanism that allows managing shared state across different switches completely in the data plane. It allows replicating and sending data between switches without having to rely on a central controller. Swish guarantees that all packets will be delivered successfully without duplicates. Swish can also handle failures, and in order to do so, it must send the data from a static source, so it can re-send the information if necessary. 
+
+D. Additional Related Work. 
+
+We mention a few works on network-wide top-k or network-wide heavy hitters, all depending on controller interaction. Some solutions send only partial information to the controller, either by sampling or by decisions made via metrics such as thresholds. Carpe [19] com-bines probabilistic counting on the switches with proba-bilistic reporting to the central coordinator, guaranteeing that communication costs do not grow proportionally with the number of switches. An earlier work by Harrison et al. [18], reduces communication overhead with the controller, by using local and global per key thresholds to limit reporting. The MV-Sketch [27] is a data structure which saves heavy flows candidates and merges the sketches from all switches in the central controller. AROMA [5] suggests a method to effectively sample packets and flows using programmable switches using controller analysis while taking into account that packets may potentially go through multiple switches. 3. C HALLENGES 
+
+In order to create a global top-k detection algorithm in the data plane, each switch in the network needs to first identify the locally heavy flows, and then merge this information with the heavy flows identified by each of the other switches in the network. However there are some significant challenges in achieving this in the data plane, which we will now describe. 
+
+Memory restrictions. A straightforward solution for merging the network-wide information, would be to have each switch broadcast its local top-k table to all other switches. Each switch would then store all of the tables and then process them all together. However, since we are using programmable switches, our memory and computational abilities are very limited, such that each switch cannot simultaneously hold all of the received data from all the other switches and process all of the data at once. Instead, each switch needs to process the information from other switches, as it is received, in a streaming fashion. Split heavy flows. To overcome this issue, let’s consider another simple approach, where switches filter smaller flows from top-k tables. Each switch computes a local top-k table, and then sends the table to other switches. When a switch receives a packet (that comes from a local table of another switch) holding a flow ID and counter, it will compare the packet’s flow ID to IDs stored in its own table. If they match, it will add the packet’s counter to the counter stored with that ID. If the packet’s ID is not found in the table and the packet’s counter is larger than the smallest counter in the table (or the smallest counter that can be found within the memory access restrictions), the stored ID and count of the smallest item in the table would be replaced with the packet’s ID and counter, such that the switch will store the heavier flow of the two. Yet, this solution is inherently flawed. A heavy flow could be split across the network into small pieces, which may be missed with this solution. When attempt-ing to merge the global information, if the flow isn’t saved in the local switch table, each small piece of the flow could be considered as a small flow and be discarded in favor of flows that appear to be heavier. For example, if we had 10 switches each holding 5
+
+flows, the first switch holds flows with counters ranging from 200 to 300 , and does not hold some flow x,while every switch except the first holds flow x in its table with counter 100 . When the first switch receives information about flow x from the other switches, each packet will hold a counter of only 100 , which is smaller than counters already saved in the first switch, so it will disregard it even though the global counter of flow x is 
+
+900 which is much heavier than the flows held in the first switch table, so, we may miss heavy flows completely. 
+
+Memory access dependencies. Another issue with the above solution is that, similarly to HashPipe [26], it requires both checking the ID first to find out if the ID is in the table, and checking the counter first to check if its larger. That is, on the one hand we wish to first compare IDs in order to see if the IDs match and then aggregate their counts, which requires accessing the IDs earlier in the pipeline, before handling the counters. But on the other hand, we might want to remove flows with a low count from the table (a packet with counter 1000 should be able to replace a saved flow with counter 100), but that requires to first compare counts and only then handle the IDs. However, if the IDs come before the counters in the pipeline, once we reach the counters the IDs can’t be accessed without re-circulation. Yet, we note that if we wish to use re-circulation, changes might happen to the switch table (by other updates from other switches) while a packet recirculates. For example if a switch holds a small flow x with counter 100 , and a packet from another switch holds a flow y with count 500 . The packet with flow y notes 
+
+x as the smallest flow in the switch and decides to recirculate to replace it. While it recirculates, another packet arrives from another switch with flow x and count 1000 , this packet finds a matching flow ID and increments the counter in the table to 1100 . When the packet with flow y finishes recirculating and replaces x,it now replaces a flow with a larger counter ( x with 1100 
+
+compared to y with 500 ), but it cannot know that without checking the counter, which will be done after already replacing the stored ID in the table and setting it to y.Note that Precision [6] does use recirculation for similar purposes, however it does not suffer from this drawback since each increment done is by at most 1, which means the smallest counter cannot change drastically while a packet recirculates and is likely to remain one of the smallest if not the smallest counter in the table. 4. T HE NODE F RAMEWORK 
+
+In order to find network-wide top-k flows in the data plane while addressing these challenges, we designed NODE. NODE shares the needed information between switches to create an identical global top-k table in every switch, and performs all data sharing and processing ex-clusively in the data plane. In this section we present an overview of NODE, followed by a detailed description of the data structures and algorithm. 
+
+A. Overview 
+
+In order to solve the above challenges, NODE takes a deterministic approach and split the process into three main parts: 
+
+1) Creating a local top-k table. Each switch pro-cesses the incoming packets to create a local top-k table. 
+
+2) Global counter aggregation. Each switch sends the contents of its local top-k table to all other switches. Each switch then aggregates the counters only for flow IDs that are already found in the local top-k table to find their global counters. In this way, the switch finds the global counts of the top-k flows in its own table. 3) Consolidation of all tables. Then, each switch sends the contents of its local top-k table, with the aggregated counts to all other switches. Each switch filters the flows with smaller counters, such that only the flows with the higher counters remain in the table. Once this process is completed, each switch holds a global top-k table. Information sharing between switches is done com-pletely in the data plane, using the Swish frame-work [29]. That is, the entire process does not require any controller interaction and is performed completely within the data plane. Note that Swish guarantees that all information is sent exactly once in a single Swish pass (assuming no failures). We address the challenges described above as follows: 
+
+Memory constraints. NODE doesn’t require saving all the information from every switch. Instead, NODE processes each packet that arrives from each switch in a streaming fashion (i.e., in a single pass). 
+
+Handling split flows. By performing global counter aggregation and then consolidating the tables, NODE uses the global information to calculate the global counter of each flow in order to identify the top-k flows. That is, when NODE performs the consolidation round between the switches (step 3 above), each packet will hold a flow ID and its global counter. Therefore, when NODE consolidates the tables it considers the entire flow count and therefore it doesn’t need to worry about making decisions with only partial information. 
+
+Order of accessing IDs and counters. As we will describe shortly, NODE uses different table formats for each stage of information sharing (steps 2 and 3). For global counter aggregation, the ID is placed before the counts in the pipeline, and for table consolidation, the counts are placed before the IDs. By doing so, when calculating global counters for local flows, NODE first accesses the ID to search for matching flows and then accesses the counter to increment it if the IDs match. Afterwards, when receiving packets with global counters, NODE uses a separate table where the counters are stored before the IDs, so it first compares counters and only then modifies the ID in the table if the stored counter is smaller than the packet’s counter. NODE does not use recirculation at all for packets received from other switches and therefore, does not need to address issues that arise from using re-circulation. 
+
+B. Components of NODE 
+
+As shown in Fig. 1 NODE makes use of five tables, that are maintained in each switch. All of the tables use the same hash functions - that way a packet with ID x
+
+will get hashed to the same table location in every table. We will now go over each of NODE’s tables: 
+
+L - Top K: Local top-k table. NODE makes use of a local top-k detection algorithm. As packets enter the switch, they are processed by that algorithm to create a local top-k table. 
+
+Snapshot: Snapshot of local top-k table. Once a local top-k table has been created, NODE sends the contents of this table to all of the other switches in the network. Yet, in order to allow failure handling when sending table information to other switches, NODE must maintain a static source of the local top-k table that is used in the global top-k detection process. 
+
+Sum: Local top-k table with global counters. In each switch this table maintains the global count of the flows found in its local top-k table. That is, this table aggregates the network-wide counts of the flows that were locally heavy and are found in the local top-k table. 
+
+G - Top K: Global top-k. This table maintains the global top-k flows across all flows in the network. That is, using the information about top-k flows received from Sum tables across the entire network, NODE will determine which flows are globally heavy (whether they were found in the local top-k table or not) and maintains them in this table. 
+
+Query: global top-k snapshot. Once the global top-k flows have been identified, NODE needs to maintain this information so that information about the global top-k flows may be used during regular packet processing. This is a static table, that is maintained until a new global top-k table is computed. Note that NODE takes as parameters: 1) The number of vectors (sub-tables) d, i.e. the number of vectors of 
+
+(ID, count ) pairs in each NODE table. Each vector has a hash table, thus d indicates the number of hash-tables used for each one of NODE’s tables. Note that d is identical in every NODE table, and the hash functions used for each vector are identical in all of NODE’s tables. That is at any vector i all NODE tables share the same hash function. 2) The size s of each vector, i.e. the number of (ID, count ) pairs saved in each vector. Note that s is identical in all vectors and in all tables. 
+
+C. Detecting Global Top-K 
+
+We will now describe how NODE uses the above tables to find the global top-k flows. To better understand the process, we will follow each table in Fig. 1 and how it interacts with the flows passing through it. Note that Fig. 1 has a single vector per table for simplicity, in a normal setting each table will have multiple vectors, each holding pairs of IDs and counters. 
+
+1) Creating a local top-k table: NODE first finds the local top-k flows. The Local top-k table maintains the local top-k flows of packets that traverse the switch. That is, every packet that traverses the switch is processed by the local top-k algorithm (e.g. Precision as it can run on programmable switches and creates the same table format that NODE uses), and the flow ID is inserted into this table accordingly. This table continuously maintains the top-k flows. In Fig. 1, switch 1 has flows f1,f2,f5
+
+in its local top-k table, while switch 2 has f1,f3,f4 in its local top-k table. 
+
+2) Global counter aggregation: In each switch, NODE sends the local top-k information to all other switches. We call this the Aggregation round. NODE first copies the contents of the local top-k table into another table called the Snapshot table. This table will remain static throughout the process of finding the global top-k flows. There are two main reasons for maintaining this static table. First, NODE cannot send the entire table at once to all of the switches. The table is sent in parts and therefore needs to remain static to avoid inconsistencies in the data sent to other switches. Second, packets can get lost on the way to the other switches. Therefore, NODE requires a static copy to support potential information sharing failures. Since the Fig. 1: An example of NODE flow. The Sum table uses the same IDs as the Snapshot table. local top-k table is continuously updated with every new packet that enters the switch, it cannot support these operations, and thus a second table is used to maintain information sent to other switches. We can see in Fig. 1 that the Snapshot table in each switch is an exact copy of the local table right before the Aggregation round. In order to sum up the global counters of local flows, NODE (once again) cannot use the local top-k table that is being modified as new items come in, and it cannot change the snapshot since it may need to resend the information in case of failure. Therefore a third table called Sum is used. In Figure 1, Sum table is separated from the Snapshot table for clarity, but to save space, it shares the same exact IDs of the Snapshot table (without changing them) while having its own count values for each flow ID x, which will eventually become the global count of x.In order to aggregate the global counts of the lo-cal top-k flows, Sum is initialized to be a copy of 
+
+Snapshot . When an ID and count from another switch are received, it will check whether the received packet’s ID matches an ID that is currently saved in the Snapshot 
+
+table. If the ID is in the table, it will add the received counter to the counter currently held in the Sum table. For example, Switch 1 has flow f1 with a count of 2000 
+
+in the Snapshot. Thus in the Aggregation round it will send this information to Switch 2. Since Switch 2 also has f1 in the Snapshot table, it will add the count that is received (i.e. 2000) to its own count such that the Sum 
+
+table now has a count of 2300 for f1. If the ID is not in the table then it does nothing. For example, flow f4
+
+is only found in Switch 2. When the information about 
+
+f4 reaches Switch 1 in the first round, it is disregarded. Once all packets from the Aggregation round have been received, Sum becomes a static table. This means we can use the table itself to send data to other switches without having to create a copy of it. However, this also means we cannot make changes to this table, as information of Sum tables is received from other switches. We note that at this point Sum holds the global counter for each local flow as we can see in Fig. 1. 
+
+3) Consolidation of all tables.: Once all counters of each of the flows have been aggregated, NODE is ready to consolidate the tables and determine which flows are the global heavy flows. In each switch, NODE sends the data from the Sum table to all other switches. We call this the Consolidation round. NODE uses a fourth table for this process: 
+
+G − T opK . As can be seen in Fig. 1, this table is structured differently from other tables as the counters are placed before the IDs. This allows NODE to first compare the counters and only then handle the IDs. 
+
+G − T opK starts as an empty table, it does not copy the local Sum table values, but instead treats them as input packets as if they came from another switch. When processing a packet containing information from a Sum 
+
+table, it will use the flow ID to find the location it is hashed to (like it would do in other tables), then it compares the packet’s counter with the saved counter in the table. If the packet’s counter is larger than the counter in the table, the packet will replace the flow ID and count values with its own. Since the counter is located before the ID in the pipeline, the packet will first replace the counter and then replace the ID. The packet will maintain the ID and counter that were removed from the table, and will use those in the next vector in the table (using the new ID for the hash function and comparing counters using the new counter). Looking at Fig. 1 and for the sake of the example assume that for each switch, G − T opK starts as a copy of Sum (meaning the values from its own Sum table were processed first and populated G − T opK and only then it started processing packets from other switches), we can see that in switch 1 in the second slot (which f4
+
+and f2 are hashed into), because the counter of flow f4
+
+is larger, it replaces the values of the ID and the counter, so switch 1 holds ( f4, 600 ) in its ID and counter values. Note that if the number of vectors d > 1 (unlike Fig. 1 in which d = 1 ), the packet will continue to the next vector of the table with the values ( f2, 500 ) (this also means it uses f2 for the hash table in the next vector). Similarly in switch 2, flow f5 replaces the stored f3 in the third slot they are both hashed to, and the packet continues processing in switch 2 with ( f3, 100 ). If the packet’s counter is smaller than the viewed counter, it will not change the counter nor the ID, which we can see in Fig. 1 where in switch 1, f3 does not change f5
+
+and in switch 2, f2 does not change f6.In order to get identical global top-k in every switch in the network, NODE does an additional comparison of the IDs if the counters are identical (we explain this requirement in section 5). If the counters are identical 
+
+NODE will compare the packet’s ID with the saved ID. If the packet’s ID is larger, it will switch the IDs. If the IDs are identical, the packet will stop processing to avoid replacing other counters in the table in different vectors and creating multiple copies of the same heavy flow. As we can see in Fig. 1 both switches hold f1 in their respective Sum tables, so we will receive a copy of f1 (with the same global counter) from each of these switches. At the end of the Consolidation round each switch holds the global top-k heavy flows in G − T opK ,in section 5 we prove that at the end of the Consolidation round all switches hold an identical global top-k flows table. We note that even though we filter low frequency IDs in G − T opK , we filter them according to the locations they are hashed to. In Fig. 1, even though f2 has a larger counter compared to f5, they are hashed to different locations and are compared to different flows, which results in f5 remaining in the table in the example while 
+
+f2 is filtered. However heavy flows are less likely to be filtered with large enough tables with additional vectors. Lastly, NODE needs to maintain a table of the Global top-k that may be queried as needed. Thus, we need a fifth table - Query , which is a snapshot of the 
+
+G − T opK table at the end of a complete NODE cycle. Once NODE finishes one iteration of creating a global top-k table, it starts another iteration to keep the tables up to date. Recall that the information sharing process is based on Swish, and it can identify when an information sharing round ended, at which time it starts the next round. NODE uses the same process and similarly uses it to decide when to switch from the Aggregation round to the Consolidation round, as well as after finishing the Consolidation round and starting the next iteration of NODE (Aggregation round of the next iteration). 5. I DENTICAL GLOBAL TOP -K T ABLES 
+
+In this section we prove why NODE guarantees that every switch eventually holds an identical G − T opK 
+
+table. We note that while network-wide identical 
+
+G − T opK tables are not required for finding the global top-k flows, it is a useful guarantee since NODE com-petes with algorithms that use a controller, which will get identical results in all switches, and by guaranteeing uniform results network wide, NODE does not fall short of a controller based solution in that aspect. We assume the local top-k algorithm creates a L − T opK table without duplicate flow IDs (like Precision [6]). In this section, the only packets we will refer to are NODE packets, each containing an (ID,count) pair. Each table is comprised of d vectors (found in different stages). Each vector contains s pairs of IDs and counters, and a corresponding hash table. For example, ( GT opK i,j .ID ,
+
+GT opK i,j .count ) are the values saved in G − T opK in vector i in index j, and hash i is the hash table for the i-th vector. Note that hash i(GT opK i,j .ID ) = j (GT opK i,j .ID is hashed to index j in the i-th vector). In order to prove this we will first show that after finishing the Aggregation round, each Sum table holds the global counters of the flows in its local L − T opK 
+
+table. This means that in the Consolidation round, for any two packets that are sent between any two switches, if the packets have the same ID , they also have an identical count . We will then show that after the end of the Consolidation round, for any ( GT opK i,j .ID ,
+
+GT opK i,j .count ) pair, that pair could not have been stored in an earlier vector k < i of G − T opK . This means that there cannot be any duplicate values in 
+
+G − T opK (two pairs of the same ID, count ) Finally, we show that every switch eventually holds an identical 
+
+G − T opK table. 
+
+Lemma 5.1. Under the assumption that each packet will be sent and delivered successfully exactly once. After finishing the Aggregation round, every switch that holds a specific ID in its Sum table, will hold the same counter for that ID. Proof. Every switch will receive each and every pair of (LT opK i,j .ID , LT opK i,j .count ) saved in the network exactly once, since each NODE packet will be sent and delivered successfully exactly once. This means that for a given ID , every switch that holds it in Sum will aggregate all of the counters for ID network wide. Since each of these switches sums up the same coun-ters and uses every counter exactly once the resulting Sum i,j .count for Sum i,j .ID will be equal for every switch that holds that same ID. From lemma 5.1 we learn that in the Consolidation round if a switch receives multiple packets with the same ID, they will all have the exact same global counter. This also means that when comparing counters, and since we compare IDs if we find matching counters (as described in section 4), we will get an equality if and only if the IDs match. Because of that, and for simplicity, in the following proofs we only refer to comparisons between counters, and assume that equal counters means they also have identical IDs (we consider both ID and counter as one large ’counter’ for the comparisons). We will now use the following lemma to prove that af-ter the Consolidation round ends, each ( GT opK i,j .ID ,
+
+GT opK i,j .count ) cannot be placed in an earlier vector 
+
+k < i .
+
+Lemma 5.2. For any (GT opK i,j .ID ,
+
+GT opK i,j .count ), and for any index j′ that 
+
+GT opK i,j .ID would have hashed into in the n-th vector, GT opK i,j .count would be smaller than 
+
+GT opK n,j ′
+
+.count .
+
+∀1 ≤ i ≤ d, 1 ≤ j ≤ s, ∀1 ≤ n < i j′ = hash n(GT opK i,j .ID )
+
+GT opK i,j .count < GT opK n,j ′
+
+.count 
+
+Proof. The intuition for the proof is when a packet saves a pair of (ID, counter) in the table in some vector i, the packet either entered the pipeline with those values and every value it compared to was larger than the packet’s counter until vector i, or the packet got those values from switching its starting values with the values of an earlier vector j, and then its counter was still smaller than counters between vectors j and i. As for values before the vector j, we reach the same conclusion of how the values reached vector j in the first place, which had to have been through a packet that either started with those values or switched them in an even earlier stage, and we go on until we reach the first vector whose values could only come from packets that entered the pipeline with those values. We will prove using induction. We will start by proving our claim for the pair (GT opK 2,j .ID ,
+
+GT opK 2,j .count ) in the second vector for some arbi-trary 1 ≤ j ≤ s. For convenience we will refer to the pair as ( fID , fcount ). In order to be saved in the second vector and since G − T opK starts empty, ( fID , fcount )had to have been on a packet processed in G − T opK ,and when comparing fcount with the saved counter, 
+
+fcount was larger and replaced the value there. Before that there are two options for how ( fID , fcount ) became the packet values: 1) The packet’s original data (when it was inserted to G − T opK ) was ( fID , fcount ). Since the packet’s data did not change till the 2nd vector, it means that in the 1st vector, in the index j′ = hash 1(fID )
+
+the packet was hashed to, GT opK 1,j ′
+
+.count > f ID .2) the packet’s original values were a different pair (P acket.ID , P acket.count ) while ( fID , fcount ) was saved in the 1st vector, and because P acket.count > fcount the values were switched out and when moving on to the second vector the packets values were ( fID ,
+
+fcount ). In both cases GT opK 2,j .count = fcount <GT opK 1,j ′
+
+.count , meaning GT opK 2,j .count ends up smaller than the counter in the 1st vector in the index 
+
+GT opK 2,j .ID is hashed to, note that even if the counter in the first vector is replaced later on it can only happen if a larger counter takes its place, which still makes it larger than GT opK 2,j .count . We assume correctness for the k-th vector: 
+
+∀1 ≤ i ≤ k, 1 ≤ j ≤ s, ∀1 ≤ n < i j′ = hash n(GT opK i,j .ID )
+
+GT opK i,j .count < GT opK n,j ′
+
+.count 
+
+We now look at the pair (GT opK k+1 ,j .ID ,
+
+GT opK k+1 ,j .count ) for some arbitrary 1 ≤ j ≤ s.For convenience we will refer to the pair as ( fID ,
+
+fcount ). In order to be saved in the (k+1)-Th vector, (fID , fcount ) had to have been on a packet processed in G − T opK , and when comparing fcount with the saved counter, fcount was larger and replaced the value there. Before that there are 2 options for how ( fID ,
+
+fcount ) became the packet values: 1) The packet’s original data (when it was inserted to G − T opK )was (fID , fcount ). Since the packet’s data did not change till vector k + 1 , it means that in every vector 
+
+1 ≤ n ≤ k, in every index j′ = hash n(fID ) fID was hashed to, fcount < GT opK n,j ′
+
+.count . 2) The packet’s original values were a different pair (P acket.ID ,
+
+P acket.count ) while (fID , fcount ) was saved in apreceding vector 1 <= i < = k in the table. When the packet reached vector i it has some ( P acket.ID ′,
+
+P acket.count ′) pair (it can be a different pair than the one it started with), where P acket.count ′ > f count and the values were switched. The packet then continued from vector i + 1 with the values (fID , fcount ). Then in every vector i + 1 ≤ n ≤ k, in every index 
+
+j′ = hash n(fID ), if fcount was larger than the saved counter GT opK n,j ′
+
+.count , the packet would have switched data again and ( fID , fcount ) wouldn’t have reached vector k + 1 , similarly if the saved counter (which also includes ID for this comparison) was equal, the packet would have turned inactive and it would not reach vector k + 1 . This means that in every vector from 
+
+i + 1 to k, in every index fID was hashed to, the saved counter was larger than fcount . But from induction we also know the same holds for every vector from 1 to isince i < = k. while ( fID , fcount ) was on its way to vector k + 1 , counters in previous vectors could change in the meantime as well as after it reached vector 
+
+k + 1 , but they can only be replaced by larger counters, meaning fcount would still be smaller than any counter saved in any index j′ that fID is hashed to in vectors 
+
+1 to k.An immediate result from Lemma 5.2, is that 
+
+G − T opK has no duplicate pairs. The same 
+
+(ID, count ) pair cannot appear twice in the same vector k since they are both hashed to the same index in k. and they cannot appear in different vectors 
+
+k1̸ = k2 since it contradicts Lemma 5.2. 
+
+Theorem 5.3. At the end of NODE’s two rounds of information sharing, the resulting G − T opK table will be identical in all switches. Proof. The intuition for the proof is as follows: We assume the resulting tables are not identical and look at the first different vector i between the two switches. Since the vectors are different, one would have a larger counter in some index. But both switches received the same packets, meaning the switch with the lower counter received a packet with the larger counter, which had to have been placed in an earlier vector j (or it would have replaced the smaller counter in vector i when the packet passed over it). But in vector j both tables are identical, which means the larger counter is saved in vector j in both switches. This means the switch that has the larger counter in vector i, has a duplicate counter in different vectors (since the larger counter is saved in both vectors 
+
+i and j). This contradicts the result of Lemma 5.2. We will prove by Induction. We start by proving that the 1st vector (of both IDs and counts) is the same in all switches. If two switches (we will call the first switch S1
+
+and the other S2) have a different 1st vector - it means one of them (without loss of generality we choose S1)has a larger counter in some index 1 ≤ j ≤ s in that vec-tor GT opK 1,j S1 .count > GT opK 1,j S2 .count . However, if 
+
+GT opK 1,j S1 .count was saved in S1 it means a packet with that count value also reached S2 at some point and that counter had to hash into the same index j in the 1st vector on S2 since they use identical hash tables. If GT opK 1,j S1 .count is larger - it should have replaced the counter saved there (either while GT opK 1,j S2 .count 
+
+was saved there or while a different smaller counter was saved there). Since it did not replace the saved counter, it means that GT opK 1,j S1 .count ≤ GT opK 1,j S2 .count ,which contradicts the assumption GT opK 1,j S1 .count > GT opK 1,j S2 .count . This proves the 1st vector is identical in every switch in the network. We assume that the first k − 1 vectors of G − T opK 
+
+in every switch in the network are identical and will prove it for vector k. We assume the k-th vector is different between two switches ( S1 and S2) - it means one of them (without loss of generality we choose 
+
+S1) has a larger counter in some index 1 ≤ j ≤ s
+
+in that vector GT opK k,j S1 .count > GT opK k,j S2 .count .However, if GT opK k,j S1 .count was saved in S1 it means a packet with that count value also reached S2 at some point. GT opK k,j S1 .count couldn’t have been placed in an earlier vector 1 ≤ k′ < k in S2, Since all the previous vectors in S1 and S2 are identical by induction, so GT opK k,j S1 .count would also need to be saved in the same vector k′ in S1, contradicting the result from Lemma 5.2 that G − T opK has no duplicate pairs. This means that GT opK k,j S1 .count reaches the k-th vector in 
+
+S2 and it is hashed into the same index j as S1 since the hash tables are identical. If GT opK k,j S1 .count is larger than the counter saved there in switch 2 - it should have replaced it. if its smaller or equal than the counter there - it contradicts the assumption that GT opK k,j S1 .count 
+
+is the larger value between the two switches in index 
+
+j.6. E VALUATION 
+
+We evaluate NODE for various performance metrics, and compare NODE to controller based approaches. We show that NODE achieves a recall rate of over 95% of the top-k flows with at most 288KB of memory for NODE’s tables. Furthermore, we implemented NODE in P4 code for the Intel Tofino Wedge-100 programmable switch [1], using ≈ 2000 lines of code, and show the resource usage of switch resources. 
+
+System Setup. We simulated a network of up to 100 switches, using python and c++ to simulate NODE’s operation. The local top-k algorithm used by NODE in all of our evaluations is Precision [6], which we have implemented and incorporated into NODE. All of NODE’s tables were comprised of two vectors ( d = 2 )with a varying vector size s. The size of these vectors was identical network-wide. The associated hash tables were also identical between different tables in NODE’s run (L-top-k table, G-top-k table, etc.). We chose to use 
+
+d = 2 vectors for each of NODE’s tables due to results in [6] showing that Precision does well with only 2 vectors, in addition to memory concerns. We also chose to set K = 128 in all tests, and vary other parameters. In each evaluation, we ran each simulation at least 5 times and present here the average results. 
+
+Datasets. We used two types of traces: 1) Synthe-sized traces with different Zipfian distributions, each containing 100M packets and 10M unique flows. The distributions used to generate the traces were a=0.6, 0.8 and 1.0. 2) A trace of real traffic, namely the CAIDA UCSD Anonymized Internet Traces - 2018, 2019 [3]. In order to simulate large networks we merged consecutive CAIDA traces to create larger traces. Splitting the Stream. In order to challenge NODE we split the stream between the switches in the following fashion: the top 128 flows were split uniformly across all switches, meaning whenever a packet that belongs to the top-k flows arrives it can go to any switch with an equal chance. The rest of the flows have dedicated switches, meaning all their packets reach the same switch. Such a split is harder for NODE since it would increase the chances of missing the larger flows in some of the local top-k tables, making it harder for NODE to identify them as heavy flows. We note that we have tested additional flow affinities (e.g., 50% or 80% flow affinity to a certain switch), and found that NODE behaves better with higher affinity as the local top-k tables are able to provide a more accurate estimate of the flow counts and the aggregation process is less significant. 
+
+A. NODE Performance 
+
+Our key observation is that larger network sizes generally have worse results than smaller network sizes, however, given a large enough table size (larger s)NODE performs well. That said, in some cases the larger network actually performs better, we suspect that this is due to the fact that the overall saved information across the entire network is larger, enabling NODE to monitor more flows and thus get better results. Fig. 2 shows results on various traces. Note that in results on a single switch, NODE behaves like Preci-sion [6], since there is no network-wide information to merge. In comparison, even with a lot more switches, despite harsher flow splits, NODE performs well. We suspect that is due to how NODE operates - more switches create a larger effective memory. Additionally, as we observe results with increasing Zipfian distribu-tions we can see NODE doesn’t need a large table to reach a high recall with Zipfian distribution of 1.0. 
+
+B. Comparing Memory Usage 
+
+We compared NODE with a basic approach, where each switch maintains a local top-k table, and peri-odically sends this information to the controller. The controller gathers all the information from all of the switches and then computes a network-wide top-k table, which it then sends back to each switch. The controller implementation is not limited in memory or computation and may thus maintain all of the collected information from all of the switches and process it in a non-streaming manner. The comparison of how well they identify global top-k is shown in Fig. 3. As shown, NODE achieves a recall that is very close to that achieved by the controller despite the fact that it functions within the confined resources and processing capabilities of the data plane. We also compare NODE to the controller based solution of FlowRadar [21]. Instead of attempting to emulate FlowRadar and potentially making a weaker version of it, we compare NODE to the results shown in the paper [21]. FlowRadar shows that even with perfect hash tables with no collisions it requires more than 2MB in each switch to support 100k unique flows, and over 20MB in each switch to support 1M unique flows. In our evaluation, the largest table in NODE uses 8192 cells (two vectors of 4096), with 8-bytes for each cell (4 bytes for ID, 4 for count), totaling 64KB. So 4 tables use 64KB each, and Sum uses 32KB (since IDs are shared with Snapshot), for a total of 288KB per switch. In the synthetic streams we used 10M different flows and in the merged Caida dataset there are almost 6M different flow IDs. In both, NODE was able to achieve good results with only 288KB memory in each switch, which is significantly less than that required by FlowRadar. 
+
+C. Clustering to reduce communication 
+
+We now look at the communication overhead of NODE and discuss ways in which this overhead can be reduced. Recall that in each round of NODE , each switch in the network sends an entire table to every other switch in the network and does so twice. Meaning that as the size of the network grows, the number of messages grows significantly. As we can see in Fig. 2e, the number of messages increases by O(n2) relative to the network size, anetwork 10 times larger will have roughly 100 times more messages. Specifically in our synthesized test of 100mil packets - in order to get a recall of almost 1 we ended up with more than double the amount of packets, with more than half of the packets being NODE packets and the rest are regular trace packets. Not only does this consume a lot of switch processing time to process all the added packets sent to it by other switches, but this may create substantial communication overhead just from sending the messages depending on the routing between switches. To address the issue of communication overhead, we designed a simple clustering approach that splits the net-work into equally (as much as possible) sized clusters. Each cluster runs its own independent NODE algorithm, after which a representative of each cluster will perform an additional round of NODE with the representatives of the other clusters. Each representative’s G − T opK 
+
+table acts as the local top-k table for the cluster for the network-wide NODE . Once the global NODE finishes, each representative will send the resulting global top-k table to every switch in its cluster. This means we can reduce the overhead from sending many messages over complex routes, as well as reduce the total number of messages in the network. However, we can expect some drop in performance as well as potentially longer runtime of NODE, since it now has to be run twice (albeit with less messages). In Fig. 2 we can see the results of NODE with and without clustering. As one (a) Synth Zipf 0.6 (b) Synth Zipf 0.8  
+
+> (c) Synth Zipf 1.0 (d) CAIDA
+> (e) Message Counts
+
+Fig. 2: NODE’s recall with different datasets. might expect, it has lower performance compared to NODE without clustering, but given a table large enough it competes well and decreases the number of messages in the network by an order of magnitude compared to the same amount of switches without clusters. We also compared performances with different amounts of clusters (which also affects cluster size) as shown in Fig. 4. As we can see in Fig 4e, adding clusters (a) 100 switches (b) 10 switches 
+
+Fig. 3: Comparing NODE to using a local top-k algorithm with a controller. has a large effect on the number of messages circulating in the network between switches for NODE . It is important to note that the number of messages required for NODE does not depend on the amount of traffic that is being processed. The number of messages is a constant (without considering failures) based on the number of switches, clusters and NODE’s table size. So while we did double the number of our packets in the synthesized stream. If our trace was 10 times larger - we would have still have used the same number of NODE messages between the different switches. 
+
+D. NODE’s Resource Usage 
+
+We implemented NODE in P4 code for the Intel Tofino Wedge-100 programmable switch [1]. Our P4 prototype uses d = 2 vectors in each table with 8192 cells each ( s = 4096 cells in each vector) to match the simulation’s variables. The main resource usage of NODE is as follows: The implementation used all 12 stages available in the switch, that is due to the multiple tables used. The tables also need to be placed in a specific order to enable the functionality of NODE (i.e Snapshot table in later stages then Local Top-k table). Similarly, ALUs are heavily used and Meter ALU usage averages at 64.6%. SRAM usage averaged at 12.1%, it increases to 28.1% if we were to use 8 times more cells in each vector ( s = 32768 ). Hash Distance Unit averaged at 33.3%. Note that the same hash functions are used across all of the tables, therefore limiting the amount of hash units needed. Overall, as can be seen Meter ALUs are the most heavily used, yet for other switch resources no more than 34% is used. It is important to note that this resource usage includes all of the NODE functionality, including any relevant components of Precision or Swish. 7. C ONCLUSION 
+
+In conclusion, we present NODE, an algorithm for efficiently finding the network-wide top-k flows com-pletely in the data plane. We proved the correctness of the system analytically and showed its performance through simulation experiments. We also present a clus-tering option to reduce NODE’s traffic overhead. In the future we plan to study how clustering can further im-prove performance and perform evaluation on additional distributed hardware to show the performance improve-ment achieved by NODE compared to the centralized approach. We also note that NODE can be generalized for any task that faces similar restrictions: 1) uses programmable switches and must adhere to their restrictions which are: feed forward pipeline, limited memory and memory access per pipeline stage and cannot use memory ac-cesses that depend on one another in the same pipeline stage. 2) has two values (ID and counter values are likely, like our own scenario) that require updating (incrementing/decrementing or rewriting/evicting), but different update types require a different dependency order of those values (increment requires ID and then counter while rewriting requires counter and then ID) which cannot be done in the same pipeline pass, but using recirculation cannot help as large changes can occur during packet recirculation. ACKNOWLEDGMENTS 
+
+Supported by the Israel Science Foundation no. 980/21. REFERENCES [1] Intel Tofino. https://www.intel.com/content/www/us/en/products/ network-io/programmable-ethernet-switch.html/. [2] Netflow. https://www.ietf.org/rfc/rfc3954.txt. (a) Synth Zipf 0.6 (b) Synth Zipf 0.8 
+
+(c) Synth Zipf 1.0 (d) CAIDA 
+
+(e) Message Counts 
+
+Fig. 4: NODE’s recall with different datasets when using clustering. 
+
+[3] The caida anonymized internet traces dataset. https://www. caida.org/catalog/datasets/passive dataset, 2018, 2019. [Online; accessed June 2023]. [4] Sugam Agarwal, Murali Kodialam, and TV Lakshman. Traffic engineering in software defined networks. In IEEE INFOCOM ,pages 2211–2219, 2013. [5] Ran Ben Basat, Xiaoqi Chen, Gil Einziger, Shir Landau Feibish, Danny Raz, and Minlan Yu. Routing oblivious measurement analytics. In IFIP Networking , pages 449–457, 2020. [6] Ran Ben Basat, Xiaoqi Chen, Gil Einziger, and Ori Rottenstreich. Designing heavy-hitter detection algorithms for programmable switches. IEEE/ACM Transactions on Networking , 28(3):1172– 1185, 2020. [7] Ran Ben Basat, Gil Einziger, Shir Landau Feibish, Jalil Moraney, and Danny Raz. Network-wide routing-oblivious heavy hitters. In ANCS , pages 66–73, 2018. [8] Ran Ben-Basat, Xiaoqi Chen, Gil Einziger, and Ori Rottenstre-ich. Efficient measurement on programmable switches using probabilistic recirculation. In 2018 IEEE 26th International Conference on Network Protocols (ICNP) , pages 313–323. IEEE, 2018. [9] Ran Ben-Basat, Gil Einziger, Roy Friedman, and Yaron Kassner. Randomized admission policy for efficient top-k and frequency estimation. In IEEE INFOCOM , pages 1–9, 2017. [10] Theophilus Benson, Ashok Anand, Aditya Akella, and Ming Zhang. Microte: Fine grained traffic engineering for data centers. In CoNEXT , pages 1–12, 2011. [11] Theophilus Benson and Balakrishnan Chandrasekaran. Sounding the bell for improving internet (of things) security. In Workshop on Internet of Things Security and Privacy , pages 77–82, 2017. [12] Burton H Bloom. Space/time trade-offs in hash coding with allowable errors. Communications of the ACM , 13(7):422–426, 1970. [13] Pat Bosshart, Glen Gibb, Hun-Seok Kim, George Varghese, Nick McKeown, Martin Izzard, Fernando Mujica, and Mark Horowitz. Forwarding metamorphosis: Fast programmable match-action processing in hardware for sdn. ACM SIGCOMM Computer Communication Review , 43(4):99–110, 2013. [14] Yanpei Chen, Rean Griffit, David Zats, and Randy H Katz. Understanding tcp incast and its implications for big data work-loads. University of California at Berkeley, Tech. Rep , 2012. [15] Graham Cormode and Shan Muthukrishnan. An improved data stream summary: the count-min sketch and its applications. 
+
+Journal of Algorithms , 55(1):58–75, 2005. [16] Vitalii Demianiuk, Sergey Gorinsky, Sergey I Nikolenko, and Kirill Kogan. Robust distributed monitoring of traffic flows. 
+
+IEEE/ACM Transactions on Networking , 29(1):275–288, 2020. [17] Damu Ding, Marco Savi, Gianni Antichi, and Domenico Sira-cusa. An incrementally-deployable p4-enabled architecture for network-wide heavy-hitter detection. IEEE Transactions on Network and Service Management , 17(1):75–88, 2020. [18] Rob Harrison, Qizhe Cai, Arpit Gupta, and Jennifer Rexford. Network-wide heavy hitter detection with commodity switches. In SOSR , pages 1–7, 2018. [19] Rob Harrison, Shir Landau Feibish, Arpit Gupta, Ross Teixeira, S Muthukrishnan, and Jennifer Rexford. Carpe elephants: Seize the global heavy hitters. In SPIN@SIGCOMM , pages 15–21, 2020. [20] Xin Jin, Xiaozhou Li, Haoyu Zhang, Nate Foster, Jeongkeun Lee, Robert Soul´ e, Changhoon Kim, and Ion Stoica. 
+
+{NetChain }:{Scale-Free }{ Sub-RTT } coordination. In USENIX NSDI , pages 35–49, 2018. [21] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. Flowradar: A better netflow for data centers. In U SEN IX N SDI ), pages 311–324, 2016. [22] Zaoxing Liu, Hun Namkung, Georgios Nikolaidis, Jeongkeun Lee, Changhoon Kim, Xin Jin, Vladimir Braverman, Minlan Yu, and Vyas Sekar. Jaqen: A high-performance switch-native approach for detecting and mitigating volumetric ddos attacks with programmable switches. In USENIX Security , pages 3829– 3846, 2021. [23] Ahmed Metwally, Divyakant Agrawal, and Amr El Abbadi. Efficient computation of frequent and top-k elements in data streams. In Database Theory-ICDT 2005 , pages 398–412, 2005. [24] Arjun Roy, Hongyi Zeng, Jasmeet Bagga, George Porter, and Alex C. Snoeren. Inside the social network’s (datacenter) network. In Proceedings of the 2015 ACM Conference on Special Interest Group on Data Communication , 2015. [25] Anees Shaikh, Jennifer Rexford, and Kang G Shin. Load-sensitive routing of long-lived ip flows. ACM SIGCOMM Computer Communication Review , 29(4):215–226, 1999. [26] Vibhaalakshmi Sivaraman, Srinivas Narayana, Ori Rottenstreich, Shan Muthukrishnan, and Jennifer Rexford. Heavy-hitter detec-tion entirely in the data plane. In SoSR , pages 164–176, 2017. [27] Lu Tang, Qun Huang, and Patrick P. C. Lee. A fast and compact invertible sketch for network-wide heavy flow detec-tion. IEEE/ACM Transactions on Networking , 28(5):2350–2363, 2020. [28] Mea Wang, Baochun Li, and Zongpeng Li. sflow: Towards resource-efficient and agile service federation in service overlay networks. In ICDCS , pages 628–635, 2004. [29] Lior Zeno, Dan RK Ports, Jacob Nelson, Daehyeok Kim, Shir Landau-Feibish, Idit Keidar, Arik Rinberg, Alon Rashelbach, Igor De-Paula, and Mark Silberstein. {SwiSh }: Distributed shared state abstractions for programmable switches. In NSDI ,pages 171–191, 2022.
