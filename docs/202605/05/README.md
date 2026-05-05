@@ -1,101 +1,52 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-05
 
-## 每次日报
-- 最新运行日期：2026-05-05
-- 运行时间：2026-05-05 21:13:28 UTC
-- 运行状态：成功
-- 本次总论文数：17
+- 生成时间：2026-05-05 21:13:28 UTC
+- 当次推荐总数：17
 - 精读区：6
 - 速读区：11
 
-### 今日简报（AI）
-5月5日共浏览17篇安全与AI相关论文，精读6篇，速读11篇。  
-重点关注LLM在安全运营中的自动化应用与攻击防护策略，《Toward Autonomous SOC Operations》和《When Alignment Isn't Enough》表现突出。  
-建议关注AI驱动的威胁检测与多模态攻击防护，对日常安全防护思路有启发。
-- 详情：[/202605/05/README](/202605/05/README)
+## 今日简报（AI）
+5月5日，完成17篇论文阅读，深度剖析安全运维与LLM攻击最新进展。  
+重点关注：自动化SOC操作框架提升威胁响应效率，以及LLM代理可能遭遇的响应路径攻击。  
+建议：关注安全AI应用与防护策略，探索如何用智能工具提升日常网络防御能力。
 
-### 精读区论文标签
-1. [Toward Autonomous SOC Operations: End\-to\-End LLM Framework for Threat Detection, Query Generation, and Resolution in Security Operations](/202605/05/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)  
-   标签：评分：8.8/10、query:q9
+## 精读区
+1. [迈向自主化 SOC 运营：面向威胁检测、查询生成与安全运营解决的端到端大语言模型框架](/202605/05/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)（8.8/10）
    摘要：本文提出一个端到端的安全运营中心\(SOC\)自动化框架，通过结合多模型大语言模型\(LLM\)集成、语法约束查询生成\(SQM\)和基于检索的事件解决方案，实现威胁检测、证据收集和事件响应自动化。在真实生产环境SIEM日志测试中，检测准确率达82.8%，误报率仅0.12，查询生成性能显著提升，事件处理时间从数小时降至不到10分钟，显示出高效可靠的实际应用潜力，值得进一步精读。
-   evidence：LLM集成用于SOC威胁检测和查询生成
-2. [When Alignment Isn't Enough: Response\-Path Attacks on LLM Agents](/202605/05/2605.02187v1-when-alignment-isnt-enough-response-path-attacks-on-llm-agents)  
-   标签：评分：8.7/10、query:q9
+2. [当对齐不足以防护：针对大语言模型代理的响应路径攻击](/202605/05/2605.02187v1-when-alignment-isnt-enough-response-path-attacks-on-llm-agents)（8.7/10）
    摘要：本论文研究了LLM代理系统在使用BYOK中继架构下存在的安全漏洞，即对生成后但执行前的响应进行篡改的攻击（post\-alignment tampering）。作者提出了Relay Tampering Attack \(RTA\) 框架，通过战略策划、多轮对话干预及隐蔽恢复，实现高成功率攻击。实验在AgentDojo和ASB基准上显示RTA可达到99.1%攻击成功率，且现有防御不足。论文值得精读以理解LLM代理安全的新威胁及潜在防御方案。
-   evidence：LLM代理中继篡改攻击破坏端到端安全
-3. [OpenSOC\-AI: Democratizing Security Operations with Parameter Efficient LLM Log Analysis](/202605/05/2604.26217v1-opensoc-ai-democratizing-security-operations-with-parameter-efficient-llm-log-analysis)  
-   标签：评分：8.5/10、query:q9
+3. [OpenSOC\-AI：通过参数高效的大语言模型日志分析实现安全运营民主化](/202605/05/2604.26217v1-opensoc-ai-democratizing-security-operations-with-parameter-efficient-llm-log-analysis)（8.5/10）
    摘要：本论文提出 OpenSOC\-AI，一种面向中小企业的轻量级安全日志分析框架，通过对 1.1B 参数的 TinyLlama 模型进行 LoRA 参数高效微调，实现威胁分类、MITRE ATT&CK 技术映射及严重性评估。使用仅 450 个域特定样本和单张 NVIDIA T4 GPU，训练时间不足五分钟，实验显示威胁分类准确率提升 68 个百分点，严重性准确率提升 30 个百分点，F1 达 0.68，显示在资源有限环境下有实际应用价值，值得进一步精读。
-   evidence：用于SOC日志分析的参数高效LLM
-4. [XekRung Technical Report](/202605/05/2605.00072v1-xekrung-technical-report)  
-   标签：评分：8.5/10、query:q9
+4. [XekRung 技术报告](/202605/05/2605.00072v1-xekrung-technical-report)（8.5/10）
    摘要：本报告介绍了XekRung，一款针对网络安全场景优化的大型语言模型，通过多维数据生成管线、持续预训练、监督微调和强化学习训练流程，实现对复杂跨层安全任务的理解与推理。实验显示其在15个网络安全基准上均领先于同规模通用及专业模型，同时保持一般任务能力。该论文值得安全或垂直AI研究者进一步精读以掌握模型构建与评测方法。
-   evidence：LLM用于网络安全威胁分析
-5. [AgenticVM: Agentic AI for Adaptive Software Vulnerability Management](/202605/05/2605.01739v1-agenticvm-agentic-ai-for-adaptive-software-vulnerability-management)  
-   标签：评分：8.5/10、query:q9
+5. [AgenticVM：用于自适应软件漏洞管理的智能代理 AI](/202605/05/2605.01739v1-agenticvm-agentic-ai-for-adaptive-software-vulnerability-management)（8.5/10）
    摘要：本论文提出了 AgenticVM，一种基于多智能体架构的漏洞管理系统，将大型语言模型与现有安全工具结合，实现漏洞检测、评估、优先级排序和报告自动化。实验显示，该系统可将原始扫描告警从 3,983 条压缩到 82 条高优先级条目，同时 CVSS 属性预测准确率达 89.3%，显著降低分析师负担。论文不仅提供性能数据，还分享了架构设计、工具\-LLM 集成及人机协同治理的实用经验，值得关注实际部署与方法创新。
-   evidence：将大型语言模型与安全工具结合实现自动漏洞管理
-6. [Large Language Models as Explainable Cyberattack Detectors for Energy Industrial Control Systems](/202605/05/2604.26079v1-large-language-models-as-explainable-cyberattack-detectors-for-energy-industrial-control-systems)  
-   标签：评分：8.0/10、query:q3
+6. [大语言模型作为能源工业控制系统可解释网络攻击检测器](/202605/05/2604.26079v1-large-language-models-as-explainable-cyberattack-detectors-for-energy-industrial-control-systems)（8.0/10）
    摘要：本文研究了将现成大语言模型\(LLM\)用于能源工业控制系统\(ICS\)Modbus流量的入侵检测，并生成可审计的事件记录。通过将Modbus通信离散化为令牌字符串，并通过提示驱动的LLM进行二分类\(normal/critical\)，实现了与监督学习基线相当的高预测性能，同时无需任务特定权重更新。实验显示在两个公开数据集上关键类召回率高，提供了可供人工审查的结构化审计记录，值得对LLM在安全辅助决策的可行性进一步研究。
-   evidence：将LLM应用于ICS Modbus流量的可解释入侵检测
 
-### 速读区论文标签
-1. [Jailbreaking Vision\-Language Models Through the Visual Modality](/202605/05/2605.00583v1-jailbreaking-vision-language-models-through-the-visual-modality)  
-   标签：评分：8.3/10、query:q9
+## 速读区
+1. [通过视觉模态破解视觉\-语言模型](/202605/05/2605.00583v1-jailbreaking-vision-language-models-through-the-visual-modality)（8.3/10）
    摘要：本文研究视觉语言模型\(VLMs\)的视觉通道作为绕过安全对齐的新攻击面，提出四种视觉越狱方法，包括视觉密码、对象替换、文本替换和类比谜题攻击。实验表明，这些视觉攻击在多种前沿VLM上有效，揭示了文本安全训练无法完全迁移到视觉模态的跨模态对齐缺口。研究提供了初步的解释与缓解策略，提示在VLM安全设计中必须将视觉作为核心目标。值得关注继续精读以理解攻击机制及防护方法。
-   evidence：通过视觉模态攻击越狱视觉语言模型
-2. [Dynamic Cyber Ranges](/202605/05/2604.24184v1-dynamic-cyber-ranges)  
-   标签：评分：8.0/10、query:q9
+2. [动态网络演练场](/202605/05/2604.24184v1-dynamic-cyber-ranges)（8.0/10）
    摘要：本文针对静态网络靶场对LLM驱动攻击代理的快速饱和问题，提出了动态网络靶场（Dynamic Cyber Ranges），通过引入LLM驱动的防御代理实时加固和响应，保持对攻击代理的评估空间。实验显示，防御代理可将攻击成功率从100%降至0–55%，并在企业级复杂场景下表现出更快检测速度和有效防御。研究值得继续精读，尤其是方法设计与实验结果。
-   evidence：LLM驱动代理增强网络安全演练场的流量防御
-3. [SecMate: Multi\-Agent Adaptive Cybersecurity Troubleshooting with Tri\-Context Personalization](/202605/05/2604.26394v1-secmate-multi-agent-adaptive-cybersecurity-troubleshooting-with-tri-context-personalization)  
-   标签：评分：8.0/10、query:q9
+3. [SecMate：基于三重上下文个性化的多智能体自适应网络安全故障排查](/202605/05/2604.26394v1-secmate-multi-agent-adaptive-cybersecurity-troubleshooting-with-tri-context-personalization)（8.0/10）
    摘要：本论文提出SecMate，一种面向网络安全排障的多智能体虚拟客服系统，通过整合设备信息、用户技能隐式推断及服务上下文的个性化推荐，实现自适应排障。作者在144名参与者、711次对话的实验中验证，设备证据收集可将正确解决率从约50%提升至90%以上，同时分步指导降低用户负担，推荐系统相关性高，用户表现出替代人工IT支持的意愿，显示经济可行性，值得精读了解多维个性化排障方法与实证数据。
-   evidence：基于LLM的多智能体网络安全排障
-4. [FCMBench\-Video: Benchmarking Document Video Intelligence](/202605/05/2604.25186v1-fcmbench-video-benchmarking-document-video-intelligence)  
-   标签：评分：7.9/10、query:q6
+4. [FCMBench\-Video：文档视频智能基准测试](/202605/05/2604.25186v1-fcmbench-video-benchmarking-document-video-intelligence)（7.9/10）
    摘要：本文提出了FCMBench\-Video，一个面向文档视频理解的双语基准，用于评估Video\-MLLM在文档感知、时间定位和证据推理方面的能力。通过495条原始短视频组合成1200条长视频，并配套11322条问答实例，实验表明基准能够区分模型能力，计数任务对视频长度敏感，高级任务考察跨文档证据整合，整体分数分布合理。该基准适合关注文档视频处理与金融反欺诈场景的研究者，值得深入阅读。
-   evidence：用于加密视频任务的文档视频智能基准
-5. [Towards Agentic Investigation of Security Alerts](/202605/05/2604.25846v1-towards-agentic-investigation-of-security-alerts)  
-   标签：评分：7.8/10、query:q9
+5. [面向安全警报的自主调查方法](/202605/05/2604.25846v1-towards-agentic-investigation-of-security-alerts)（7.8/10）
    摘要：本文针对安全运营中心面临的告警过载问题，提出了一种基于大语言模型\(LLM\)的agentic调查工作流，通过预定义查询与受限工具访问结合，自动完成告警初步分析。实验显示该方法在提取日志信息和判断告警真伪方面优于直接使用LLM，能够显著减轻人工负担，值得关注其在自动化安全调查中的应用潜力。
-   evidence：LLM辅助自动安全告警分析
-6. [Verbal\-R3: Verbal Reranker as the Missing Bridge between Retrieval and Reasoning](/202605/05/2605.01399v1-verbal-r3-verbal-reranker-as-the-missing-bridge-between-retrieval-and-reasoning)  
-   标签：评分：7.8/10、query:profile-1
+6. [Verbal\-R3：作为检索与推理之间缺失桥梁的语言重排序器](/202605/05/2605.01399v1-verbal-r3-verbal-reranker-as-the-missing-bridge-between-retrieval-and-reasoning)（7.8/10）
    摘要：本文提出 Verbal\-R3，一种通过 Verbal Annotations 将检索结果与大模型推理能力连接的 RAG 框架，以解决传统直接注入检索文本导致的整合低效问题。方法包含 Generator 与 Verbal Reranker，后者生成相关性评分并提供解析性叙述以指导推理。实验证明 Verbal\-R3 在复杂问答任务上超过现有方法，显著提高答案准确性。值得对 RAG 改进与多轮检索推理的读者进一步精读。
-   evidence：Verbal\-R3桥接检索与LLM推理
-7. [Robust and Explainable Divide\-and\-Conquer Learning for Intrusion Detection](/202605/05/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)  
-   标签：评分：7.8/10、query:q5
+7. [面向入侵检测的鲁棒且可解释的分而治之学习方法](/202605/05/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)（7.8/10）
    摘要：论文提出一种面向入侵检测的相关性感知分治学习框架 SCAL，通过自动识别高相关流量类别并拆分为多个子任务，使轻量级模型（如决策树）也能在资源受限设备上获得更高准确率、更小模型规模以及更强可解释性与鲁棒性。实验显示局部模型最高可提升 43.3% 准确率并缩小 257 倍模型规模。若关注边缘侧 IDS、模型压缩、可解释安全 AI，这篇值得继续细读。
-   evidence：用于网络入侵检测的分而治之机器学习
-8. [Evaluating Tabular Representation Learning for Network Intrusion Detection](/202605/05/2605.02519v1-evaluating-tabular-representation-learning-for-network-intrusion-detection)  
-   标签：评分：7.8/10、query:q4
+8. [用于网络入侵检测的表格表示学习评估](/202605/05/2605.02519v1-evaluating-tabular-representation-learning-for-network-intrusion-detection)（7.8/10）
    摘要：本文系统评估了表格化表示学习在网络入侵检测中的有效性，针对NetFlow数据对多种表示学习方法（TabICL、SCARF、自动编码器等）进行横向对比，结合有监督分类器和无监督异常检测器，发现方法效果高度依赖具体数据集和模型组合，跨数据集迁移存在一定泛化能力但表现波动明显。结果表明表格化表示学习有潜力提升入侵检测性能，但仍需谨慎选择方法和数据集。值得继续细读以了解方法对不同攻击类别的表现。
-   evidence：使用表格流量数据进行网络入侵检测的机器学习应用
-9. [SMSI: System Model Security Inference: Automated Threat Modeling for Cyber\-Physical Systems](/202605/05/2604.23905v1-smsi-system-model-security-inference-automated-threat-modeling-for-cyber-physical-systems)  
-   标签：评分：6.8/10、query:q9
+9. [SMSI：系统模型安全推理——面向网络物理系统的自动化威胁建模](/202605/05/2604.23905v1-smsi-system-model-security-inference-automated-threat-modeling-for-cyber-physical-systems)（6.8/10）
    摘要：本论文提出 SMSI（System Model Security Inference），旨在自动化 CPS（Cyber\-Physical Systems）威胁建模，将 SysML 架构模型映射到 NIST 800\-53 安全控制，减少人工分析时间。方法结合确定性解析、神经符号检索与分类模型及控制推荐器，通过 CVE→ATT&CK→NIST 的多阶段管线实现自动化。实验在医疗 IoT 网关 MedGateway 上验证，结果显示 LLM 与密集编码模型均能有效映射漏洞与攻击技术，支持可追踪的控制建议，值得精读。
-   evidence：用于威胁建模的零样本LLM
-10. [Detecting Avalanche Effect in Adversarial Settings: Spotting the Encryption Loops in Ransomware](/202605/05/2604.24131v1-detecting-avalanche-effect-in-adversarial-settings-spotting-the-encryption-loops-in-ransomware)  
-   标签：评分：6.8/10、query:q4
+10. [在对抗环境下检测雪崩效应：识别勒索软件中的加密循环](/202605/05/2604.24131v1-detecting-avalanche-effect-in-adversarial-settings-spotting-the-encryption-loops-in-ransomware)（6.8/10）
    摘要：本文针对二进制勒索软件中的加密循环识别问题，提出一种基于真正雪崩效应\(avalanche effect\)检测的自动分析方法。通过记录重放和Shapiro–Wilk统计检验，方法在对抗环境下实现高鲁棒性和高准确率。实验证明在10个代表性勒索软件家族中实现0%假阴性和1.1%假阳性，值得精读用于理解对抗性逆向分析策略。
-   evidence：勒索软件加密循环中的雪崩效应检测
-11. [DYMAPIA: A Multi\-Domain Framework for Detecting AI\-based Video Manipulation](/202605/05/2604.24426v1-dymapia-a-multi-domain-framework-for-detecting-ai-based-video-manipulation)  
-   标签：评分：6.8/10、query:q6
+11. [DYMAPIA：用于检测基于 AI 视频篡改的多域框架](/202605/05/2604.24426v1-dymapia-a-multi-domain-framework-for-detecting-ai-based-video-manipulation)（6.8/10）
    摘要：本论文提出DYMAPIA，一种融合频域、空间纹理及时间一致性线索的多域视频篡改检测框架，通过生成动态异常掩码并辅以轻量级DistXCNet分类器，实现对Deepfake视频的高精度检测。实验在FF\+\+、Celeb\-DF和VDFD数据集上表现出超过99%的准确率和F1分数，同时模型轻量且可实时部署，显示出在数字取证和虚假信息防御等场景的实用性，值得深入精读。
-   evidence：加密视频篡改检测的深度学习
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
