@@ -1,0 +1,679 @@
+Title: Evergreen: Efficient Claim Verification for Semantic Aggregates
+
+URL Source: https://arxiv.org/pdf/2604.26180v1
+
+Published Time: Thu, 30 Apr 2026 00:19:44 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# Evergreen : Efficient Claim Verification for Semantic Aggregates 
+
+# Alexander W. Lee 
+
+Brown University and Snowflake Inc. alexander_w_lee@brown.edu 
+
+# Benjamin Han 
+
+Snowflake Inc. benjamin.han@snowflake.com 
+
+# Shayak Sen 
+
+Snowflake Inc. shayak.sen@snowflake.com 
+
+# Sam Yeom 
+
+Snowflake Inc. sam.yeom@snowflake.com 
+
+# Uğur Çetintemel 
+
+Brown University and Snowflake Inc. ugur_cetintemel@brown.edu 
+
+# Anupam Datta 
+
+Snowflake Inc. anupam.datta@snowflake.com 
+
+## ABSTRACT 
+
+With recent semantic query processing engines, semantic aggrega-tion has become a primitive operator, enabling the reduction of a relation into a natural language aggregate using an LLM. However, the resulting semantic aggregate may contain claims that are not grounded in the underlying relation. Verifying such claims is chal-lenging: they often involve quantifiers, groupings, and comparisons over relations that far exceed LLM context windows and require a costly combination of semantic and symbolic processing. We present Evergreen , a system that recasts claim verification as a semantic query processing task with tailored optimizations and provenance capture. Evergreen compiles each claim into a declar-ative semantic verification query and executes it on the same query engine that produced the aggregate. To reduce cost and latency, Ev-ergreen avoids unnecessary LLM calls through verification-aware optimizations, including early stopping, relevance sorting, and es-timation with confidence sequences, as well as general-purpose optimizations for semantic queries, such as operator fusion, similar-ity filtering, and prompt caching. Each verdict is accompanied by citations that identify a minimal set of tuples justifying the result, with semantics based on semiring provenance for first-order logic. On a benchmark of real-world restaurant review datasets reflect-ing production-inspired workloads, Evergreen achieves excellent verification quality (F1 = 1.00 ) with a strong LLM while reduc-ing cost by 3.2× and latency by 4.0× compared to unoptimized verification. Even with a significantly weaker LLM, Evergreen out-performs a strong LLM-as-a-judge baseline in F1 at 48 × lower cost and 2.3× lower latency. Relative to a retrieval-augmented agent, 
+
+Evergreen compares favorably in F1 and latency with similar cost when both use a strong LLM; yet, with a much weaker LLM, it achieves the same F1 at 63 × lower cost and 4.2× lower latency. 
+
+Artifact Availability: 
+
+The source code, data, and/or other artifacts have been made available at https://github.com/brown-db/evergreen. 
+
+## 1 INTRODUCTION 
+
+A growing number of semantic query processing engines have re-cently emerged in academia [ 3, 13 , 15 , 20 , 43 , 45 , 47 , 55 , 59 , 62 , 69 , 72 ]and industry [ 21 , 29 , 44 , 76 ]. These systems feature semantic oper-ators that augment traditional database operators with LLMs. In several systems [ 3, 44 , 55 , 62 ], semantic aggregation is a primitive operator—reducing a relation of tuples with an LLM-based aggrega-tion function specified by a prompt. For example, the prompt might ask for a summary of customer reviews or a comparison between 10 1 10 0 10 1
+
+Cost ($) 
+
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> F1 Score
+> Opus 4.6
+> Sonnet 4.6
+> Haiku 4.5
+> Opus 4.6
+> Sonnet 4.6
+> Haiku 4.5
+> Opus 4.6 Opus 4.6
+> Sonnet 4.6
+> Haiku 4.5 Maverick
+> Scout
+> 8B
+> base_rm
+> rag_agent
+> evg_unopt
+> evg_opt
+
+Figure 1: F1 score vs. mean cost per claim (log scale), aver-aged over three trials. We compare base_rm (LLM-as-a-judge), 
+
+rag_agent (retrieval-augmented agent), evg_unopt (unopti-mized Evergreen ), and evg_opt (optimized Evergreen )across several Claude and Llama models. The dashed line connects the Pareto-optimal implementations. evg_opt im-plementations exclusively occupy the Pareto frontier. 
+
+reviews from different restaurants. At a high level, the semantic aggregation either processes the relation in a single LLM call or invokes an LLM multiple times to process the relation in chunks, depending on the relation’s size. Yet, regardless of the implemen-tation, the resulting semantic aggregate may contain claims that are not grounded in the relation. The LLM might hallucinate that “the majority of reviews are positive” when in fact only a minority are, or that “no reviewers mention vegan options” when one does. The central question we investigate is: how can we reliably and efficiently determine whether the claims embedded in a se-mantic aggregate are actually supported by the underlying relation? As semantic aggregation gains adoption in production data systems such as Snowflake’s Cortex AISQL [ 44 ], answering this question becomes essential. Verifying claims in semantic aggregates is challenging for sev-eral reasons. First, the underlying relations are often large, easily exceeding LLM context windows; a relation of a few thousand re-views can span hundreds of thousands of tokens. Second, based on our observations of production semantic aggregation workloads at Snowflake, claims that arise from such aggregations often in-volve quantifiers, groupings, and comparisons across groups in a relation (e.g., “all locations have multiple complaints”, “the top-ranked location is [A]”). Verifying these claims requires semantic reasoning about each tuple followed by symbolic reasoning over the resulting values, a task LLMs struggle to accomplish reliably. Third, semantically evaluating each tuple requires an expensive 
+
+> arXiv:2604.26180v1 [cs.DB] 28 Apr 2026
+
+LLM invocation, making brute-force verification over the relation prohibitively costly and slow. Finally, a binary verdict alone is often insufficient—users expect citations back to the data that explain it. Existing approaches to claim verification fall short for semantic aggregates. Naive LLM-as-a-judge methods [ 50 , 66 , 84 ] assess a claim against a provided source but assume that everything fits in the model’s context window—an assumption violated by large rela-tions. Retrieval-augmented LLM approaches [ 38 , 71 , 74 , 77 ] scale to larger corpora by retrieving relevant evidence, but they target claims verified by connecting dependent sources rather than quanti-fied claims over independent tuples. Although these approaches can perform symbolic reasoning in natural language about quantifiers, groupings, and cross-group comparisons, doing so is both costly and less reliable than dedicated symbolic operations. Program-based LLM methods [ 31 , 53 ] can generate imperative programs that com-bine symbolic and semantic processing; however, they push the responsibility of optimization and citation capture onto the LLM, resulting in potentially suboptimal or error-prone implementa-tions. In the database community, query-based verification sys-tems [ 12 , 32 , 34 , 37 , 67 , 68 ] translate claims into declarative queries over structured data, but cannot handle claims that require seman-tic evaluation. Meanwhile, semantic query processing engines are capable of expressing such verification logic. Yet, existing systems lack verification-aware optimizations and explanations. Most rele-vant to us is an early framework called Binder [ 15 ], which naively processes all tuples with an LLM and was only evaluated on a claim verification benchmark limited to small structured tables [14]. We present Evergreen , a system that reliably and efficiently ver-ifies claims from semantic aggregates by treating claim verification as a semantic query processing problem with principled optimiza-tions and provenance capture. In particular, Evergreen compiles each claim into a declarative semantic verification query composed of standard relational operators and semantic operators, shifting the burden of optimization and citation capture away from the LLM and onto the query engine. Crucially, Evergreen reuses the same query engine that produced the semantic aggregate, requiring no separate verification infrastructure. Its efficiency stems from two complementary classes of optimizations. First, Evergreen intro-duces verification-aware optimizations —including early stopping, relevance sorting, and estimation with anytime-valid confidence sequences [ 19 , 73 ]—that exploit the structure of verification queries to minimize the amount of evidence that must be examined. These techniques are specific to verification queries and constitute our primary technical contributions. Second, Evergreen incorporates 
+
+general-purpose optimizations for semantic queries, such as oper-ator fusion, similarity filtering, and prompt caching. Collectively, these optimizations enable substantial reductions in cost and la-tency. Finally, Evergreen accompanies each verdict with citations— minimal explanations of why a claim holds or why not—formalized via semiring provenance for first-order logic [28]. We evaluate Evergreen on a benchmark of 16 diverse claims over three Yelp restaurant review datasets [ 78 ] based on production-inspired semantic aggregation workloads. Figure 1 illustrates the power of Evergreen ’s optimized query engine. With a strong LLM, 
+
+Evergreen achieves perfect verification quality (F1 = 1.00 ) while re-ducing cost by 3.2× and latency by 4.0× relative to an unoptimized version of Evergreen . With weaker and cheaper models, Ever-green ’s quality degrades gracefully. Evergreen equipped with a substantially weaker LLM outperforms a strong LLM-as-a-judge baseline in quality at 48 × lower cost and 2.3× lower latency. When compared to a retrieval-augmented agentic approach with a strong LLM, Evergreen attains higher quality and lower latency with comparable cost, and with weaker models, Evergreen achieves the same quality at 63 × lower cost and 4.2× lower latency. This robustness reflects the advantages of Evergreen ’s neuro-symbolic design: LLMs are restricted to fine-grained semantic tasks, while optimized symbolic query processing handles the rest. 
+
+Summary of Contributions. 
+
+• We identify several claim types that arise in semantic aggregates and map them to well-defined logical structures (Section 2). 
+
+• We show how claims from semantic aggregates can be expressed as declarative semantic verification queries (Section 3). 
+
+• We introduce optimizations tailored to the claim verification setting and integrate them with general-purpose optimizations for semantic queries, substantially reducing cost and latency while preserving quality (Section 4). 
+
+• We build on semiring provenance for first-order logic [ 28 ] to formalize citations as data provenance, deriving minimal expla-nations for each verification result (Section 5). 
+
+• We evaluate Evergreen on a benchmark reflecting real-world semantic aggregation workloads, demonstrating the system’s dominance in verification quality, cost, and latency over other approaches (Section 6). 
+
+## 2 CLAIMS OVER RELATIONS 
+
+Semantic aggregates implicitly encode a collection of claims , i.e., natural language assertions about the underlying relation. To ver-ify these claims, Evergreen first makes them explicit via a claim decomposition process. In particular, we follow prior work [ 74 ] by first invoking an LLM to break down each sentence in the semantic aggregate into a list of claims. Since the resulting claims may con-tain vague references (e.g., pronouns, unknown entities, non-full names), the process then invokes an LLM again for each claim to resolve the references using the original response as context. From our analysis of claims generated by production semantic aggregation workloads at Snowflake, we identify several common claim types that map to familiar logical structures. Let R be a rela-tion and 𝜑 a logical formula with a free variable ranging over tuples 
+
+𝑡 ∈ R . R may be a filtered subset of the base relation, restricted to tuples relevant to the claim’s scope (e.g., reviews for a specific restaurant or reviews from vegetarian customers). We write 𝜑 (𝑡 )
+
+to denote the evaluation of 𝜑 on a specific tuple 𝑡 ∈ R , yielding ⊤
+
+(true) or ⊥ (false). 𝜑 can involve symbolic evaluation (e.g., whether the tuple’s age attribute is greater than 21) or semantic evaluation (e.g., whether the tuple’s text attribute mentions vegan options). In effect, evaluating 𝜑 over R induces a boolean attribute, partitioning tuples into those that satisfy 𝜑 and those that do not. 
+
+Existential claims use the existential quantifier to assert that at least one tuple satisfies 𝜑 :
+
+∃𝑡 ∈ R : 𝜑 (𝑡 ).
+
+For example, “Some reviewers enjoy the restaurant’s chicken salad.” 
+
+> 2
+
+Universal claims use the universal quantifier to assert that all tuples satisfy 𝜑 :
+
+∀𝑡 ∈ R : 𝜑 (𝑡 ).
+
+For example, “The reviews do not mention any vegan options.” 
+
+Cardinal claims use cardinal quantifiers to assert the number of tuples that satisfy 𝜑 , such as 
+
+∃≥𝑘 𝑡 ∈ R : 𝜑 (𝑡 ),
+
+where 𝑘 ∈ { 0, 1, . . . , |R|} . For example, “At least a handful of veg-etarian customers enjoyed the restaurant’s burgers.” Variants of cardinal quantifiers include ∃>𝑘 , ∃≤𝑘 , ∃<𝑘 , ∃=𝑘 , and ∃≠𝑘 . Cardinal quantifiers generalize existential and universal quantifiers with ∃≥1
+
+and ∃=| R | , respectively. 
+
+Proportional claims use proportional quantifiers to assert the proportion of tuples that satisfy 𝜑 , such as 
+
+∃≥𝜌 𝑡 ∈ R : 𝜑 (𝑡 ),
+
+where 𝜌 ∈ [ 0, 1]. For example, “The restaurant has received major-ity positive reviews.” Variants of proportional quantifiers include 
+
+∃>𝜌 , ∃≤𝜌 , ∃<𝜌 , ∃=𝜌 , and ∃≠𝜌 . Proportional quantifiers reduce to cardinal quantifiers by scaling the threshold 𝜌 by |R| .
+
+Ordinal claims assert that a group of tuples achieves a particular rank with respect to a per-group aggregate. Let 𝐺 1, . . . , 𝐺 𝑚 ⊆ R 
+
+be groups of tuples induced by partitioning R on one or more attributes, and let 𝑓 (𝐺 𝑗 , 𝜑 ) denote a per-group aggregate (i.e., the count or proportion of tuples in 𝐺 𝑗 satisfying 𝜑 ). Given the set 
+
+𝑉 (𝜑 ) := {𝑓 (𝐺 1, 𝜑 ), . . . , 𝑓 (𝐺 𝑚 , 𝜑 )} of distinct per-group aggregates, the rank of group 𝐺 𝑖 is 
+
+rank (𝐺 𝑖 , 𝜑 ) := |{ 𝑣 ∈ 𝑉 (𝜑 ) : 𝑣 > 𝑓 (𝐺 𝑖 , 𝜑 )}| + 1.
+
+An ordinal claim asserts rank (𝐺 𝑖 , 𝜑 ) = 𝑟 for some target group 𝐺 𝑖 
+
+and rank 𝑟 . For example, “The top-ranked McDonald’s location in terms of service has the Business ID [A].” 
+
+Nested claims compose the above claim types at multiple depths of grouping. Given groups 𝐺 1, . . . , 𝐺 𝑚 ⊆ R as above, a nested claim of depth two specifies an outer quantifier over the groups and an inner quantifier over tuples within each group. For example, “All McDonald’s locations have multiple complaints about poor service quality” is expressed as 
+
+∀𝐺 𝑖 ∃≥2𝑡 ∈ 𝐺 𝑖 : 𝜑 (𝑡 ),
+
+where 𝐺 𝑖 is a group of tuples for a location and 𝜑 (𝑡 ) is the formula expressing whether the tuple’s text attribute mentions poor service quality. Nesting can theoretically extend to arbitrary depths, though higher depths are unlikely to be encountered in practice. 
+
+## 3 CLAIMS AS QUERIES 
+
+Given the logical structure of claims, Evergreen compiles these natural language claims into semantic verification queries using an LLM. Akin to traditional database query languages, these verifica-tion queries are declarative in nature, enabling the LLM to focus on specifying what to verify rather than how to verify it. Evergreen ’s queries are composed of standard relational operators and semantic operators. This approach shifts the burden of low-level responsi-bilities, such as optimization and provenance capture, away from the LLM and to the query engine for a more reliable and efficient verification process. Importantly, Evergreen requires no separate verification infrastructure—the same query engine that produced the semantic aggregate also verifies claims extracted from it. 
+
+Query Interface. Evergreen provides a DataFrame API in Python, where a DataFrame df represents a relation R. Queries are com-posed by chaining operators parameterized by expressions and then optimized and executed using collect() . We detail the core operators and their relevant expressions, highlighting how they correspond to the logical structure of claims. 
+
+filter(predicate) selects tuples that satisfy the boolean ex-pression predicate . In verification queries, filters are generally used to restrict R to tuples relevant to the claim. In addition to symbolic expressions for structured filtering, Evergreen features prompt expressions for semantic filtering: prompt(prompt_str, return_type=bool) . The prompt expression uses an LLM to eval-uate a semantic predicate specified by a prompt string prompt_str .The prompt string can reference tuple attributes by name. 
+
+> df.filter( prompt( "The {text} indicates that the reviewer is vegetarian" ))
+
+map(expr) computes a new attribute for each tuple by evaluating the expression expr . The map operator evaluates attributes required by the claim’s formula 𝜑 that are not already materialized in the relation. Similar to filters, the expression may be a symbolic or prompt expression. The prompt expressions can also return non-boolean types. 
+
+> df.map( prompt( "Identify the sentiment of the {text}", Sentiment ).alias("sentiment") )
+
+aggregate(agg_exprs, group_by=()) aggregates over tuples by evaluating the sequence of aggregation function expressions 
+
+agg_exprs , optionally grouped by a sequence of grouping expres-sions group_by . Aggregation functions are closely related to a claim’s quantifiers. bool_or(expr) directly corresponds to the ex-istential quantifier and evaluates to true if the expression expr 
+
+evaluates to true for at least one tuple, and false otherwise. On the other hand, bool_and(expr) directly corresponds to the universal quantifier and evaluates to true if the expression expr evaluates to true for all tuples, and false otherwise. count_if(expr) evaluates to the number of tuples for which the expression expr evaluates to true; when the resulting aggregate is paired with a comparison expression in a subsequent operator, it corresponds to a cardinal quantifier. Similarly, proportion(expr) evaluates to the propor-tion of tuples for which the expression expr evaluates to true and corresponds to a proportional quantifier when paired with a com-parison expression. An aggregation function’s expression expr 
+
+corresponds to a claim’s formula 𝜑 . expr can simply be a reference 
+
+col(name) to a boolean attribute or an expression over attributes that evaluates to a boolean value. 
+
+> df.aggregate([ proportion( col("sentiment").eq(Sentiment.POSITIVE)
+> 3).alias("positive_prop") ])
+
+Grouping is used for ordinal and nested claims to compute group aggregates before subsequent ranking or outer aggregation steps. 
+
+with_rank(expr, descending=True) creates a dense rank at-tribute for each tuple based on the expression expr , in descending 
+
+order by default. This operator is used for ordinal claims, determin-ing each group’s rank after per-group aggregation. 
+
+> df.with_rank(col("positive_prop"))
+
+check(predicate) is the terminal operator of a verification query. It evaluates the boolean expression predicate on the (typ-ically aggregated) result and adds it as a new boolean attribute representing the claim’s verdict. 
+
+> df.check(col("positive_prop") > 0.5)
+
+The verdict is annotated with provenance information that explains why the verdict is true or false, which we describe more in Section 5. 
+
+End-to-End Examples. Recall the nested claim from Section 2: “All McDonald’s locations have multiple complaints about poor service quality,” expressed as ∀𝐺 𝑖 ∃≥2𝑡 ∈ 𝐺 𝑖 : 𝜑 (𝑡 ). Figure 2 shows the corresponding verification query. The query first uses a seman-tic map() to evaluate 𝜑 on each tuple, labeling whether a review complains about poor service. The first aggregate() groups tuples by location ( business_id ) and applies count_if() to count com-plaints per group for the inner cardinal quantifier ∃≥2. The second 
+
+aggregate() applies bool_and() to verify that every group’s com-plaint count meets the threshold, implementing the outer universal quantifier ∀. Finally, check() evaluates the verdict. Figure 3 shows a second example for the ordinal claim “The top-ranked McDonald’s location in terms of service has the Business ID [A].” The query additionally uses a semantic filter() to restrict to service-related reviews and with_rank() to determine each location’s rank. 
+
+## 4 QUERY OPTIMIZATIONS 
+
+The bottleneck of semantic verification queries lies in their semantic operators, which require invoking expensive LLMs. Evergreen 
+
+introduces verification-aware optimizations and combines them with general-purpose optimizations for semantic queries to reduce cost and latency while maintaining reliability. 
+
+## 4.1 Verification-Aware Optimizations 
+
+4.1.1 Early Stopping. Computing full aggregations over all tuples is not required for many types of verification queries. As such, 
+
+Evergreen executes queries using the iterator model —where oper-ators lazily pull tuples from their children—and stops aggregating early so that only necessary tuples are pulled through the semantic operators that appear before the aggregation. For bool_or(expr) , its accumulator stops aggregating after en-countering a witness , i.e., a tuple that satisfies the boolean expres-sion expr . For bool_and(expr) , its accumulator stops aggregating after encountering a counterexample , i.e., a tuple that does not satisfy expr . For the count_if(expr) and proportion(expr) ag-gregation functions, Evergreen ’s query optimizer extracts the relevant comparison expressions from subsequent operators (e.g., 
+
+check(col("positive_prop") > 0.5) ) and pushes them down 
+
+> df.map( prompt( "Identify whether the {text} is a complaint about " "poor service quality", bool ).alias("complains_about_service") ).aggregate([ count_if( col("complains_about_service") ).alias("complaint_count")], group_by=[col("business_id")] ).aggregate([ bool_and( col("complaint_count") >= 2 ).alias("all_have_multiple_complaints") ]) .check(col("all_have_multiple_complaints")) .collect()
+
+Figure 2: Verification query for the nested claim “All McDon-ald’s locations have multiple complaints about poor service quality” ( ∀𝐺 𝑖 ∃≥2𝑡 ∈ 𝐺 𝑖 : 𝜑 (𝑡 )). 
+
+> df.filter( prompt( "The {text} mentions the service at the restaurant" )).map( prompt( "Identify whether the {text} praises or speaks " "positively about the service at the restaurant", bool ).alias("praises_service") ).aggregate([ proportion( col("praises_service") ).alias("service_praise_prop")], group_by=[col("business_id")] ).with_rank(col("service_praise_prop")) .filter(col("business_id").eq("[A]")) .check(col("rank").eq(1)) .collect()
+
+Figure 3: Verification query for the ordinal claim “The top-ranked McDonald’s location in terms of service has the Busi-ness ID [A]” ( rank (𝐺 𝑖 , 𝜑 ) = 1). 
+
+to the corresponding aggregate operators as early stopping hints. Given these hints, the accumulators can stop as soon as their run-ning count or proportion satisfies the comparison. When the total number of input tuples is known, the accumulator computes the maximum achievable count or proportion assuming all remaining tuples satisfy expr and stops when the comparison is determined regardless of the remaining tuples. For an ungrouped aggregate, the overall number of input tuples is determined by a scan operator 
+
+> 4
+
+that counts the tuples prior to LLM evaluation. In contrast, for a grouped aggregate, the total is derived from the per-group counts collected during the sorting phase, as we now explain. For grouped aggregates, Evergreen avoids using hash-based ag-gregates since they require pulling all tuples through the semantic operators, which defeats the purpose of early stopping. Evergreen 
+
+instead uses streaming aggregates, processing groups sequentially over sorted, group-contiguous input. The optimizer inserts a sort operator as low in the query plan as possible to ensure that tuples belonging to the same group are aggregated together while avoid-ing unnecessary semantic operator evaluations. Once a group’s aggregate is resolved, all operators below the aggregate skip the remaining tuples belonging to that group. While operations like sorting and scanning are typically considered expensive in tradi-tional query processing, they are effectively free when compared to evaluating semantic operators. 
+
+4.1.2 Relevance Sorting. Early stopping is most effective when relevant tuples—those that contribute to the aggregate’s verdict— appear early in the input stream. Since tuples are processed in arbitrary order by default, these relevant tuples may not surface until later. Evergreen encourages early stopping by pre-sorting tuples by relevance. This optimization is similar to a top-k operation, but allows the query engine to potentially process all tuples in the relation without enforcing a set limit. At optimization time, the optimizer constructs a description of the aggregate to score each tuple’s relevance. It first traces the at-tribute referenced by the aggregate expression back to the semantic map that produced it, collecting the map’s prompt expression and any filter prompts that reference the same text attribute. These prompts provide context for what the aggregate is accumulating over (i.e., the scope of the claim’s relation R and the claim’s formula 
+
+𝜑 ). The description also includes the aggregate expression itself and, when applicable, its comparison expression; together, they express the claim’s quantifier. The optimizer then prompts an LLM with this description to generate a semantic search query , a set of 
+
+inclusion keywords likely to appear in relevant tuples, and a set of 
+
+exclusion keywords that should not appear in them. At execution time, each tuple is scored using three ranking signals: cosine simi-larity between the tuple’s text embedding and the search query’s embedding, the number of inclusion keywords present, and the number of exclusion keywords absent. Each tuple’s text embedding is computed during ingestion and reused across queries. Signals are combined via Reciprocal Rank Fusion [ 16 ] (with the standard constant 60 ), and tuples are fed to the aggregate in descending rele-vance order. The relevance sort operator is pushed down to above the table scan so that reordering occurs before any LLM evaluation. Relevance sorting applies when surfacing a small number of satisfying tuples is sufficient to determine the verdict: bool_or() ,which requires a single witness, and count_if() with “at least” comparisons ( ≥, >) involving low thresholds 𝑘 . For nested queries, relevance sorting applies only to the innermost aggregate, which op-erates on the relation’s text attributes. Other aggregation scenarios rely on estimation, which we describe next. 
+
+4.1.3 Estimation with Confidence Sequences. In addition to de-terministic early stopping, Evergreen estimates whether certain comparisons can be resolved by leveraging confidence sequences (CSs) [ 19 , 73 ]. Our approach is similar to early work on online aggregation [ 30 ], which uses classical confidence intervals (CIs). However, unlike CIs, CSs do not suffer from the “peeking prob-lem” [ 35 ], i.e., inflating the error rate due to continuous monitoring. More formally, let 𝑋 1, 𝑋 2, . . . be a sequence of Bernoulli random variables, where 𝑋 𝑠 = 1 if the 𝑠 -th tuple satisfies the aggregation function’s boolean expression expr , and 0 otherwise. Further let 
+
+𝜇 ∈ [ 0, 1] denote the true proportion of tuples satisfying expr in an accumulator’s input stream. The accumulator can estimate 𝜇 
+
+using an anytime-valid (1 − 𝛼 )-confidence sequence : a sequence of 
+
+confidence intervals ([ 𝐿 𝑠 , 𝑈 𝑠 ]) 𝑠 ≥1 that satisfies 
+
+Pr (∃ 𝑠 ≥ 1 : 𝜇 ∉ [𝐿 𝑠 , 𝑈 𝑠 ]) ≤ 𝛼, 
+
+where [𝐿 𝑠 , 𝑈 𝑠 ] ⊆ [ 0, 1] for all 𝑠 ≥ 1 and 𝛼 ∈ ( 0, 1) is a configurable 
+
+significance level . Equivalently, 1 − 𝛼 is the confidence level of the CS. The preceding guarantee holds simultaneously at all sample sizes 𝑠 , so the accumulator can check the latest CI [𝐿 𝑠 , 𝑈 𝑠 ] after each observed tuple and stop as soon as the verdict is clear, without repeated checks inflating the error rate. A classical confidence in-terval, by contrast, is valid only at a single, predetermined sample size. CSs enable Evergreen to stop confidently as early as possible without committing to a sample size in advance that may be too small to be conclusive or too large to be cost-effective. In general, a comparison can be resolved once the entire CI falls on one side of the threshold or is contained within a tolerance interval. For proportion() with comparison ≥ 𝜌 , the accumulator can stop as soon as 𝐿 𝑠 ≥ 𝜌 (confirming) or 𝑈 𝑠 < 𝜌 (refuting); analogous rules apply for the other inequality comparisons. For comparisons = and ≠, the accumulator uses a configurable relative error tolerance 𝜀 ∈ ( 0, 1). It confirms = 𝜌 when [𝐿 𝑠 , 𝑈 𝑠 ] ⊆ [ 𝜌 (1 −
+
+𝜀 ), 𝜌 (1 + 𝜀 )] , and confirms ≠ 𝜌 when [𝐿 𝑠 , 𝑈 𝑠 ] does not intersect the tolerance interval. For count_if() , the proportion CI [𝐿 𝑠 , 𝑈 𝑠 ]
+
+can be scaled by the total number 𝑛 of input tuples to obtain the count CI [𝑛 · 𝐿 𝑠 , 𝑛 · 𝑈 𝑠 ], and the same comparison logic applies to the count threshold 𝑘 . For bool_and() , the accumulator checks whether 𝜇 = 1 using the equality rule with 𝜌 = 1, which reduces to 
+
+[𝐿 𝑠 , 𝑈 𝑠 ] ⊆ [ 1 − 𝜀, 1] since 𝜇 is bounded above by 1. For bool_or() ,the accumulator uses the scaled count CI to check whether there exists at least one satisfying tuple: it confirms when 𝑛 · 𝐿 𝑠 ≥ 1 and refutes when 𝑛 · 𝑈 𝑠 < 1. Since a witness triggers deterministic early stopping, estimation here primarily serves to detect 𝑛 · 𝑈 𝑠 < 1, i.e., no satisfying tuple exists. When the total number 𝑛 of input tuples is known, the CS exploits sampling without replacement, yielding tighter intervals. Specifically, Evergreen instantiates the CS using the betting approach of Waudby-Smith and Ramdas [73]. Since CSs require that observations arrive in exchangeable (i.e., random) order, the optimizer inserts a shuffle operator when estima-tion is used. For ungrouped aggregates, the shuffle is placed above the table scan, randomizing all tuples. For grouped aggregates, the shuffle is inserted above the sort operator used for grouping and it hierarchically randomizes at each level: groups are shuffled as contiguous blocks, and tuples within the finest groups are also shuffled, preserving group contiguity for the streaming aggregate. When multiple estimation decisions occur simultaneously in the same query, Evergreen controls for the family-wise error rate :the probability of any CI failing to contain 𝜇 must remain below 
+
+𝛼 . The error budget is divided in two stages. First, for a query 
+
+> 5
+
+with 𝑜 aggregate operators that use estimation, the budget is split equally, allocating a significance level of 𝛼 /𝑜 to each operator. Sec-ond, within each operator, the budget is divided across its 𝑎 estimat-ing accumulators and the 𝑚 groups in the input stream. When the number of groups 𝑚 is known in advance (from a scan operator or a sort operator that records per-group counts), Evergreen applies a Bonferroni correction, assigning each accumulator a per-group significance level of 𝛼 /( 𝑜 · 𝑎 · 𝑚 ). When 𝑚 is not known in ad-vance, Evergreen allocates a geometrically decreasing share to each successive group: the 𝑖 -th group receives a per-accumulator significance level of 𝛼 /( 𝑜 · 𝑎 · 2𝑖 ). Because Í∞ 
+
+> 𝑖 =1
+
+2−𝑖 = 1, the total error budget never exceeds 𝛼 regardless of the number of groups. Relevance sorting and estimation impose conflicting require-ments on tuple order. Relevance sorting arranges tuples to accel-erate deterministic early stopping, while estimation requires ex-changeable order for the CS guarantee. The optimizer therefore applies at most one strategy per aggregate operator. The choice is guided by a heuristic that assumes claims are likely true , which we expect to hold increasingly as LLMs improve. Under this assump-tion, the optimizer chooses to use relevance sorting for existential claims and cardinal claims with “at least” comparisons ( ≥, >) involv-ing low thresholds because they only require a few satisfying tuples to confirm that the comparison is true. For the remaining cases, the optimizer chooses estimation. For a true universal claim, 𝜇 = 1; the optimizer uses estimation to confirm this, avoiding processing all tu-ples. For a true cardinal claim with a large “at least” threshold, many satisfying tuples must be surfaced before early stopping can occur, diminishing relevance sorting’s advantage. For a true cardinal claim with an “at most” comparison ( ≤, <), observing satisfying tuples early does not confirm the claim; without estimation, confirmation requires processing all tuples. For a true equality comparison ( =, ≠), relevance sorting does not help because surfacing 𝑘 positives does not confirm there are exactly 𝑘 satisfying tuples, since additional unseen positives may exist; estimation instead bounds the count tightly enough to resolve the comparison. For a proportional claim, regardless of its validity, the optimizer chooses estimation because it cannot determine whether the equivalent count threshold ( 𝑛 · 𝜌 )is low, since 𝑛 is unknown at optimization time. In nested queries, the two strategies can coexist at different levels: the inner aggregate uses relevance sorting within each group, while the outer aggregate uses estimation with group order shuffled for exchangeability. We note that this heuristic of biasing towards true claims may backfire if a claim is in fact false. For example, if an existential claim is false, the optimizer’s choice of relevance sorting results in scanning the entire relation; in this case, estimation is more optimal. Adap-tively selecting between relevance sorting and estimation based on runtime observations is a promising direction for future work. 
+
+## 4.2 General-Purpose Optimizations 
+
+4.2.1 Operator Fusion. A verification query can contain multiple semantic operators, e.g., a semantic filter followed by a semantic map, each requiring a separate LLM call per tuple. Evergreen 
+
+reduces this cost by fusing consecutive semantic operators into a single operator. The fused semantic operator packs all prompts into a single LLM call and receives all results in a single response. It then applies the filter logic: if any filter expression evaluates to false, the tuple is discarded; otherwise, the map outputs are emitted. When the fused operator contains a semantic filter, the scan operator that provides the total number 𝑛 of input tuples to ag-gregates can no longer be used. Placing the scan below the fused operator would yield a pre-filter count that overstates the number of tuples the aggregate will observe. Placing the scan above would execute the fused operator’s LLM on every tuple before the aggre-gate begins since it is a pipeline breaker, defeating the purpose of early stopping. The optimizer therefore omits the scan when fusion is enabled. Without 𝑛 , three capabilities described in earlier subsections become unavailable: (1) deterministic bounds based on the maximum achievable count or proportion, (2) scaling the proportion CI to a count CI for count_if() , and (3) tighter CIs via sampling without replacement. In such cases, the optimizer falls back to other optimizations that do not require knowing 𝑛 . For instance, for cardinal claims with “at least” comparisons ( ≥, >), the inability to scale the CI makes estimation unviable, so the optimizer applies relevance sorting regardless of the threshold 𝑘 .Fusing multiple prompts into a single LLM call may reduce out-put quality. Yet, based on our observations, verification queries usually only require a few semantic operators, with each having a fairly narrow scope. With so few narrowly scoped prompts and the current capabilities of LLMs, this combination reduces the number of LLM calls with minimal degradation in quality. 
+
+4.2.2 Similarity Filtering. Semantic filter operators invoke an LLM on every input tuple to evaluate a boolean predicate, but many tuples may not satisfy it. Evergreen reduces unnecessary LLM calls by inserting a similarity pre-filter below each semantic filter. At optimization time, the optimizer generates a search query from the filter’s prompt—using the same LLM-driven approach as in relevance sorting—and embeds it. At execution time, the pre-filter computes the maximum cosine similarity between the query em-bedding and the tuple’s sentence-level embeddings; tuples whose similarity falls below a configurable threshold are discarded before the LLM is invoked. Sentence-level embeddings avoid the signal di-lution that occurs with a single document embedding, ensuring that a tuple is not discarded when even one of its sentences is relevant to the predicate. By setting the threshold conservatively, the filter achieves high recall while still eliminating tuples that are clearly unrelated to the predicate, avoiding expensive LLM calls. 
+
+4.2.3 Prompt Caching. Evergreen caches LLM responses on disk, keyed by model name and prompt string. When the same prompt is sent to the same model, the cached response is used, avoiding an LLM call. This benefits workloads where multiple claims share semantic operators over the same data. For example, ordinal claims about different positions in the same ranking—such as “restaurant X ranks first” and “restaurant Y ranks second” in service quality—may have identical filter and map prompts for every tuple. After verify-ing a claim, subsequent claims with the same semantic operators incur no additional LLM calls for previously evaluated tuples. 
+
+## 5 CITATIONS AS PROVENANCE 
+
+Providing only a single yes-or-no decision for a claim is often not enough for users. Each verification outcome should be paired with 
+
+> 6
+
+a collection of citations—references to the sources that support the decision—so that users can check every result by examining the underlying evidence. By treating claims as queries, Evergreen 
+
+formalizes citations through the lens of data provenance , providing users with a precise explanation for why each claim’s verification result holds based on the facts of the underlying relation. We first describe Evergreen ’s provenance semantics and then show how they are derived from semiring provenance for first-order logic [ 28 ]. 
+
+## 5.1 Provenance Semantics 
+
+Evergreen represents the provenance of each verification result as a set of provenance tokens , which annotate tuples in the relation with whether they satisfy certain logical formulas. A positive token 
+
+(𝑡, 𝜑, ⊤) indicates that 𝜑 (𝑡 ) = ⊤ (i.e., tuple 𝑡 satisfies formula 𝜑 ), while a negative token (𝑡, 𝜑, ⊥) indicates that 𝜑 (𝑡 ) = ⊥ (i.e., tuple 𝑡 
+
+does not satisfy 𝜑 ). Intuitively, each provenance token represents a fact about a specific tuple in the relation. Together, the tokens show the tuples that jointly explain the verification result. When the claim is true, the tokens provide an explanation for why the claim holds. When the claim is false, the tokens explain why-not ,i.e., why the claim’s negation holds. Evergreen produces different sets of provenance tokens depending on the claim’s type, validity, and query optimizations. Yet, in all cases, the resulting provenance is minimal , containing no redundant facts to explain the result. We now detail the provenance tokens returned for each claim type. 
+
+Existential and Universal Claims. When an existential claim is true, Evergreen produces a single positive token that serves as a witness for the claim. For example, given the claim “Some reviewers enjoy the restaurant’s chicken salad,” if tuple 𝑡 satisfies 𝜑 := “enjoys the restaurant’s chicken salad”, then a possible resulting prove-nance is {( 𝑡, 𝜑, ⊤)} . While there may be other tuples that satisfy 𝜑 ,
+
+Evergreen only returns the first encountered witness due to early stopping. When an existential claim is false, Evergreen produces the set {( 𝑡 1, 𝜑, ⊥) , . . . , (𝑡 | R | , 𝜑, ⊥)} , which indicates that no tuple in the relation R satisfies 𝜑 . When estimation is enabled and the count CI is below 1, the query only returns {( 𝑡 1, 𝜑, ⊥) , . . . , (𝑡 |𝑆 | , 𝜑, ⊥)} for the processed sample 𝑆 ⊂ R .The universal case is the dual of the existential case. For instance, if the claim “The reviews do not mention any vegan options” is true, then the resulting provenance is {( 𝑡 1, 𝜑, ⊤) , . . . , (𝑡 | R | , 𝜑, ⊤)} , where each tuple satisfies 𝜑 := “does not mention vegan options”. When estimation is enabled and the proportion CI is within [1 − 𝜀, 1],only the processed sample’s tokens {( 𝑡 1, 𝜑, ⊤) , . . . , (𝑡 |𝑆 | , 𝜑, ⊤)} are returned. When a universal claim is false, the provenance is a single counterexample {( 𝑡, 𝜑, ⊥)} that mentions vegan options. 
+
+Cardinal and Proportional Claims. Consider a cardinal claim 
+
+∃≥𝑘 𝑡 ∈ R : 𝜑 (𝑡 ), e.g., “At least a handful of vegetarian customers en-joyed the restaurant’s burgers.” When the claim is true, Evergreen 
+
+produces 𝑘 positive tokens {( 𝑡 1, 𝜑, ⊤) , . . . , (𝑡 𝑘 , 𝜑, ⊤)} that witness the claim. Evergreen only returns 𝑘 tokens since early stopping halts after finding 𝑘 satisfying tuples. Similar to the prior claim types, when estimation is enabled and the count CI is at least 𝑘 , Ev-ergreen returns only the positive tokens in the processed sample 
+
+𝑆 . When the claim is false and Evergreen processes all tuples, it pro-duces the set {( 𝑡 1, 𝜑, ⊤) , . . . , (𝑡 𝑘 ′ , 𝜑, ⊤) , (𝑡 𝑘 ′+1, 𝜑, ⊥) , . . . , (𝑡 | R | , 𝜑, ⊥)} 
+
+containing a token for each tuple in the relation, where 𝑘 ′ < 𝑘 
+
+tokens are positive and the remaining tokens are negative, demon-strating that fewer than 𝑘 tuples satisfy 𝜑 . When only a subset of tuples is processed—either because the count provably cannot reach 𝑘 given the remaining tuples, or because the count CI is below 
+
+𝑘 —the tokens cover only the processed tuples. The provenance for ∃>𝑘 is the same as ∃≥𝑘 but with 𝑘 replaced by 
+
+𝑘 +1. ∃<𝑘 is the negation of ∃≥𝑘 : when the claim is true, all tokens of the processed tuples are produced to show that fewer than 𝑘 satisfy 
+
+𝜑 ; when false, 𝑘 positive tokens are returned as counterexamples. 
+
+∃≤𝑘 follows analogously as the negation of ∃>𝑘 . For ∃=𝑘 and ∃≠𝑘 ,both true and false cases output all tokens of the processed tuples to demonstrate the exact count. Since proportional claims reduce to cardinal claims, Evergreen scales the proportion threshold 𝜌 by the number of processed tuples and then applies the provenance semantics of cardinal claims. 
+
+Ordinal Claims. An ordinal claim asserts that a target group 𝐺 𝑖 
+
+achieves rank 𝑟 among 𝑚 groups, where the rank is based on a per-group aggregate 𝑓 . Evergreen computes the provenance as 𝑚 − 1
+
+pairwise comparisons between 𝐺 𝑖 and every other group 𝐺 𝑗 where 
+
+𝑖 ≠ 𝑗 . Each pairwise comparison produces two sets of provenance tokens (one per group) following the provenance semantics for car-dinal or proportional claims. Specifically, when 𝑓 (𝐺 𝑖 , 𝜑 ) > 𝑓 (𝐺 𝑗 , 𝜑 ),
+
+𝐺 𝑖 ’s tokens follow the rules for a true ∃>𝑓 (𝐺 𝑗 ,𝜑 ) claim, while 𝐺 𝑗 ’s tokens follow the rules for a true ∃<𝑓 (𝐺 𝑖 ,𝜑 ) claim. When 𝑓 (𝐺 𝑖 , 𝜑 ) <
+
+𝑓 (𝐺 𝑗 , 𝜑 ), the roles are reversed. When 𝑓 (𝐺 𝑖 , 𝜑 ) = 𝑓 (𝐺 𝑗 , 𝜑 ), both groups’ tokens follow the rules for a true ∃=𝑓 (𝐺 𝑖 ,𝜑 ) claim and con-tribute all tokens. The overall provenance is the union across all comparisons, spanning tokens from all 𝑚 groups. 
+
+Nested Claims. A nested claim composes an outer quantifier over groups with an inner claim per group. Evergreen first evaluates each group’s inner claim, producing per-group provenance tokens following the semantics of the inner claim type. The outer quantifier then combines these per-group token sets following its provenance semantics. For example, if the claim ∀𝐺 𝑖 ∃≥2𝑡 ∈ 𝐺 𝑖 : 𝜑 (𝑡 ) is true, the provenance is the union of two positive tokens per group. If the claim is false, the provenance is the first failing group’s tokens, which shows that fewer than two tuples in that group satisfy 𝜑 .
+
+## 5.2 Semiring Semantics for First-Order Logic 
+
+Evergreen ’s provenance semantics are not ad hoc; they build on semiring provenance for first-order logic [ 28 ]. Seminal work on provenance semirings for positive relational algebra [ 26 ] formal-ized how each output tuple depends on input tuples by annotating each input tuple with a distinct indeterminate in a commutative semiring of polynomials. Annotations are propagated through pos-itive relational algebra queries. The semiring’s addition ( +) and multiplication ( ·) operations represent alternative and joint use of input tuples, respectively. The provenance of each output tuple is a polynomial; each monomial represents an alternative derivation, recording which input tuples jointly contribute to the output. Grädel and Tannen [ 28 ] extend this framework to full first-order logic by pairing each indeterminate 𝑝 with a dual indeterminate 𝑝 ,subject to the constraint 𝑝 · 𝑝 = 0. With their semantics, addition corresponds to disjunction and existential quantification, while mul-tiplication corresponds to conjunction and universal quantification. Intuitively, 𝑝 tracks a fact, 𝑝 tracks its negation, and 0 represents 
+
+> 7
+
+false assertions. The constraint 𝑝 · 𝑝 = 0 eliminates any explanation that jointly relies on contradictory facts. For a given claim with formula 𝜑 and relation R, each tuple 
+
+𝑡 ∈ R is associated with a pair of indeterminates 𝑝 𝑡 and 𝑝 𝑡 that correspond to the tokens (𝑡, 𝜑, ⊤) and (𝑡, 𝜑, ⊥) , respectively. An 
+
+interpretation 𝜋 maps literals to polynomials in the semiring and extends inductively to all first-order logic with the following rules (adapted from Definition 2 of [ 28 ]): (i) 𝜋 [[ 𝜓 ∨𝜒 ]] := 𝜋 [[ 𝜓 ]]+ 𝜋 [[ 𝜒 ]] ,(ii) 𝜋 [[ 𝜓 ∧ 𝜒 ]] := 𝜋 [[ 𝜓 ]] · 𝜋 [[ 𝜒 ]] , (iii) 𝜋 [[∃ 𝑡 ∈ R : 𝜓 (𝑡 )]] :=
+
+Í𝑡 ∈ R 𝜋 [[ 𝜓 (𝑡 )]] , (iv) 𝜋 [[∀ 𝑡 ∈ R : 𝜓 (𝑡 )]] := Î𝑡 ∈ R 𝜋 [[ 𝜓 (𝑡 )]] , and (v) 𝜋 [[¬ 𝜓 ]] := 𝜋 [[ nnf (¬ 𝜓 )]] , where 𝜓 and 𝜒 are formulas and 
+
+nnf (·) denotes the transformation to negation normal form. In our setting, 𝜋 (𝜑 (𝑡 )) = 𝑝 𝑡 when 𝑡 satisfies 𝜑 and 0 otherwise; dually, 
+
+𝜋 (¬ 𝜑 (𝑡 )) = 𝑝 𝑡 when 𝑡 does not satisfy 𝜑 and 0 otherwise. By annotating each fact that holds with its indeterminate, we track how individual tuples contribute to establishing the verification result. 
+
+Evergreen ’s provenance semantics are derived from the rules above. However, rather than computing the full polynomial , each query returns a single monomial —a minimal explanation—either because the polynomial is itself a single monomial or because the query’s optimizations result in one. The monomial may also contain just a subset of indeterminates compared to its full counterpart in the polynomial due to optimizations such as estimation. Our semantics for existential and universal claims are a direct application of Grädel and Tannen’s [ 28 ] rules above for existential and universal quantifiers, respectively (modulo returning just a sin-gle monomial). Specifically, for an existential claim ∃𝑡 ∈ R : 𝜑 (𝑡 ),applying the existential rule (iii) yields Í𝑡 ∈ R 𝜋 (𝜑 (𝑡 )) . Each tuple 𝑡 
+
+satisfying 𝜑 contributes a monomial 𝑝 𝑡 to the resulting polynomial, while non-satisfying tuples contribute 0. Since any single monomial 
+
+𝑝 𝑡 suffices as a witness, Evergreen returns the corresponding pos-itive token {( 𝑡, 𝜑, ⊤)} for the first satisfying tuple. When the claim is false, equivalently ∀𝑡 ∈ R : ¬𝜑 (𝑡 ), the universal rule (iv) yields 
+
+Î𝑡 ∈ R 𝜋 (¬ 𝜑 (𝑡 )) = Î𝑡 ∈ R 𝑝 𝑡 . This single monomial corresponds to all negative tokens, so the query returns {( 𝑡 1, 𝜑, ⊥) , . . . , (𝑡 | R | , 𝜑, ⊥)} .The semantics extend naturally when the query only processes a sample 𝑆 ⊂ R of tuples. The universal case is the dual. Grädel and Tannen [ 28 ] do not explicitly provide provenance expressions for cardinal quantifiers, so we derive them based on the rules above. By deriving provenance polynomials for cardinal claims, we also obtain the expressions for the remaining claim types, which are defined in terms of cardinal provenance. For instance, 
+
+∃≥𝑘 𝑡 ∈ R : 𝜑 (𝑡 ) is equivalent to 𝑘 nested existential quantifiers over strictly ordered tuples, each satisfying 𝜑 . Evaluating in the semiring replaces each existential with a sum and each conjunction with a product, yielding 
+
+𝜋 [[∃ ≥𝑘 𝑡 ∈ R : 𝜑 (𝑡 )]] =∑︁   
+
+> 𝑊 ⊆ R |𝑊 |=𝑘
+
+Ö 
+
+> 𝑡 ∈𝑊
+
+𝜋 [[ 𝜑 (𝑡 )]] .
+
+The interpretation 𝜋 assigns 0 to any tuple 𝑡 ∈ 𝑊 that does not sat-isfy 𝜑 , so the resulting polynomial only contains 𝑘 -element mono-mials where all corresponding tuples satisfy 𝜑 . As such, Evergreen 
+
+only returns the 𝑘 positive tokens {( 𝑡 1, 𝜑, ⊤) , . . . , (𝑡 𝑘 , 𝜑, ⊤)} that correspond to the first 𝑘 -element monomial. The polynomial for ∃=𝑘 𝑡 ∈ R : 𝜑 (𝑡 ) additionally requires that the remaining |R| − 𝑘 tuples do not satisfy 𝜑 :
+
+𝜋 [[∃ =𝑘 𝑡 ∈ R : 𝜑 (𝑡 )]] =∑︁   
+
+> 𝑊 ⊆ R |𝑊 |=𝑘
+
+Ö 
+
+> 𝑡 ∈𝑊
+
+𝜋 [[ 𝜑 (𝑡 )]] · 
+
+Ö  
+
+> 𝑡 ′∈ R\ 𝑊
+
+𝜋 [[¬ 𝜑 (𝑡 ′)]] .
+
+The second product introduces negative indeterminates for tuples outside 𝑊 . Since the interpretation assigns 0 to any tuple in 𝑊 that does not satisfy 𝜑 and any satisfying tuple in R \ 𝑊 , only the unique subset of exactly 𝑘 satisfying tuples produces a nonzero monomial. The resulting monomial contains an indeterminate for every tuple, where 𝑘 are positive and the remaining are negative, so Evergreen 
+
+returns {( 𝑡 1, 𝜑, ⊤) , . . . , (𝑡 𝑘 , 𝜑, ⊤) , (𝑡 𝑘 +1, 𝜑, ⊥) , . . . , (𝑡 | R | , 𝜑, ⊥)} .The other cardinal quantifiers share one of these two expressions: 
+
+∃>𝑘 reduces to ∃≥𝑘 +1, while ∃<𝑘 , ∃≤𝑘 , and ∃≠𝑘 follow the same form as ∃=𝑘 but sum over subsets of size < 𝑘 , ≤ 𝑘 , and ≠ 𝑘 , respectively. Proportional quantifiers reduce to cardinal quantifiers by scaling the proportion threshold by |R| , so their provenance polynomials follow directly. For ordinal claims, asserting that group 𝐺 𝑖 achieves rank 𝑟 is equivalent to a conjunction of 𝑚 − 1 pairwise cardinal comparisons; in the semiring, this conjunction becomes a product of per-comparison polynomials, consistent with the pairwise token structure described in the previous subsection. Nested quantifiers are already supported by the inductive interpretation rules. 
+
+## 6 EXPERIMENTAL EVALUATION 
+
+Our experimental evaluation aims to show that Evergreen can achieve higher verification quality at lower cost and latency com-pared to existing approaches. In addition to an end-to-end evalu-ation, we perform a more fine-grained quality analysis of Ever-green ’s provenance and its individual semantic operators. Finally, we conduct an ablation study to quantify the effect of each opti-mization on Evergreen ’s quality, cost, and latency. 
+
+Benchmark Datasets and Claims. To the best of our knowledge, no existing benchmark targets claim verification over semantic aggregates, so we curate one to evaluate Evergreen . From our analysis of production semantic aggregation queries on Snowflake AISQL [ 44 ], we observe that queries are often executed over re-lations of customer reviews, such as service or product reviews. We thus obtain datasets by selecting three subsets of the restau-rant reviews in the Yelp Open Dataset [ 78 ], which we identify as johns_roast_pork (1,609 tuples; 230k tokens), mcdonalds_mo 
+
+(1,813 tuples; 244k tokens), and village_whiskey (1,603 tuples; 291k tokens). mcdonalds_mo contains reviews from 62 McDon-ald’s locations in Missouri USA, while johns_roast_pork and 
+
+village_whiskey are reviews of separate restaurants. We pose four aggregation queries over the three datasets via AISQL’s AI_AGG() function [ 44 ] with Llama 3.3 70B [ 25 ]. These queries are also inspired by the observed workloads at Snowflake. We issue separate summarization queries to johns_roast_pork 
+
+and village_whiskey . For mcdonalds_mo , we issue a comparative query to highlight commonalities and differences between restau-rant locations and a ranking query to describe the top three loca-tions in terms of service. We use the approach described in Section 2 to decompose each aggregate response into a list of claims. 
+
+> 8
+
+Table 1: Benchmark claims. Comma-separated claim types are ordered from the outer to inner quantifier. Ordinal claims compare proportions.                                                    
+
+> ID Dataset Task Claim Type Claim Grounded
+> C1
+> johns_roast_pork Summarize Cardinal Less than a handful of customers complained about service quality. ⊥
+> C2 Existential Some reviewers enjoy the restaurant’s chicken salad. ⊤
+> C3 Proportional Common criticisms of John’s Roast Pork include cash-only policy. ⊥
+> C4 Universal The reviews do not mention any vegan options. ⊤
+> C5
+> mcdonalds_mo
+> Compare Existential, Universal Some McDonald’s locations had no negative reviews. ⊥
+> C6 Proportional, Cardinal Only a minority of McDonald’s locations had multiple reports of incorrect orders. ⊥
+> C7 Proportional, Existential The majority of McDonald’s locations had reports of cold food. ⊤
+> C8 Universal, Cardinal All McDonald’s locations have multiple complaints about poor service quality. ⊤
+> C9 Rank Ordinal The top-ranked McDonald’s location in terms of service has the Business ID [A]. ⊤
+> C10 Ordinal The McDonald’s location ranked #2 in terms of service has the Business ID [B]. ⊤
+> C11 Ordinal The top-ranked McDonald’s location in terms of service has the Business ID [B]. ⊥
+> C12 Ordinal The McDonald’s location ranked #2 in terms of service has the Business ID [A]. ⊥
+> C13
+> village_whiskey Summarize Cardinal More than a handful of vegetarian customers enjoyed the restaurant’s burgers. ⊤
+> C14 Existential Some reviewers enjoyed the restaurant’s bacon fries. ⊥
+> C15 Proportional Village Whiskey has received majority positive reviews. ⊤
+> C16 Universal There are over 200 varieties of whiskey available at Village Whiskey. ⊥
+
+To curate a diverse and balanced benchmark of claims, we take a selection of automatically generated claims from the semantic ag-gregation queries and combine them with manually written claims. In total, we obtain 16 claims (Table 1) that span all claim types described in Section 2, with an even split between grounded and ungrounded claims. Claims are compiled to queries using an LLM by providing the claim, the original aggregation prompt, the dataset schema with attribute descriptions, and documentation of Ever-green ’s API, which contains example queries for a separate domain (i.e., movie reviews). Each generated query was manually reviewed for correctness, and we found that the LLM produced correct queries for all 16 claims. We leave a systematic evaluation of compilation accuracy across a larger set of claims to future work. In general, human annotation of claim-level ground truth is infeasible in our setting because verifying quantified claims (e.g., “all reviews are positive”) may require reviewing every tuple in the relation—over 1,600 per dataset. Instead, the ground truth validity of each claim is determined with a reference implementation of 
+
+Evergreen , where each invocation of a semantic operator takes the majority vote from an ensemble of the three most capable LLMs available to us (Claude Opus 4.6 [ 7], Claude Opus 4.5 [ 5], and Gemini 3 Pro [ 24 ]). Moreover, the reference implementation disables all optimizations, since some can degrade quality and early stopping prevents the capture of tuple-level ground truth labels for provenance and semantic operator quality evaluations. 
+
+Implementations. We use Snowflake Cortex AI [ 64 ] for LLM inference and embedding generation. All embeddings are created by 
+
+snowflake-arctic-embed-l-v2.0 [ 48 ]. We compare Evergreen 
+
+with three implementations: base_rm , rag_agent , and evg_unopt .
+
+base_rm verifies a claim by prompting an LLM to reason about whether the claim is supported by the given input relation. base_rm 
+
+represents existing baseline approaches that use an LLM-as-a-judge to verify whether a claim is grounded in some given context [ 50 , 66 ,84 ]. We instantiate three versions of base_rm , each with a different LLM: Claude Opus 4.6 [ 7], Sonnet 4.6 [ 8], and Haiku 4.5 [ 4 ]. The implementation serializes each tuple as a JSON object and greedily adds them to the prompt until Claude’s 200k token context window limit is exhausted. Since our datasets exceed the context window limit, the input relation is truncated and tuples beyond the limit are dropped. The LLM is instructed to first consider the logical structure of the claim and describe its thinking process before returning a binary decision of whether the claim is grounded in the input relation. When claims involve vague quantifiers (e.g., “common”), we also provide hints to the LLM that specify exact thresholds (e.g., “at least 10%”), providing a fairer comparison with the ground truth obtained from the reference implementation. Since base_rm 
+
+sometimes exhausted its 8,192-token output limit, we allowed it to retry up to 10 times, with all claims succeeding within that budget. Retries are included in latency measurements. We disable extended thinking across all Claude models to avoid hitting the maximum output token limit and set the temperature to 0 for better reproducibility. We keep Opus and Sonnet’s effort level at their high default, which also applies to the remaining implementations. 
+
+rag_agent is an LLM agent that uses a retrieval engine as a tool and represents an implementation of iterative retrieval-based claim verification approaches [ 38 , 77 ]. The interface to the retrieval engine is similar to relevance sorting but restricted to top-k queries. In addition to a semantic search query, inclusion keywords, and exclusion keywords for the text attribute, the agent must specify a limit on the most relevant tuples to retrieve from the database. The agent can also include structured filters in the retrieval query (e.g., 
+
+business_id = [A] ), which are executed as pre-filters before re-trieving the requested number of tuples. After tuples are retrieved, the LLM can choose how many tuples to initially view. At each iter-ation of the agentic loop, the LLM either (1) issues a retrieval query and views the initial results, (2) views the next page of previously retrieved tuples, or (3) outputs whether the claim is grounded and terminates. Hints for vague quantifiers are provided to rag_agent 
+
+as well. We instantiate rag_agent with the same three Claude mod-els as base_rm and enable adaptive extended thinking for Opus and Sonnet, which requires the default temperature of 1. 
+
+evg_unopt is an instantiation of Evergreen without any opti-mizations enabled and represents a naive semantic query processing engine like Binder [ 15 ]. evg_unopt evaluates semantic operators on every tuple in the relation using Opus. All Evergreen imple-mentations use a temperature of 0 for reproducibility and do not 
+
+> 9
+
+use extended thinking. Moreover, implementations process tuples in batches of 32, trading up to one batch size of unnecessary LLM calls for significantly lower latency. We instantiate six additional implementations of Evergreen 
+
+with all optimizations enabled; they are collectively referred to as 
+
+evg_opt . Each implementation uses a different LLM for its semantic operators. We include the three Claude models used in base_rm 
+
+and three additional Llama models (Llama 4 Maverick [49], Llama 4 Scout [ 49 ], and Llama 3.1 8B [ 25 ]) to evaluate how quality, cost, and latency change with even smaller and weaker models. Opus is always used for the optimizer’s LLM to generate high-quality search queries. To maintain high recall, we set the threshold for similarity filters to 0.15. For estimation with CSs, we use a confidence level of 0.95 (i.e., 𝛼 = 0.05 ) and a relative error of 𝜀 = 0.05 .
+
+Verification Results. Figure 1 highlights the quality versus cost tradeoffs for each implementation, and Table 2 shows their quality, cost, and latency numbers in more detail. Precision, recall, and F1 score treat ungrounded claims as the positive class, measuring an implementation’s ability to detect hallucinations. Since our bench-mark has an even split between grounded and ungrounded claims, we also report accuracy. Cost is computed from input and output to-ken counts at published per-million-token USD rates for each LLM. For Claude models, we use Anthropic’s input/output rates: $5/$25 for Opus 4.6, $3/$15 for Sonnet 4.6, and $1/$5 for Haiku 4.5 [ 6 ]. For open source Llama models, we use Groq’s rates: $0.20/$0.60 for Maverick, $0.11/$0.34 for Scout, and $0.05/$0.08 for 3.1 8B [ 27 ]. Latency is measured in wall-clock seconds; however, we note that because implementations use Cortex for inference, measurements are subject to server-side variability. Reported costs and latencies for Evergreen include both the optimization and execution phases. 
+
+evg_opt with Opus matches the reference implementation with perfect F1 while reducing cost by 3.2 × and latency by 4.0 × relative to evg_unopt , demonstrating the effectiveness of Evergreen ’s optimizations. Although evg_opt exceeds base_rm in F1 for each LLM at higher cost and latency, evg_opt with smaller and weaker models simultaneously achieves higher quality at lower cost and latency than base_rm with larger and stronger models. For example, compared to base_rm with Opus, evg_opt with Llama 8B achieves higher F1 (0.89 vs. 0.82) at 48 × lower cost ($0.021 vs. $0.999) and 2.3 × lower latency (40s vs. 91s). rag_agent generally outperforms or maintains comparable quality with base_rm across all models, albeit at higher cost and latency due to more thinking tokens. When both use Opus, evg_opt beats rag_agent on all metrics except cost, which is comparable. Furthermore, evg_opt with Maverick matches rag_agent with Opus on mean F1 (0.93) at 63 × lower cost ($0.060 vs. $3.76) and 4.2 × lower latency (62s vs. 263s). These results highlight the advantages of Evergreen ’s neuro-symbolic design: by restricting LLMs to fine-grained semantic tasks, Evergreen 
+
+enables reliable verification at significantly lower cost and latency using weaker models, outperforming approaches that rely on strong LLMs for both semantic and symbolic processing. Figure 4 reveals the failure modes for each implementation. First, 
+
+base_rm fails to verify the grounded existential claim C2 since the supporting witness tuple (i.e., a review that enjoys the restau-rant’s chicken salad) falls beyond the LLM’s context window limit. 
+
+base_rm also struggles with the grounded ordinal claim C10 be-cause it cannot confidently compute the relevant quantities for each McDonald’s location and defaults to saying the claim is ungrounded. On the other hand, rag_agent generally performs better for C2 compared to base_rm , since rag_agent can use retrieval to find the relevant witness that verifies the claim. However, rag_agent still struggles with ordinal claims (e.g., C10 and C11), sometimes failing to identify the true top-ranked location because it is not equipped with a reliable mechanism to obtain all unique locations (via the business ID). rag_agent with Haiku also faces the same issue as 
+
+base_rm , concluding that the claim is ungrounded due to uncer-tainties in quantification. In contrast, evg_opt generally performs well on ordinal claims; though, C10 is still relatively difficult for 
+
+evg_opt when using weaker models because mislabels can result in different rankings, especially when quantities are close. evg_opt 
+
+fails the most on claim C14, an ungrounded existential claim. For such claims, a single false “witness” suffices to flip the verdict. Here, the weaker models mislabeled a positive review about bacon and fries separately, rather than bacon fries. 
+
+Provenance and Semantic Operator Quality. To understand how Evergreen ’s provenance and semantic operators degrade with weaker models, we measure provenance precision and per-operator quality (Table 3). All metrics are micro-averaged across queries, pooling raw counts before computing each metric. Provenance pre-cision is the proportion of returned tokens that are correct—a posi-tive token (𝑡, 𝜑, ⊤) is correct if 𝜑 (𝑡 ) = ⊤ according to the reference, and dually for a negative token (𝑡, 𝜑, ⊥) . We report provenance pre-cision rather than recall because Evergreen intentionally returns a minimal set of provenance tokens; thus, we only require that the provenance is correct, not exhaustive. Filter quality is measured by precision, recall, and F1, treating tuples selected by the refer-ence’s filter as the positive class. Map accuracy is the proportion of map operator outputs that match the reference. evg_opt with Opus nearly matches evg_unopt across all metrics, achieving 0.99 for provenance precision, filter F1, and map accuracy. Quality degrades gracefully with model cost: all Claude models remain at least 0.96 across the three metrics, while Llama ranges from 0.71 to 0.97. 
+
+Ablation Study. We evaluate the contribution of each optimization by performing a leave-one-out ablation study using Haiku, disabling one optimization at a time while keeping the others enabled. Each optimization is evaluated only on the claims to which it applies. Figure 5 reports the resulting cost and latency multipliers relative to the fully optimized configuration. Note that disabling early stopping effectively disables relevance sorting and estimation with CSs since neither provides benefit when all tuples are processed. Disabling early stopping leads to the largest increase in both cost and latency by 6.7×, illustrating the benefits of verification-aware optimizations. Estimation with CSs and prompt caching each yield comparable savings of 2× to 2.7×. Operator fusion and relevance sorting provide more moderate savings of 1.5× to 2×. Similarity filtering produces almost no cost savings in our evaluation because the similarity threshold is set low to maintain high recall, filtering out few tuples before the semantic filter is executed. We further examine the similarity filter’s behavior on four rep-resentative claims (C3, C9, C13, C16) across their entire datasets. Figure 6 shows the recall and filter rate of the similarity filter at different thresholds 𝜏 ∈ { 0.05 , 0.15 , . . . , 0.55 }. We measure recall as the proportion of tuples selected by the reference implementation’s 
+
+> 10
+
+Table 2: Verification quality, cost, and latency across claims. Cost and latency are averaged over claims. We report the mean with [min, max] over three trials.                                                                                       
+
+> Implementation LLM Precision Recall F1 Score Accuracy Cost ($) Latency (s)
+> base_rm
+> Claude Opus 4.6 0.78 [0.78, 0.78] 0.88 [0.88, 0.88] 0.82 [0.82, 0.82] 0.81 [0.81, 0.81] 0.999 [0.996, 1.000] 91 [56, 155] Claude Sonnet 4.6 0.77 [0.70, 0.80] 0.96 [0.88, 1.00] 0.85 [0.78, 0.89] 0.83 [0.75, 0.88] 0.600 [0.594, 0.604] 68 [52, 83] Claude Haiku 4.5 0.64 [0.64, 0.64] 0.88 [0.88, 0.88] 0.74 [0.74, 0.74] 0.69 [0.69, 0.69] 0.199 [0.199, 0.199] 23 [23, 23]
+> rag_agent
+> Claude Opus 4.6 0.96 [0.89, 1.00] 0.92 [0.75, 1.00] 0.93 [0.86, 1.00] 0.94 [0.88, 1.00] 3.76 [3.71, 3.78] 263 [256, 268] Claude Sonnet 4.6 0.85 [0.80, 0.89] 0.96 [0.88, 1.00] 0.90 [0.88, 0.94] 0.90 [0.88, 0.94] 3.24 [2.82, 3.60] 331 [300, 352] Claude Haiku 4.5 0.60 [0.54, 0.64] 0.92 [0.88, 1.00] 0.72 [0.67, 0.76] 0.65 [0.56, 0.69] 0.206 [0.180, 0.226] 24 [23, 25]
+> evg_unopt Claude Opus 4.6 1.00 [1.00, 1.00] 1.00 [1.00, 1.00] 1.00 [1.00, 1.00] 1.00 [1.00, 1.00] 12.05 [12.04, 12.05] 661 [615, 722]
+> evg_opt
+> Claude Opus 4.6 1.00 [1.00, 1.00] 1.00 [1.00, 1.00] 1.00 [1.00, 1.00] 1.00 [1.00, 1.00] 3.71 [3.56, 3.87] 166 [152, 190] Claude Sonnet 4.6 0.88 [0.88, 0.88] 0.88 [0.88, 0.88] 0.88 [0.88, 0.88] 0.88 [0.88, 0.88] 1.83 [1.80, 1.89] 78 [77, 80] Claude Haiku 4.5 1.00 [1.00, 1.00] 0.88 [0.88, 0.88] 0.93 [0.93, 0.93] 0.94 [0.94, 0.94] 0.610 [0.597, 0.626] 66 [62, 71] Llama 4 Maverick 1.00 [1.00, 1.00] 0.88 [0.88, 0.88] 0.93 [0.93, 0.93] 0.94 [0.94, 0.94] 0.060 [0.053, 0.064] 62 [58, 69] Llama 4 Scout 0.75 [0.75, 0.75] 0.75 [0.75, 0.75] 0.75 [0.75, 0.75] 0.75 [0.75, 0.75] 0.033 [0.033, 0.034] 33 [31, 34] Llama 3.1 8B 0.92 [0.88, 1.00] 0.88 [0.88, 0.88] 0.89 [0.88, 0.93] 0.90 [0.88, 0.94] 0.021 [0.020, 0.023] 40 [34, 44]
+
+C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 
+
+Claim 
+
+base_rm Claude Opus 4.6 
+
+base_rm Claude Sonnet 4.6 
+
+base_rm Claude Haiku 4.5 
+
+rag_agent Claude Opus 4.6 
+
+rag_agent Claude Sonnet 4.6 
+
+rag_agent Claude Haiku 4.5 
+
+evg_unopt Claude Opus 4.6 
+
+evg_opt Claude Opus 4.6 
+
+evg_opt Claude Sonnet 4.6 
+
+evg_opt Claude Haiku 4.5 
+
+evg_opt Llama 4 Maverick 
+
+evg_opt Llama 4 Scout 
+
+evg_opt Llama 3.1 8B 
+
+> Implementation
+
+1.00 0.00 0.00 1.00 1.00 1.00 1.00 1.00 1.00 0.00 1.00 1.00 1.00 1.00 1.00 1.00 
+
+1.00 0.00 1.00 1.00 1.00 1.00 1.00 0.67 1.00 0.00 1.00 0.67 1.00 1.00 1.00 1.00 
+
+1.00 0.00 1.00 1.00 1.00 1.00 1.00 0.00 0.00 0.00 0.00 1.00 1.00 1.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 0.67 1.00 1.00 1.00 0.67 0.67 1.00 1.00 1.00 1.00 1.00 
+
+1.00 0.33 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.67 1.00 0.33 1.00 1.00 1.00 
+
+1.00 1.00 1.00 0.33 0.67 1.00 0.33 0.00 0.00 0.33 0.67 1.00 0.33 1.00 0.67 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.00 1.00 1.00 1.00 0.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.00 0.00 0.00 1.00 1.00 0.00 1.00 1.00 
+
+1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.33 1.00 1.00 1.00 0.00 1.00 1.00 
+
+Figure 4: Per-claim verification correctness. Each cell shows the proportion over three trials in which the implementation produced the correct result. Table 3: Evergreen ’s provenance precision and semantic operator quality micro-averaged across queries. We report the mean with [min, max] over three trials.                                           
+
+> Implementation LLM Provenance Precision Filter Precision Filter Recall Filter F1 Score Map Accuracy
+> evg_unopt Claude Opus 4.6 0.99 [0.99, 1.00] 1.00 [1.00, 1.00] 0.99 [0.99, 0.99] 0.99 [0.99, 0.99] 1.00 [1.00, 1.00]
+> evg_opt
+> Claude Opus 4.6 0.99 [0.98, 0.99] 0.99 [0.99, 0.99] 0.98 [0.98, 0.98] 0.99 [0.98, 0.99] 0.99 [0.99, 0.99] Claude Sonnet 4.6 0.98 [0.98, 0.98] 0.99 [0.99, 0.99] 0.97 [0.97, 0.97] 0.98 [0.98, 0.98] 0.99 [0.99, 0.99] Claude Haiku 4.5 0.96 [0.96, 0.96] 0.97 [0.97, 0.97] 0.98 [0.97, 0.98] 0.97 [0.97, 0.97] 0.98 [0.98, 0.98] Llama 4 Maverick 0.93 [0.93, 0.94] 0.96 [0.96, 0.97] 0.88 [0.88, 0.89] 0.92 [0.92, 0.92] 0.97 [0.96, 0.97] Llama 4 Scout 0.94 [0.94, 0.94] 0.97 [0.97, 0.97] 0.56 [0.56, 0.56] 0.71 [0.71, 0.71] 0.95 [0.95, 0.96] Llama 3.1 8B 0.84 [0.81, 0.86] 0.90 [0.87, 0.92] 0.77 [0.77, 0.78] 0.83 [0.82, 0.84] 0.92 [0.92, 0.92]
+
+LLM-based semantic filter that also exceed the similarity thresh-old, and filter rate as the proportion of all tuples filtered out due to being below the similarity threshold. At the default threshold 
+
+𝜏 = 0.15 , the similarity filter achieves a recall greater than 0.97 on all claims with a filter rate of at most 0.09. At higher thresholds, claims with semantically specific filter predicates (e.g., C16: "The {text} mentions the number of whiskey varieties available" )maintain high recall; however, claims with semantically broader 
+
+filter predicates (e.g., C3: "The {text} expresses a criticism or complaint" ) experience a rapid drop in recall. Thus, 𝜏 = 0.15 is a conservative default that prioritizes recall on all claims. Integrat-ing more advanced techniques, such as automatically learning the optimal threshold per query [ 55 , 62 ] or late interaction for more fine-grained semantic matching [39, 60], is a natural next step. Four of the six optimizations—relevance sorting, operator fusion, similarity filtering, and prompt caching—maintain perfect verifi-cation quality. Disabling early stopping and estimation with CSs each results in a 0.167 precision decrease. Both drops are caused by C4, a grounded universal claim. With early stopping or estimation enabled, Evergreen only processes a subset of tuples and correctly finds no counterexample. Without these optimizations, processing       
+
+> 11 ES
+> RS
+> ECS
+> OF
+> SF
+> PC
+> Implementation
+> 0
+> 2
+> 4
+> 6
+> Cost Multiplier  6.7
+> 1.7 2.3 1.5 1.0
+> 2.0
+> ES
+> RS
+> ECS
+> OF
+> SF
+> PC
+> Implementation
+> 0
+> 2
+> 4
+> 6
+> Latency Multiplier  6.7
+> 1.5 2.1 2.0 1.5
+> 2.7
+
+Figure 5: Cost and latency multipliers relative to evg_opt with Claude Haiku 4.5 when each optimization is disabled. ES: Early Stopping, RS: Relevance Sorting, ECS: Estimation with Confidence Sequences, OF: Operator Fusion, SF: Similarity Filtering, PC: Prompt Caching. Bars show the mean across three trials and error bars indicate the range. 0.1 0.2 0.3 0.4 0.5     
+
+> Similarity Threshold
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Recall
+> 0.1 0.2 0.3 0.4 0.5
+> Similarity Threshold
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Filter Rate
+> C3
+> C9
+> C13
+> C16
+
+Figure 6: Similarity filter recall and filter rate across similar-ity thresholds 𝜏 ∈ { 0.05 , 0.15 , . . . , 0.55 }. The dashed line marks the default threshold 𝜏 = 0.15 . Points indicate the mean over three trials, and the shaded regions show the range. 
+
+all tuples increases the LLM’s likelihood of flagging a false coun-terexample, flipping the verdict. This effect is not generalizable, however, as estimation may also miss a valid counterexample due to sampling. Overall, we find that our optimizations yield substan-tial performance gains while maintaining quality. 
+
+## 7 RELATED WORK 
+
+Section 1 presented work relevant to claim verification. Here, we discuss other related work in more detail. 
+
+Semantic query processing engines such as Snowflake’s Cor-tex AISQL [ 44 ], DocETL [ 62 , 75 ], LOTUS [ 55 ], and Palimpzest [ 45 ,58 ], among many others [ 3, 13 , 15 , 18 , 20 , 21 , 29 , 43 , 47 , 59 , 69 , 72 , 76 ], have emerged in recent years. At their core is a set of semantic operators—including semantic aggregation—which augment tradi-tional database operators with LLMs. To reduce the cost of invoking these operators, novel query optimizers [ 58 , 75 ] and efficient execu-tion strategies [ 46 , 63 , 65 , 70 , 79 , 80 , 83 ] have been proposed, with recent work introducing the SemBench benchmark for evaluating these systems [ 40 ]. Yet, the community lacks a systematic approach to verify the correctness of semantic aggregates. Lee et al . [ 41 ]describe a vision for semantic integrity constraints as a declara-tive abstraction for enforcing the correctness of LLM outputs in semantic queries. Evergreen is a step towards this vision. 
+
+Approximate query processing (AQP) has a long history of trading accuracy for speed via sampling [ 1 , 11 , 30 , 54 , 85 ]. Online aggregation [ 30 ] introduced progressive refinement of aggregate estimates, allowing users to stop early once estimates appear tight enough; however, continuously monitoring classical confidence intervals invalidates their error guarantees [35]. Evergreen ’s use of confidence sequences [ 19 , 73 ] enables valid monitoring without a predetermined sample size. More recent work explores approx-imating aggregation queries that involve evaluating multimodal semantic operators for filters (e.g., ABae [ 36 ], ThalamusDB [ 33 ]) and the statistics of interest (e.g., InQuest [ 57 ]). In contrast to these settings, which estimate bounds on the true aggregate values, verifi-cation queries only need to resolve boolean comparisons involving the aggregates. This structure enables earlier termination: while traditional AQP relaxes a precise aggregate to an interval estimate, 
+
+Evergreen collapses the interval to a binary verdict, needing only enough precision to resolve the comparison. 
+
+Data provenance originated from the database community [ 22 ], with foundational models including data lineage [ 17 ], why- and where-provenance [ 9 ], and why-not provenance [ 10 ]. Seminal work by Green et al . [ 26 ] unifies several of these models under provenance semirings, also known as how-provenance. Subsequent work ex-tends semiring semantics to other settings, such as aggregation [ 2]and full first-order logic with negation [ 28 ]. Several database sys-tems support provenance capture and querying, differing in prove-nance model or approach [ 23 , 42 , 51 , 52 , 56 , 61 ]; however, none support semantic queries or provenance for first-order logic. In NLP, Zhang et al . [ 81 , 82 ] formalize provenance for claims as a labeled graph over dependent web sources, tracing how a claim originated and evolved. Unlike this setting, Evergreen verifies quantified claims over independent tuples in a relation, motivating its application of semiring provenance for first-order logic. 
+
+## 8 CONCLUSIONS 
+
+We present Evergreen , a system that reliably and efficiently veri-fies claims extracted from semantic aggregates by compiling them into declarative semantic verification queries composed of standard relational and semantic operators. This formulation admits a suite of complementary optimizations that substantially reduce cost and latency while preserving verification quality. Furthermore, each verdict is accompanied by a minimal explanation based on semiring provenance for first-order logic. Looking ahead, a natural extension is to exploit shared computation across the many claims that arise from a semantic aggregate, akin to multi-query optimization in databases. As semantic aggregation becomes a standard feature of production data systems, Evergreen demonstrates that the declar-ative query abstractions already present in these systems can be efficiently leveraged to make their outputs reliable and explainable. 
+
+## ACKNOWLEDGMENTS 
+
+We thank the Snowflake Cortex AISQL team for their valuable support and feedback. This material is based upon work supported by the NSF Graduate Research Fellowship Program under Grant Nos 2439559 and 2040433. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of the NSF. 
+
+> 12
+
+## REFERENCES 
+
+[1] Sameer Agarwal, Barzan Mozafari, Aurojit Panda, Henry Milner, Samuel Madden, and Ion Stoica. 2013. BlinkDB: queries with bounded errors and bounded response times on very large data. In Proceedings of the 8th ACM European Conference on Computer Systems (Prague, Czech Republic) (EuroSys ’13) . Association for Computing Machinery, New York, NY, USA, 29–42. https://doi.org/10.1145/ 2465351.2465355 [2] Yael Amsterdamer, Daniel Deutch, and Val Tannen. 2011. Provenance for ag-gregate queries. In Proceedings of the Thirtieth ACM SIGMOD-SIGACT-SIGART Symposium on Principles of Database Systems (Athens, Greece) (PODS ’11) . As-sociation for Computing Machinery, New York, NY, USA, 153–164. https: //doi.org/10.1145/1989284.1989302 [3] Eric Anderson, Jonathan Fritz, Austin Lee, Bohou Li, Mark Lindblad, Henry Lindeman, Alex Meyer, Parth Parmar, Tanvi Ranade, Mehul A. Shah, et al . 2025. The Design of an LLM-powered Unstructured Analytics System. In CIDR .[4] Anthropic. 2025. System Card: Claude haiku 4.5. https://www-cdn.anthropic. com/7aad69bf12627d42234e01ee7c36305dc2f6a970.pdf. Accessed: 2026-03-31. [5] Anthropic. 2025. System Card: Claude Opus 4.5. https://www-cdn.anthropic. com/bf10f64990cfda0ba858290be7b8cc6317685f47.pdf. Accessed: 2026-03-31. [6] Anthropic. 2026. Claude API Docs: Pricing. https://platform.claude.com/docs/ en/about-claude/pricing. Accessed: 2026-03-31. [7] Anthropic. 2026. System Card: Claude Opus 4.6. https://www-cdn.anthropic. com/0dd865075ad3132672ee0ab40b05a53f14cf5288.pdf. Accessed: 2026-03-31. [8] Anthropic. 2026. System Card: Claude Sonnet 4.6. https://www-cdn.anthropic. com/78073f739564e986ff3e28522761a7a0b4484f84.pdf. Accessed: 2026-03-31. [9] Peter Buneman, Sanjeev Khanna, and Tan Wang-Chiew. 2001. Why and Where: A Characterization of Data Provenance. In Database Theory — ICDT 2001 , Jan Van den Bussche and Victor Vianu (Eds.). Springer Berlin Heidelberg, Berlin, Heidelberg, 316–330. [10] Adriane Chapman and H. V. Jagadish. 2009. Why not?. In Proceedings of the 2009 ACM SIGMOD International Conference on Management of Data (Providence, Rhode Island, USA) (SIGMOD ’09) . Association for Computing Machinery, New York, NY, USA, 523–534. https://doi.org/10.1145/1559845.1559901 [11] Surajit Chaudhuri, Bolin Ding, and Srikanth Kandula. 2017. Approximate Query Processing: No Silver Bullet. In Proceedings of the 2017 ACM Interna-tional Conference on Management of Data (Chicago, Illinois, USA) (SIGMOD ’17) . Association for Computing Machinery, New York, NY, USA, 511–519. https://doi.org/10.1145/3035918.3056097 [12] Atoosa Chegini, Keivan Rezaei, Hamid Eghbalzadeh, and Soheil Feizi. 2025. RePanda: Pandas-powered Tabular Verification and Reasoning. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , Wanxiang Che, Joyce Nabende, Ekaterina Shutova, and Moham-mad Taher Pilehvar (Eds.). Association for Computational Linguistics, Vienna, Austria, 32200–32212. https://doi.org/10.18653/v1/2025.acl-long.1549 [13] Shu Chen, Deepti Raghavan, and Uğur Çetintemel. 2025. Continuous Prompts: LLM-Augmented Pipeline Processing over Unstructured Streams. arXiv:2512.03389 [cs.DB] https://arxiv.org/abs/2512.03389 [14] Wenhu Chen, Hongmin Wang, Jianshu Chen, Yunkai Zhang, Hong Wang, Shiyang Li, Xiyou Zhou, and William Yang Wang. 2020. TabFact: A Large-scale Dataset for Table-based Fact Verification. In International Conference on Learning Representations . https://openreview.net/forum?id=rkeJRhNYDH [15] Zhoujun Cheng, Tianbao Xie, Peng Shi, Chengzu Li, Rahul Nadkarni, Yushi Hu, Caiming Xiong, Dragomir Radev, Mari Ostendorf, Luke Zettlemoyer, Noah A. Smith, and Tao Yu. 2023. Binding Language Models in Symbolic Languages. In The Eleventh International Conference on Learning Representations . https: //openreview.net/forum?id=lH1PV42cbF [16] Gordon V. Cormack, Charles L A Clarke, and Stefan Buettcher. 2009. Reciprocal rank fusion outperforms condorcet and individual rank learning methods. In 
+
+Proceedings of the 32nd International ACM SIGIR Conference on Research and Development in Information Retrieval (Boston, MA, USA) (SIGIR ’09) . Association for Computing Machinery, New York, NY, USA, 758–759. https://doi.org/10. 1145/1571941.1572114 [17] Yingwei Cui, Jennifer Widom, and Janet L. Wiener. 2000. Tracing the lineage of view data in a warehousing environment. ACM Trans. Database Syst. 25, 2 (June 2000), 179–227. https://doi.org/10.1145/357775.357777 [18] Hanjun Dai, Bethany Yixin Wang, Xingchen Wan, Bo Dai, Sherry Yang, Azade Nova, Pengcheng Yin, Phitchaya Mangpo Phothilimthana, Charles Sutton, and Dale Schuurmans. 2024. UQE: A Query Engine for Unstructured Databases. In 
+
+The Thirty-eighth Annual Conference on Neural Information Processing Systems .https://openreview.net/forum?id=t7SGOv5W5z [19] D. A. Darling and Herbert Robbins. 1967. CONFIDENCE SEQUENCES FOR MEAN, VARIANCE, AND MEDIAN. Proceedings of the National Acad-emy of Sciences 58, 1 (1967), 66–68. https://doi.org/10.1073/pnas.58.1.66 arXiv:https://www.pnas.org/doi/pdf/10.1073/pnas.58.1.66 [20] Uélison Jean Lopes dos Santos, Alessandro Ferri, Szilard Nistor, Riccardo Tom-masini, Carsten Binnig, and Manisha Luthra. 2025. Towards a Multimodal Stream Processing System. arXiv:2510.14631 [cs.DB] https://arxiv.org/abs/2510.14631 [21] Till Döhmen. 2024. INTRODUCING THE PROMPT() FUNCTION: USE THE POWER OF LLMS WITH SQL! https://motherduck.com/blog/sql-llm-prompt-function-gpt-models/. Accessed: 2026-03-31. [22] Boris Glavic. 2021. Data Provenance. Found. Trends Databases 9, 3-4 (April 2021), 209–441. https://doi.org/10.1561/1900000068 [23] Boris Glavic and Gustavo Alonso. 2009. Perm: Processing Provenance and Data on the Same Data Model through Query Rewriting. In Proceedings of the 2009 IEEE International Conference on Data Engineering (ICDE ’09) . IEEE Computer Society, USA, 174–185. https://doi.org/10.1109/ICDE.2009.15 [24] Google. 2025. Gemini 3 Pro Model Card. https://storage.googleapis.com/ deepmind-media/Model-Cards/Gemini-3-Pro-Model-Card.pdf. Accessed: 2026-03-31. [25] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, et al . 2024. The Llama 3 Herd of Models. arXiv:2407.21783 [cs.AI] https://arxiv.org/abs/2407.21783 [26] Todd J. Green, Grigoris Karvounarakis, and Val Tannen. 2007. Provenance semirings. In Proceedings of the Twenty-Sixth ACM SIGMOD-SIGACT-SIGART Symposium on Principles of Database Systems (Beijing, China) (PODS ’07) . Associ-ation for Computing Machinery, New York, NY, USA, 31–40. https://doi.org/10. 1145/1265530.1265535 [27] Groq. 2026. Groq: Pricing. https://groq.com/pricing. Accessed: 2026-03-31. [28] Erich Grädel and Val Tannen. 2024. Provenance Analysis and Semiring Semantics for First-Order Logic. arXiv:2412.07986 [cs.LO] https://arxiv.org/abs/2412.07986 [29] Jian He and Vaibhav Sethi. 2025. Announcing BigQuery-managed AI func-tions for better SQL. https://cloud.google.com/blog/products/data-analytics/sql-reimagined-for-the-ai-era-with-bigquery-ai-functions. Accessed: 2026-03-31. [30] Joseph M. Hellerstein, Peter J. Haas, and Helen J. Wang. 1997. Online aggregation. 
+
+SIGMOD Rec. 26, 2 (June 1997), 171–182. https://doi.org/10.1145/253262.253291 [31] Qisheng Hu, Quanyu Long, and Wenya Wang. 2025. BOOST: Bootstrap-ping Strategy-Driven Reasoning Programs for Program-Guided Fact-Checking. arXiv:2504.02467 [cs.AI] https://arxiv.org/abs/2504.02467 [32] Tharushi Jayasekara and Immanuel Trummer. 2025. CEDAR: A System for Cost-Efficient Data-Driven Claim Verification. Proc. VLDB Endow. 18, 11 (July 2025), 4492–4504. https://doi.org/10.14778/3749646.3749708 [33] Saehan Jo and Immanuel Trummer. 2024. ThalamusDB: Approximate Query Processing on Multi-Modal Data. Proc. ACM Manag. Data 2, 3, Article 186 (May 2024), 26 pages. https://doi.org/10.1145/3654989 [34] Saehan Jo, Immanuel Trummer, Weicheng Yu, Xuezhi Wang, Cong Yu, Daniel Liu, and Niyati Mehta. 2019. Verifying Text Summaries of Relational Data Sets. In Proceedings of the 2019 International Conference on Management of Data 
+
+(Amsterdam, Netherlands) (SIGMOD ’19) . Association for Computing Machinery, New York, NY, USA, 299–316. https://doi.org/10.1145/3299869.3300074 [35] Ramesh Johari, Pete Koomen, Leonid Pekelis, and David Walsh. 2017. Peeking at A/B Tests: Why it matters, and what to do about it. In Proceedings of the 23rd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining 
+
+(Halifax, NS, Canada) (KDD ’17) . Association for Computing Machinery, New York, NY, USA, 1517–1525. https://doi.org/10.1145/3097983.3097992 [36] Daniel Kang, John Guibas, Peter Bailis, Tatsunori Hashimoto, Yi Sun, and Matei Zaharia. 2021. Accelerating approximate aggregation queries with expensive predicates. Proc. VLDB Endow. 14, 11 (July 2021), 2341–2354. https://doi.org/10. 14778/3476249.3476285 [37] Georgios Karagiannis, Mohammed Saeed, Paolo Papotti, and Immanuel Trummer. 2020. Scrutinizer: a mixed-initiative approach to large-scale, data-driven claim verification. Proc. VLDB Endow. 13, 12 (July 2020), 2508–2521. https://doi.org/10. 14778/3407790.3407841 [38] Omar Khattab, Christopher Potts, and Matei Zaharia. 2021. Baleen: Robust Multi-Hop Reasoning at Scale via Condensed Retrieval. In Advances in Neu-ral Information Processing Systems , M. Ranzato, A. Beygelzimer, Y. Dauphin, P.S. Liang, and J. Wortman Vaughan (Eds.), Vol. 34. Curran Associates, Inc., 27670–27682. https://proceedings.neurips.cc/paper_files/paper/2021/file/ e8b1cbd05f6e6a358a81dee52493dd06-Paper.pdf [39] Omar Khattab and Matei Zaharia. 2020. ColBERT: Efficient and Effective Pas-sage Search via Contextualized Late Interaction over BERT. In Proceedings of the 43rd International ACM SIGIR Conference on Research and Development in Infor-mation Retrieval (Virtual Event, China) (SIGIR ’20) . Association for Computing Machinery, New York, NY, USA, 39–48. https://doi.org/10.1145/3397271.3401075 [40] Jiale Lao, Andreas Zimmerer, Olga Ovcharenko, Tianji Cong, Matthew Russo, Gerardo Vitagliano, Michael Cochez, Fatma Özcan, Gautam Gupta, Thibaud Hottelier, H. V. Jagadish, Kris Kissel, Sebastian Schelter, Andreas Kipf, and Im-manuel Trummer. 2025. SemBench: A Benchmark for Semantic Query Processing Engines. arXiv:2511.01716 [cs.DB] https://arxiv.org/abs/2511.01716 [41] Alexander W. Lee, Justin Chan, Michael Fu, Nicolas Kim, Akshay Mehta, Deepti Raghavan, and Uğur Çetintemel. 2025. Semantic Integrity Constraints: Declara-tive Guardrails for AI-Augmented Data Processing Systems. Proc. VLDB Endow. 
+
+18, 11 (July 2025), 4073–4080. https://doi.org/10.14778/3749646.3749677 [42] Seokki Lee, Bertram Ludäscher, and Boris Glavic. 2019. PUG: a framework and practical implementation for why and why-not provenance. The VLDB Journal 
+
+28, 1 (Feb. 2019), 47–71. https://doi.org/10.1007/s00778-018-0518-5 [43] Zequn Li, Yuanhao Zhong, Chengliang Chai, Zhaoze Sun, Yuhao Deng, Ye Yuan, Guoren Wang, and Lei Cao. 2025. DocDB: A Database for Unstructured Document 
+
+> 13
+
+Analysis. Proc. VLDB Endow. 18, 12 (Aug. 2025), 5387–5390. https://doi.org/10. 14778/3750601.3750678 [44] Paweł Liskowski, Benjamin Han, Paritosh Aggarwal, Bowei Chen, Boxin Jiang, Nitish Jindal, Zihan Li, Aaron Lin, Kyle Schmaus, Jay Tayade, Weicheng Zhao, Anupam Datta, Nathan Wiegand, and Dimitris Tsirogiannis. 2025. Cortex AISQL: A Production SQL Engine for Unstructured Data. arXiv:2511.07663 [cs.DB] https://arxiv.org/abs/2511.07663 [45] Chunwei Liu, Matthew Russo, Michael Cafarella, Lei Cao, Peter Baille Chen, Zui Chen, Michael Franklin, Tim Kraska, Samuel Madden, Rana Shahout, and Gerardo Vitagliano. 2025. Palimpzest: Optimizing AI-Powered Analytics with Declarative Query Processing. In CIDR .[46] Shu Liu, Asim Biswal, Amog Kamsetty, Audrey Cheng, Luis Gaspar Schroeder, Liana Patel, Shiyi Cao, Xiangxi Mo, Ion Stoica, Joseph E. Gonzalez, and Matei Zaharia. 2025. Optimizing LLM Queries in Relational Data Analytics Workloads. In Eighth Conference on Machine Learning and Systems . https://openreview.net/ forum?id=R7bK9yycHp [47] Duo Lu, Siming Feng, Jonathan Zhou, Franco Solleza, Malte Schwarzkopf, and Uğur Çetintemel. 2025. VectraFlow: Integrating Vectors into Stream Processing. In CIDR .[48] Luke Merrick, Danmei Xu, Gaurav Nuti, and Daniel Campos. 2024. Arctic-Embed: Scalable, Efficient, and Accurate Text Embedding Models. arXiv:2405.05374 [cs.CL] https://arxiv.org/abs/2405.05374 [49] Meta. 2025. The Llama 4 herd: The beginning of a new era of natively multimodal AI innovation. https://ai.meta.com/blog/llama-4-multimodal-intelligence/. Ac-cessed: 2026-03-31. [50] Sewon Min, Kalpesh Krishna, Xinxi Lyu, Mike Lewis, Wen-tau Yih, Pang Koh, Mohit Iyyer, Luke Zettlemoyer, and Hannaneh Hajishirzi. 2023. FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing , Houda Bouamor, Juan Pino, and Kalika Bali (Eds.). Association for Computational Linguistics, Singapore, 12076–12100. https://doi.org/10.18653/ v1/2023.emnlp-main.741 [51] Haneen Mohammed, Charlie Summers, Sughosh Kaushik, and Eugene Wu. 2023. SmokedDuck Demonstration: SQLStepper. In Companion of the 2023 International Conference on Management of Data (Seattle, WA, USA) (SIGMOD ’23) . Association for Computing Machinery, New York, NY, USA, 183–186. https://doi.org/10. 1145/3555041.3589731 [52] Haneen Mohammed, Alexander Yao, Charlie Summers, Hongbin Zhong, Gromit Yeuk-Yin Chan, Subrata Mitra, Lampros Flokas, and Eugene Wu. 2024. FaDE: More Than a Million What-Ifs Per Second. Proc. VLDB Endow. 18, 4 (Dec. 2024), 943–955. https://doi.org/10.14778/3717755.3717757 [53] Liangming Pan, Xiaobao Wu, Xinyuan Lu, Anh Tuan Luu, William Yang Wang, Min-Yen Kan, and Preslav Nakov. 2023. Fact-Checking Complex Claims with Program-Guided Reasoning. In Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , Anna Rogers, Jordan Boyd-Graber, and Naoaki Okazaki (Eds.). Association for Computational Linguistics, Toronto, Canada, 6981–7004. https://doi.org/10.18653/v1/2023.acl-long.386 [54] Yongjoo Park, Barzan Mozafari, Joseph Sorenson, and Junhao Wang. 2018. Ver-dictDB: Universalizing Approximate Query Processing. In Proceedings of the 2018 International Conference on Management of Data (Houston, TX, USA) (SIGMOD ’18) . Association for Computing Machinery, New York, NY, USA, 1461–1476. https://doi.org/10.1145/3183713.3196905 [55] Liana Patel, Siddharth Jha, Melissa Pan, Harshit Gupta, Parth Asawa, Carlos Guestrin, and Matei Zaharia. 2025. Semantic Operators and Their Optimization: Enabling LLM-Based Data Processing with Accuracy Guarantees in LOTUS. Proc. VLDB Endow. 18, 11 (July 2025), 4171–4184. https://doi.org/10.14778/3749646. 3749685 [56] Fotis Psallidas and Eugene Wu. 2018. Smoke: fine-grained lineage at interactive speed. Proc. VLDB Endow. 11, 6 (Feb. 2018), 719–732. https://doi.org/10.14778/ 3199517.3199522 [57] Matthew Russo, Tatsunori Hashimoto, Daniel Kang, Yi Sun, and Matei Zaharia. 2023. Accelerating Aggregation Queries on Unstructured Streams of Data. Proc. VLDB Endow. 16, 11 (July 2023), 2897–2910. https://doi.org/10.14778/3611479. 3611496 [58] Matthew Russo, Chunwei Liu, Sivaprasad Sudhir, Gerardo Vitagliano, Michael Cafarella, Tim Kraska, and Samuel Madden. 2026. Abacus: A Cost-Based Opti-mizer for Semantic Operator Systems. https://doi.org/10.14778/3796195.3796215 arXiv:2505.14661 [cs.DB] [59] Gabriele Sanmartino, Matthias Urban, Paolo Papotti, and Carsten Binnig. 2026. The Stretto Execution Engine for LLM-Augmented Data Systems. arXiv:2602.04430 [cs.DB] https://arxiv.org/abs/2602.04430 [60] Keshav Santhanam, Omar Khattab, Jon Saad-Falcon, Christopher Potts, and Matei Zaharia. 2022. ColBERTv2: Effective and Efficient Retrieval via Lightweight Late Interaction. In Proceedings of the 2022 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies ,Marine Carpuat, Marie-Catherine de Marneffe, and Ivan Vladimir Meza Ruiz (Eds.). Association for Computational Linguistics, Seattle, United States, 3715– 3734. https://doi.org/10.18653/v1/2022.naacl-main.272 [61] Aryak Sen, Silviu Maniu, and Pierre Senellart. 2025. ProvSQL: A Gen-eral System for Keeping Track of the Provenance and Probability of Data. arXiv:2504.12058 [cs.DB] https://arxiv.org/abs/2504.12058 [62] Shreya Shankar, Tristan Chambers, Tarak Shah, Aditya G. Parameswaran, and Eugene Wu. 2025. DocETL: Agentic Query Rewriting and Evaluation for Complex Document Processing. Proc. VLDB Endow. 18, 9 (May 2025), 3035–3048. https: //doi.org/10.14778/3746405.3746426 [63] Shreya Shankar, Sepanta Zeighami, and Aditya Parameswaran. 2026. Task Cascades for Efficient Unstructured Data Processing. arXiv:2601.05536 [cs.DB] https://arxiv.org/abs/2601.05536 [64] Snowflake. n.d.. Snowflake Cortex AI. https://www.snowflake.com/en/product/ features/cortex/. Accessed: 2026-03-31. [65] Zhaoze Sun, Chengliang Chai, Qiyan Deng, Kaisen Jin, Xinyu Guo, Han Han, Ye Yuan, Guoren Wang, and Lei Cao. 2025. QUEST: Query Optimization in Unstructured Document Analysis. Proc. VLDB Endow. 18, 11 (July 2025), 4560– 4573. https://doi.org/10.14778/3749646.3749713 [66] Liyan Tang, Philippe Laban, and Greg Durrett. 2024. MiniCheck: Efficient Fact-Checking of LLMs on Grounding Documents. In Proceedings of the 2024 Con-ference on Empirical Methods in Natural Language Processing , Yaser Al-Onaizan, Mohit Bansal, and Yun-Nung Chen (Eds.). Association for Computational Linguis-tics, Miami, Florida, USA, 8818–8847. https://doi.org/10.18653/v1/2024.emnlp-main.499 [67] Michael Theologitis, Preetam Prabhu Srikar Dammu, Chirag Shah, and Dan Suciu. 2026. ClaimDB: A Fact Verification Benchmark over Large Structured Data. arXiv:2601.14698 [cs.CL] https://arxiv.org/abs/2601.14698 [68] Michael Theologitis and Dan Suciu. 2026. Thucy: An LLM-based Multi-Agent Sys-tem for Claim Verification across Relational Databases. arXiv:2512.03278 [cs.DB] https://arxiv.org/abs/2512.03278 [69] Matthias Urban and Carsten Binnig. 2023. CAESURA: Language Models as Multi-Modal Query Planners. In CIDR .[70] Matthias Urban and Carsten Binnig. 2024. ELEET: Efficient Learned Query Execution over Text and Tables. Proc. VLDB Endow. 17, 13 (Sept. 2024), 4867– 4880. https://doi.org/10.14778/3704965.3704989 [71] Haoran Wang and Kai Shu. 2023. Explainable Claim Verification via Knowledge-Grounded Reasoning with Large Language Models. In Findings of the Association for Computational Linguistics: EMNLP 2023 , Houda Bouamor, Juan Pino, and Kalika Bali (Eds.). Association for Computational Linguistics, Singapore, 6288– 6304. https://doi.org/10.18653/v1/2023.findings-emnlp.416 [72] Jiayi Wang and Guoliang Li. 2025. AOP: Automated and Interactive LLM Pipeline Orchestration for Answering Complex Queries. In CIDR .[73] Ian Waudby-Smith and Aaditya Ramdas. 2023. Estimating means of bounded random variables by betting. Journal of the Royal Statistical Society Series B: Statistical Methodology 86, 1 (02 2023), 1–27. https:// doi.org/10.1093/jrsssb/qkad009 arXiv:https://academic.oup.com/jrsssb/article-pdf/86/1/1/56961777/qkad009.pdf [74] Jerry Wei, Chengrun Yang, Xinying Song, Yifeng Lu, Nathan Hu, Jie Huang, Dustin Tran, Daiyi Peng, Ruibo Liu, Da Huang, Cosmo Du, and Quoc V. Le. 2024. Long-form factuality in large language models. In Advances in Neural Information Processing Systems , A. Globerson, L. Mackey, D. Belgrave, A. Fan, U. Paquet, J. Tomczak, and C. Zhang (Eds.), Vol. 37. Curran Associates, Inc., 80756–80827. https://doi.org/10.52202/079017-2567 [75] Lindsey Linxi Wei, Shreya Shankar, Sepanta Zeighami, Yeounoh Chung, Fatma Ozcan, and Aditya G. Parameswaran. 2026. Multi-Objective Agentic Rewrites for Unstructured Data Processing. arXiv:2512.02289 [cs.DB] https://arxiv.org/ abs/2512.02289 [76] Patrick Wendell, Eric Peter, Nicolas Pelaez, Jianwei Xie, Vinny Vi-jeyakumaar, Linhong Liu, and Shitao Li. 2023. Introducing AI Func-tions: Integrating Large Language Models with Databricks SQL. https://www.databricks.com/blog/2023/04/18/introducing-ai-functions-integrating-large-language-models-databricks-sql.html. Accessed: 2026-03-31. [77] Zhuohan Xie, Rui Xing, Yuxia Wang, Jiahui Geng, Hasan Iqbal, Dhruv Sahnan, Iryna Gurevych, and Preslav Nakov. 2025. FIRE: Fact-checking with Iterative Retrieval and Verification. In Findings of the Association for Computational Lin-guistics: NAACL 2025 , Luis Chiruzzo, Alan Ritter, and Lu Wang (Eds.). Asso-ciation for Computational Linguistics, Albuquerque, New Mexico, 2901–2914. https://doi.org/10.18653/v1/2025.findings-naacl.158 [78] Yelp. 2023. Yelp Open Dataset. https://business.yelp.com/data/resources/open-dataset/. Accessed: 2026-03-31. [79] Sepanta Zeighami, Shreya Shankar, and Aditya Parameswaran. 2025. Cut Costs, Not Accuracy: LLM-Powered Data Processing with Guarantees. Proc. ACM Manag. Data 3, 6, Article 311 (Dec. 2025), 26 pages. https://doi.org/10.1145/ 3769776 [80] Sepanta Zeighami, Shreya Shankar, and Aditya Parameswaran. 2025. Featurized-Decomposition Join: Low-Cost Semantic Joins with Guarantees. arXiv:2512.05399 [cs.DB] https://arxiv.org/abs/2512.05399 [81] Yi Zhang, Zachary Ives, and Dan Roth. 2020. “Who said it, and Why?” Provenance for Natural Language Claims. In Proceedings of the 58th Annual Meeting of the 
+
+> 14
+
+Association for Computational Linguistics , Dan Jurafsky, Joyce Chai, Natalie Schluter, and Joel Tetreault (Eds.). Association for Computational Linguistics, Online, 4416–4426. https://doi.org/10.18653/v1/2020.acl-main.406 [82] Yi Zhang, Zachary Ives, and Dan Roth. 2021. What is Your Article Based On? Inferring Fine-grained Provenance. In Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Con-ference on Natural Language Processing (Volume 1: Long Papers) , Chengqing Zong, Fei Xia, Wenjie Li, and Roberto Navigli (Eds.). Association for Computational Linguistics, Online. https://doi.org/10.18653/v1/2021.acl-long.458 [83] Fuheng Zhao, Jiayue Chen, Yiming Pan, Tahseen Rabbani, Sohaib, Divyakant Agrawal, Amr El Abbadi, Paritosh Aggarwal, Anupam Datta, and Dimitris Tsirogiannis. 2025. Access Paths for Efficient Ordering with Large Language Models. arXiv:2509.00303 [cs.DB] https://arxiv.org/abs/2509.00303 [84] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric P. Xing, Hao Zhang, Joseph E. Gonzalez, and Ion Stoica. 2023. Judging LLM-as-a-judge with MT-bench and Chatbot Arena. In Proceedings of the 37th International Conference on Neural Information Processing Systems (New Orleans, LA, USA) (NIPS ’23) .Curran Associates Inc., Red Hook, NY, USA, Article 2020, 29 pages. [85] Yuxuan Zhu, Tengjun Jin, Stefanos Baziotis, Chengsong Zhang, Charith Mendis, and Daniel Kang. 2025. PilotDB: Database-Agnostic Online Approximate Query Processing with A Priori Error Guarantees. Proc. ACM Manag. Data 3, 3, Article 198 (June 2025), 28 pages. https://doi.org/10.1145/3725335

@@ -1,101 +1,52 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-06
 
-## 每次日报
-- 最新运行日期：2026-05-06
-- 运行时间：2026-05-06 20:47:14 UTC
-- 运行状态：成功
-- 本次总论文数：17
+- 生成时间：2026-05-06 20:47:14 UTC
+- 当次推荐总数：17
 - 精读区：6
 - 速读区：11
 
-### 今日简报（AI）
-5月6日共整理17篇网络安全与工业控制系统相关论文，涵盖深度与速读内容。  
-重点关注：利用大语言模型优化威胁检测与恶意软件识别，以及跨工厂未知攻击的检测方法。  
-建议普通读者关注LLM在安全运维和跨系统防护中的实际应用前景。
-- 详情：[/202605/06/README](/202605/06/README)
+## 今日简报（AI）
+5月6日安全研究日报：共浏览17篇前沿论文，重点聚焦自动化SOC与恶意软件检测。  
+值得关注的是，基于LLM的端到端威胁检测与行为特征增强的恶意软件识别显示出显著提升。  
+建议普通读者关注AI在网络安全操作中的应用趋势，理解自动化工具如何辅助防御。
 
-### 精读区论文标签
-1. [Toward Autonomous SOC Operations: End\-to\-End LLM Framework for Threat Detection, Query Generation, and Resolution in Security Operations](/202605/06/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)  
-   标签：评分：8.5/10、query:q9
+## 精读区
+1. [迈向自主安全运营中心：面向威胁检测、查询生成与响应的端到端大语言模型框架](/202605/06/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)（8.5/10）
    摘要：本文提出了一种端到端 SOC 自动化框架，通过集成多模型威胁检测、语法约束查询生成（SQM）和基于证据的事件响应，实现从日志分析到处置的全流程优化。实验显示，LLM 集成模型在 SIEM 日志检测中达 82.8% 准确率，SQM 提升查询生成性能超过两倍，事件响应准确率从 78.3% 提升至 90%，平均事件处理时间从数小时缩短至十分钟以内。研究具有实际生产环境价值，值得进一步精读。
-   evidence：使用LLM集成进行威胁检测和流量分析
-2. [Trident: Improving Malware Detection with LLMs and Behavioral Features](/202605/06/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)  
-   标签：评分：8.5/10、query:q7
+2. [Trident：结合大型语言模型与行为特征的恶意软件检测改进方法](/202605/06/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)（8.5/10）
    摘要：本文提出 Trident，一种结合大语言模型（LLM）与行为特征的恶意软件检测框架，通过解析沙箱行为报告生成行为规则并与静态特征分类器结合，实现对概念漂移具有更强鲁棒性、低误报率的自动化检测。实验表明，Trident 在召回率、F1 和误报率上均优于仅使用静态特征或行为规则的方法，值得关注用于动态恶意软件检测的新方法探索。
-   evidence：LLM用于行为特征的恶意软件检测
-3. [A Survey of Reasoning\-Intensive Retrieval: Progress and Challenges](/202605/06/2605.00063v1-a-survey-of-reasoning-intensive-retrieval-progress-and-challenges)  
-   标签：评分：8.3/10、query:profile-1
+3. [推理密集型检索综述：进展与挑战](/202605/06/2605.00063v1-a-survey-of-reasoning-intensive-retrieval-progress-and-challenges)（8.3/10）
    摘要：本文系统梳理了推理密集型检索（Reasoning\-Intensive Retrieval, RIR）的研究进展与挑战，聚焦在查询与证据之间存在隐含推理链的场景。论文通过构建分类框架、整理多领域多模态基准，以及总结方法与迭代策略，展示了当前技术在单阶段检索、多阶段重排序及迭代检索中的表现。实验结果显示多阶段与推理增强方法显著提升了检索性能。对于关注推理驱动信息检索的研究者，本文提供了高价值路线图，值得精读。
-   evidence：使用LLM的推理密集型检索综述与组合需求相关
-4. [XekRung Technical Report](/202605/06/2605.00072v1-xekrung-technical-report)  
-   标签：评分：8.3/10、query:q9
+4. [XekRung 技术报告](/202605/06/2605.00072v1-xekrung-technical-report)（8.3/10）
    摘要：本文介绍了 XekRung，一款面向网络安全的前沿大语言模型，旨在提供全面的安全能力。通过定制的数据生成管道构建高质量训练集，并结合持续预训练、监督微调和强化学习的训练流程，模型在网络安全专项基准上实现了领先表现，同时在通用任务上保持较强能力。论文值得关注，尤其是其跨层次、多步骤推理的能力和多维度评估体系。
-   evidence：用于网络安全和流量分析的LLM
-5. [Decompose to Understand, Fuse to Detect: Frequency\-Decoupled Anomaly Detection for Encrypted Network Traffic](/202605/06/2605.02970v1-decompose-to-understand-fuse-to-detect-frequency-decoupled-anomaly-detection-for-encrypted-network-traffic)  
-   标签：评分：8.3/10、query:q5
+5. [分解以理解，融合以检测：面向加密网络流量的频率解耦异常检测](/202605/06/2605.02970v1-decompose-to-understand-fuse-to-detect-frequency-decoupled-anomaly-detection-for-encrypted-network-traffic)（8.3/10）
    摘要：本文针对加密网络流量异常检测提出了FreeUp框架，通过频率解耦将流量数据分为低频和高频分支独立学习，并结合不确定性融合机制生成异常评分。实验显示该方法在多个基准数据集上优于现有最先进方法，尤其在捕捉高频特征方面表现突出。该研究方法新颖，值得对频率解耦和融合策略部分进行精读。
-   evidence：深度学习检测加密网络流量异常
-6. [Large Language Models as Explainable Cyberattack Detectors for Energy Industrial Control Systems](/202605/06/2604.26079v1-large-language-models-as-explainable-cyberattack-detectors-for-energy-industrial-control-systems)  
-   标签：评分：8.0/10、query:q3
+6. [大型语言模型作为能源工业控制系统的可解释网络攻击检测器](/202605/06/2604.26079v1-large-language-models-as-explainable-cyberattack-detectors-for-energy-industrial-control-systems)（8.0/10）
    摘要：本文探索将通用大语言模型（LLM）作为能源工业控制系统（ICS）Modbus流量的可审计入侵检测辅助层，采用二分类normal/critical任务，将Modbus通信离散化为token序列，通过prompt驱动模型生成警报及简明事件记录。实验显示，LLM无需任务特定训练即可在两套公开数据集上实现约0.98的准确率，检测性能与强监督模型相当，同时提供可供人工审查的可解释记录，值得关注其人机协作和可审计机制。
-   evidence：LLM用于ICS网络流量检测
 
-### 速读区论文标签
-1. [OpenSOC\-AI: Democratizing Security Operations with Parameter Efficient LLM Log Analysis](/202605/06/2604.26217v1-opensoc-ai-democratizing-security-operations-with-parameter-efficient-llm-log-analysis)  
-   标签：评分：8.0/10、query:q9
+## 速读区
+1. [OpenSOC\-AI：通过参数高效的LLM日志分析实现安全运营民主化](/202605/06/2604.26217v1-opensoc-ai-democratizing-security-operations-with-parameter-efficient-llm-log-analysis)（8.0/10）
    摘要：本论文提出OpenSOC\-AI，一个面向中小企业的轻量级安全日志分析框架，通过对1.1B参数的TinyLlama模型进行LoRA参数高效微调，实现自动威胁分类、MITRE ATT&CK映射和严重性评估。仅用450条领域示例和单块T4 GPU训练五分钟，就显著提升威胁分类准确率和严重性评估，展示了小模型在资源受限环境下可行性，值得关注小企业安全自动化应用。
-   evidence：LLM日志分析用于自动化安全操作
-2. [SecMate: Multi\-Agent Adaptive Cybersecurity Troubleshooting with Tri\-Context Personalization](/202605/06/2604.26394v1-secmate-multi-agent-adaptive-cybersecurity-troubleshooting-with-tri-context-personalization)  
-   标签：评分：8.0/10、query:q9
+2. [SecMate：基于三重上下文个性化的多智能体自适应网络安全故障排除](/202605/06/2604.26394v1-secmate-multi-agent-adaptive-cybersecurity-troubleshooting-with-tri-context-personalization)（8.0/10）
    摘要：论文提出面向中小企业网络安全支持场景的多智能体助手 SecMate，通过“三重上下文个性化”联合利用设备诊断信息、用户技术画像与服务推荐，实现自适应故障排查。系统包含本地 Clue Collector、隐式用户画像、分步式 troubleshooting 与推荐代理。作者基于 144 名参与者、711 段真实对话开展评测，结果显示设备级证据可将问题解决率从约 50% 提升至 90% 以上，同时降低用户负担并提升满意度。论文工程完整、用户实验充分，若关注 agentic AI、IT support automation 或个性化对话系统，值得细读。
-   evidence：基于LLM的多代理网络安全排障
-3. [Medoid Prototype Alignment for Cross\-Plant Unknown Attack Detection in Industrial Control Systems](/202605/06/2604.25544v1-medoid-prototype-alignment-for-cross-plant-unknown-attack-detection-in-industrial-control-systems)  
-   标签：评分：7.8/10、query:q5
+3. [用于工业控制系统跨工厂未知攻击检测的中点原型对齐方法](/202605/06/2604.25544v1-medoid-prototype-alignment-for-cross-plant-unknown-attack-detection-in-industrial-control-systems)（7.8/10）
    摘要：本论文针对工业控制系统中跨工厂未知攻击检测提出了一种中值原型对齐方法，通过将异构流量压缩到可比较的表示空间，并提取稳健的中值原型进行域适应，从而减少噪声匹配并提高跨域转移稳定性。实验在天然气和水储存控制系统上验证，平均准确率达0.843，F1\-score达0.838，显示该方法在处理域偏移和未知攻击上具有实用价值，值得精读。
-   evidence：跨工厂ICS攻击检测的原型对齐方法
-4. [Towards Agentic Investigation of Security Alerts](/202605/06/2604.25846v1-towards-agentic-investigation-of-security-alerts)  
-   标签：评分：7.8/10、query:q7
+4. [面向安全告警的自主调查方法](/202605/06/2604.25846v1-towards-agentic-investigation-of-security-alerts)（7.8/10）
    摘要：本论文针对安全运营中心中警报过载问题，提出一种基于大语言模型（LLM）的半自主调查工作流，通过结构化查询和工具限制辅助LLM选择操作、提取证据并生成警报判定。实验显示该方法在初步调查阶段比单纯LLM判定准确性更高，能有效减少人工工作量，值得关注其方法与实验设计。
-   evidence：利用LLM自动化安全警报调查
-5. [From Packets to Patterns: Interpreting Encrypted Network Traffic as Longitudinal Behavioral Signals](/202605/06/2605.01616v1-from-packets-to-patterns-interpreting-encrypted-network-traffic-as-longitudinal-behavioral-signals)  
-   标签：评分：7.8/10、query:q7
+5. [从数据包到模式：将加密网络流量解读为纵向行为信号](/202605/06/2605.01616v1-from-packets-to-patterns-interpreting-encrypted-network-traffic-as-longitudinal-behavioral-signals)（7.8/10）
    摘要：本研究探索利用加密手机网络流量作为被动感知手段，捕捉用户睡眠、压力和孤独感等行为模式。通过基于Transformer的个体适配器模型和稀疏自编码器提取可解释行为特征，结合纵向分析区分个体间差异与个体内部变化。结果显示网络流量可有效揭示行为偏离基线的动态特征，验证了其在数字表型和行为建模中的潜力，值得进一步精读理解方法细节和纵向分析策略。
-   evidence：Transformer模型分析加密网络流量的行为模式
-6. [FIRCE: A Framework for Intrusion Response and Conformal Evaluation](/202605/06/2605.01962v1-firce-a-framework-for-intrusion-response-and-conformal-evaluation)  
-   标签：评分：7.8/10、query:q5
+6. [FIRCE：入侵响应与保形评估框架](/202605/06/2605.01962v1-firce-a-framework-for-intrusion-response-and-conformal-evaluation)（7.8/10）
    摘要：本文提出FIRCE框架，旨在提升基于机器学习的入侵检测系统在物联网环境下应对概念漂移的能力。方法结合多种保形评估策略与自适应分块机制，实现对分布变化的实时检测和模型重训练。实验包括IoT测试平台及CICIDS2018和UNSW\-NB15数据集验证，结果显示该方法在漂移检测和响应效率上优于静态分类器，值得进一步精读以理解具体实现与适用场景。
-   evidence：入侵响应框架与自适应流量分析
-7. [Robust and Explainable Divide\-and\-Conquer Learning for Intrusion Detection](/202605/06/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)  
-   标签：评分：7.8/10、query:q4
+7. [面向入侵检测的稳健且可解释的分而治之学习](/202605/06/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)（7.8/10）
    摘要：本文提出了一种面向入侵检测的可解释、稳健的划分式学习方法SCAL，通过将复杂的学习任务自动分解为相关子问题，训练轻量级局部模型，实现高准确率、显著减小模型规模，同时增强对抗鲁棒性和可解释性。实验证明在真实网络流量数据集上，局部模型准确率提升43.3%，模型体积减少257倍，值得继续精读以了解方法实现和性能分析。
-   evidence：加密流量入侵检测的机器学习方法
-8. [Zero Day Attacks: Novel Behaviour or Novel Vulnerability?](/202605/06/2605.03138v1-zero-day-attacks-novel-behaviour-or-novel-vulnerability)  
-   标签：评分：7.8/10、query:q9
+8. [零日攻击：新型行为还是新型漏洞？](/202605/06/2605.03138v1-zero-day-attacks-novel-behaviour-or-novel-vulnerability)（7.8/10）
    摘要：本文通过对过去 20 年公开零日攻击事件的系统回顾，分析其发生机制，指出零日攻击主要源于未披露的漏洞而非新颖攻击行为。作者提出零日漏洞分类法，并评估 ML 入侵检测系统在现实环境中的局限性，强调以漏洞为中心的防御策略更符合实务需求。研究方法清晰、证据充分，对于关注零日攻击检测与漏洞管理的读者值得精读。
-   evidence：基于机器学习的入侵检测系统，相关于网络安全与流量分析
-9. [FCMBench\-Video: Benchmarking Document Video Intelligence](/202605/06/2604.25186v2-fcmbench-video-benchmarking-document-video-intelligence)  
-   标签：评分：6.8/10、query:q6
+9. [FCMBench\-Video：文档视频智能基准测试](/202605/06/2604.25186v2-fcmbench-video-benchmarking-document-video-intelligence)（6.8/10）
    摘要：本论文提出 FCMBench\-Video，一个面向文档视频理解的基准，评估模型在文档感知、时间线证据定位和基于证据推理上的能力。通过495条原始视频组成1,200条长视频，并配套11,322条中英文问答实例，提供可控退化和多文档组合的现实捕获条件。实验显示，任务如计数、跨文档验证和证据选择能够有效区分模型能力。整体分布广泛，未出现饱和，值得对文档视频理解和信用敏感场景应用继续关注。
-   evidence：与加密视频任务相关的视频智能基准
-10. [Evergreen: Efficient Claim Verification for Semantic Aggregates](/202605/06/2604.26180v1-evergreen-efficient-claim-verification-for-semantic-aggregates)  
-   标签：评分：6.8/10、query:q3
+10. [常青：面向语义聚合的高效声明验证](/202605/06/2604.26180v1-evergreen-efficient-claim-verification-for-semantic-aggregates)（6.8/10）
    摘要：本文提出 Evergreen 系统，用于高效验证语义聚合中的陈述是否真实，方法是将验证问题转化为语义查询处理任务，并通过验证感知优化和溯源捕获降低成本和延迟。实验显示，在真实餐厅评论数据集上，Evergreen 在强 LLM 下 F1 可达 1.00，同时成本降低 3.2 倍、延迟降低 4 倍，即便使用弱 LLM也显著优于基线，值得精读了解优化策略和溯源机制。
-   evidence：LLM辅助语义验证方法可用于网络或加密数据
-11. [InterPartAbility: Text\-Guided Part Matching for Interpretable Person Re\-Identification](/202605/06/2604.27122v1-interpartability-text-guided-part-matching-for-interpretable-person-re-identification)  
-   标签：评分：6.8/10、query:q6
+11. [InterPartAbility：基于文本的部位匹配用于可解释的人体重识别](/202605/06/2604.27122v1-interpartability-text-guided-part-matching-for-interpretable-person-re-identification)（6.8/10）
    摘要：本论文提出 InterPartAbility，一种针对文本引导的人体重识别（TI\-ReID）的可解释方法，通过 patch\-phrase 交互模块实现文本短语与图像局部区域的对齐，从而提供概念级和部位级解释。实验在 CUHK\-PEDES 和 ICFG\-PEDES 上显示，该方法在保持竞争性检索性能的同时，实现了可量化的可解释性评估，值得关注 TI\-ReID 可解释性研究。
-   evidence：文本引导匹配方法可用于加密视频分析
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
