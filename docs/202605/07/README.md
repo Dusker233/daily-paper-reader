@@ -1,85 +1,44 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-07
 
-## 每次日报
-- 最新运行日期：2026-05-07
-- 运行时间：2026-05-07 20:46:30 UTC
-- 运行状态：成功
-- 本次总论文数：13
+- 生成时间：2026-05-07 20:46:30 UTC
+- 当次推荐总数：13
 - 精读区：2
 - 速读区：11
 
-### 今日简报（AI）
-今天共浏览 13 篇安全与AI结合的技术论文，涵盖精读与速读内容。  
-重点关注 LLM 在恶意软件分析与解释性生成、以及漏洞管理与检测的应用进展。  
-建议关注 LLM 在安全运维和恶意软件检测的实用工具和方法，保持对新模型的试用兴趣。
-- 详情：[/202605/07/README](/202605/07/README)
+## 今日简报（AI）
+5月7日聚焦安全与AI，精读13篇前沿技术报告。  
+重点关注基于LLM的恶意软件分析与解释性方法，以及参数高效的安全日志处理工具。  
+建议关注AI在安全运营中的实际应用，尝试探索可落地的自动化防护方案。
 
-### 精读区论文标签
-1. [XekRung Technical Report](/202605/07/2605.00072v1-xekrung-technical-report)  
-   标签：评分：8.0/10、query:q9
+## 精读区
+1. [XekRung 技术报告](/202605/07/2605.00072v1-xekrung-technical-report)（8.0/10）
    摘要：本论文介绍了 XekRung，一款专门面向网络安全的前沿大语言模型，通过定制化数据合成管道、大规模持续预训练、监督微调和强化学习训练流程，旨在提升模型在安全任务上的综合能力。实验显示 XekRung 在多项网络安全基准测试中达到领先水平，同时在通用基准上表现稳健，显示其在跨层次多步推理和安全场景应用的潜力，值得对具体训练策略和性能细节深入阅读。
-   evidence：用于网络流量的网络安全LLM
-2. [Evaluating Retrieval\-Augmented Generation for Explainable Malware Analysis](/202605/07/2605.03140v1-evaluating-retrieval-augmented-generation-for-explainable-malware-analysis)  
-   标签：评分：8.0/10、query:q9
+2. [评估基于检索增强生成的可解释恶意软件分析](/202605/07/2605.03140v1-evaluating-retrieval-augmented-generation-for-explainable-malware-analysis)（8.0/10）
    摘要：本文评估了检索增强生成（RAG）在恶意软件可解释分析中的效果，使用多种大语言模型（LLMs）处理来自VirusTotal的结构化报告。研究发现，RAG在已有充分结构化证据时往往降低解释质量，引入无关上下文和叙述噪声，提示在安全关键流程中盲目使用RAG可能适得其反。论文强调恶意软件解释主要是信号提取任务而非知识检索，并提出针对安全开发的设计建议，值得对RAG在安全场景应用感兴趣的读者深入阅读。
-   evidence：LLM用于恶意软件分析与网络安全
 
-### 速读区论文标签
-1. [OpenSOC\-AI: Democratizing Security Operations with Parameter Efficient LLM Log Analysis](/202605/07/2604.26217v1-opensoc-ai-democratizing-security-operations-with-parameter-efficient-llm-log-analysis)  
-   标签：评分：7.8/10、query:q9
+## 速读区
+1. [OpenSOC\-AI：通过高效参数调优的LLM日志分析推动安全运维的民主化](/202605/07/2604.26217v1-opensoc-ai-democratizing-security-operations-with-parameter-efficient-llm-log-analysis)（7.8/10）
    摘要：本论文针对中小企业缺乏安全运维资源的问题，提出了OpenSOC\-AI框架，通过对1.1亿参数TinyLlama模型进行参数高效微调，实现对原始安全日志的自动威胁分类、MITRE ATT&CK映射和严重性评估。在单张T4 GPU上，仅用450个领域示例和LoRA微调不到5分钟，威胁分类准确率提升68个百分点，F1值0.68，显示出小模型可在资源受限环境下提供实用安全分析，值得安全与AI研究者深入阅读。
-   evidence：将LLMs应用于安全操作中的自动威胁分类和严重性评估
-2. [Trident: Improving Malware Detection with LLMs and Behavioral Features](/202605/07/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)  
-   标签：评分：7.8/10、query:q7
+2. [Trident：结合大语言模型与行为特征提升恶意软件检测](/202605/07/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)（7.8/10）
    摘要：本文提出 Trident 系统，利用大语言模型（LLMs）结合行为特征提升 PE 恶意软件检测。方法包括从沙箱行为报告中自动生成检测规则，并与静态特征决策树和 LLM 直接分析结果结合。实验显示，Trident 在概念漂移下仍保持高召回率与低误报率，优于传统静态特征方法。对于关注自动化、可解释且抗概念漂移的恶意软件检测研究者，本论文值得精读。
-   evidence：使用行为特征的LLM辅助恶意软件检测
-3. [AgenticVM: Agentic AI for Adaptive Software Vulnerability Management](/202605/07/2605.01739v1-agenticvm-agentic-ai-for-adaptive-software-vulnerability-management)  
-   标签：评分：7.8/10、query:q9
+3. [AgenticVM：用于自适应软件漏洞管理的智能体人工智能](/202605/07/2605.01739v1-agenticvm-agentic-ai-for-adaptive-software-vulnerability-management)（7.8/10）
    摘要：本文提出了AgenticVM，一种结合大型语言模型与传统安全工具的多代理框架，用于自动化软件漏洞的检测、评估、优先级排序和报告生成。通过规则处理、BERT预测模块及专用LLM代理，显著降低告警噪声（最高98%减少）并准确预测缺失CVSS属性（89.3%）。研究展示了在提高效率与降低分析师负担的同时保持风险可视性，值得进一步精读架构设计与实证结果。
-   evidence：LLM集成用于漏洞管理，涉及网络安全应用。
-4. [Robust and Explainable Divide\-and\-Conquer Learning for Intrusion Detection](/202605/07/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)  
-   标签：评分：7.8/10、query:q5
+4. [用于入侵检测的鲁棒且可解释的分而治之学习](/202605/07/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)（7.8/10）
    摘要：本论文提出了一种针对入侵检测的可解释、鲁棒的划分式学习方法SCAL，通过将复杂任务分解为相关子任务，实现轻量级模型训练，同时提升本地准确率、模型紧凑性和对抗鲁棒性。实验证明在真实网络数据集上，本地模型准确率提高43.3%，模型体积减少至原来的1/257。方法兼顾效率与可解释性，值得关注资源受限场景下的入侵检测应用。
-   evidence：基于机器学习的加密网络流量入侵检测
-5. [Decompose to Understand, Fuse to Detect: Frequency\-Decoupled Anomaly Detection for Encrypted Network Traffic](/202605/07/2605.02970v1-decompose-to-understand-fuse-to-detect-frequency-decoupled-anomaly-detection-for-encrypted-network-traffic)  
-   标签：评分：7.6/10、query:q5
+5. [分解以理解，融合以检测：加密网络流量的频率解耦异常检测](/202605/07/2605.02970v1-decompose-to-understand-fuse-to-detect-frequency-decoupled-anomaly-detection-for-encrypted-network-traffic)（7.6/10）
    摘要：本论文针对加密网络流量的异常检测难题，提出了FreeUp频率解耦框架，通过将流量图像分解为高低频分支独立建模，并结合不确定性融合评分机制，实现更全面的异常识别。实验显示该方法在多个基准上显著优于现有重建型模型。该研究方法新颖，适合关注加密流量分析和频域特性研究的读者继续精读。
-   evidence：加密网络流量异常检测与视觉建模
-6. [Evaluating Tabular Representation Learning for Network Intrusion Detection](/202605/07/2605.02519v1-evaluating-tabular-representation-learning-for-network-intrusion-detection)  
-   标签：评分：7.6/10、query:q5
+6. [评估表格化表示学习在网络入侵检测中的应用](/202605/07/2605.02519v1-evaluating-tabular-representation-learning-for-network-intrusion-detection)（7.6/10）
    摘要：本文系统评估了面向网络入侵检测的表格表示学习方法，旨在自动从NetFlow数据中学习鲁棒特征，以替代传统手工特征工程。作者对比了TabICL、SCARF、autoencoder及端到端transformer在多个基准数据集上的表现，结合监督分类器和无监督异常检测。结果显示方法效果高度依赖具体数据集，跨数据集迁移具有潜力但性能波动大。对于关注网络安全和表格数据表示学习的研究者，论文提供了全面实验参考，值得进一步精读。
-   evidence：用于网络入侵检测的表格表示学习
-7. [Toward Autonomous SOC Operations: End\-to\-End LLM Framework for Threat Detection, Query Generation, and Resolution in Security Operations](/202605/07/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)  
-   标签：评分：6.9/10、query:q9
+7. [迈向自主SOC运维：面向威胁检测、查询生成与安全运维解决方案的端到端大语言模型框架](/202605/07/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)（6.9/10）
    摘要：本研究提出了一个面向自主化安全运营中心（SOC）操作的端到端框架，通过集成传统机器学习与大语言模型（LLMs）实现威胁检测、查询生成与事件解决。该框架通过三个模块：威胁检测、语法约束证据收集（SQM）和威胁解决推荐，提升了SOC操作的自动化和效率，减少了事件处理时间。实验表明，结合LLM的框架能显著提升检测精度，并缩短响应时间，适用于生产环境中的SOC操作。值得细读，尤其在SOC自动化和LLM应用领域的贡献上。
-   evidence：LLM用于网络安全威胁检测
-8. [eDySec: A Deep Learning\-based Explainable Dynamic Analysis Framework for Detecting Malicious Packages in PyPI Ecosystem](/202605/07/2604.26219v1-edysec-a-deep-learning-based-explainable-dynamic-analysis-framework-for-detecting-malicious-packages-in-pypi-ecosystem)  
-   标签：评分：6.8/10、query:q5
+8. [eDySec：基于深度学习的可解释动态分析框架，用于检测PyPI生态系统中的恶意包](/202605/07/2604.26219v1-edysec-a-deep-learning-based-explainable-dynamic-analysis-framework-for-detecting-malicious-packages-in-pypi-ecosystem)（6.8/10）
    摘要：本论文提出了 eDySec，一个基于深度学习的可解释动态分析框架，用于检测 PyPI 生态系统中的恶意软件包。通过对安装时和安装后行为的动态追踪，并结合特征选择和可解释性技术，eDySec 显著降低了误报和漏报，提高了检测准确率和模型稳定性，显示出对下一代软件供应链攻击具有较强防御能力，值得进一步精读。
-   evidence：使用深度学习检测恶意软件包并分析行为
-9. [GIFGuard: Proactive Forensics against Deepfakes in Facial GIFs via Spatiotemporal Watermarking](/202605/07/2604.26519v1-gifguard-proactive-forensics-against-deepfakes-in-facial-gifs-via-spatiotemporal-watermarking)  
-   标签：评分：6.8/10、query:q6
+9. [GIFGuard：通过时空水印对面部GIF深度伪造的主动取证防护](/202605/07/2604.26519v1-gifguard-proactive-forensics-against-deepfakes-in-facial-gifs-via-spatiotemporal-watermarking)（6.8/10）
    摘要：本文提出 GIFGuard，一种针对面部 GIF 的深度伪造主动取证框架，通过时空水印嵌入和恢复机制，实现对动态序列的鲁棒性保护。方法结合 STARE 编码器和 DIRD 解码器，确保水印在深度伪造攻击下仍可准确提取。实验显示 GIFGuard 在视觉质量和防伪稳健性上优于现有方法，提供低比特错误率（≈0.01%）。值得对面向 GIF 的主动取证研究和水印技术感兴趣的读者精读。
-   evidence：通过时空水印进行加密视频取证
-10. [Beyond One\-Size\-Fits\-All Exercises: Personalizing Computer Science Worksheets with Large Language Models](/202605/07/2604.27433v1-beyond-one-size-fits-all-exercises-personalizing-computer-science-worksheets-with-large-language-models)  
-   标签：评分：6.8/10、query:q3
+10. [超越一刀切练习：利用大语言模型个性化计算机科学作业](/202605/07/2604.27433v1-beyond-one-size-fits-all-exercises-personalizing-computer-science-worksheets-with-large-language-models)（6.8/10）
    摘要：论文研究如何利用大语言模型为 CS1（计算机导论）课程自动生成“因人而异”的练习单，而非统一题目。作者基于 Bloom 分类与自我决定理论，将 409 名学生划分为四类画像，并对 RegEx 练习进行脚手架、语气与显式指导的自适应调整。结果显示，个性化材料显著降低低水平学生的放弃率，并提升低知识低动机学生正确率。论文价值在于它强调“教师侧”LLM 教学设计，而非聊天机器人式学生助手，值得关注教育 AI 与教学编排方向的读者细读。
-   evidence：LLM应用于自适应内容生成
-11. [AdvNet: Revealing Performance Issues in Network Protocols by Generating Adversarial Environments](/202605/07/2605.00755v1-advnet-revealing-performance-issues-in-network-protocols-by-generating-adversarial-environments)  
-   标签：评分：6.8/10、query:q3
+11. [AdvNet：通过生成对抗环境揭示网络协议的性能问题](/202605/07/2605.00755v1-advnet-revealing-performance-issues-in-network-protocols-by-generating-adversarial-environments)（6.8/10）
    摘要：论文提出 AdvNet，一个自动生成“对抗性网络环境”的测试框架，用于发现拥塞控制等网络协议在罕见条件下的性能缺陷。其核心做法是利用机器学习优化搜索网络时序参数，并通过噪声鲁棒机制处理真实协议执行中的随机性。作者在 27 个 Linux 内核级单路径与多路径 CC 实现上验证了方法，发现了此前未暴露的内核 bug 与协议鲁棒性问题。对于关注网络协议测试、CC 鲁棒性与系统 ML 的读者，这篇论文很值得继续细读。
-   evidence：通过基于机器学习的优化解决网络协议中的性能问题
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
