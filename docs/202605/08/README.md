@@ -1,97 +1,50 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-08
 
-## 每次日报
-- 最新运行日期：2026-05-08
-- 运行时间：2026-05-08 20:22:09 UTC
-- 运行状态：成功
-- 本次总论文数：16
+- 生成时间：2026-05-08 20:22:09 UTC
+- 当次推荐总数：16
 - 精读区：5
 - 速读区：11
 
-### 今日简报（AI）
-今天共浏览 16 篇论文，涵盖精读与速读，深入技术前沿。  
-重点关注多跳检索优化与工业网络入侵检测的新方法。  
-建议普通读者可先从多跳检索与异常检测实践案例入手，加深理解应用场景。
-- 详情：[/202605/08/README](/202605/08/README)
+## 今日简报（AI）
+今日阅读16篇前沿技术文献，精读与速读兼顾。  
+重点关注多跳检索优化与IoT/工业网络异常检测方法的新进展。  
+建议关注多模态信息整合与自适应证据组装技术，以提升实际应用效果。
 
-### 精读区论文标签
-1. [XekRung Technical Report](/202605/08/2605.00072v1-xekrung-technical-report)  
-   标签：评分：8.3/10、query:q9
+## 精读区
+1. [XekRung 技术报告](/202605/08/2605.00072v1-xekrung-technical-report)（8.3/10）
    摘要：本论文介绍了 XekRung，一款面向网络安全的前沿大语言模型，通过定制化数据合成、持续预训练、监督微调与强化学习构建完整训练流程，实现跨层次、多步推理能力。实验显示其在15项网络安全专用基准上领先同规模模型，同时保持良好通用性能，显示出对复杂安全任务的实用价值，值得深入阅读以了解其训练方法与评测体系。
-   evidence：大型语言模型用于网络安全任务
-2. [AdaGATE: Adaptive Gap\-Aware Token\-Efficient Evidence Assembly for Multi\-Hop Retrieval\-Augmented Generation](/202605/08/2605.05245v1-adagate-adaptive-gap-aware-token-efficient-evidence-assembly-for-multi-hop-retrieval-augmented-generation)  
-   标签：评分：8.2/10、query:profile-1
+2. [AdaGATE：面向多跳检索增强生成的自适应缺口感知高效令牌证据组装](/202605/08/2605.05245v1-adagate-adaptive-gap-aware-token-efficient-evidence-assembly-for-multi-hop-retrieval-augmented-generation)（8.2/10）
    摘要：本论文提出AdaGATE，一种无需训练的多跳检索增强生成（RAG）证据控制器，通过显式追踪知识缺口并进行令牌约束的证据选择，实现高效且鲁棒的多跳问答。实验证明，在HotpotQA数据集下，AdaGATE在清洁、冗余和噪声条件下均取得最高证据F1，同时显著减少输入令牌使用量，表明方法在有限上下文和不完美检索场景下表现优异，值得继续精读。
-   evidence：多跳检索的缺口感知证据组合
-3. [Toward Autonomous SOC Operations: End\-to\-End LLM Framework for Threat Detection, Query Generation, and Resolution in Security Operations](/202605/08/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)  
-   标签：评分：8.1/10、query:q9
+3. [迈向自主化SOC运维：面向威胁检测、查询生成与响应的端到端大语言模型框架](/202605/08/2604.27321v1-toward-autonomous-soc-operations-end-to-end-llm-framework-for-threat-detection-query-generation-and-resolution-in-security-operations)（8.1/10）
    摘要：本文提出了一个端到端的安全运营中心\(SOC\)自动化框架，通过集成多模型威胁检测、语法约束查询生成\(SQM\)和检索增强解决方案，实现从警报分析到事件响应的全流程自动化。实验证明该框架在真实SIEM日志中检测准确率达到82.8%，误报率仅0.120，查询生成和事件解决精度显著提升，平均事件处理时间由数小时降至10分钟以内，显示了其在生产环境中的潜力，值得继续精读了解方法细节。
-   evidence：LLM集成用于SOC威胁检测和查询生成
-4. [Evaluating Tabular Representation Learning for Network Intrusion Detection](/202605/08/2605.02519v1-evaluating-tabular-representation-learning-for-network-intrusion-detection)  
-   标签：评分：8.0/10、query:q4
+4. [用于网络入侵检测的表格表示学习评估](/202605/08/2605.02519v1-evaluating-tabular-representation-learning-for-network-intrusion-detection)（8.0/10）
    摘要：本文系统评估了基于表格表示学习的网络入侵检测方法，针对NetFlow数据自动学习特征表示。通过对比TabICL、SCARF及传统自编码器和端到端Transformer方法，在多个公开数据集上进行监督分类和无监督异常检测实验，发现不同方法的效果高度依赖数据集，监督学习普遍优于无监督方法，并且学习的表示在跨数据集迁移中存在显著波动。整体上，论文提供了方法性能和迁移能力的全景视图，值得关注表格表示学习在网络安全中的应用。
-   evidence：用于网络入侵的表格表示学习
-5. [LCC\-LLM: Leveraging Code\-Centric Large Language Models for Malware Attribution](/202605/08/2605.05807v1-lcc-llm-leveraging-code-centric-large-language-models-for-malware-attribution)  
-   标签：评分：8.0/10、query:q9
+5. [LCC\-LLM：利用面向代码的大型语言模型进行恶意软件归因](/202605/08/2605.05807v1-lcc-llm-leveraging-code-centric-large-language-models-for-malware-attribution)（8.0/10）
    摘要：本文提出 LCC\-LLM，一个面向恶意软件归属分析的代码中心化大语言模型框架，结合 LCCD 数据集、多源网络安全知识、静态分析和验证链机制，实现证据驱动的多任务静态恶意软件分析。通过对 43 类任务的评估和 MalwareBazaar 案例测试，展示了在结构化报告生成、IoC 提取、漏洞评估等任务上的高可靠性和实用性，值得继续精读其方法设计与实验细节。
-   evidence：LLM用于恶意软件代码分析
 
-### 速读区论文标签
-1. [Binary Image\-Based Intrusion Detection for Operational Technology Networks: Extending the SPHBI Methodology from IoT to Modbus TCP](/202605/08/2605.04250v2-binary-image-based-intrusion-detection-for-operational-technology-networks-extending-the-sphbi-methodology-from-iot-to-modbus-tcp)  
-   标签：评分：7.8/10、query:q5
+## 速读区
+1. [面向工业控制网络的基于二值图像的入侵检测：将SPHBI方法从物联网扩展至Modbus TCP](/202605/08/2605.04250v2-binary-image-based-intrusion-detection-for-operational-technology-networks-extending-the-sphbi-methodology-from-iot-to-modbus-tcp)（7.8/10）
    摘要：论文研究 SPHBI（二值包头图像）方法从 IoT 扩展到 OT/Modbus TCP 场景是否仍有效。作者基于 CIC Modbus 2023 数据集设计五种不同协议层深度的单包二值图像方案，并用轻量 CNN 分类。结果显示仅靠 TCP/IP 头几乎失效，但加入极少量 Modbus 应用层字段后即可达到 98%\+ 二分类准确率与约 94% 多分类准确率，同时参数量远低于 ResNet50 类方案。若关注轻量化 OT 边缘 IDS、单包检测与协议层贡献分析，值得继续细读。
-   evidence：基于二值图像的入侵检测适用于加密流量分析
-2. [Context\-Aware Graph Attention for Unsupervised Telco Anomaly Detection](/202605/08/2604.27172v1-context-aware-graph-attention-for-unsupervised-telco-anomaly-detection)  
-   标签：评分：7.6/10、query:q4
+2. [面向无监督电信异常检测的上下文感知图注意力模型](/202605/08/2604.27172v1-context-aware-graph-attention-for-unsupervised-telco-anomaly-detection)（7.6/10）
    摘要：本文提出 C\-MTAD\-GAT，一种面向电信多变量时间序列的无监督、上下文感知图注意力异常检测模型，通过结合图注意力机制与轻量上下文嵌入，实现统一中央模型对千级网络元素的异常评分。实验证明，在公共 TELCO 数据集上，其 F1 指标优于 MTAD\-GAT 和 DC\-VAE，同时触发警报显著减少，并在实际核心网络中成功部署，展示工业环境适用性。研究值得精读以获取上下文建模与图注意力结合的实现细节及部署经验。
-   evidence：图注意力用于网络异常检测
-3. [RouteProfile: Elucidating the Design Space of LLM Profiles for Routing](/202605/08/2605.00180v1-routeprofile-elucidating-the-design-space-of-llm-profiles-for-routing)  
-   标签：评分：7.5/10、query:profile-1
+3. [RouteProfile：阐明用于路由的大型语言模型（LLM）配置文件设计空间](/202605/08/2605.00180v1-routeprofile-elucidating-the-design-space-of-llm-profiles-for-routing)（7.5/10）
    摘要：本文研究大语言模型（LLM）路由中的模型能力描述——LLM profile的设计对路由性能的影响。通过提出RouteProfile框架，从组织形式、表示类型、聚合深度和学习配置四个维度系统构建模型能力档案，并在三类代表性路由器及新模型泛化场景下评估。结果表明结构化档案优于扁平档案，查询级信号比领域级信号更可靠，新模型泛化最受训练优化结构化档案提升。论文提供了路由研究中关注模型能力描述的重要性，值得继续精读。
-   evidence：LLM配置文件设计研究对复合检索与流量任务相关
-4. [Trident: Improving Malware Detection with LLMs and Behavioral Features](/202605/08/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)  
-   标签：评分：7.5/10、query:q9
+4. [Trident：结合大型语言模型与行为特征的恶意软件检测改进方法](/202605/08/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)（7.5/10）
    摘要：本文提出Trident框架，结合静态特征的决策树、LLM生成的行为规则以及对沙箱行为报告的直接LLM分析，通过多数投票实现恶意软件检测。方法利用LLM处理半结构化动态行为数据，生成可推广的检测规则，并在概念漂移环境下保持高性能和低误报率。实验显示Trident在F1值和概念漂移鲁棒性上均优于仅使用静态特征或单独行为规则的方法，值得深入阅读方法和实验部分。
-   evidence：LLM用于恶意软件行为分析
-5. [AgenticVM: Agentic AI for Adaptive Software Vulnerability Management](/202605/08/2605.01739v1-agenticvm-agentic-ai-for-adaptive-software-vulnerability-management)  
-   标签：评分：7.5/10、query:q9
+5. [AgenticVM：面向自适应软件漏洞管理的自主智能体 AI](/202605/08/2605.01739v1-agenticvm-agentic-ai-for-adaptive-software-vulnerability-management)（7.5/10）
    摘要：本论文提出 AgenticVM，一种基于多智能体的 AI 框架，将大语言模型与安全工具结合，实现软件漏洞管理全生命周期的自动化，包括检测、评估、优先级排序与报告生成。实验显示，该系统可将海量扫描告警压缩至可操作队列，最高减噪达 98%，同时预测缺失 CVSS 属性准确率为 89.3%。研究兼顾性能和实际部署，可显著降低分析师负担，值得继续精读。
-   evidence：用于网络安全漏洞管理的LLM驱动代理
-6. [FIRCE: A Framework for Intrusion Response and Conformal Evaluation](/202605/08/2605.01962v1-firce-a-framework-for-intrusion-response-and-conformal-evaluation)  
-   标签：评分：7.5/10、query:q4
+6. [FIRCE：入侵响应与保形评估框架](/202605/08/2605.01962v1-firce-a-framework-for-intrusion-response-and-conformal-evaluation)（7.5/10）
    摘要：本文提出FIRCE框架，旨在增强基于机器学习的入侵检测系统（IDS）对概念漂移的响应能力，通过引入多种保形评估策略和自适应分块机制，实现对网络流量变化的实时检测与模型重训练。实验基于自建物联网测试床及CICIDS2018、UNSW\-NB15数据集，显示FIRCE在漂移检测和动态响应方面优于静态分类器，值得进一步精读其方法设计与实验结果。
-   evidence：基于机器学习的入侵检测与概念漂移处理
-7. [Belief\-Guided Inference Control for Large Language Model Services via Verifiable Observations](/202605/08/2604.27536v1-belief-guided-inference-control-for-large-language-model-services-via-verifiable-observations)  
-   标签：评分：6.8/10、query:q1
+7. [基于可验证观测的信念引导大型语言模型服务推理控制](/202605/08/2604.27536v1-belief-guided-inference-control-for-large-language-model-services-via-verifiable-observations)（6.8/10）
    摘要：本文提出 VEROIC 框架，在黑箱大语言模型服务中，通过可验证的轻量级观察信号构建对响应可靠性的贝叶斯信念状态，并结合预算感知策略在请求时动态决定是否触发高成本推理。实验显示，该方法在多任务上改善了质量\-成本权衡、风险估计和推理控制鲁棒性，适合对大模型服务的精细推理控制研究者进一步阅读。
-   evidence：LLM服务的自适应推理控制
-8. [H\-RAG at SemEval\-2026 Task 8: Hierarchical Parent\-Child Retrieval for Multi\-Turn RAG Conversations](/202605/08/2605.00631v1-h-rag-at-semeval-2026-task-8-hierarchical-parent-child-retrieval-for-multi-turn-rag-conversations)  
-   标签：评分：6.8/10、query:q1
+8. [SemEval\-2026 Task 8 的 H\-RAG：用于多轮 RAG 对话的分层父子检索方法](/202605/08/2605.00631v1-h-rag-at-semeval-2026-task-8-hierarchical-parent-child-retrieval-for-multi-turn-rag-conversations)（6.8/10）
    摘要：本文提出 H\-RAG 系统，针对 SemEval\-2026 Task 8 的多轮对话检索增强生成任务，设计了父子层级检索机制，将文档分为句级子块进行精细检索，同时保留完整文档作为父单元提供生成上下文。通过混合密集\-稀疏检索和父级聚合优化多轮 RAG 表现，Task A 的 nDCG@5 达 0.4271，Task C 综合指标达 0.3241，显示层级检索和聚合对性能提升关键，值得对多轮 RAG 系统设计深入学习。
-   evidence：多轮RAG中的层级检索
-9. [FT\-RAG: A Fine\-grained Retrieval\-Augmented Generation Framework for Complex Table Reasoning](/202605/08/2605.01495v1-ft-rag-a-fine-grained-retrieval-augmented-generation-framework-for-complex-table-reasoning)  
-   标签：评分：6.8/10、query:q3
+9. [FT\-RAG：用于复杂表格推理的细粒度检索增强生成框架](/202605/08/2605.01495v1-ft-rag-a-fine-grained-retrieval-augmented-generation-framework-for-complex-table-reasoning)（6.8/10）
    摘要：本文提出 FT\-RAG，一种细粒度表格增强生成框架，用于复杂表格推理，通过将表格分解为单元级语义单位并构建结构化图进行知识关联，实现跨表检索和多模态融合。实验表明，其在 Multi\-Table\-RAG\-Lib 基准上大幅提升表格及单元命中率与精确值生成准确率，显示出在复杂表格与异构文本场景中可靠的事实支撑能力，值得关注其方法细节与实验设计。
-   evidence：增强型RAG LLM用于表格推理
-10. [Towards Visual Query Localization in the 3D World](/202605/08/2605.01498v1-towards-visual-query-localization-in-the-3d-world)  
-   标签：评分：6.8/10、query:q6
+10. [面向三维世界的视觉查询定位](/202605/08/2605.01498v1-towards-visual-query-localization-in-the-3d-world)（6.8/10）
    摘要：本文首次提出面向3D空间的视觉查询定位（3DVQL），构建了包含2002序列、170K帧和多模态数据（点云、RGB、深度）的基准数据集，并设计了LaF融合算法将2D特征映射到3D空间以提升定位精度。实验显示多模态融合优于单模态，特别是LaF方法在不同融合模块上表现最优，显示该方向具有显著研究价值。值得继续精读方法与实验部分以理解多模态融合策略。
-   evidence：视频理解的3D视觉查询定位
-11. [Retrieval with Multiple Query Vectors through Anomalous Pattern Detection](/202605/08/2605.01965v1-retrieval-with-multiple-query-vectors-through-anomalous-pattern-detection)  
-   标签：评分：6.8/10、query:profile-1
+11. [通过异常模式检测的多查询向量检索](/202605/08/2605.01965v1-retrieval-with-multiple-query-vectors-through-anomalous-pattern-detection)（6.8/10）
    摘要：本文提出了一种基于异常模式检测的多查询向量检索方法，针对传统单查询向量在复杂信息检索场景中的局限，通过识别查询向量中的异常维度并检索数据库中具有相似异常模式的向量，实现更精准的检索。实验覆盖文本、图像及表格数据集，结果显示查询向量数量增加显著提升检索性能，尤其从1到8个查询向量时效果提升明显。该方法值得在多向量检索及LLM增强生成场景中进一步精读。
-   evidence：多向量检索方法与复杂LLM网络查询相关
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。

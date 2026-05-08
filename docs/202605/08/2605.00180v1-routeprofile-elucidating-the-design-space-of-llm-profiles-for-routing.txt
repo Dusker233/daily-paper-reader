@@ -1,0 +1,498 @@
+Title: RouteProfile: Elucidating the Design Space of LLM Profiles for Routing
+
+URL Source: https://arxiv.org/pdf/2605.00180v1
+
+Published Time: Mon, 04 May 2026 00:10:33 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+Preprint. 
+
+# RouteProfile : Elucidating the Design Space of LLM Profiles for Routing 
+
+Jingjun Xu ∗1 Hongji Pu ∗1 Tao Feng ∗1
+
+Haozhen Zhang ∗2 Jiaxuan You †1 Ge Liu †1 
+
+> 1
+
+University of Illinois Urbana-Champaign 2Nanyang Technological University 
+
+## Abstract 
+
+As the large language model (LLM) ecosystem expands, individual mod-els exhibit varying capabilities across queries, benchmarks, and domains, motivating the development of LLM routing. While prior work has largely focused on router mechanism design, LLM profiles, which capture model capabilities, remain underexplored. In this work, we ask: How does LLM profile design affect routing performance across different routers? Address-ing this question helps clarify the role of profiles in routing, disentangle profile design from router design, and enable fairer comparison and more principled development of routing systems. To this end, we view LLM profiling as a structured information integration problem over heteroge-neous interaction histories. We develop a general design space of LLM profiles, named RouteProfile, along four key dimensions: organizational form, representation type, aggregation depth, and learning configuration. Through systematic evaluation across three representative routers under both standard and new-LLM generalization settings, we show that: (1) structured profiles consistently outperform flat ones; (2) query-level signals are more reliable than coarse domain-level signals; and (3) generalization to newly introduced models benefits most from structured profiles under trainable configurations. Overall, our work highlights LLM profile design as an important direction for future routing research. 
+
+§ ulab-uiuc/RouteProfile Hugging Face Collection 
+
+## 1 Introduction 
+
+As the large language model (LLM) ecosystem expands, individual models exhibit varying capabilities across queries, tasks, and domains. This heterogeneity motivates the develop-ment of LLM routing to select the most suitable model for each query (Chen et al., 2023). However, existing work has predominantly focused on designing more sophisticated router mechanisms (Lu et al., 2024; Chen et al., 2024; Ong et al., 2025). Yet LLM profiles, which capture the capabilities of individual models, have remained largely unexplored. The prior design of LLM profiles is heterogeneous and entangled with routing strategies, making it unclear where the LLM routing performance gains originate. This obscures fair comparison and hinders principled design in routers. Therefore, our paper aims to raise attention to this important research question: How does the design of LLM profiles affect routing performance across different LLM routers? 
+
+Constructing LLM profiles is inherently challenging. An LLM’s profile is rarely explicitly available, but must instead be inferred from heterogeneous interaction histories spanning diverse queries, tasks, and domains (Liang et al., 2023). These signals vary in granularity 
+
+> ∗
+
+Equal contribution. {jingjunx,hongjip2,taofeng2 }@illinois.edu , wazhz14@gmail.com .
+
+> †
+
+Corresponding author. 
+
+1
+
+> arXiv:2605.00180v1 [cs.NI] 30 Apr 2026
+
+Preprint. Query Q1 (Easy) Q2 (Mid) Q5 (Ex-Hard) Q3 (Hard) Q4 (Vry-Hard) Human_eval Agentverse-mgsm 
+
+> Math
+> Reasoning Knowledge Coding
+> QA
+> Opbook_QA MMLU GPQA MBPP Writing
+> Travia_QA
+
+Task Domain 
+
+Figure 1: Model strengths vary substantially across query, task, and domain levels. Radar plots compare the performance of candidate LLMs under three views: query difficulty, benchmark task, and domain category. No single model dominates all dimensions; instead, different models exhibit complementary strengths and weaknesses, motivating the need for structured model profiling in routing. and are often interdependent: query behavior reflects task characteristics, task performance relates to domain expertise, and all these signals jointly shape model-level capability profiles. As shown in Figure 1, such interaction histories are highly heterogeneous, making it difficult to distinguish stable model characteristics from task-specific or noisy behaviors. Yet existing profile designs used in LLM routing remain limited. Some methods use index-based profiles, representing each model as a discrete one-hot vector (Zheng et al., 2023). Such semantically impoverished profiles make it difficult for routers trained on fixed benchmarks to generalize to unseen queries or newly introduced models. Other methods rely on LLM-generated profiles, where a strong model produces natural language descriptions of each candidate LLM (Feng et al., 2025a; Zhang et al., 2025). While more expressive, these profiles often remain coarse, knowledge-limited, and narrow in coverage. A third line of work derives profiles from benchmark-level summary statistics (Shnitzer et al., 2023), but such summaries discard rich fine-grained interaction signals and fail to capture structured relationships among models, queries, tasks, and domains. 
+
+A structured view of LLM profiling. These limitations suggest that constructing LLM profiles requires integrating heterogeneous interaction histories spanning queries, tasks, and domains. These signals are not only diverse in granularity, but also interdependent. Therefore, LLM profiling should be studied not merely as feature extraction from isolated observations, but as a structured information integration problem. Specifically, how such heterogeneous histories are organized and integrated, whether as flat observations or structured evidence, can substantially affect the resulting profiles and routing behavior. 
+
+General framework for LLM profiling. Motivated by this view, we develop a general framework, named RouteProfile , that characterizes the design space of LLM profiling along four key dimensions: organizational form , representation type , aggregation depth , and 
+
+learning configuration . Organizational form specifies how interaction histories are organized before integration, such as flat collections or structured relational forms. Representation type determines whether the resulting profiles are expressed as textual summaries or dense embeddings. Aggregation depth controls the scope of information integration, ranging from local evidence to broader contextual structure. Learning configuration indicates whether the profiling process is training-free or optimized through learning. Rather than enumerating all possible design variants, this framework shifts attention from specialized router mechanisms to a principled understanding of how LLM profile design shapes routing performance and generalization. 2Preprint. 
+
+Evaluation and main discoveries. We systematically evaluate RouteProfile to understand how different profiling choices affect LLM routing performance. Experiments are conducted across several representative routers, including SimRouter, MLPRouter (Hu et al., 2024), and GraphRouter (Feng et al., 2025a), under both standard and new-LLM generalization settings. Based on the evaluation results, we highlight three key findings: (1) Structured profiles consistently outperform flat profiles . (2) Query-level signals are more reliable than coarse domain-level ones . (3) Generalization to newly introduced models benefits most from structured profiles, particularly under trainable learning configurations . Overall, our work advocates for a transition from studying router mechanism design to LLM profile design, offering exciting research directions in routing. 
+
+## 2 Related Work 
+
+LLM Routing. Recent work formulates multi-LLM routing as an inference-time decision problem, assigning each query to a model under quality, cost, or latency constraints (Ding et al., 2024; Ong et al., 2025; Chen et al., 2023). Existing methods mainly focus on router design, including preference-trained, reward-guided, contrastive, and graph-based routers (Zhang et al., 2025; Ong et al., 2025; Chen et al., 2024; Feng et al., 2025a; ˇSakota et al., 2024). Some methods also use model-side signals such as benchmark statistics, metadata, or structured task–query–model relations (Ong et al., 2025; Chen et al., 2024; Feng et al., 2025a), but typically treat these signals as auxiliary inputs rather than a standalone design problem. In contrast, we study LLM profile design and its effect across routers. 
+
+LLM Profiling. Prior work studies explicit profiling of model capabilities. QualEval (Mura-hari et al., 2024) derives natural-language capability groups for diagnosis, Skill-Slices (Moay-eri et al., 2024) recovers latent skills to reveal trade-offs hidden by aggregate benchmark scores, and EvalTree (Zeng et al., 2025) organizes model weaknesses through capability trees. More recently, BELLA explores skill-based profiling for cost-aware LLM routing (Okamoto et al., 2026). However, these works mainly target evaluation, diagnosis, or a specific routing framework, rather than treating profile design as a general routing problem. 
+
+## 3 LLM Interaction Histories as a Heterogeneous Graph 
+
+In this section, we first describe the data sources from which LLM profiles are constructed. Then we formalize these signals as a heterogeneous graph for principled LLM profile definition and systematic analysis, which we refer to as the interaction graph .We consider four primary sources to construct an LLM profile as illustrated in Figure 2: 
+
+model family , domain coverage , task evaluation , and query-level instance . Model family encodes the structural prior of each model, including its architectural lineage, series, and devel-oper, and thus provides insight into inherent capabilities. Domain coverage characterizes the task areas in which a model exhibits competence, highlighting its specialization and heterogeneity across domains. Task evaluation captures the model’s standardized perfor-mance in technical reports or model cards and, therefore, offers a comparable assessment of model capabilities. Query-level instance represents specific problems associated with tasks, providing a finer-grained view of the tasks that a model is expected to handle. To systematically integrate the data sources, we represent the multi-source information as a heterogeneous graph G = ( V, E ). Each node v ∈ V and edge e ∈ E are assigned types through mapping functions, with node type defined by ϕ : V → C and edge type defined by ψ : E → D . An edge connecting a pair of nodes is denoted as euv = ( u, v). Specifically, we define 5 node types: model node vm, model family node v f , domain node vd, task node 
+
+vt, query node vq; and 4 edge types: model-model family edge em f , model-task edge emt ,task-domain edge etd , and task-query edge etq .We then describe the features associated with nodes and edges. For node features x, we adopt different initialization strategies given the inherent differences among node types. In particular, we utilize an additional LLM, such as GPT-4o (OpenAI, 2024), to generate textual descriptions for model nodes, domain nodes, and the task nodes using tailored 3Preprint. Organizational Form     
+
+> Model
+> Model Family
+> Query
+> Domain
+> Task
+> Structured Integration Flat Concatenation
+> Model Family Task
+> Domain Query
+> Learning Config.
+> Aggre. Depth
+> Representation Type
+> Trainable
+> Training-Free
+> 1
+> 2
+> 3
+> K-Hop
+> Aggregation
+> [
+> [
+> Model
+> Profile
+> Text -based
+> Message Propagation
+> Emb -based
+> Message Propagation
+> LLM
+> Summarization
+> Text
+> Vectors
+> Vector
+> Computation
+
+Routing 
+
+> New
+> Query
+> Choose
+> Best Model
+> LLM Profile
+
+LLM Profile  Design Space 
+
+> SimRouter
+> MLPRouter
+> GraphRouter
+> Model
+> Task
+> Domain
+> Query
+> Model
+> Family
+
+Data 
+
+Sources 
+
+Figure 2: Overview of the RouteProfile . LLM profiles are constructed from interaction his-tories comprising model family, task evaluation, domain coverage, and query-level signals. The design space is characterized along four dimensions: organizational form (flat/structured), 
+
+representation type (text/embedding), aggregation depth (hop ∈ { 0, 1, 2, ... }), and learning con-figuration (training-free/trainable). Three representative routers are employed to evaluate how profile design choices affect routing performance across different routing settings. Here, ”Aggre.” and ”Config.” denote Aggregation and Configuration, respectively. prompts. All generated descriptions can be found in Appendix A.1. For query nodes, the description corresponds directly to the query content. These descriptions serve as node features in the text space and are further encoded by a pre-trained language model (PLM), such as Longformer (Beltagy et al., 2020), to obtain dense embeddings. For edge features r,only the model–task edges are associated with features, which encode performance scores demonstrated on technical reports or authoritative LLM leaderboards, such as the Open LLM Leaderboard (Fourrier et al., 2024). Finally, we define the LLM profile pm of a model node vm as: 
+
+pm = ˆxvm = f (G)vm , (1) where ˆxvm denotes the aggregated representation of vm, and f is the information aggregation function over the interaction graph G.
+
+## 4 RouteProfile : Proposed Design Space for LLM Profiles 
+
+Next, we propose a general design space of LLM profiles for routing, named RouteProfile .Specifically, we focus on the design of the information aggregation function f .The RouteProfile includes four key dimensions as illustrated in Figure 2: organizational form , representation type , aggregation depth , and learning configuration . In defining this space, we follow two guiding principles: (1) inclusiveness of dimensions that materially affect downstream routing performance; (2) conciseness by excluding overly task-specific choices, such as particular LLMs or graph neural networks (GNNs) used for information aggregation. Our goal is not to enumerate all possible design variants, but to show how a systematic view for understanding how different profile design choices affect routing performance. 
+
+Organizational Form Representation Type Aggregation Depth Learning Configuration 
+
+Flat, Structured Text, Embedding 0, 1, 2, 3, 4 Training-Free, Trainable In particular, organizational form specifies whether the structural information in the inter-action graph is leveraged during aggregation. In a structured form, relational information 4Preprint. is typically modeled through a GNN, whereas in a flat form, the available information is directly concatenated into plain text or a single vector. Representation type determines the information fusion mechanism, which can either be textual descriptions or dense embed-dings. Textual representations are usually summarized by LLMs, whereas dense embed-dings are often computed through neural networks, such as those in GNNs. Aggregation depth controls the extent of information propagation within the graph, determining whether only direct neighbors or also higher-order neighborhoods contribute to the LLM profiles. 
+
+Learning configuration indicates whether the aggregation function f is trainable. In a train-able setting, the aggregation function f can be optimized, for example, via self-supervised learning on the interaction graph. Formally, we define the function f as: 
+
+pm = ˆxvm = f (ω,γ,K,ℓ)(G)vm , (2) where ω ∈ { Flat , Structured } denotes the organizational form, γ ∈ { Text , Embedding }
+
+denotes the representation type, K ∈ { 0, 1, 2, 3, 4 } denotes the aggregation depth, and 
+
+ℓ ∈ { Training-free, Trainable } denotes the learning configuration. 
+
+## 5 Experimental Setup 
+
+In this section, we describe the experimental setup for evaluating how design choices in LLM profiles affect routing performance. The setup comprises two parts. The first is upstream profile construction, covering interaction graph construction (Section 5.1) and instantiated design choices (Section 5.2). The second is downstream routing evaluation, including datasets and candidate LLMs (Section 5.3), routing methods (Section 5.4), and evaluation tasks (Section 5.5). 
+
+5.1 Interaction Graph Construction 
+
+We construct the interaction graph using 15 datasets spanning 4 capability domains: knowl-edge, reasoning, math, and coding. Dataset statistics are summarized in the upper portion of Table 7, with detailed descriptions provided in Table 4. The graph further incorporates 25 LLMs from 5 model families to enrich relational signals across models. Of these, 8 serve as candidate LLMs for downstream routing evaluation and the remainder serve as auxiliary nodes to improve graph connectivity and evidence diversity. Full statistics are reported in Table 8, with descriptions in Table 3. 
+
+5.2 Instantiated Design Choices for LLM Profile Construction 
+
+We present concrete instantiations of the aggregation function f (ω,γ,K,ℓ), covering four representative configurations across the dimensions defined in Section 4. 
+
+Flat Aggregation ( ω = Flat , γ = Text , K = 0, ℓ = Training-free ). Flat aggregation con-structs the LLM profile directly in the text space without exploiting graph structure. Specifi-cally, data associated with vm is sampled from G and concatenated into a textual description: 
+
+pm = f (Flat,Text,0,Training-free )(G)vm = C(S(vm)) , (3) where S(vm) denotes the sampled data for vm, and C(·) is a concatenation operator. 
+
+Text-based GNN ( ω = Structured , γ = Text , K ∈ { 1, 2, 3, 4 }, ℓ = Training-free ). Inspired by Yu et al. (2025), the text-based GNN performs message passing entirely in the text space. The aggregation function updates each node v by prompting an LLM to summarize the textual attributes of its neighborhood N (v). At each propagation hop k, a node-type-specific prompt template T (·) organizes the current node text with neighboring textual states and available edge features into a unified prompt π(k) 
+
+> v
+
+:
+
+π(k) 
+
+> v
+
+= T
+
+
+
+x(k−1) 
+
+> v
+
+, { (x(k−1) 
+
+> u
+
+, ruv ) | u ∈ N (v) }
+
+
+
+. (4) 5Preprint. The updated representation is then obtained by querying an LLM: 
+
+x(k) 
+
+> v
+
+= LLM 
+
+
+
+π(k)
+
+> v
+
+
+
+. (5) The LLM profile is then defined as pm = f (Structured,Text, K,Training-free )(G)vm = x(K) 
+
+> vm
+
+.
+
+Embedding-based GNN ( ω = Structured , γ = Emb , K ∈ { 1, 2, 3, 4 }, ℓ = Training-free ). 
+
+The embedding-based GNN performs feature aggregation on the interaction graph at the embedding level through message passing. Following a simplified GCN-style propagation inspired by Feng et al. (2025b), node representations are updated at the embedding level: 
+
+x(k) 
+
+> v
+
+= ∑ 
+
+> u∈N (v)∪{ v}
+
+wuv 
+
+p|N (v) ∪ { v}| |N (u) ∪ { u}| x(k−1) 
+
+> u
+
+, (6) where wuv = ruv if an edge feature is available, and wuv = 1 otherwise. The LLM profile is then defined as pm = f (Structured,Emb, K,Training-free )(G)vm = x(K) 
+
+> vm
+
+.
+
+Trainable GNN ( ω = Structured , γ = Emb , K ∈ { 1, 2, 3, 4 }, ℓ = Trainable ). The trainable GNN extends the embedding-based GNN with a learnable aggregation optimized via a self-supervised masked reconstruction objective. A proportion of node and edge features is randomly masked, and the model is trained to reconstruct the masked attributes from the remaining graph context: 
+
+L = Lnode + Ledge , (7) where Lnode and Ledge are both implemented as mean squared error (MSE) losses. Specif-ically, we adopt HANConv (Wang et al., 2019) as the backbone, which is designed for heterogeneous graphs and supports type-aware message passing. The LLM profile is then defined as pm = f (Structured,Emb, K,Trainable )(G)vm = x(K) 
+
+> vm
+
+.
+
+5.3 Downstream Datasets and Candidate LLMs 
+
+We select 12 datasets spanning math, reasoning, knowledge, and coding, sampling 50 instances per dataset for downstream evaluation. Statistics are summarized in the lower portion of Table 7, with detailed descriptions in Table 4. Furthermore, routing is evaluated over a fixed candidate pool of 8 LLMs drawn from the Qwen2, Llama, Gemma2, Mistral, and Mixtral families, covering model scales from 3B to 176B parameters. Detailed dataset descriptions and LLM specifications are provided in Table 4 and Table 3, respectively. 
+
+5.4 Routing Methods 
+
+We consider three representative embedding-based routers to examine how different LLM profile designs affect model selection across varying routing mechanisms. In particular, SimRouter is training-free, MLPRouter is learning-based, and GraphRouter is graph-structured. For all routers, query representations are obtained by encoding textual query content with Longformer (Beltagy et al., 2020). 
+
+SimRouter is a similarity-based, non-parametric router that selects models by measuring the similarity between the query representation and each candidate’s profile. It serves as a lightweight baseline for assessing semantic alignment between profiles and queries. 
+
+MLPRouter (Hu et al., 2024) is a trainable router that projects query representations and model profiles into a shared latent space via separate MLPs, ranking candidate models by the similarity between projected representations. It evaluates whether LLM profiles support discriminative model selection under a learned projection. 
+
+GraphRouter (Feng et al., 2025a) organizes tasks, queries, and candidate LLMs into a hetero-geneous graph and applies a GNN with self-supervised learning to capture their relational structure. It evaluates whether LLM profiles can further enhance routing performance when embedded within a graph-structured model selection framework. 6Preprint. Text-Based GNN Embedding-Based GNN Trainable GNN 
+
+Figure 3: Effect of aggregation hop differs across profile designs and routers (RQ1). Depth helps overall, but its value is dependent on the profile design (i.e., representation type and learning configuration) and router. 
+
+5.5 Routing Tasks and Metrics 
+
+We consider two settings to assess the utility and generalizability of LLM profiles in routing. 
+
+Standard Routing. In the standard setting, all candidate LLMs are included in the interaction graph during profile construction, and the router selects the most suitable model for each query based on the constructed profiles. This setting examines how profile design affects routing performance. The evaluation metric is the average response performance across queries, as introduced in Table 7. 
+
+Routing with New LLM (Cold-Start). This setting evaluates whether LLM profiles general-ize to newly introduced candidates. Candidates are partitioned into old and new subsets. For each old candidate, 150 interaction instances per task are incorporated into the interaction graph; new candidates are excluded from such interaction history. In our experiments, 
+
+Mistral-Small-24B-Instruct-2501 is designated as the new LLM. Besides average perfor-mance, we define a cold-start metric that captures the probability of a query being both routed to and correctly answered by the new LLM: Cold-start Performance = Nnew ∧correct 
+
+N , (8) where N is the total number of queries, and Nnew ∧correct is the number of queries both routed to and correctly answered by the new LLM. 
+
+## 6 Experimental Results 
+
+We aim to answer the following research questions through experiments: • RQ1 : How much does LLM profile design constrain routing quality, independent of router choice? • RQ2 : Which data sources effectively improve LLM profiles and which instead introduce noise? • RQ3 : How do different profile designs generalize to newly introduced models under cold-start conditions? 
+
+6.1 Main Comparison of LLM Profile Designs (RQ1) 
+
+This experiment investigates whether progressively stronger profile construction, spanning flat to structured and training-free to trainable, consistently improves routing performance across routers. 
+
+Routing performance depends strongly on how candidate models are profiled. As shown in Table 1, structured profiles consistently outperform flat baselines across routers, and this 7Preprint. Table 1: Routing performance across different profile designs (RQ1). Results are shown for different profile designs across SimRouter, MLPRouter, and GraphRouter. Abbreviations include ”Org.”: Organizational, ”Rep.”: Representation, ”Aggre.”: Aggregation, ”Learn. Config.”: Learning Configuration, ”TF”: Training-free, ”Tr”: Trainable.                                                                                          
+
+> Design Space Avg. Performance ↑
+> Org. Form Rep. Type Aggre. Hop Learn. Config. SimRouter MLPRouter GraphRouter
+> Flat Index 0TF 0.499 0.593 0.532 Flat Text 0TF 0.554 0.613 0.539 Structured Text 1TF 0.527 0.617 0.549 Structured Text 2TF 0.549 0.620 0.589 Structured Text 3TF 0.566 0.625 0.593 Structured Text 4TF 0.580 0.624 0.610 Structured Emb 1TF 0.549 0.613 0.600 Structured Emb 2TF 0.560 0.610 0.610 Structured Emb 3TF 0.534 0.617 0.613 Structured Emb 4TF 0.577 0.605 0.614
+> Structured Emb 1Tr 0.532 0.613 0.613 Structured Emb 2Tr 0.538 0.613 0.613 Structured Emb 3Tr 0.611 0.613 0.604 Structured Emb 4Tr 0.613 0.557 0.516
+
+pattern holds across both text-based and embedding-based representations. This suggests that routing quality is constrained not only by the router mechanism, but also by the quality of the LLM profiles themselves, where retaining structural information is key to constructing more informative profiles. 
+
+The effect of integration depth depends on profile design and router. As shown in Figure 3, additional aggregation hops are generally beneficial but not uniformly so. In the training-free setting, increasing aggregation hop generally improves performance across both text-based and embedding-based profiles. However, in the trainable setting, additional hops benefit SimRouter while degrading performance in MLPRouter and GraphRouter. We attribute this degradation to over-smoothing, whose effect is more pronounced in trainable routers that rely on discriminative profile representations for effective model selection. 
+
+6.2 Effect of Graph Structural Sources (RQ2) 
+
+This experiment varies the inclusion of query-, task-, and domain-level data to identify which signals contribute most to profile construction. 
+
+Query-level signal is a more reliable source than domain-level signal. Table 2 shows that including the query-level signal yields more consistent gains than including the domain-level signal across different profile design configurations and routers. In particular, the strongest results for both Text-2hop and Emb-2hop (the text- and embedding-based profiles with 2-hop aggregation) are obtained when task and query signals are retained together, suggesting that finer-grained interaction signals are more informative for model profiling than coarse domain summaries. 
+
+Domain-level signal is less reliable and can introduce noise. As Table 2 also shows, adding domain nodes does not reliably improve routing and can even weaken otherwise strong profiles. This suggests that coarse-grained domain information is harder to integrate effectively and may hurt profile quality. 
+
+6.3 How Model profiling helps Router in Cold-Start Situations (RQ3) 
+
+This experiment examines whether LLM profiles remain informative enough to support routing over unseen candidate models under the new-LLM setting (Section 5.5). 8Preprint. Table 2: Effect of data source on routing performance (RQ2). We compare task-, query-, and domain-level information across three profile configurations: flat aggregation (Flat), 2-hop text-based GNN (Text-2hop), and 2-hop embedding-based GNN (Emb-2hop). Model and model family nodes are included in all configurations. Profile design details are described in Section 5.2. 
+
+Config. Included Node Type Avg. Performance Task Query Domain SimRouter MLPRouter GraphRouter 
+
+Flat 
+
+✓ ✓ ✓ 0.554 0.613 0.539 
+
+✓ ✓ 0.551 0.619 0.532 
+
+✓ ✓ 0.532 0.619 0.523 
+
+✓ 0.553 0.612 0.512 
+
+✓ 0.541 0.610 0.514 Text-2hop 
+
+✓ ✓ ✓ 0.549 0.620 0.589 
+
+✓ ✓ 0.578 0.627 0.611 
+
+✓ ✓ 0.535 0.622 0.610 
+
+✓ 0.516 0.624 0.539 
+
+✓ 0.574 0.619 0.607 Emb-2hop 
+
+✓ ✓ ✓ 0.560 0.620 0.610 
+
+✓ ✓ 0.562 0.630 0.610 
+
+✓ ✓ 0.535 0.605 0.612 
+
+✓ 0.543 0.609 0.607 
+
+✓ 0.544 0.603 0.556 SimRouter MLPRouter GraphRouter Emb-Tr-3Hop Emb-Tr-1Hop Emb-Tr-4Hop 
+
+>           
+
+Figure 4: Routing performance across different profile designs under the new-LLM routing setting (RQ3). The three panels compare how different profile designs behave under each router. Trainable GNNs achieve the strongest cold-start performance (Eq. 8). 
+
+Generalization to new LLMs requires structured and trainable profiles. As shown in Figure 4, structured profiles generally outperform flat baselines on both average perfor-mance and cold-start performance across all routers. Flat profiles yield near-zero cold-start performance, indicating that structural information is essential for generalizing to unseen models. Trainable configurations further amplify this effect: while training-free structured profiles improve average routing performance, trainable structured profiles are critical for cold-start generalization, achieving substantially higher cold-start scores across routers. These results suggest that relational structure and learned integration are complementary and jointly necessary for robust generalization. 
+
+Generalization depends on profile–router co-design. Figure 4 further shows that cold-start gains are not realized uniformly across routers. GraphRouter achieves the strongest overall cold-start performance, while different structured profile families interact differently with SimRouter and MLPRouter. This suggests that generalization to new models depends not 9Preprint. only on having stronger profiles but also on pairing them with routers capable of leveraging relational profile structure. 
+
+## 7 Conclusion 
+
+In this work, we systematically study the design space of LLM profiles for routing. Our results show that routing quality depends not only on router design, but also on how candi-date models are profiled. Across experiments, structured profiles consistently outperform flat ones, query-level evidence proves more reliable than coarse domain evidence, and robust generalization to newly introduced models requires structured profiles, especially when profile construction is trainable. At the same time, these gains are not realized uni-formly across routers: effective routing depends on profile–router co-design. Overall, our work positions LLM profile design as a critical and underexplored component of routing systems, opening new research directions in LLM routing. 
+
+## References 
+
+Iz Beltagy, Matthew E. Peters, and Arman Cohan. Longformer: The long-document trans-former. CoRR , abs/2004.05150, 2020. Lingjiao Chen, Matei Zaharia, and James Zou. Frugalgpt: How to use large language models while reducing cost and improving performance. arXiv preprint arXiv:2305.05176 , 2023. URL https://arxiv.org/abs/2305.05176 .Shuhao Chen, Weisen Jiang, Baijiong Lin, James T. Kwok, and Yu Zhang. Routerdc: Query-based router by dual contrastive learning for assembling large language mod-els. In Advances in Neural Information Processing Systems , volume 37. Curran As-sociates, Inc., 2024. URL https://proceedings.neurips.cc/paper files/paper/2024/ file/7a641b8ec86162fc875fb9f6456a542f-Paper-Conference.pdf .Dujian Ding, Ankur Mallick, Chi Wang, Robert Sim, Subhabrata Mukherjee, Victor Ruhle, Laks V. S. Lakshmanan, and Ahmed Hassan Awadallah. Hybrid llm: Cost-efficient and quality-aware query routing. In The Twelfth International Conference on Learning Representations , 2024. URL https://openreview.net/forum?id=02f3mUtqnM .Tao Feng, Yanzhen Shen, and Jiaxuan You. Graphrouter: A graph-based router for llm selections. In The Thirteenth International Conference on Learning Repre-sentations , 2025a. URL https://proceedings.iclr.cc/paper files/paper/2025/hash/ 41b6674c28a9b93ec8d22a53ca25bc3b-Abstract-Conference.html .Tao Feng, Yexin Wu, Guanyu Lin, and Jiaxuan You. Graph world model. In Forty-second International Conference on Machine Learning, ICML 2025, Vancouver, BC, Canada, July 13-19, 2025 , Proceedings of Machine Learning Research. PMLR / OpenReview.net, 2025b. Cl ´ementine Fourrier, Nathan Habib, Alina Lozovskaya, Konrad Szafer, and Thomas Wolf. Open llm leaderboard v2. https://huggingface.co/spaces/open-llm-leaderboard/ open llm leaderboard , 2024. Qitian Jason Hu, Jacob Bieker, Xiuyu Li, Nan Jiang, Benjamin Keigwin, Gaurav Ranganath, Kurt Keutzer, and Shriyash Kaustubh Upadhyay. Routerbench: A benchmark for multi-llm routing system. arXiv preprint arXiv:2403.12031 , 2024. Percy Liang, Rishi Bommasani, Tony Lee, Dimitris Tsipras, Dilara Soylu, Michihiro Yasunaga, Yian Zhang, Deepak Narayanan, Yuhuai Wu, Ananya Kumar, et al. Holistic evaluation of language models. Transactions on Machine Learning Research , 2023. URL https:// openreview.net/forum?id=iO4LZibEqW .Keming Lu, Hongyi Yuan, Runji Lin, Junyang Lin, Zheng Yuan, Chang Zhou, and Jingren Zhou. Routing to the expert: Efficient reward-guided ensemble of large language models. In Proceedings of the 2024 Conference of the North American Chapter of the Association for 
+
+10 Preprint. 
+
+Computational Linguistics: Human Language Technologies (Volume 1: Long Papers) , pp. 1964– 1974. Association for Computational Linguistics, 2024. URL https://aclanthology.org/ 2024.naacl-long.109/ .Mazda Moayeri, Vidhisha Balachandran, Varun Chandrasekaran, Safoora Yousefi, Thomas Fel, Soheil Feizi, Besmira Nushi, Neel Joshi, and Vibhav Vineet. Unearthing skill-level in-sights for understanding trade-offs of foundation models. arXiv preprint arXiv:2410.13826 ,2024. Vishvak Murahari, Ameet Deshpande, Peter Clark, Tanmay Rajpurohit, Ashish Sabharwal, Karthik Narasimhan, and Ashwin Kalyan. Qualeval: Qualitative evaluation for model improvement. In Proceedings of the 2024 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 1: Long Papers) , pp. 2093–2111, 2024. Mika Okamoto, Ansel Kaplan Erol, and Glenn Matlin. Trust by design: Skill profiles for transparent, cost-aware llm routing. arXiv preprint arXiv:2602.02386 , 2026. Isaac Ong, Amjad Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E. Gonzalez, M. Waleed Kadous, and Ion Stoica. Routellm: Learning to route llms from preference data. In The Thirteenth International Conference on Learning Representations , 2025. URL 
+
+https://openreview.net/forum?id=8sSqNntaMr .OpenAI. Gpt-4o system card. CoRR , abs/2410.21276, 2024. Marija ˇSakota, Maxime Peyrard, and Robert West. Fly-swat or cannon? cost-effective language model choice via meta-modeling. In Proceedings of the 17th ACM International Conference on Web Search and Data Mining . Association for Computing Machinery, 2024. URL https://dl.acm.org/doi/10.1145/3616855.3635825 .Tal Shnitzer, Anthony Ou, M ´ırian Silva, Kate Soule, Yuekai Sun, Justin Solomon, Neil Thompson, and Mikhail Yurochkin. Large language model routing with benchmark datasets. CoRR , abs/2309.15789, 2023. Xiao Wang, Houye Ji, Chuan Shi, Bai Wang, Yanfang Ye, Peng Cui, and Philip S Yu. Het-erogeneous graph attention network. In The world wide web conference , pp. 2022–2032, 2019. Haofei Yu, Zhaochen Hong, Zirui Cheng, Kunlun Zhu, Keyang Xuan, Jinwei Yao, Tao Feng, and Jiaxuan You. Researchtown: Simulator of human research community. In Forty-second International Conference on Machine Learning, ICML 2025, Vancouver, BC, Canada, July 13-19, 2025 , Proceedings of Machine Learning Research. PMLR / OpenReview.net, 2025. Zhiyuan Zeng, Yizhong Wang, Hannaneh Hajishirzi, and Pang Wei Koh. Evaltree: Pro-filing language model weaknesses via hierarchical capability trees. arXiv preprint arXiv:2503.08893 , 2025. Haozhen Zhang, Tao Feng, and Jiaxuan You. Router-r1: Teaching llms multi-round routing and aggregation via reinforcement learning. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yong-hao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric P. Xing, Hao Zhang, Joseph E. Gonzalez, and Ion Stoica. Judging LLM-as-a-judge with MT-bench and chatbot arena. In Advances in Neural Information Processing Systems , volume 36. Curran As-sociates, Inc., 2023. URL https://proceedings.neurips.cc/paper files/paper/2023/ hash/91f18a1287b398d378ef22505bf41832-Abstract-Datasets and Benchmarks.html .11 Preprint. 
+
+## A Appendix 
+
+A.1 Data Sources for LLM Profile Construction 
+
+We describe the initial node features used to construct the interaction graph for LLM profiling, covering four types of nodes: model family, model, task, domain, and query. 
+
+A.1.1 Model Family Nodes 
+
+Each model family node is initialized with a natural language description capturing its architectural design, training methodology, and general capabilities: • Qwen2 : A family of decoder-only Transformer models developed by Alibaba Cloud, trained on large-scale multilingual corpora with improvements in data quality, alignment, and long-context handling. • Gemma2 : An open model family released by Google, featuring grouped-query attention and interleaved local-global attention for efficient inference and high-quality language modeling. • LLaMA : A family of autoregressive Transformer models developed by Meta AI, widely adopted as foundation models for research and downstream applications, including instruction following and conversational agents. • Mistral : A family of high-efficiency decoder-only models developed by Mistral AI, incorporating grouped-query and sliding-window attention for scalable and memory-efficient inference. • Mixtral : A mixture-of-experts extension of the Mistral architecture that selectively activates sparse expert networks per token, achieving high model capacity with efficient computation. 
+
+A.1.2 Model Nodes 
+
+Each model node is initialized using its model family description as the base text feature, supplemented with model-specific attributes including parameter count, instruction-tuning status, and any available model card information. This allows model nodes to inherit shared architectural priors from their family while retaining individual characteristics. 
+
+A.1.3 Task Nodes 
+
+Each task node is initialized with a natural language description of the benchmark. Table 4 summarizes all datasets used in this work along with their descriptions. 
+
+A.1.4 Domain Nodes 
+
+Each domain node represents a high-level capability category. We define six domains, each characterized by a natural language description that serves as the initial text feature: • Knowledge : Tasks requiring broad factual knowledge, academic understanding, and evidence-grounded question answering across domains. • Reasoning : Tasks requiring commonsense reasoning, multi-step inference, logical deduction, and robust decision making. • QA : Tasks centered on question answering with retrieval, reading comprehension, and answer faithfulness to provided evidence. • Math : Tasks requiring arithmetic, symbolic manipulation, theorem application, and multi-step mathematical problem solving. • Coding : Tasks requiring program synthesis, debugging, and functional correctness under executable unit tests. • Alignment : Tasks evaluating instruction following, helpfulness, harmlessness, truthfulness, and preference alignment in assistant behavior. 12 Preprint. 
+
+A.1.5 Query Nodes 
+
+Query nodes represent individual queries sampled from each benchmark dataset. For each dataset, up to 1,000 queries are randomly sampled to serve as query nodes in the interaction graph. Each query node is initialized by encoding the raw query text using a pre-trained language model. Table 5 lists the datasets and their corresponding Hugging Face identifiers used for query sampling. 
+
+A.2 Prompts for Text-based GNN 
+
+At each propagation hop, every node in the interaction graph is updated by an LLM that synthesises information from its local neighbourhood. The prompts are designed to reflect the heterogeneous structure of the graph, with distinct templates for each node type. 
+
+A.3 Dataset Statistics 
+
+Table 7 summarizes the datasets used in this work, divided into two groups: those used for evidence graph construction during LLM profiling, and those used for routing evaluation. 
+
+A.4 LLM Statistics 
+
+Table 8 summarizes the LLMs used in this work, divided into candidate models that participate in routing and auxiliary models that serve as additional graph context nodes during profile construction. 
+
+A.5 Detailed Experimental Results for RQ3 
+
+Table 9 presents the full results for RQ3, reporting both average routing performance and cold-start performance across all profile design configurations and three routers under the new-LLM generalization setting. 13 Preprint. Table 3: Model nodes and their descriptions used in the interaction graph. 
+
+Model Description 
+
+Candidate LLMs 
+
+Qwen2.5-7B-Instruct An upgraded Qwen model with enhanced multilingual capa-bilities across diverse language tasks. Gemma-2-9B-IT A 9B instruction-tuned model from Google designed for gen-eral text processing and conversational applications. Llama-3.1-8B-Instruct Meta’s 8B model from the Llama-3 series, designed for con-versational AI and complex reasoning tasks. Mixtral-8x7B-Instruct A 56B mixture-of-experts model composed of eight 7B expert models, optimized for creative text generation. Mixtral-8x22B-Instruct An advanced 176B MoE model comprising eight 22B expert components, delivering strong performance across diverse tasks. Llama-3.2-3B-Instruct Meta’s ultra-lightweight 3B model optimized for speed and efficiency, ideal for simple tasks requiring fast responses. Mistral-Small-24B-Instruct Mistral AI’s latest compact model delivering strong per-formance from 24B parameters, excelling at instruction-following tasks. 
+
+Auxiliary Models 
+
+Llama-3.3-70B-Instruct Meta’s 70B multilingual instruction model focused on high-quality dialogue, reasoning, coding, and tool use. Qwen2.5-3B-Instruct A lightweight instruction model in the Qwen2.5 family, suited for low-cost applications and efficient local inference. Qwen2.5-14B-Instruct A mid-sized instruction model offering strong reasoning, knowledge use, and instruction-following for production workflows. Qwen2.5-32B-Instruct A high-performance dense model built for stronger reasoning, richer world knowledge, and reliable long-form generation. Qwen2.5-72B-Instruct The flagship dense model in the Qwen2.5 series, built for top-tier reasoning and knowledge-intensive generation. Gemma-2-2B-IT Google’s smallest instruction-tuned Gemma 2 model, offering a balanced blend of reasoning and response generation. Gemma-2-27B-IT Google’s largest instruction-tuned Gemma 2 model, deliver-ing strong reasoning and response quality for high-quality workloads. Llama-3.2-1B-Instruct Meta’s ultra-compact instruction model optimized for fast, efficient text generation in constrained environments. Mistral-Nemo-Instruct A compact yet capable instruction model jointly developed by Mistral AI and NVIDIA, strong in chat, coding, and multi-lingual tasks. Qwen2.5-7B-Instruct-1M Extended-context version of Qwen2.5-7B, supporting up to 1M tokens for long-document analysis and complex work-flows. Qwen2.5-14B-Instruct-1M Combines stronger 14B reasoning with 1M token context support for advanced long-context enterprise workflows. Qwen2-7B-Instruct A versatile instruction model from Qwen2, offering a strong balance of chat quality, reasoning, and multilingual usability. Qwen2-72B-Instruct The flagship instruction model in the Qwen2 family, designed for premium assistants and demanding production work-loads. Llama-3.1-70B-Instruct Meta’s high-capability multilingual instruction model for strong dialogue, reasoning, coding, and knowledge-intensive generation. Ministral-8B-Instruct Mistral AI’s edge-focused 8B model, built for latency-sensitive assistants and compact production systems. Mistral-Small-Instruct-2409 A capable mid-sized instruction model for general text gener-ation, multilingual tasks, and function-calling workflows. Mistral-Large-Instruct-2411 Mistral AI’s advanced large model built for state-of-the-art reasoning, coding, and long-context understanding. 
+
+14 Preprint. Table 4: Task nodes and their descriptions used in the interaction graph. 
+
+Task Description 
+
+BBH A challenging subset of BIG-Bench focusing on tasks where earlier models performed significantly below human level, spanning multi-step arith-metic, logical reasoning, and complex language understanding. MATH500 A curated 500-problem subset of the MATH benchmark covering competition-level mathematics including algebra, geometry, number theory, and combinatorics. GPQA A graduate-level benchmark with expert-authored multiple-choice ques-tions in physics, chemistry, and biology, designed to resist simple retrieval-based answering. MuSR A benchmark for multi-step and structured reasoning that requires inte-grating multiple pieces of information through sequential inference. MMLU-Pro An enhanced version of MMLU with more difficult questions and ex-panded answer choices, designed to better evaluate reasoning ability. MMLU A broad multiple-choice benchmark covering 57 academic and profes-sional subjects across humanities, social science, STEM, and other do-mains. C-Eval A Chinese standardized-exam benchmark spanning dozens of disciplines for evaluating Chinese language understanding and reasoning in exam-style settings. AGIEval A human-centric benchmark derived from official admission and qual-ification exams (e.g., SAT, Gaokao) to evaluate general reasoning and problem-solving. TriviaQA A large-scale QA benchmark with trivia questions and evidence docu-ments, testing knowledge retrieval and answer generation under noisy real-world evidence. Natural Questions A real-user QA benchmark based on anonymized Google queries with Wikipedia evidence, evaluating short-answer and long-answer question answering. SQuAD A reading comprehension benchmark of crowd-authored questions on Wikipedia passages, where answers are extracted text spans. TheoremQA A STEM theorem-driven QA benchmark with university-level problems across math, CS/EE, physics, and finance, testing formal reasoning and theorem application. CommonsenseQA A multiple-choice commonsense benchmark built from ConceptNet rela-tions, requiring implicit everyday knowledge. WinoGrande A large-scale pronoun coreference benchmark testing robust common-sense reasoning in Winograd-style disambiguation. ARC-Challenge The difficult split of the AI2 Reasoning Challenge, containing grade-school science questions that require deeper reasoning beyond retrieval. OpenBookQA A science QA benchmark requiring multi-hop reasoning by combining core facts with external commonsense knowledge. BoolQ A yes/no QA benchmark built from real user queries paired with evi-dence passages, testing binary reading comprehension and inference. DROP A reading comprehension benchmark requiring discrete reasoning such as counting, comparison, and arithmetic over paragraphs. GSM8K A grade-school math word-problem benchmark with multi-step natural-language solutions for evaluating arithmetic reasoning. MGSM A multilingual extension of GSM8K-style math problems enabling cross-lingual evaluation of multi-step mathematical reasoning. HumanEval A code-generation benchmark of hand-written programming problems with hidden unit tests evaluating functional correctness. MBPP A benchmark of around one thousand crowd-sourced entry-level Python tasks with reference tests for practical code generation. TruthfulQA A benchmark measuring whether models produce truthful answers rather than imitating common human misconceptions. 
+
+15 Preprint. Table 5: Hugging Face dataset identifiers used for query node construction. 
+
+Dataset Hugging Face Identifier 
+
+IFEval google/IFEval 
+
+BBH lukaemon/bbh 
+
+MATH500 HuggingFaceH4/MATH-500 
+
+GPQA Idavidrein/gpqa 
+
+MuSR TAUR-Lab/MuSR 
+
+MMLU-Pro TIGER-Lab/MMLU-Pro 
+
+EvalPlus evalplus/humanevalplus 
+
+MultiPL-E nuprl/MultiPL-E 
+
+C-Eval ceval/ceval-exam 
+
+AGIEval English lighteval/agi eval en 
+
+SQuAD rajpurkar/squad 
+
+TheoremQA TIGER-Lab/TheoremQA 
+
+WinoGrande allenai/winogrande 
+
+BoolQ google/boolq 
+
+DROP ucinlp/drop 
+
+TruthfulQA domenicrosati/TruthfulQA 
+
+WildBench allenai/WildBench 
+
+Table 6: Prompt templates for Text-GNN aggregation across different node types. 
+
+Node Type Input Context Instruction Output 
+
+Model Model family; bench-mark scores grouped by domain; representative queries ranked by similar-ity to connected datasets Synthesise all context into a unified capability profile covering archi-tecture, domain-level performance, and query suitability 3–5 sentence capability profile Dataset Parent domain; models evaluated with scores; representative queries from the benchmark Describe what capability the benchmark evaluates, which models perform well or poorly, and what query types it covers 2–4 sentence benchmark profile Domain All benchmark datasets belonging to this domain Characterise the capabil-ity area and summarise the benchmark landscape within it 2–4 sentence domain pro-file Model Family All model nodes that in-stantiate this architecture Describe key design char-acteristics and the typical capability profile of mod-els built on this architec-ture 2–4 sentence architecture profile Query Not updated — raw query text is preserved throughout all hops as a stable semantic anchor. 
+
+16 Preprint. Table 7: Overview of Datasets for Profile Construction and Routing Evaluation. 
+
+Usage Dataset Task Type Metric Cases 
+
+Profile Construction BBH Reasoning Accuracy 1000 MATH500 Math Accuracy 500 GPQA-Diamond Knowledge / Reasoning Accuracy 198 MUSR Reasoning Accuracy 756 MMLU-Pro Knowledge Accuracy 1000 AGIEval Knowledge Accuracy 29 TheoremQA Math / Reasoning Accuracy 800 DROP Reasoning Accuracy 1000 TruthfulQA Reasoning Accuracy 817 WinoGrande Reasoning Accuracy 1000 BoolQ Reasoning Accuracy 1000 C-Eval Knowledge Accuracy 1000 SQuAD Knowledge Accuracy 1000 MultiPL-E Coding Accuracy 1000 EvalPlus Coding Accuracy 164 Routing Evaluation MGSM Math Accuracy 50 GSM8K Math Accuracy 50 AgentVerse Reasoning Accuracy 50 CommonsenseQA Reasoning Accuracy 50 OpenBookQA Reasoning Accuracy 50 ARC-Challenge Reasoning Accuracy 50 MMLU Knowledge Accuracy 50 NaturalQA Knowledge Accuracy 50 TriviaQA Knowledge Accuracy 50 CommonGen Knowledge Accuracy 50 MBPP Coding Accuracy 50 HumanEval Coding Accuracy 50 Table 8: Statistics of Candidate and Auxiliary LLMs. 
+
+Role LLM Size Model Family 
+
+Candidate Llama-3.2-3B-Instruct 3B Llama Qwen2.5-7B-Instruct 7B Qwen2.5 Llama-3.1-8B-Instruct 8B Llama Gemma-2-9B-IT 9B Gemma2 Mistral-Small-24B-Instruct-2501 24B Mistral Mixtral-8x7B-Instruct-v0.1 56B Mixtral Llama-3.3-70B-Instruct 70B Llama Mixtral-8x22B-Instruct-v0.1 176B Mixtral Auxiliary Llama-3.2-1B-Instruct 1B Llama Gemma-2-2B-IT 2B Gemma2 Qwen2.5-3B-Instruct 3B Qwen2.5 Qwen2-7B-Instruct 7B Qwen2 Qwen2.5-7B-Instruct-1M 7B Qwen2.5 Ministral-8B-Instruct-2410 8B Mistral Mistral-Nemo-Instruct-2407 12B Mistral Qwen2.5-14B-Instruct 14B Qwen2.5 Qwen2.5-14B-Instruct-1M 14B Qwen2.5 Mistral-Small-Instruct-2409 22B Mistral Gemma-2-27B-IT 27B Gemma2 Qwen2.5-32B-Instruct 32B Qwen2.5 Qwen2-72B-Instruct 72B Qwen2 Qwen2.5-72B-Instruct 72B Qwen2.5 Llama-3.1-70B-Instruct 70B Llama Mistral-Large-Instruct-2411 123B Mistral 17 Preprint. Table 9: Routing with a new LLM (RQ3). 
+
+Design Space SimRouter MLPRouter GraphRouter Form Type D Cfg. Avg. Perf. Unseen Sel. 
+
+×Succ. Avg. Perf. Unseen Sel. 
+
+×Succ. Avg. Perf. Unseen Sel. 
+
+×Succ. 
+
+Flat Index 0 TF 0.499 0.015 0.589 0.000 0.532 0.000 Flat Text 0 TF 0.483 0.002 0.602 0.000 0.515 0.015 Structured Text 1 TF 0.536 0.072 0.612 0.000 0.577 0.042 Structured Text 2 TF 0.565 0.038 0.610 0.062 0.594 0.000 Structured Text 3 TF 0.568 0.038 0.617 0.008 0.596 0.413 Structured Text 4 TF 0.553 0.000 0.622 0.023 0.613 0.547 
+
+Structured Emb 1 TF 0.559 0.008 0.617 0.033 0.536 0.098 Structured Emb 2 TF 0.529 0.000 0.557 0.000 0.571 0.285 Structured Emb 3 TF 0.529 0.032 0.582 0.028 0.550 0.000 Structured Emb 4 TF 0.513 0.003 0.605 0.033 0.610 0.000 Structured Emb 1 Tr 0.587 0.180 0.604 0.213 0.610 0.000 Structured Emb 2 Tr 0.563 0.285 0.610 0.000 0.613 0.547 
+
+Structured Emb 3 Tr 0.611 0.452 0.610 0.000 0.612 0.547 
+
+Structured Emb 4 Tr 0.568 0.185 0.532 0.000 0.613 0.547 
+
+18
