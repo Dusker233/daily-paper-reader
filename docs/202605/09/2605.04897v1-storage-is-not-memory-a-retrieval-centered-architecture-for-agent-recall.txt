@@ -1,0 +1,394 @@
+Title: Storage Is Not Memory: A Retrieval-Centered Architecture for Agent Recall
+
+URL Source: https://arxiv.org/pdf/2605.04897v1
+
+Published Time: Thu, 07 May 2026 00:59:08 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Storage Is Not Memory: A Retrieval-Centered Architecture for Agent Recall 
+
+Joshua Adler Guy Zehavi 
+
+Sauron Labs 
+
+josh@sauronlabs.ai 
+
+Abstract 
+
+Extraction at ingestion is the wrong primitive for agent memory: content discarded before the query is known cannot be recovered at retrieval time. We propose True Memory , a six-layer architecture that shifts the center of the system from a storage schema to a multi-stage retrieval pipeline operating over events preserved verbatim. The full system runs as a single SQLite file on commodity CPU with no exter-nal database, vector index, graph store, or GPU. On LoCoMo (Maharana et al., 2024), 1,540 questions across 10 multi-session conversations, True Memory Pro reaches 93.0% accuracy (3-run mean, semantic-match judge; rankings are valid across systems but absolute scores exceed published strict-match base-lines) against 61.4% for Mem0, 65.4% for Superme-mory, and approximately 71% for Zep (Rasmussen et al., 2025) under a matched gpt-4.1-mini an-swer model, and 94.5% for EverMemOS, which uses a GPU-served embedder and a Neo4j graph store. On LongMemEval (Wu et al., 2025), 500 questions across multi-session conversations, True Memory Pro reaches 87.8% (3-run mean). On BEAM-1M (Tavakoli et al., 2026), 700 questions across 35 con-versations at the 1-million-token scale, True Memory Pro reaches 76.6% (3-run mean), above the prior pub-lished result of 73.9% for Hindsight (Latimer et al., 2025). A 56-configuration ablation shows a 1.3-percentage-point spread within the top-performing configuration family. The system also includes an encoding gate (novelty, salience, prediction error) that filters ingestion in production; it is disabled in all reported benchmark numbers because current evalu-ation instruments reward total recall and cannot score selective ingestion. Gate evaluation is deferred to fu-ture work. 
+
+1 Introduction 
+
+Agent memory has emerged as a commercial product category for language models operating 
+
+> Technical report. Sauron Labs, 2026.
+
+across sessions, days, or months, including Mem0 (Chhikara et al., 2025), Zep (Rasmussen et al., 2025), Graphiti (Zep AI, 2024), Supermemory (Supermemory, 2024), and EverMemOS (Hu et al., 2026). These systems share a structural pattern in which, at ingestion, a language model parses in-coming conversational content into a structured representation, whether atomic facts (Chhikara et al., 2025), entity nodes in a knowledge graph (Rasmussen et al., 2025; Zep AI, 2024), hierarchi-cal summaries (Supermemory, 2024), or graph-plus-embedding hybrids (Hu et al., 2026), that is then stored in a vector database or graph store and retrieved by similarity at query time. This pattern inherits the wrong primitive from document search infrastructure, which uses ap-proximate nearest-neighbor indexing (Malkov and Yashunin, 2018) as exposed by managed or open-source products such as Pinecone, Chroma, Weav-iate, and Qdrant (Pinecone et al., 2026), where structured records are extracted at ingestion, in-dexed, and retrieved by similarity. Because ex-traction runs before the query is known, content discarded at ingestion cannot be recovered at re-trieval time. Retrieval-augmented generation (Lewis et al., 2020) and a body of subsequent work partially mitigate these limitations through query expansion via hypothetical document embeddings (Gao et al., 2023), cross-encoder reranking over initial candi-dates (Nogueira and Cho, 2019), and reciprocal rank fusion of lexical and semantic signals (Cor-mack et al., 2009). These refinements improve recall over plain similarity search, but they operate on the structured representation produced at ingest and therefore inherit whatever that step preserved. We present True Memory , an agent memory architecture that applies an encoding gate at inges-tion rather than extracting incoming conversational events into structured records. The gate scores 1
+
+> arXiv:2605.04897v1 [cs.CL] 6 May 2026
+
+each event for novelty, salience, and prediction error, and events that exceed threshold are pre-served verbatim, while higher-order structure such as summaries, entity profiles, and consolidation is computed post-ingestion or deferred to query time. Grounded in reconstructive recall (Bartlett, 1932), the episodic/semantic distinction (Tulving, 1972), and levels-of-processing effects on retrievability (Craik and Lockhart, 1972), with the taxonomy of memory distortions from Schacter (2001) inform-ing our treatment of contradictions, True Memory is implemented as a single SQLite file running on edge compute. The contributions of this paper are fourfold: 1. Architectural reframing. We formalize agent memory as a retrieval architecture rather than a storage schema (Figure 1), with encoding, consolidation, and query-time ranking as cooperating stages of the same pipeline rather than independent mod-ules separated by a database. 2. Encoding gate. We introduce a three-signal gated ingestion mechanism (novelty, salience, prediction error) whose novelty and prediction-error signals query the same stored message substrate that the retrieval layers use, while salience scores the in-coming event in isolation; ingestion and re-trieval therefore share a common representa-tion rather than being separated by a schema boundary. 3. Empirical evidence. We report 93.0% on LoCoMo (1,540 questions, 3-run mean), 87.8% on LongMemEval (500 questions, 3-run mean), and 76.6% on BEAM-1M (700 questions at the 1-million-token scale, 3-run mean) under gpt-4.1-mini , trailing only EverMemOS on LoCoMo and exceed-ing all prior published results on BEAM-1M, with a 56-configuration ablation showing a 1.3-percentage-point spread within the top-performing subfamily. 4. Retrieval-as-bottleneck diagnostic. On 357 LoCoMo questions answered incor-rectly by an early True Memory iteration, supplying the full conversation to the same answer model recovered 92%, locating the bottleneck in the retrieval pipeline rather than the storage layer. 
+
+2 Background 
+
+Vector database infrastructure built on HNSW-class indexing (Malkov and Yashunin, 2018), as exposed by products including Pinecone, Chroma, Weaviate, and Qdrant (Pinecone et al., 2026), was designed for large-scale document search, where a document is chunked once at indexing time, em-bedded into a dense vector space, and served by approximate nearest-neighbor lookup. The design is defensible where the corpus is stable, queries fall within a predictable range, and stored items carry roughly equivalent informational weight, since un-der those conditions the chunk boundaries and the fixed representation are unlikely to matter for most future queries. Retrieval-augmented generation (Lewis et al., 2020) adapted this infrastructure to language models, and commercial agent memory systems (Chhikara et al., 2025; Hu et al., 2026; Rasmussen et al., 2025; Supermemory, 2024; Zep AI, 2024) extended it to multi-session conversational set-tings. Query-time refinements accumulated on top, including query expansion via hypothetical docu-ment embeddings (Gao et al., 2023), cross-encoder reranking over initial candidates (Nogueira and Cho, 2019), and reciprocal rank fusion of lexical and semantic signals (Cormack et al., 2009); each refinement raises recall over what was preserved, but none of them change what gets preserved. None of the conditions that justified the document-search design hold in agent memory: the corpus grows with every conversational turn, queries arrive days or weeks after content was stored and frequently ask about details the extrac-tor had no reason to preserve, and informational weight is highly non-uniform, with details men-tioned once in passing sometimes serving as the key to a question asked months later. A parallel line of ML research modifies how lan-guage models handle information internally. Mem-ory networks introduce memory slots inside the model’s forward pass (Sukhbaatar et al., 2015), and MemGPT pages content in and out of the model’s context window at runtime (Packer et al., 2023). These systems change how a model processes the information it already has, whereas True Memory addresses the prior question of which information reaches the model in the first place. To our knowl-edge, True Memory is among the first publicly-described agent memory architectures that treat gated ingestion and query-time relevance judgment 2as cooperating mechanisms, with two of three gate signals querying the same stored message substrate that serves retrieval. The framing draws on recon-structive memory as described by Bartlett (1932), the episodic/semantic distinction due to Tulving (1972), and the complementary-learning-systems account of McClelland et al. (1995). Concurrent with this work, several groups have independently explored retrieval-centered archi-tectures for agent memory. These systems share the premise that verbatim event preservation out-performs extraction-based ingestion; they dif-fer in retrieval-pipeline design, storage substrate, and deployment model. In a related direction, Li et al. (2026) propose a query-focused and memory-aware reranker for long-context process-ing, extending cross-encoder reranking with ex-plicit memory conditioning; their work is comple-mentary to the multi-stage pipeline described here. True Memory’s distinguishing characteristic is the single-SQLite-file implementation with zero exter-nal dependencies, the three-signal encoding gate, and the emphasis on commodity-hardware deploy-ment. 
+
+3 Design Principles 
+
+A database returns what was written, whereas a memory returns what is reconstructed at the mo-ment of recall, a distinction foundational in cogni-tive neuroscience (Bartlett, 1932; Schacter, 2001). Extraction-based agent memory inverts this rela-tionship, committing content to a fixed schema at ingestion and treating retrieval as lookup over that schema, so that the representation becomes the memory. When a query arrives that the schema did not anticipate, the representation cannot ac-commodate it, and the memory is not available to be retrieved regardless of what was originally said. A memory system is therefore defined by what it does at the moment of recall rather than by what it wrote down earlier. Tulving (1972)’s distinction between episodic and semantic memory is framed at retrieval, where the same underlying substrate serves both and what surfaces depends on how the cue interrogates it, and Craik and Lockhart (1972) showed that depth of encoding determines later re-trievability, coupling encoding and retrieval across time rather than separating them into independent stages. The scaling argument follows from the same re-framing. Language models have finite context win-dows while conversations extend without bound, so retrieval is the mechanism that lets the bounded window carry the unbounded history. The brain solves the analogous problem through consolida-tion, by which memories are reorganized over time with emotionally or consequentially salient con-tent preferentially preserved (Cahill and McGaugh, 1995; Squire and Alvarez, 1995); consolidation on this view is not compression for storage efficiency but preparation for retrieval under cues that can-not be anticipated at encoding. Neither dumping the entire conversation into context nor extracting a lossy summary at ingestion scales to unbounded histories, whereas selective preservation and selec-tive surfacing, decided separately and at different moments, supplies the scalable path. 
+
+4 Architecture 
+
+True Memory is organized into six layers (L0–L5) that operate across three time-separated phases: 
+
+ingestion , post-ingestion batch processing , and 
+
+query-time retrieval . Stored events are retained in the form they arrived in, and interpretive structure is computed later. The ten pipeline stages below specify each layer by its typed input and output. We adopt the convention, following information-retrieval literature (Cormack et al., 2009), that 𝑑 
+
+denotes a candidate item and 𝑞 denotes a user query; throughout §4, 𝑑 specifically refers to a candidate event, a single admitted message row in the L1 messages table, rather than a document in the traditional document-retrieval sense. 
+
+4.1 Pipeline stages 
+
+The ten pipeline stages below reference the six lay-ers (L0–L5) as follows: Stage 1 uses all three gate signals (L0/L3/L5 derived), Stage 2 = L1 writer, Stage 3 = L4 consolidator, Stage 4 = L5 predictive coder, Stage 5 = L0 engram updater, Stage 6 = L1 lexical retrieval, Stage 7 = L2 dense retrieval, Stage 8 = RRF fusion (cross-layer), Stage 9 = L3 salience reweighter, Stage 10 = cross-encoder reranker. 
+
+Ingestion phase Stage 1: Encoding Gate. Input: raw event 𝑒 𝑡 
+
+with text and metadata (sender, timestamp, modal-ity). Output: binary admit decision plus a signal tag set {𝑛 𝑡 , 𝑠 𝑡 , 𝜋 𝑡 } written to the event’s metadata on admit. 3Figure 1: True Memory’s six-layer architecture across three time-separated phases. Ingestion (01): the encoding gate admits or rejects each event 𝑒 𝑡 based on novelty ( 𝑛 𝑡 ), salience ( 𝑠 𝑡 ), and prediction error (𝜋 𝑡 ), computed through independent signal mechanisms; novelty and prediction error query the stored message substrate, while salience scores the event in isolation. Admitted events are written verbatim to 
+
+messages with corresponding updates to the FTS5 lexical and sqlite-vec dense indices. Post-ingestion (02): batch processes read the L1 event substrate to update L4 consolidation artifacts, the L5 surprise index, and the L0 personality engram. Query-time (03): L1 lexical and L2 dense candidates are fused via reciprocal rank fusion, reweighted by L3 salience conditional on the L0 speaker engram (dashed prior 
+
+arrow), and reranked by a cross-encoder before the top-𝑘 are passed to the answer model. Novelty and salience operate on different axes. Novelty is computed against the stored neighbor-hood returned by L2 and scores the event relative to what the substrate already contains; salience is computed over the event in isolation and scores properties of the event itself: category, affect, in-formation density. A restatement of a known pref-erence therefore has low novelty but high salience, and a novel passing detail has high novelty but low salience; the gate combines both rather than substituting one for the other. For each incoming event 𝑒 𝑡 , the gate computes three signals, each through its own mechanism. Novelty and prediction error query the stored mes-sage substrate; salience scores the event in isola-tion: 
+
+• Novelty (𝑛 𝑡 ) measures how much new in-formation 𝑒 𝑡 adds to stored memories using gzip compression cost. The gate retrieves the nearest stored messages, concatenates them into a memory text 𝑀 , and computes 
+
+𝑛 𝑡 = |gz (𝑀 ∥ 𝑒 𝑡 )| − | gz (𝑀 )| |gz (𝑒 𝑡 )| ,
+
+where gz (·) denotes gzip compression at level 6 and ∥ denotes byte concatena-tion. Redundant information compresses cheaply against the memory context, yield-ing low 𝑛 𝑡 ; novel information is incom-pressible, yielding high 𝑛 𝑡 . The signal returns 1 .0 when memory is empty and 0.05 for trivially short messages (com-pressed size below 10 bytes). This replaced cosine-similarity inversion, which is anti-correlated with novelty in conversational data: noise like “ok” is semantically dis-tant from factual memories while important updates are semantically close. Validated 4in a 120-variant sweep: AUC 0.788 vs. 0.484 for cosine baseline. Implementation: 
+
+truememory.ingest.encoding gate .
+
+• Salience (𝑠 𝑡 ) delegates to a hybrid scorer (truememory.ingest.encoding salience )that routes on message length: messages of 50 characters or fewer are scored by a rule-based speech-act classifier that is length-independent, returning fixed scores by lin-guistic function (e.g., commitments → 0.8, corrections → 0.6, noise → 0.02, questions 
+
+→ 0.2); messages longer than 50 charac-ters are scored by the L3 retrieval salience scorer ( truememory.salience.compute message salience ), which evaluates length, numbers, dates, and emotional mark-ers. 
+
+• Prediction error (𝜋 𝑡 ) uses embedding pair-difference scoring. The gate embeds the cross-pair (𝑒 𝑡 [SEP ] 𝑚 1) and the self-pair 
+
+(𝑚 1 [SEP ] 𝑚 1), where 𝑚 1 is the nearest stored memory, using the same embedding model that serves vector search. Prediction error is 
+
+𝜋 𝑡 = 1 − cos  vcross , vself 
+
+.
+
+When the cross-pair embedding diverges from the self-pair, the message says some-thing different about the same topic. The sig-nal applies two early-exit filters: messages classified as noise by the salience scorer are assigned 𝜋 𝑡 = 0 without embedding, and messages whose nearest stored mem-ory has low topical relevance (below a co-sine threshold) are also assigned 𝜋 𝑡 = 0. Validated in a 200-variant sweep: AUC 0.730 standalone, gate AUC 0.816 in three-signal combination; independent of novelty (𝑟 = 0.30) and salience ( 𝑟 = 0.23). No ad-ditional model is required. Implementation: 
+
+truememory.ingest.encoding gate .The gate applies a salience floor 𝑠 min = 0.10: messages whose salience falls below 𝑠 min are re-jected regardless of their gate score, preventing high-novelty off-topic noise from passing. For messages above the floor, admit 𝑒 𝑡 iff 
+
+𝜆 𝑛 · 𝑛 𝑡 + 𝜆 𝑠 · 𝑠 𝑡 + 𝜆 𝜋 · 𝜋 𝑡 
+
+𝜆 𝑛 + 𝜆 𝑠 + 𝜆 𝜋 
+
+≥ 𝜏 + Δ𝑐 , (1) where Δ𝑐 is a per-category threshold offset (correction −0.06, decision −0.04, relationship 
+
+−0.04, all others 0) that lowers the bar for high-value categories. The weights (𝜆 𝑛 , 𝜆 𝑠 , 𝜆 𝜋 , 𝜏 ) =
+
+(0.25 , 0.20 , 0.30 , 0.30 ) are production defaults. The numerator is normalized by the weight sum so the score lands in [0, 1] regardless of weight magnitudes. In the benchmark configuration used throughout 
+
+§6, the gate is disabled and every input event is admitted ( 𝜏 = −∞ ). 
+
+Stage 2: L1 Writer. Input: admitted event plus metadata and signal tag set. Output: one row in messages , a corresponding update to the messages fts FTS5 index, and a 256-dimensional vector row in vec messages (sqlite-vec). 
+
+Post-ingestion phase (batch) Stage 3: L4 Consolidator. 1 Input: event clus-ters over a sliding window of recent messages 
+
+rows. Output: summary rows (one per clus-ter), contradiction records (pairs of rows whose claims conflict, indexed by entity and predicate), and timeline rows (time-ordered assertions with superseded-by links). 
+
+Stage 4: L5 Predictive Coder. 2 Input: the event stream in temporal order. Output: aper-event surprise score 𝜎 𝑡 ∈ [0, 1] stored in 
+
+surprise scores and used as a retrieval boost. In the production implementation, 𝜎 𝑡 is a weighted combination of the fraction of newly-extracted fact fingerprints (numbers, proper nouns, dates, event keywords, definitional predicates) not yet present in the accumulated fact set, plus small length, de-tail, and event bonuses, with explicit contradiction detection for update verbs. There is no learned predictor ˆ 𝑣 𝑡 in the current implementation; the sur-prise signal is computed directly over extracted fact sets rather than as an L2 residual. 
+
+Stage 5: L0 Engram Updater. 3 Input: full event history for a given speaker. Out-
+
+> 1Inspired by memory consolidation as described in Squire and Alvarez (1995).
+> 2Inspired by the predictive-coding framework of Rao and Ballard (1999).
+> 3Inspired by the theory-of-mind framework of Gallagher and Frith (2003).
+
+5put: a speaker-preference attribute map in 
+
+entity profiles (one row per distinct en-tity), plus a 256-dimensional character-n-gram style vector in entity style vectors (hashed char-(3,4,5)-grams, L2-normalized, mean-pooled across a speaker’s messages), both refreshed on schedule. At query time the style vector is used as a retrieval prior, scoring candidate messages by cosine similarity to the queried entity’s writing profile. 
+
+Query-time phase Stage 6: L1 Lexical Retrieval. Input: query 𝑞 .Output: candidate set 𝐶 1 = top-𝑘 FTS5 matches over messages fts (rank by BM25). 
+
+Stage 7: L2 Dense Retrieval. Input: query 𝑞 ,embedded to 𝑣 𝑞 . Output: candidate set 𝐶 2 = top-𝑘 
+
+cosine-nearest rows from vec messages .
+
+Stage 8: RRF Fusion. Input: (𝐶 1, 𝐶 2) (and the optional separation list). Output: fused candidate set 𝐶 fused ranked by a per-source-weighted exten-sion of reciprocal rank fusion. The original formu-lation of Cormack et al. (2009) aggregates candi-date rankings as RRF Cormack (𝑑 ) =∑︁  
+
+> 𝑟 ∈𝑅
+
+1
+
+𝑘 + 𝑟 (𝑑 ) , 𝑘 = 60 ,
+
+(2) where 𝑅 is the set of contributing rank lists, 𝑟 (𝑑 ) is the rank of 𝑑 in list 𝑟 , and 𝑘 = 60 is the smoothing constant from that work; individual rank lists are not weighted, so the formulation is the uniform case 𝑤 𝑟 ≡ 1. True Memory extends this with a per-source weight 𝑤 𝑟 to reflect the empirically different contributions of lexical and dense rank lists in multi-session conversational retrieval, and to accommodate the optional separation rank list whose signal is weaker than either primary source: RRF (𝑑 ) =∑︁  
+
+> 𝑟 ∈𝑅
+
+𝑤 𝑟 · 1
+
+𝑘 + 𝑟 (𝑑 ) , 𝑘 = 60 , (3) where 𝑅 contains the FTS5, dense, and (when present) separation rank lists, with 𝑤 fts = 𝑤 vec = 1and 𝑤 sep = 0.8 × 𝑤 vec in the reference imple-mentation; separation search fires only when the corpus contains more than five distinct senders, because in two- or three-person con-versations the sender/recipient prefix produces a uniform ranking that dilutes the primary signals (truememory/hybrid.py ). The smoothing con-stant 𝑘 = 60 is unchanged from Cormack et al. (2009). A principled calibration sweep over the source weights is left for future work. 
+
+Stage 9: L3 Salience Reweighter. 4 Input: 
+
+𝐶 fused , plus query-side signals (question type, timestamp) and the L0 speaker engram. Out-put: 𝐶 fused reweighted by a pipeline of condi-tional scalar adjustments applied sequentially to each candidate’s RRF score: score 𝐿 3 (𝑑, 𝑞 ) = RRF (𝑑 ) ◦ 𝑓 𝑡 (𝑑, 𝑞 ) ◦ 𝑓 𝐿 0 (𝑑 ),
+
+(4) where ◦ denotes sequential application (i.e., each factor either multiplies the running score or injects new candidates) and each factor fires only when its triggering condition is met: 
+
+• 𝑓 𝑡 (𝑑, 𝑞 ) is a conditional temporal boost: when the query carries temporal intent and the candidate 𝑑 already appears in the temporally-filtered result set, the running score is multiplied by 1 .3; otherwise 𝑓 𝑡 = 1(truememory/engine.py ). 
+
+• 𝑓 𝐿 0 (𝑑 ) is a conditional personality-prior injection: when the query has personal-ity intent, L0 profile and style-vector re-sults are appended to the candidate set with scores scaled to 0 .8 × max (existing scores )
+
+for entity-profile results and 0 .9 × max for style-vector results, so that the L0 prior in-forms but does not dominate factual retrieval (truememory/engine.py ). Results falling below a minimum salience thresh-old are dropped from the candidate set before reranking. When the surprise scores table is populated, candidates with a positive surprise score 𝜎 𝑡 > 0 have their score multiplied by 
+
+(1 + 𝛼 · 𝜎 𝑡 ) where 𝛼 = 0.2 (configurable via 
+
+TRUEMEMORY ALPHA SURPRISE ); candidates with 
+
+𝜎 𝑡 = 0 are left untouched, and the step is a no-op when the surprise index has not been built. Each multiplicative factor is scalar, so score 𝐿 3 (𝑑, 𝑞 ) is itself scalar. The pipeline is compositional: factors fire independently and in sequence, with inactive factors contributing 1 (identity). 
+
+> 4Inspired by levels-of-processing effects on retrievability (Craik and Lockhart, 1972).
+
+6Stage 10: Cross-encoder Reranker with Modal-ity Fusion. Input: (𝑞, 𝑑. text ) pairs for the top 
+
+𝑁 items in the reweighted 𝐶 fused . Output: scalar relevance score per pair, optionally adjusted by a modality factor 𝑓 𝑚 (𝑑, 𝑞 ) that examines the candi-date’s modality and the question type of the query (detail questions penalize summary modalities by 0.7×; synthesis questions boost them by 1 .2×; gen-eral questions apply no adjustment), implemented in truememory/reranker.py . The top-𝑘 (de-fault 𝑘 = 10) after sorting are passed to the an-swer model. In the benchmark configuration used throughout §6, the pre-rerank window is 100 (see Table 1). 
+
+5 Implementation 
+
+True Memory’s entire persistent state is a single SQLite database file, and its runtime dependencies are Python and standard scientific-computing li-braries. No external database, vector index, graph store, GPU, or cloud service is required at any con-figuration. 
+
+Storage substrate. The full storage layer con-sists of SQLite with the FTS5 full-text-search mod-ule (Hipp and contributors, 2000) for lexical search and sqlite-vec (Garcia, 2024) for dense-vector re-trieval. Events are stored verbatim in a messages 
+
+table with metadata (sender, recipient, timestamp, category, modality), while entity profiles, sum-maries, fact timelines, and surprise indices occupy their own tables populated by post-ingestion batch processes. The database file is portable, backu-pable as a single file, and inspectable with any SQLite tool. 
+
+5.1 Schema snippet 
+
+The following is a verbatim excerpt of the produc-tion DDL from truememory/storage.py (Fig-ure 2); tables and triggers not central to the expo-sition are elided. 
+
+Figure 2: Production schema excerpt. Each section corresponds to a layer in the architec-ture of §4: messages is the L1 verbatim event substrate, messages fts is the L1 FTS5 lexi-cal index, vec messages is the L2 dense vec-tor index (created lazily by vector search.py ), 
+
+entity profiles is the L0 speaker engram, 
+
+entity style vectors stores L0 char-n-gram style profiles, and surprise scores is the L5 prediction-error index (created lazily by 
+
+predictive.py ). The full DDL also includes 
+
+metadata (embedder identity and schema ver-sion), episodes (6-hour-gap session boundaries), 
+
+landmark events (life events such as job changes and moves), causal edges (forward/backward cause chains), and entity relationships 
+
+(Dunbar-hierarchy relationship graph; populated when entity-sheet mode is enabled). 
+
+Hardware footprint. A lightweight configura-tion uses on the order of 30 million total param-eters across the embedder and reranker, yielding approximately 123 MB of static model weights at 
+
+fp32 (approximately 61 MB at fp16 ), with run-time working-set RAM under 1 GB that is dom-inated by the Python scientific-computing stack rather than the models themselves; the system runs comfortably on any commodity single-board com-puter with at least 1 GB of available RAM, and a Raspberry Pi 4 is sufficient for full deployment. Larger configurations use embedders in the hun-dreds of millions of parameters and approximately 72 to 4 GB of runtime RAM, and none require a GPU. Smaller configurations trade a few points of accuracy for significantly smaller footprint. 
+
+Cost profile. True Memory’s infrastructure cost is bounded by local compute, so only the answer-model API call incurs marginal expense; at 100 queries per day this is approximately $12 per month under gpt-4.1-mini pricing. For reference, Ev-erMemOS is open source and free to self-host, though its pipeline requires a Neo4j graph store, a GPU-served embedder, and multi-service cloud orchestration that carry infrastructure costs not re-flected in the benchmark harness. Meanwhile, Mem0, Supermemory, and Zep operate on tier-based pricing models in the $15 to $400 per month range depending on tier and usage. 
+
+5.2 Compute and latency budget 
+
+The three tiers use the following model configurations. Embedder: Model2Vec 
+
+potion-base-8M (Tulkens and van Dongen, 2024) (256-dimensional static embedding) for Edge, and Qwen3-Embedding-0.6B (Qwen Team, 2025) truncated to 256 dimensions via Ma-tryoshka representation learning for Base and Pro. Reranker: cross-encoder/ms-marco-MiniLM-L-6-v2 (22M parameters, CPU-friendly) for Edge, and Alibaba-NLP/gte-reranker-modernbert-base (149M parameters) for Base and Pro. Pro adds hypothetical-document query expansion (Gao et al., 2023). Answer model: 
+
+openai/gpt-4.1-mini via the OpenAI API across all tiers. A per-stage latency breakdown is left for future work. 
+
+6 Results 
+
+The numbers that follow reflect the retrieval stack alone; the encoding-gate disclaimer from the ab-stract applies throughout. All TrueMemory re-sults were produced on the v0.6.0 pipeline ( main 
+
+branch). OpenRouter API calls were made be-tween April–May 2026. We evaluate True Memory on three public benchmarks of long-term conversational memory: LoCoMo (Maharana et al., 2024), LongMemEval (Wu et al., 2025), and BEAM-1M (Tavakoli et al., 2026). 
+
+Evaluation harness. All three benchmarks are run through the same harness conventions, in-cluding deterministic answer and judge generation, 
+
+gpt-4o-mini as a three-run majority judge, and a capped top-𝑘 retrieval window feeding the answer model. All True Memory scores in this section are 3-run means unless otherwise noted; individ-ual run scores and standard deviations are reported where the spread is informative. Answer models for competitor rows are reported per row in Table 2 and vary across systems. 
+
+6.1 LoCoMo Paired comparisons among the three True Memory configurations. On v0.6.0, the 3-run mean gaps are: TM Pro vs. TM Base, 1 .0 pp; TM Base vs. TM Edge, 2 .4 pp; TM Pro vs. TM Edge, 3.4 pp. The Pro–Base gap is small and may not be statistically resolved; the Base–Edge gap is con-sistent across all three runs. All three tiers cluster at the origin of the cost-accuracy Pareto frontier (Figure 3a). 
+
+Oracle ceiling. The theoretical upper bound on LoCoMo is to supply the full conversation di-rectly to the answer model, bypassing any memory system. Under gpt-4.1-mini , this full-context oracle reaches 92.99% (1,432 of 1,540, 95% CI 
+
+[91 .60 , 94 .16 ]) at a cost of 45.6 million input to-kens per run, or $0.0129 per correct answer, so True Memory Pro at 93.0% reaches 99.9% of or-acle accuracy (Figure 3b) (unrounded: 92.96% 3-run mean vs. 92.99% oracle; both round to 93.0%) at one-fifth the cost per correct. Under Claude Opus 4.6, the same full-context oracle reaches 96.75% (1,490 of 1,540, CI [95 .75 , 97 .53 ]), indi-cating that the architectural gain stacks with model gains rather than substituting for them. For refer-ence, gpt-4.1-mini with no conversation context at all scores 3.90% (60 of 1,540), which establishes the floor. 
+
+6.2 Diagnostic: retrieval is the bottleneck 
+
+On an early iteration of True Memory, 357 Lo-CoMo questions were answered incorrectly. When the answer model was given the full conversation in place of retrieval results on those same 357 questions, 330 of 357 (92.44%, 95% Wilson CI 
+
+[89 .22 , 94 .75 ]) were then answered correctly. The 8Table 1: Evaluation harness settings. 
+
+Setting LoCoMo LongMemEval BEAM-1M Questions ( 𝑁 ) 1,540 500 700 Session structure 10 multi-sess. convs 38–62 haystack sess. 35 convs at 1M tok. Answer model (TM rows) gpt-4.1-mini gpt-4.1-mini gpt-4.1-mini 
+
+Judge model gpt-4o-mini gpt-4o-mini gpt-4o-mini 
+
+Judge runs / question 3 (majority) 3 (majority) 3 (majority) Answer temperature 0 0 0Judge temperature 0 0 0Max answer tokens 200 200 200 Retrieval top-𝑘 (pre-rerank) 100 100 100 
+
+Table 2: LoCoMo accuracy (v0.6.0, 3-run means for True Memory rows) with 95% Wilson confidence intervals. 𝑁 = 1,540. 
+
+System Accuracy 95% CI Correct Cost / correct vs row above EverMemOS ∗ (Hu et al., 2026) 94.48% [93.23, 95.51] 1,455 $0.0010 † —
+
+TM Pro ‡ 93.0% [91.60, 94.16] 1,432 $0.0013 𝜒 2 = 4.09, 𝑝 =0.043 
+
+TM Base ‡ 92.01% [90.54, 93.26] 1,417 $0.0011 𝜒 2 = 1.12, 𝑝 =0.29 
+
+TM Edge ‡ 89.65% [88.05, 91.07] 1,381 $0.0010 𝜒 2 = 6.54, 𝑝 =0.011 RAG (ChromaDB) 86.17% [84.35, 87.80] 1,327 $0.0011 𝜒 2 = 11 .56, 𝑝 =6.7×10 −4
+
+Engram 84.55% [82.65, 86.26] 1,302 $0.0011 𝜒 2 = 2.28, 𝑝 =0.13 BM25 80.45% [78.40, 82.36] 1,239 $0.0011 𝜒 2 = 17 .39, 𝑝 =3.0×10 −5
+
+Zep (published) § (Rasmussen et al., 2025) ∼71% — — — —Supermemory (Supermemory, 2024) 65.39% [62.98, 67.72] 1,007 $0.0019 𝜒 2 = 98 .09, 𝑝< 10 −22 
+
+Mem0 (Chhikara et al., 2025) 61.43% [58.97, 63.83] 946 $0.0031 𝜒 2 = 6.26, 𝑝 =0.012 
+
+> ∗
+
+EverMemOS retrieval is served by proprietary cloud infrastructure (a 4-billion-parameter GPU-hosted embedder with a Neo4j graph store); the retrieval pipeline is not open source and cannot be run on local hardware. Reported numbers use pre-computed retrieval outputs provided by the EverMemOS team. 
+
+> †
+
+Cost per correct reflects only the harness answer and judge API calls. EverMemOS retrieval compute runs on its own proprietary infrastructure and is not included; infrastructure requirements are discussed in §5. 
+
+> ‡
+
+True Memory scores are 3-run means on the v0.6.0 pipeline. Individual run accuracies: Pro 92.79%, 93.05%, 93.05%; Base 91.75%, 92.08%, 92.21%; Edge 89.87%, 89.55%, 89.55%. Wilson CIs and correct counts are computed from the mean correct count rounded to the nearest integer. 
+
+> §
+
+Zep accuracy is from the published Zep paper (Rasmussen et al., 2025) using their own evaluation methodology, not our harness. 
+
+2×2 contingency of paired outcomes on this subset is reported in Table 3. 
+
+Per-category breakdown. Grouping the 357 items by LoCoMo’s four question categories and computing per-category recovery under the full-context oracle (95% Wilson CIs shown): 
+
+Category Recov. Count 95% CI Cat 1 (single-sess.) 94.0% 94/100 [87.5, 97.2] Cat 2 (multi-sess.) 87.8% 65/74 [78.5, 93.5] Cat 3 (knowl.-upd.) 86.2% 25/29 [69.4, 94.5] Cat 4 (temporal) 94.8% 146/154 [90.1, 97.3] 
+
+Category 3 (knowledge-update) is the small-est and the hardest-to-recover category, consistent with the intuition that contradiction-bearing ques-tions are where a retrieval-only system is most likely to surface stale information even when the correcting utterance is present in storage. 
+
+Residual 8% analysis. 27 of 357 questions were still answered incorrectly under full con-text. A best-effort qualitative pass over the wrong rows in full context gpt4mini.json places roughly 20 of the 27 in the genuine-reasoning-failure bucket (arithmetic or multi-step inference over dates, counts, or causal chains), 5 in the temporal-annotation-ambiguity bucket (questions whose gold answer fixes a calendar date that the conversation only licenses approximately), and 2 in an ambiguous/unanswerable bucket; these counts are heuristic and should be treated as provisional. 9(a) True Memory dominates the cost-accuracy Pareto frontier except for EverMemOS. Horizontal axis: estimated monthly infrastructure cost (log scale). Vertical axis: LoCoMo accuracy.   
+
+> (b) True Memory Pro reaches 99.9% of the gpt-4.1-mini oracle ceiling. Oracle-ceiling comparison on Lo-CoMo: True Memory Pro (v0.6.0, 3-run mean) reaches 99.9% of the gpt-4.1-mini ceiling and 96.0% of the Opus 4.6 ceiling.
+
+Figure 3: Cost-accuracy and oracle-ceiling analysis on LoCoMo. (a) True Memory’s three tiers cluster at the origin of the cost axis alongside EverMemOS and other open-source systems. Paid services (Mem0, Supermemory) incur monthly costs that shift them rightward. Every non-frontier system is strictly dominated. (b) True Memory Pro consumes 256-dimensional embeddings rather than the oracle conditions’ 45.6 million input tokens per run. Table 3: 2 × 2 contingency on the 357-question retrieval-bottleneck subset.            
+
+> Orac. corr. Orac. incorr. Total Retr. correct 000Retr. incorrect 330 27 357 Column total 330 27 357
+
+Version note. The 357-question diagnostic above was run on an early pipeline iteration. On the current v0.6.0 pipeline, True Memory Pro answers 1,432 of 1,540 correctly (3-run mean), leaving approximately 108 incorrect questions. The retrieval-bottleneck hypothesis is further sup-ported: at 93.0%, the system reaches 99.9% of the gpt-4.1-mini oracle ceiling (92.99%), so the remaining gap is dominated by questions the answer model itself cannot solve even with full context. 
+
+Horizon caveat. This diagnostic works because a full LoCoMo conversation fits in current context windows. At longer horizons of weeks, months, or years of conversation, the full history cannot be loaded into any model’s context window, so the diagnostic becomes unavailable and retrieval becomes the dominant scalable path. LoCoMo and similar benchmarks measure short-to-medium horizons, whereas True Memory’s gated ingestion, consolidation, and accumulating speaker prior are designed to scale past where these benchmarks stop measuring. 
+
+6.3 LongMemEval (cross-benchmark gener-alization) 
+
+Table 4 reports systems on LongMemEval (Wu et al., 2025). True Memory Pro was evaluated on the v0.6.0 pipeline under gpt-4.1-mini ; com-petitor rows are from a prior evaluation under the same harness conventions. 
+
+Per-category breakdown. The multi-session category is the hardest for the retrieval pipeline, consistent with LoCoMo’s per-category pattern; single-session categories score highest. 
+
+Cross-benchmark comparison. True Memory Pro leads RAG-ChromaDB on LongMemEval by 0.8 pp (87.8% vs. 87.0%) and every other agent memory product by at least 4.8 pp (EverMemOS at 83.0%). The result is consistent with the prior v0.2.0 evaluation (87.2%), indicating that the re-trieval pipeline upgrades in v0.6.0 maintain cross-10 Table 4: LongMemEval accuracy with 95% Wilson confidence intervals. 𝑁 = 500. Evaluated on the LongMemEval strict variant ( longmemeval s.json ). True Memory Pro is a 3-run mean on the v0.6.0 pipeline; competitor rows are single-run. 
+
+System Accuracy 95% CI Correct Answer model 
+
+TM Pro (oracle variant) 92.0% [89.43, 94.07] 460 gpt-4.1-mini 
+
+TM Pro (3-run mean, strict) 87.8% [84.64, 90.38] 439 gpt-4.1-mini 
+
+RAG (ChromaDB) 87.0% [83.77, 89.67] 435 gpt-4.1-mini 
+
+EverMemOS ∗ (Hu et al., 2026) 83.0% [79.40, 86.10] — gpt-4o †
+
+Engram 82.2% [78.61, 85.30] 411 gpt-4.1-mini 
+
+BM25 81.6% [77.97, 84.75] 408 gpt-4.1-mini 
+
+Mem0 (Chhikara et al., 2025) 66.0% [61.74, 70.02] 330 gpt-4.1-mini  
+
+> ∗EverMemOS retrieval is served by proprietary cloud infrastructure and cannot be run on local hardware; reported number is from the EverMemOS paper.
+> †EverMemOS accuracy is from the published EverMemOS paper using gpt-4o , not our evaluation harness.
+
+benchmark accuracy while the primary gains ap-pear on LoCoMo and BEAM-1M. 
+
+6.4 BEAM-1M (long-horizon generalization) 
+
+BEAM (Tavakoli et al., 2026) evaluates memory at conversation scales that exceed any model’s con-text window. The 1M-token split contains 35 con-versations with 20 questions each (700 total), span-ning 10 memory-ability categories. Table 5 reports True Memory Pro (3-run mean) alongside the prior published result. Table 5: BEAM-1M accuracy (3-run mean). 𝑁 =
+
+700 (35 convs × 20 questions). Individual runs: 75.0%, 78.1%, 76.6%.        
+
+> System Acc. Answer model
+> TM Pro (3-run) 76.6% gpt-4.1-mini Hindsight (Latimer et al., 2025) 73.9% proprietary
+
+Per-category breakdown. Performance varies substantially across BEAM’s ten memory-ability categories (3-run means): preference following 97.1%, contradiction resolution 91.4%, infor-mation extraction 91.4%, summarization 89.5%, instruction following 84.8%, abstention 82.4%, knowledge update 77.6%, multi-session reason-ing 67.1%, temporal reasoning 64.8%, event or-dering 19.5%. The top six categories exceed 80%, while event ordering (19.5%) is an outlier that re-quires chronological sequencing of events across sessions, a capability that the current pipeline does not specifically optimize for. Temporal reasoning (64.8%) and multi-session reasoning (67.1%) rep-resent the next targets for improvement. 
+
+Significance. BEAM-1M tests a qualitatively different regime from LoCoMo: at 1 million to-kens per conversation, no model’s context window holds the history, and the full-context oracle di-agnostic of §6.2 is unavailable. True Memory’s 76.6% exceeds the prior published Hindsight result of 73.9% by 2.7 pp, though we note that Hindsight uses a different answer model and the compari-son is not controlled for that variable. The result demonstrates that the retrieval architecture general-izes from LoCoMo’s short-to-medium horizons to the long-horizon regime the system was designed for. 
+
+6.5 Abstention 
+
+Abstention is evaluated as one of the ten BEAM-1M categories ( §6.4), where True Memory Pro scores 82.4% (3-run mean). 
+
+6.6 Comparison to EverMemOS 
+
+EverMemOS outscores True Memory on LoCoMo at 94.48%, 1.48 points above True Memory Pro’s 3-run mean of 93.0%. Both are retrieval-based architectures, and the gap at this margin is small. EverMemOS achieves the higher number by em-ploying a 4-billion-parameter embedder served on GPUs, a Neo4j graph store, and a proprietary multi-service retrieval stack, whereas True Mem-ory reaches 93.0% with a single SQLite file on commodity CPU. The 1.5-point gap separates a 11 GPU-served, graph-backed retrieval pipeline from one that runs on commodity CPU. 
+
+7 Ablations 
+
+This section reports a 56-configuration grid study on LoCoMo that evaluates the sensitivity of True Memory’s accuracy to component choice within the retrieval pipeline. 
+
+Grid design. We evaluated 56 combinations of 7 embedder classes × 8 reranker options (includ-ing a no-reranker control) on LoCoMo, using the evaluation harness of §6, with hypothetical-document query expansion enabled in all 56 runs. Embedder classes spanned static 256-dimensional embeddings, dense transformer em-beddings at 256, 512, 768, and 1024 dimensions, and a published retrieval-tuned dense embedding, while reranker options spanned lightweight cross-encoders, modernbert-based cross-encoders, bge-family cross-encoders, and a no-reranker control. 
+
+Aggregate results. Accuracy across the full grid ranged from 89.9% at the worst configuration to 93.1% at the best, a 3.2-percentage-point spread, with a mean of 91.26% and a median of 91.20%. Fifty-three of the 56 configurations achieved 90.0% or higher. 
+
+> ★Ablation data collected on the v0.4.0 pipeline. Absolute scores may differ on v0.6.0; relative rankings of embedder/r-eranker combinations are expected to hold (see footnote in Query Expansion Ablation below).
+
+Subfamily behavior. Within the subfamily of a Matryoshka-trained 256-dimensional embedding (Kusupati et al., 2022) paired with any reranker, the total accuracy spread is 1.3 percentage points (best qwen3 256d × zerank1 at 92.3%, worst 
+
+qwen3 256d × bge large and qwen3 256d ×
+
+mxbai large at 91.0%), so that changing the reranker identity within this family moves accu-racy by at most 1.3 pp. This is the narrow-range figure referenced in the abstract. 
+
+Query expansion ablation. We additionally ran the Base configuration with and without hypothetical-document query expansion (Gao et al., 2023); enabling query expansion adds 1.0 pp on LoCoMo (92.0% without, 93.0% with, v0.6.0 3-run means). 5
+
+Interpretation. The grid provides a falsifiable architectural claim: if retrieval pipeline quality were primarily a matter of choosing the right em-bedder or reranker, we would expect wide vari-ance across components, which is not what we observe. Within the authoritative configuration family (Matryoshka-trained 256-dimensional em-bedding plus any reranker), 1.3 percentage points separates the best from the worst, and within the full 56-configuration grid, 3.2 points separates the best from the worst; both ranges sit entirely above every prior published agent memory system mea-sured in §6. What distinguishes True Memory from extraction-based competitors is not which embedder or reranker is chosen, but whether the retrieval pipeline exists as an architectural center at all. 
+
+8 Discussion 
+
+The claim this paper advances is that retrieval, rather than storage, is what determines the behav-ior of a memory system. The evidence is roughly 30 percentage points of LoCoMo accuracy sepa-rating True Memory from every extraction-based competitor, and roughly 19 percentage points sepa-rating its lightest configuration (Edge, 89.7%) from every extraction-based competitor. Accuracy vari-ance across 56 component combinations within the retrieval-based regime is 3.2 percentage points, and within the top-performing subfamily it is 1.3, so that architecture separates from its absence by roughly an order of magnitude more than compo-nent choice separates from itself. The three retrieval baselines included in §6, namely BM25 (80.5%), Engram (84.5%), and RAG-ChromaDB (86.2%), cluster within a 5.7-pp band on LoCoMo, forming a ceiling for sys-tems that retrieve stored content without reasoning about it at query time. All three preserve events verbatim and retrieve by lexical or semantic simi-larity alone; none filters noise at ingestion, detects contradictions between temporally separated mes-sages, resolves relative time references, or condi-tions retrieval on speaker identity. The extraction-based systems (Mem0 at 61.4%, Supermemory at 
+
+> 5Ablation data in Table 6, Table 7, and Figure 4 were col-lected on the v0.4.0 pipeline; absolute scores may differ on v0.6.0, but relative rankings of embedder/reranker combina-tions are expected to hold as these choices are independent of the gate, L0, and dedup changes introduced in v0.5.0 and v0.6.0.
+
+12 Table 6: Grid-wide and subfamily statistics on LoCoMo (56 configurations, 1,540 questions). ★                    
+
+> Scope Cells Best Worst Mean Median Spread Full 56-configuration grid 56 93.1% 89.9% 91.26% 91.20% 3.2 pp Matryoshka-256d ×reranker subfamily 892.3% 91.0% 91.46% 91.4% 1.3 pp
+
+Figure 4: The retrieval pipeline moves accuracy by at most 3.2 pp across 56 configurations; within the Matryoshka subfamily, at most 1.3 pp. ★ Heatmap of the 56-configuration LoCoMo grid. Rows: 7 embedder classes. Columns: 8 reranker options including a no-reranker control. Cell color encodes accuracy from 89.9% (grid worst) to 93.1% (grid best). The Matryoshka-trained 256-dimensional embedder row shows the 1.3-percentage-point subfamily spread referenced in the abstract. 65.4%) fall roughly 20 percentage points below this ceiling because they discard the verbatim substrate entirely. True Memory Pro exceeds every base-line by 6.8 to 12.5 percentage points depending on the comparison, and even the lightweight Edge configuration exceeds RAG by 3.5 pp. The abla-tion of §7 shows that the gap is not attributable to any single component: within the top-performing embedder subfamily, swapping the reranker moves accuracy by at most 1.3 pp, yet every configura-tion in that family exceeds the best baseline by at least 4.8 pp. Three tiers of system emerge: extraction-based systems that lose information at ingestion, retrieval baselines that preserve it but surface it without query-time reasoning, and a retrieval-centered pipeline that preserves informa-tion and applies multi-stage ranking at recall. The gap between tiers is consistently wider than the gap between components within any single tier, so that the choice of retrieval architecture dominates the choice of any individual component within it. Two open questions define the most immediate directions for future work: the encoding gate, and horizon. 
+
+Encoding gate. The gate’s three-signal combi-nation achieves AUC 0.816 on a held-out eval-uation set (validated in a 200-variant sweep; 
+
+truememory/ingest/encoding gate.py ), but current benchmarks inject fixed conversation tran-scripts and reward total recall, and therefore cannot score a system that chooses what to ingest. True Memory runs in production with selective inges-tion active, and all reported results disable it for comparability; whether the gated system beats the ungated one on accuracy, and by how much, is an empirical question no public benchmark currently answers. We regard this as a gap in the evaluation literature rather than a limitation of the architec-ture. 13 Horizon. LoCoMo tests memory at scales that fit in a frontier model’s context window, which is why a full-context oracle remains computable. BEAM-1M ( §6.4) begins to probe the long-horizon regime: at 1 million tokens per conversation, no model’s context window holds the history, and True Memory Pro reaches 76.6% (3-run mean). Prelim-inary single-run results on BEAM-10M (10 con-versations at 10 million tokens each, approximately 20,000 messages per conversation, 𝑁 = 200) reach 65.0%, an 11.6-pp drop from the 1M split. The degradation is not uniform: knowledge-update ac-curacy improves from 77.6% at 1M to 90.0% at 10M, suggesting that the retrieval pipeline’s contradiction-resolution mechanism benefits from deeper conversation history, while temporal rea-soning (30.0%) and event ordering (5.0%) degrade sharply, consistent with the same weakness ob-served at 1M. A full 3-run evaluation on BEAM-10M is in progress. The agent-memory setting, however, extends to weeks, months, and years of conversation, scales at which no oracle is measur-able and no benchmark yet exists. The architecture of §4 is engineered for that regime. Verbatim event preservation yields a further ar-chitectural consequence: any scoring function in-troduced after ingestion can be evaluated retroac-tively against the full event history. A salience weighting defined later for a new domain, a reten-tion classification, or any relevance function that did not exist at ingestion all operate on the same substrate the retrieval pipeline uses. Systems that commit to a scoring function at ingestion lack this property. 
+
+9 Conclusion 
+
+In this work we presented True Memory , an agent memory architecture that treats retrieval, rather than storage, as the architectural center. The sys-tem is organized as six cooperating layers over a substrate of events preserved verbatim, with an encoding gate at ingestion whose three signals (novelty, salience, prediction error) are computed through independent mechanisms, two of which query the same stored message substrate that serves retrieval. On LoCoMo under a matched gpt-4.1-mini 
+
+answer model, True Memory Pro reaches 93.0% (3-run mean), trailing only the cloud-served Ev-erMemOS by 1.5 points while running as a sin-gle SQLite file on commodity CPU. On Long-MemEval, the system reaches 87.8%, leading ev-ery agent memory product by at least 4.8 pp. On BEAM-1M, at 1-million-token conversation scale, True Memory Pro reaches 76.6%, above the prior published Hindsight result of 73.9%. A 56-configuration ablation shows that component choice within the retrieval pipeline moves accuracy by an order of magnitude less than the retrieval architecture itself moves it relative to extraction-based baselines, and a retrieval-bottleneck diag-nostic locates the remaining errors in retrieval rather than storage. Two directions follow. First, evaluation instru-ments for selective ingestion: the encoding gate (AUC 0.816, validated in a 200-variant sweep) is disabled throughout this paper because no public benchmark scores a system that chooses what to ingest, and closing this gap requires new bench-marks rather than new architectures. Second, deeper long-horizon evaluation: BEAM-1M be-gins to probe the regime the architecture was de-signed for, but weeks, months, and years of con-versation remain beyond any current benchmark’s reach. The code, evaluation harness, and benchmark outputs are available at https://github.com/ buildingjoshbetter/TrueMemory .
+
+Limitations 
+
+This work has three principal limitations. First, the encoding gate is disabled throughout all bench-mark evaluations because no existing benchmark scores selective ingestion; the gate’s contribution to end-to-end accuracy therefore remains unmea-sured. Second, the longest evaluation corpus (BEAM-1M) spans approximately one million to-kens, whereas the architecture is designed for con-versation histories that grow over weeks or months; no public benchmark probes this regime. Third, all reported scores use a semantic-match judge, which is more lenient than exact-match scoring; rankings across systems are valid but absolute ac-curacy numbers should not be compared directly to strict-match baselines without adjustment. 
+
+References 
+
+Frederic Charles Bartlett. Remembering: A Study in Experimental and Social Psychology . Cam-14 bridge University Press, 1932. Larry Cahill and James L. McGaugh. A novel demonstration of enhanced memory associated with emotional arousal. Consciousness and Cognition , 4(4):410–421, 1995. Prateek Chhikara, Dev Khant, Saket Aryan, Taran-jeet Singh, and Deshraj Yadav. Mem0: Building production-ready AI agents with scalable long-term memory. arXiv preprint arXiv:2504.19413 ,2025. Gordon V. Cormack, Charles L. A. Clarke, and Stefan B¨ uttcher. Reciprocal rank fusion outper-forms Condorcet and individual rank learning methods. In Proceedings of the 32nd Interna-tional ACM SIGIR Conference on Research and Development in Information Retrieval , pages 758–759, 2009. Fergus I. M. Craik and Robert S. Lockhart. Levels of processing: A framework for memory re-search. Journal of Verbal Learning and Verbal Behavior , 11(6):671–684, 1972. Helen L. Gallagher and Christopher D. Frith. Func-tional imaging of “theory of mind”. Trends in Cognitive Sciences , 7(2):77–83, 2003. Luyu Gao, Xueguang Ma, Jimmy Lin, and Jamie Callan. Precise zero-shot dense retrieval with-out relevance labels. In Proceedings of the 61st Annual Meeting of the Association for Compu-tational Linguistics , pages 1762–1777, 2023. Alex Garcia. sqlite-vec: A vector search SQLite extension. https://github.com/asg017/ sqlite-vec , 2024. Accessed 2026-04-15. D. Richard Hipp and contributors. SQLite and the FTS5 full-text-search module. https:// www.sqlite.org/fts5.html , 2000. SQLite released in 2000; the FTS5 module was added in 2015. Accessed 2026-04-15. C. Hu, X. Gao, Z. Zhou, D. Xu, Y. Bai, X. Li, H. Zhang, T. Li, C. Zhang, L. Bing, and Y. Deng. EverMemOS: A self-organizing memory oper-ating system for structured long-horizon reason-ing, 2026. Aditya Kusupati, Gantavya Bhatt, Aniket Rege, Matthew Wallingford, Aditya Sinha, Vivek Ramanujan, William Howard-Snyder, Kaifeng Chen, Sham Kakade, Prateek Jain, and Ali Farhadi. Matryoshka representation learning. In Advances in Neural Information Processing Systems 35 , pages 30233–30249, 2022. Chris Latimer, Nicol´ o Boschi, Andrew Neeser, Chris Bartholomew, Gaurav Srivastava, Xuan Wang, and Naren Ramakrishnan. Hindsight is 20/20: Building agent memory that re-tains, recalls, and reflects. arXiv preprint arXiv:2512.12818 , 2025. Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich K¨ uttler, Mike Lewis, Wen-tau Yih, Tim Rockt¨ aschel, Sebastian Riedel, and Douwe Kiela. Retrieval-augmented generation for knowledge-intensive NLP tasks. In Advances in Neural Information Processing Systems 33 ,pages 9459–9474, 2020. Yuqing Li, Jiangnan Li, Mo Yu, Guoxuan Ding, Zheng Lin, Weiping Wang, and Jie Zhou. Query-focused and memory-aware reranker for long context processing. arXiv preprint arXiv:2602.12192 , 2026. Adyasha Maharana, Dong-Ho Lee, Sergey Tulyakov, Mohit Bansal, Francesco Barbieri, and Yuwei Fang. Evaluating very long-term conversational memory of LLM agents. In Pro-ceedings of the 62nd Annual Meeting of the As-sociation for Computational Linguistics , pages 13851–13870, 2024. arXiv:2402.17753. Yu. A. Malkov and D. A. Yashunin. Effi-cient and robust approximate nearest neighbor search using hierarchical navigable small world graphs. IEEE Transactions on Pattern Analysis and Machine Intelligence , 42(4):824–836, 2018. arXiv:1603.09320. James L. McClelland, Bruce L. McNaughton, and Randall C. O’Reilly. Why there are comple-mentary learning systems in the hippocampus and neocortex: Insights from the successes and failures of connectionist models of learning and memory. Psychological Review , 102(3):419– 457, 1995. Rodrigo Nogueira and Kyunghyun Cho. Pas-sage re-ranking with BERT. arXiv preprint arXiv:1901.04085 , 2019. 15 Charles Packer, Sarah Wooders, Kevin Lin, Vivian Fang, Shishir G. Patil, Ion Stoica, and Joseph E. Gonzalez. MemGPT: Towards LLMs as operat-ing systems. arXiv preprint arXiv:2310.08560 ,2023. Pinecone, Chroma, Weaviate, and Qdrant. Vector database products built on HNSW-class index-ing, 2026. Representative commercial and open-source vector database products; product doc-umentation at https://www.pinecone.io ,
+
+https://www.trychroma.com , https:// weaviate.io , and https://qdrant.tech ,accessed 2026-04-15. Qwen Team. Qwen3-Embedding: Advanced text embedding and reranking through foundation models, 2025. Rajesh P. N. Rao and Dana H. Ballard. Predictive coding in the visual cortex: A functional inter-pretation of some extra-classical receptive-field effects. Nature Neuroscience , 2(1):79–87, 1999. Preston Rasmussen, Pavlo Paliychuk, Travis Beau-vais, Jack Ryan, and Daniel Chalef. Zep: Atemporal knowledge graph architecture for agent memory, 2025. Daniel L. Schacter. The Seven Sins of Mem-ory: How the Mind Forgets and Remembers .Houghton Mifflin, 2001. Larry R. Squire and Pablo Alvarez. Retrograde amnesia and memory consolidation: A neurobi-ological perspective. Current Opinion in Neu-robiology , 5(2):169–177, 1995. Sainbayar Sukhbaatar, Arthur Szlam, Jason We-ston, and Rob Fergus. End-to-end memory net-works. In Advances in Neural Information Pro-cessing Systems 28 , pages 2440–2448, 2015. arXiv:1503.08895. Supermemory. Supermemory. https:// supermemory.ai/ , 2024. Commercial agent-memory service. Documentation at https: //docs.supermemory.ai . Accessed 2026-04-15. Mohammad Tavakoli, Alireza Salemi, Carrie Ye, Mohamed Abdalla, Hamed Zamani, and J. Ross Mitchell. Beyond a million tokens: Benchmark-ing and enhancing long-term memory in LLMs. In International Conference on Learning Repre-sentations (ICLR) , 2026. arXiv:2510.27246. St´ ephan Tulkens and Thomas van Dongen. Model2vec: Fast static embeddings from sen-tence transformers. https://github.com/ MinishLab/model2vec , 2024. Accessed 2026-04-15. Endel Tulving. Episodic and semantic memory. In Endel Tulving and Wayne Donaldson, editors, 
+
+Organization of Memory , pages 381–403. Aca-demic Press, 1972. Di Wu, Hongwei Wang, Wenhao Yu, Yichong Zhang, Kai-Wei Chang, and Dong Yu. Long-MemEval: Benchmarking chat assistants on long-term interactive memory. In Interna-tional Conference on Learning Representations (ICLR) , 2025. arXiv:2410.10813. Zep AI. Graphiti: A temporal knowledge graph framework for ai agents. https:// github.com/getzep/graphiti , 2024. Ac-cessed 2026-04-15. 16 A Complete 56-configuration ablation data 
+
+Table 7 lists every cell of the 7 embedder × 8 reranker grid referenced in §7, sorted by LoCoMo accuracy. The aggregate statistics in Table 6 and the heatmap in Figure 4 are computed directly from these 56 rows. Table 7: Per-configuration results across the 56-cell LoCoMo grid. ★ Wilson 95% CIs computed from correct-count over 𝑁 = 1,540. Retrieval latency is the harness-reported average per query. 
+
+Config Embedder Dim Reranker Accuracy Correct 95% Wilson CI Retrieval C01 zembed1 — mxbai large 93.1% 1433/1540 [91.67, 94.22] 3.29 s C02 zembed1 — qwen3 reranker 92.9% 1430/1540 [91.46, 94.04] 5.34 s C03 zembed1 — gte reranker 92.6% 1426/1540 [91.18, 93.80] 2.69 s C04 qwen3 256d 256 zerank1 92.3% 1421/1540 [90.83, 93.50] 3.11 s C05 zembed1 — bge v2 m3 92.2% 1420/1540 [90.76, 93.44] 4.50 s C06 nomic 768d 768 zerank1 92.0% 1417/1540 [90.55, 93.26] 2.53 s C07 qwen3 512d 512 zerank1 92.0% 1417/1540 [90.55, 93.26] 3.06 s C08 gte modernbert 768d 768 gte reranker 91.9% 1415/1540 [90.41, 93.15] 2.58 s C09 qwen3 512d 512 qwen3 reranker 91.9% 1415/1540 [90.41, 93.15] 4.40 s C10 zembed1 — zerank1 91.9% 1416/1540 [90.48, 93.20] 4.08 s C11 gte modernbert 768d 768 bge v2 m3 91.8% 1414/1540 [90.34, 93.09] 3.42 s C12 qwen3 256d 256 gte reranker 91.8% 1414/1540 [90.34, 93.09] 2.46 s C13 gte modernbert 768d 768 qwen3 reranker 91.7% 1412/1540 [90.20, 92.97] 4.13 s C14 qwen3 1024d 1024 qwen3 reranker 91.7% 1412/1540 [90.20, 92.97] 4.26 s C15 qwen3 256d 256 miniml12 91.7% 1412/1540 [90.20, 92.97] 1.92 s C16 gte modernbert 768d 768 zerank1 91.6% 1410/1540 [90.06, 92.85] 2.73 s C17 qwen3 512d 512 gte reranker 91.6% 1410/1540 [90.06, 92.85] 2.73 s C18 zembed1 — bge large 91.6% 1410/1540 [90.06, 92.85] 4.42 s C19 qwen3 512d 512 bge v2 m3 91.5% 1409/1540 [89.99, 92.79] 3.34 s C20 qwen3 512d 512 mxbai large 91.5% 1409/1540 [89.99, 92.79] 2.34 s C21 model2vec 256d 256 miniml12 91.4% 1407/1540 [89.86, 92.67] 9.41 s C22 qwen3 256d 256 qwen3 reranker 91.4% 1407/1540 [89.86, 92.67] 4.36 s C23 qwen3 512d 512 bge large 91.4% 1408/1540 [89.93, 92.73] 3.34 s C24 model2vec 256d 256 bge large 91.3% 1406/1540 [89.79, 92.61] 3.39 s C25 nomic 768d 768 qwen3 reranker 91.3% 1406/1540 [89.79, 92.61] 4.01 s C26 qwen3 256d 256 bge v2 m3 91.3% 1406/1540 [89.79, 92.61] 3.50 s C27 qwen3 512d 512 miniml12 91.3% 1406/1540 [89.79, 92.61] 2.11 s C28 gte modernbert 768d 768 bge large 91.2% 1405/1540 [89.72, 92.55] 3.14 s C29 gte modernbert 768d 768 miniml12 91.2% 1404/1540 [89.65, 92.49] 1.86 s C30 gte modernbert 768d 768 no reranker 91.2% 1404/1540 [89.65, 92.49] 1.71 s C31 nomic 768d 768 bge large 91.2% 1404/1540 [89.65, 92.49] 3.56 s C32 qwen3 256d 256 no reranker 91.2% 1404/1540 [89.65, 92.49] 1.81 s C33 gte modernbert 768d 768 mxbai large 91.1% 1403/1540 [89.58, 92.43] 2.63 s C34 qwen3 512d 512 no reranker 91.1% 1403/1540 [89.58, 92.43] 1.89 s C35 model2vec 256d 256 zerank1 91.0% 1402/1540 [89.51, 92.37] 3.78 s C36 nomic 768d 768 no reranker 91.0% 1402/1540 [89.51, 92.37] 1.74 s C37 qwen3 256d 256 bge large 91.0% 1401/1540 [89.44, 92.31] 3.48 s C38 qwen3 256d 256 mxbai large 91.0% 1401/1540 [89.44, 92.31] 2.30 s C39 nomic 768d 768 bge v2 m3 90.9% 1400/1540 [89.37, 92.24] 3.04 s C40 nomic 768d 768 miniml12 90.9% 1400/1540 [89.37, 92.24] 1.92 s C41 qwen3 1024d 1024 bge v2 m3 90.9% 1400/1540 [89.37, 92.24] 3.63 s C42 qwen3 1024d 1024 miniml12 90.9% 1400/1540 [89.37, 92.24] 2.09 s C43 nomic 768d 768 mxbai large 90.8% 1398/1540 [89.23, 92.12] 2.34 s C44 qwen3 1024d 1024 no reranker 90.8% 1399/1540 [89.30, 92.18] 1.86 s C45 qwen3 1024d 1024 zerank1 90.8% 1399/1540 [89.30, 92.18] 3.62 s C46 qwen3 1024d 1024 gte reranker 90.7% 1397/1540 [89.16, 92.06] 2.62 s C47 qwen3 1024d 1024 mxbai large 90.7% 1397/1540 [89.16, 92.06] 2.25 s C48 model2vec 256d 256 gte reranker 90.6% 1395/1540 [89.02, 91.94] 2.36 s C49 zembed1 — miniml12 90.6% 1395/1540 [89.02, 91.94] 26.86 s C50 model2vec 256d 256 qwen3 reranker 90.5% 1394/1540 [88.95, 91.88] 4.21 s C51 zembed1 — no reranker 90.5% 1393/1540 [88.88, 91.82] 1.54 s C52 nomic 768d 768 gte reranker 90.4% 1392/1540 [88.82, 91.76] 2.54 s C53 qwen3 1024d 1024 bge large 90.1% 1387/1540 [88.47, 91.46] 3.38 s C54 model2vec 256d 256 bge v2 m3 89.9% 1385/1540 [88.33, 91.34] 3.41 s C55 model2vec 256d 256 mxbai large 89.9% 1384/1540 [88.26, 91.28] 2.25 s C56 model2vec 256d 256 no reranker 89.9% 1384/1540 [88.26, 91.28] 1.61 s 
+
+17

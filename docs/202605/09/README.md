@@ -1,85 +1,44 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-09
 
-## 每次日报
-- 最新运行日期：2026-05-09
-- 运行时间：2026-05-09 19:58:31 UTC
-- 运行状态：成功
-- 本次总论文数：13
+- 生成时间：2026-05-09 19:58:31 UTC
+- 当次推荐总数：13
 - 精读区：2
 - 速读区：11
 
-### 今日简报（AI）
-今天共浏览了13篇网络安全与大模型相关论文，其中2篇精读，11篇速读。  
-重点关注大模型在恶意软件检测与长期威胁防护上的应用，展示了行为特征与影子内存的创新结合。  
-建议关注这类大模型安全方案的落地潜力，并尝试理解基础的防御机制与策略。
-- 详情：[/202605/09/README](/202605/09/README)
+## 今日简报（AI）
+今天共整理 13 篇安全与 LLM 相关论文，涵盖精读与速读。  
+重点关注 LLM 在恶意软件检测和长期威胁防护中的应用，以及工业 OT 网络自动漏洞管理。  
+建议关注 LLM 安全防护和行为特征分析的新方法，提升日常网络防御意识。
 
-### 精读区论文标签
-1. [Trident: Improving Malware Detection with LLMs and Behavioral Features](/202605/09/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)  
-   标签：评分：8.0/10、query:q9
+## 精读区
+1. [Trident：结合大语言模型与行为特征的恶意软件检测优化](/202605/09/2605.00297v1-trident-improving-malware-detection-with-llms-and-behavioral-features)（8.0/10）
    摘要：本文提出 Trident 框架，通过结合大型语言模型（LLMs）解析沙箱行为报告与静态特征决策树，实现自动化、可解释且对概念漂移鲁棒的恶意软件检测。实验显示 Trident 在保持低误报率的同时，优于仅基于静态特征或行为规则的方法，显示出高效和稳健性，值得继续精读。
-   evidence：将LLMs用于恶意软件检测和行为特征
-2. [MAGE: Safeguarding LLM Agents against Long\-Horizon Threats via Shadow Memory](/202605/09/2605.03228v1-mage-safeguarding-llm-agents-against-long-horizon-threats-via-shadow-memory)  
-   标签：评分：8.0/10、query:profile-1
+2. [MAGE：通过影子记忆保护大型语言模型代理免受长期威胁](/202605/09/2605.03228v1-mage-safeguarding-llm-agents-against-long-horizon-threats-via-shadow-memory)（8.0/10）
    摘要：本文提出了MAGE框架，用于防御大型语言模型（LLM）代理在多轮交互中面临的长期威胁。其核心通过“影子记忆”保留安全关键上下文，对潜在动作进行风险评估。实验证明，MAGE在工具链攻击和持久性提示注入中大幅降低攻击成功率，同时保持高正常任务效用，且开销极低。该方法首次以记忆机制为基础提供了可解释、多用途的长期威胁防御策略，值得进一步精读。
-   evidence：LLM代理安全记忆用于长期威胁分析
 
-### 速读区论文标签
-1. [FIRCE: A Framework for Intrusion Response and Conformal Evaluation](/202605/09/2605.01962v1-firce-a-framework-for-intrusion-response-and-conformal-evaluation)  
-   标签：评分：7.9/10、query:q5
+## 速读区
+1. [FIRCE：入侵响应与保形评估框架](/202605/09/2605.01962v1-firce-a-framework-for-intrusion-response-and-conformal-evaluation)（7.9/10）
    摘要：本文提出 FIRCE 框架，通过结合多种共形评估策略与自适应分块机制，增强 IoT 入侵检测系统对概念漂移的响应能力。实验证明 FIRCE 能有效检测分布变化并触发模型重训练，同时在 CICIDS2018 与 UNSW\-NB15 数据集上验证了方法的泛化性，显示出在动态网络环境下提高 IDS 鲁棒性和效率的潜力，值得关注其共形评估设计和自适应调度机制。
-   evidence：深度学习用于入侵和加密流量分析
-2. [Robust and Explainable Divide\-and\-Conquer Learning for Intrusion Detection](/202605/09/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)  
-   标签：评分：7.8/10、query:q4
+2. [用于入侵检测的稳健且可解释的分而治之学习](/202605/09/2605.02015v1-robust-and-explainable-divide-and-conquer-learning-for-intrusion-detection)（7.8/10）
    摘要：本论文提出了SCAL（Subproblem Correlation\-Aware Learning）方法，通过相关性感知的分而治之策略，将复杂的网络入侵检测任务拆分为可管理的子任务，从而在资源受限设备上训练轻量模型。实验显示，SCAL在真实网络数据集上可提高局部精度43.3%，模型体积减少257倍，同时增强对抗鲁棒性和可解释性，表明该方法适合继续深入阅读。
-   evidence：用于网络入侵检测的分而治之机器学习
-3. [APIOT: Autonomous Vulnerability Management Across Bare\-Metal Industrial OT Networks](/202605/09/2605.02346v1-apiot-autonomous-vulnerability-management-across-bare-metal-industrial-ot-networks)  
-   标签：评分：7.8/10、query:q3
+3. [APIOT：跨裸机工业 OT 网络的自主漏洞管理](/202605/09/2605.02346v1-apiot-autonomous-vulnerability-management-across-bare-metal-industrial-ot-networks)（7.8/10）
    摘要：本论文提出了APIOT框架，实现了在裸机工业OT设备上端到端的自主漏洞发现、利用、修补与验证循环，利用LLM智能体直接操作工业协议字段而非依赖传统Shell或文件系统。实验覆盖290次运行、五种前沿LLM与多种网络拓扑，显示在监督层（overseer）辅助下，任务成功率高达90%以上。研究表明，LLM增强攻击者能力显著，防御模型需重新评估潜在威胁，值得深入精读工业OT安全与LLM应用相关方法。
-   evidence：用于裸金属OT协议推理的LLM框架
-4. [Decompose to Understand, Fuse to Detect: Frequency\-Decoupled Anomaly Detection for Encrypted Network Traffic](/202605/09/2605.02970v1-decompose-to-understand-fuse-to-detect-frequency-decoupled-anomaly-detection-for-encrypted-network-traffic)  
-   标签：评分：7.8/10、query:q5
+4. [分解以理解，融合以检测：加密网络流量的频率解耦异常检测](/202605/09/2605.02970v1-decompose-to-understand-fuse-to-detect-frequency-decoupled-anomaly-detection-for-encrypted-network-traffic)（7.8/10）
    摘要：本论文针对加密网络流量异常检测中的高频信息难以重构问题，提出了 FreeUp 框架，通过将流量图像分解为低频和高频分支独立建模，并引入不确定性驱动的融合评分机制，实现对全频段特征的高保真重建与敏感异常检测。实验证明其在多个基准数据集上优于现有方法，值得关注用于加密流量安全分析。
-   evidence：使用深度学习进行加密网络流量分析
-5. [Storage Is Not Memory: A Retrieval\-Centered Architecture for Agent Recall](/202605/09/2605.04897v1-storage-is-not-memory-a-retrieval-centered-architecture-for-agent-recall)  
-   标签：评分：7.8/10、query:profile-1
+5. [存储不是记忆：面向检索的智能体回忆架构](/202605/09/2605.04897v1-storage-is-not-memory-a-retrieval-centered-architecture-for-agent-recall)（7.8/10）
    摘要：本文提出True Memory，一种以检索为中心的多层代理记忆架构，避免在信息摄取阶段丢弃潜在重要内容。系统在普通CPU上运行，无需GPU或外部数据库，通过事件逐字保留和多阶段检索实现高准确率。实验显示True Memory在多会话问答基准上优于多数现有系统，值得进一步精读以了解架构设计与检索机制。
-   evidence：支持复杂任务的LLM代理检索架构
-6. [Retrieval from Within: An Intrinsic Capability of Attention\-Based Models](/202605/09/2605.05806v1-retrieval-from-within-an-intrinsic-capability-of-attention-based-models)  
-   标签：评分：7.8/10、query:q7
+6. [内部检索：基于注意力模型的内在能力](/202605/09/2605.05806v1-retrieval-from-within-an-intrinsic-capability-of-attention-based-models)（7.8/10）
    摘要：本文探讨了注意力机制编码\-解码模型是否具备内部检索能力，提出 INTRA 框架，通过解码器的交叉注意力直接在模型自身的编码表示中选择证据并生成答案。实验显示，INTRA 在多跳问答和证据召回上超越传统检索增强生成（RAG）管线，同时减少外部检索器依赖，值得进一步精读。
-   evidence：探讨了与LLMs和网络流量理解密切相关的检索方法和模型。
-7. ["I Don't Know" \-\- Towards Appropriate Trust with Certainty\-Aware Retrieval Augmented Generation](/202605/09/2605.00957v1-i-dont-know----towards-appropriate-trust-with-certainty-aware-retrieval-augmented-generation)  
-   标签：评分：6.9/10、query:q9
+7. [“我不知道”——面向具备确定性感知的检索增强生成的适当信任](/202605/09/2605.00957v1-i-dont-know----towards-appropriate-trust-with-certainty-aware-retrieval-augmented-generation)（6.9/10）
    摘要：本文提出了CERTA系统，一种面向信任校准的确定性增强检索生成方法，旨在让大语言模型在回答问题时表达自我反思的不确定性，从而帮助用户建立适当信任。通过构建包含非客观问题的Certainty Benchmark，实验显示CERTA能识别不确定回答、减少过度认同，并在道德判断场景中表现谨慎。该研究值得关注，尤其适合对可信AI与LLM自我反思机制感兴趣的读者。
-   evidence：确定性增强RAG提升LLM输出分析可信度
-8. [A Framework of Secure Source Coding using Mutual Information Security Criterion: Universal Coding, Strong Converse Theorem](/202605/09/2605.04720v1-a-framework-of-secure-source-coding-using-mutual-information-security-criterion-universal-coding-strong-converse-theorem)  
-   标签：评分：6.9/10、query:q4
+8. [基于互信息安全准则的安全源编码框架：通用编码与强反定理](/202605/09/2605.04720v1-a-framework-of-secure-source-coding-using-mutual-information-security-criterion-universal-coding-strong-converse-theorem)（6.9/10）
    摘要：本文提出了一种基于互信息安全准则的固定长度源编码加密框架，旨在确保信息传输的可靠性和安全性。作者给出了在错误概率和信息泄露受限条件下实现安全通信的必要充分条件，并证明了该条件与具体约束常数无关，体现了强反定理。此外，文中还证明了加密解密方案的普适性，即适用于任意明文和密钥分布。整体方法理论性强，值得精读理解其安全性证明与普适性设计。
-   evidence：讨论了加密框架和密码学技术在安全通信中的应用。
-9. [Retrieval with Multiple Query Vectors through Anomalous Pattern Detection](/202605/09/2605.01965v1-retrieval-with-multiple-query-vectors-through-anomalous-pattern-detection)  
-   标签：评分：6.9/10、query:profile-1
+9. [通过异常模式检测进行多查询向量检索](/202605/09/2605.01965v1-retrieval-with-multiple-query-vectors-through-anomalous-pattern-detection)（6.9/10）
    摘要：本文提出一种面向多查询向量的检索方法，将查询集合视为共享“异常模式”，通过异常模式检测筛选共同显著维度，再在数据库中检索具有相同异常结构的向量。作者在图像、文本与表格数据上验证，结果显示相比KDTree基线，该方法在多数场景下提升精度与召回，且查询向量数量增加时性能提升明显，尤其1到8个增长最显著，之后收益递减，整体表明多查询建模优于单向量检索，值得进一步精读。
-   evidence：多向量检索支持基于LLM的分析工作流
-10. [SCOUT: Active Information Foraging for Long\-Text Understanding with Decoupled Epistemic States](/202605/09/2605.04496v1-scout-active-information-foraging-for-long-text-understanding-with-decoupled-epistemic-states)  
-   标签：评分：6.9/10、query:profile-1
+10. [SCOUT：基于解耦的认知状态进行长文本理解的主动信息觅食](/202605/09/2605.04496v1-scout-active-information-foraging-for-long-text-understanding-with-decoupled-epistemic-states)（6.9/10）
    摘要：本文提出了SCOUT，一种针对百万令牌长文本理解（LTU）的主动信息觅食方法。SCOUT通过活跃探索文档、逐步收缩推理状态，实现了信息的高效获取与计算成本的显著降低。相比传统方法，SCOUT在复杂推理任务上性能优异，且减少了最多8倍的令牌消耗，能有效解决长文本理解中的性能和效率困境。值得进一步精读。
-   evidence：主动LLM信息搜索支持组合任务
-11. [Autonomous LLM Agent Worms: Cross\-Platform Propagation, Automated Discovery and Temporal Re\-Entry Defense](/202605/09/2605.02812v1-autonomous-llm-agent-worms-cross-platform-propagation-automated-discovery-and-temporal-re-entry-defense)  
-   标签：评分：6.8/10、query:q9
+11. [自主型大语言模型代理蠕虫：跨平台传播、自动发现与时间重入防御](/202605/09/2605.02812v1-autonomous-llm-agent-worms-cross-platform-propagation-automated-discovery-and-temporal-re-entry-defense)（6.8/10）
    摘要：本文系统研究了持久化 LLM 代理中的自主蠕虫传播风险，提出 SSCGV 自动发现可注入载体和 SRPO 优化对摘要、改写鲁棒的蠕虫负载，并设计 RTW\-A 时序重入防御机制。在三种开源代理框架上验证，展示了跨平台、多跳自主传播及高风险操作潜力，同时提供了防御策略。研究对安全防护和多代理系统治理具有参考价值，值得进一步精读。
-   evidence：基于LLM的安全代理传播风险分析
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
