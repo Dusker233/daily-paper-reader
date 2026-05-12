@@ -1,79 +1,40 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-12
 
-## 每次日报
-- 最新运行日期：2026-05-12
-- 运行时间：2026-05-12 21:47:26 UTC
-- 运行状态：成功
-- 本次总论文数：12
+- 生成时间：2026-05-12 21:47:26 UTC
+- 当次推荐总数：12
 - 精读区：1
 - 速读区：11
 
-### 今日简报（AI）
-今天成功发布了12篇文章，其中精读一篇，速读11篇。值得关注的是基于二进制图像的入侵检测和链式思维推理在移动流量预测中的应用。建议读者关注网络安全和人工智能领域的最新研究动态。
-- 详情：[/202605/12/README](/202605/12/README)
+## 今日简报（AI）
+今天成功发布了12篇文章，其中精读一篇，速读11篇。值得关注的是基于二进制图像的入侵检测方法及其在工业网络中的应用。建议读者关注最新的移动流量预测和视频隐私保护技术，以获取前沿信息。
 
-### 精读区论文标签
-1. [Binary Image\-Based Intrusion Detection for Operational Technology Networks: Extending the SPHBI Methodology from IoT to Modbus TCP](/202605/12/2605.04250v2-binary-image-based-intrusion-detection-for-operational-technology-networks-extending-the-sphbi-methodology-from-iot-to-modbus-tcp)  
-   标签：评分：8.3/10、query:q5
+## 精读区
+1. [基于二进制图像的操作技术网络入侵检测：将SPHBI方法从物联网扩展到Modbus TCP](/202605/12/2605.04250v2-binary-image-based-intrusion-detection-for-operational-technology-networks-extending-the-sphbi-methodology-from-iot-to-modbus-tcp)（8.3/10）
    摘要：本研究扩展了单包头部二进制图像（SPHBI）入侵检测方法至Modbus TCP，评估了五种不同协议深度的方法。结果显示，仅使用TCP/IP头部的准确率为51.8%，而添加应用层信息后准确率提升至98.1%。最佳方法在九个类别中实现94.4%的多类准确率，参数量显著低于传统深度学习模型。这表明该方法适合资源受限的操作技术边缘设备，值得进一步研究。
-   evidence：深度学习用于加密Modbus TCP流量检测
 
-### 速读区论文标签
-1. [Chain\-of\-Thought Reasoning Enhances In\-Context Learning for LLM\-Based Mobile Traffic Prediction](/202605/12/2605.09260v1-chain-of-thought-reasoning-enhances-in-context-learning-for-llm-based-mobile-traffic-prediction)  
-   标签：评分：7.8/10、query:q7
+## 速读区
+1. [链式思维推理增强了基于LLM的移动流量预测中的上下文学习](/202605/12/2605.09260v1-chain-of-thought-reasoning-enhances-in-context-learning-for-llm-based-mobile-traffic-prediction)（7.8/10）
    摘要：本研究提出了一种基于链式思维的LLM框架，用于提高移动流量预测的准确性，特别是在快速变化的网络环境中。通过构建结构化的推理步骤，该方法在真实5G数据集上实现了显著的性能提升，相较于传统方法具有更好的适应性和准确性，值得进一步细读以了解其具体实现与应用潜力。
-   evidence：基于LLM的移动流量预测
-2. [DRIFT: Drift\-Resilient Invariant\-Feature Transformer for DGA Detection](/202605/12/2605.10436v1-drift-drift-resilient-invariant-feature-transformer-for-dga-detection)  
-   标签：评分：7.8/10、query:q4
+2. [DRIFT：抗漂移不变特征转换器用于DGA检测](/202605/12/2605.10436v1-drift-drift-resilient-invariant-feature-transformer-for-dga-detection)（7.8/10）
    摘要：本研究提出了一种名为DRIFT的框架，旨在解决域名生成算法（DGA）检测中的时间漂移问题。通过对2017至2025年的数据进行纵向研究，发现现有模型在面对新变种时性能迅速下降。DRIFT采用混合标记化策略和多任务自监督预训练，显著提高了模型的鲁棒性，并在前向链式实验中超越了现有基线。因此，该研究为长期DGA防御提供了可靠基础，值得深入阅读。
-   evidence：基于Transformer的不变特征学习用于网络安全流量
-3. [CFE\-PPAR: Compression\-friendly encryption for privacy\-preserving action recognition leveraging video transformers](/202605/12/2605.05692v1-cfe-ppar-compression-friendly-encryption-for-privacy-preserving-action-recognition-leveraging-video-transformers)  
-   标签：评分：7.5/10、query:q6
+3. [CFE\-PPAR：一种适合压缩的隐私保护动作识别加密方法，利用视频变换器](/202605/12/2605.05692v1-cfe-ppar-compression-friendly-encryption-for-privacy-preserving-action-recognition-leveraging-video-transformers)（7.5/10）
    摘要：本研究提出了一种名为CFE\-PPAR的压缩友好型加密方法，旨在实现隐私保护的动作识别。该方法利用视频变换器直接对加密视频进行识别，克服了现有加密方法在视频压缩后性能显著下降的问题。实验结果表明，CFE\-PPAR在UCF101和HMDB51数据集上表现优于传统方法，值得深入阅读以了解其具体实现和效果。
-   evidence：压缩友好加密视频识别与加密视频任务相关
-4. [CLAD: A Clustered Label\-Agnostic Federated Learning Framework for Joint Anomaly Detection and Attack Classification](/202605/12/2605.06571v1-clad-a-clustered-label-agnostic-federated-learning-framework-for-joint-anomaly-detection-and-attack-classification)  
-   标签：评分：7.5/10、query:q4
+4. [CLAD：一种用于联合异常检测和攻击分类的聚类无标签联邦学习框架](/202605/12/2605.06571v1-clad-a-clustered-label-agnostic-federated-learning-framework-for-joint-anomaly-detection-and-attack-classification)（7.5/10）
    摘要：本研究提出了CLAD框架，旨在解决物联网环境中传统入侵检测系统的局限性，特别是设备异构性和标签稀缺问题。通过结合聚类联邦学习和双模式微架构，CLAD实现了无标签数据的有效利用，并在80%无标签客户端的场景下提高了30%的检测性能，同时降低了通信成本。该框架的创新性和实用性使其值得深入阅读。
-   evidence：联邦学习用于异常与攻击分类，涉及加密或网络流量的机器学习
-5. [Towards multi\-modal forgery representation learning for AI\-generated video detection and localization](/202605/12/2605.07232v1-towards-multi-modal-forgery-representation-learning-for-ai-generated-video-detection-and-localization)  
-   标签：评分：7.5/10、query:q6
+5. [面向多模态伪造表示学习以实现AI生成视频的检测与定位](/202605/12/2605.07232v1-towards-multi-modal-forgery-representation-learning-for-ai-generated-video-detection-and-localization)（7.5/10）
    摘要：本研究提出了一种多模态伪造表示学习框架，旨在提高对AI生成视频的检测和定位能力。通过结合视觉、音频和语言模型，研究展示了该方法在识别部分操控视频方面的优势。实验结果表明，该方法超越了现有的最先进技术，值得深入阅读以了解其具体实现和效果。
-   evidence：多模态AI视频检测结合LMM语义分支，将LLM与加密视频检测关联
-6. [Large Language Models over Networks: Collaborative Intelligence under Resource Constraints](/202605/12/2605.08626v1-large-language-models-over-networks-collaborative-intelligence-under-resource-constraints)  
-   标签：评分：7.5/10、query:q3
+6. [网络上的大型语言模型：资源约束下的协作智能](/202605/12/2605.08626v1-large-language-models-over-networks-collaborative-intelligence-under-resource-constraints)（7.5/10）
    摘要：本论文探讨了在资源约束下，通过多个独立的大语言模型（LLMs）进行协作智能的方法。作者提出了一种新的任务级协作框架，强调设备与云端之间以及多代理之间的合作，以提高响应质量并应对计算、内存、通信和成本等多重限制。研究表明，该方法能够有效提升复杂任务处理能力，值得进一步细读以了解其具体实现和应用场景。
-   evidence：用于网络应用的大型语言模型协作
-7. [Adversarial Update\-Based Federated Unlearning for Poisoned Model Recovery](/202605/12/2605.02110v1-adversarial-update-based-federated-unlearning-for-poisoned-model-recovery)  
-   标签：评分：6.8/10、query:q4
+7. [基于对抗更新的联邦去学习用于被污染模型恢复](/202605/12/2605.02110v1-adversarial-update-based-federated-unlearning-for-poisoned-model-recovery)（6.8/10）
    摘要：本研究提出了一种名为联邦对抗性去学习（FAUN）的新方法，旨在从被恶意客户端攻击的联邦学习模型中快速恢复准确性。FAUN通过保留少量恶意更新并利用对抗优化生成消除方向，从而在几轮去学习后实现了快速恢复。实验表明，FAUN在多个数据集上表现出与完全重训练相当的恢复效果，但所需轮次和计算开销显著降低，因此值得进一步细读。
-   evidence：联邦学习遗忘方法缓解模型投毒
-8. [Adaptive Dual\-Path Framework for Covert Semantic Communication](/202605/12/2605.03423v1-adaptive-dual-path-framework-for-covert-semantic-communication)  
-   标签：评分：6.8/10、query:q7
+8. [自适应双路径框架用于隐蔽语义通信](/202605/12/2605.03423v1-adaptive-dual-path-framework-for-covert-semantic-communication)（6.8/10）
    摘要：本研究提出了一种新颖的自适应双路径框架，用于隐蔽语义通信，通过将隐蔽数据嵌入任务特定特征来提升通信效率与安全性。实验显示，该方法能有效降低攻击者检测能力，值得进一步细读以了解其具体实现与应用潜力。
-   evidence：语义通信嵌入隐秘信息，与LLM流量编码相关
-9. [A Pragmatic Comparison of Cryptographic Computation Technologies for Machine Learning](/202605/12/2605.04858v1-a-pragmatic-comparison-of-cryptographic-computation-technologies-for-machine-learning)  
-   标签：评分：6.8/10、query:q4
+9. [机器学习密码计算技术的务实比较](/202605/12/2605.04858v1-a-pragmatic-comparison-of-cryptographic-computation-technologies-for-machine-learning)（6.8/10）
    摘要：本研究旨在比较安全多方计算（SMPC）和完全同态加密（FHE）在机器学习中的应用，提供理论总结和软件实现的基准测试。通过对两种技术的性能进行评估，发现FHE在简单回归和密集网络上表现优于SMPC，而SMPC则在复杂模型如卷积神经网络中更具优势。这项研究为从业者选择合适的安全计算技术提供了实用指导，值得继续细读。
-   evidence：用于机器学习的加密方法
-10. [A Privacy\-Preserving Machine Learning Framework for Edge Intelligence: An Empirical Analysis](/202605/12/2605.05751v1-a-privacy-preserving-machine-learning-framework-for-edge-intelligence-an-empirical-analysis)  
-   标签：评分：6.8/10、query:q4
+10. [面向边缘智能的隐私保护机器学习框架：实证分析](/202605/12/2605.05751v1-a-privacy-preserving-machine-learning-framework-for-edge-intelligence-an-empirical-analysis)（6.8/10）
    摘要：本研究提出了一种新的隐私保护机器学习框架，专为边缘智能应用设计，评估了差分隐私、可安全多方计算和完全同态加密三种技术的性能。实验结果表明，差分隐私在保持吞吐量和延迟方面表现良好，但模型复杂性会导致准确率下降，而完全同态加密则显著增加响应时间。该论文为边缘计算中的隐私、性能和资源效率之间的权衡提供了重要见解，值得继续细读。
-   evidence：边缘智能的隐私保护机器学习
-11. [Revisiting Uncertainty: On Evidential Learning for Partially Relevant Video Retrieval](/202605/12/2605.06083v1-revisiting-uncertainty-on-evidential-learning-for-partially-relevant-video-retrieval)  
-   标签：评分：6.8/10、query:q6
+11. [重新审视不确定性：关于部分相关视频检索的证据学习](/202605/12/2605.06083v1-revisiting-uncertainty-on-evidential-learning-for-partially-relevant-video-retrieval)（6.8/10）
    摘要：本研究提出了一种名为Holmes的层次证据学习框架，旨在解决部分相关视频检索中的不确定性问题。通过对跨模态证据的聚合和建模，该方法显著提高了检索性能，并在多个基准测试中超越了现有最先进的方法。值得进一步细读以了解其创新机制和实验结果。
-   evidence：LLM在部分相关视频检索中的应用
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
