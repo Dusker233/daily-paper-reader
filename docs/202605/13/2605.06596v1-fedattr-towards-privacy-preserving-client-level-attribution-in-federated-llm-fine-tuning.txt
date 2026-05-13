@@ -1,0 +1,3452 @@
+Title: FedAttr: Towards Privacy-preserving Client-Level Attribution in Federated LLM Fine-tuning
+
+URL Source: https://arxiv.org/pdf/2605.06596v1
+
+Published Time: Fri, 08 May 2026 01:39:42 GMT
+
+Number of Pages: 39
+
+Markdown Content:
+# FedAttr: Towards Privacy-preserving Client-Level Attribution in Federated LLM Fine-tuning 
+
+Su Zhang 
+
+Department of Computer Science University of Maryland, College Park 
+
+suzhang1@umd.edu 
+
+Junfeng Guo 
+
+Department of Computer Science University of Maryland, College Park 
+
+gjf2023@umd.edu 
+
+Heng Huang 
+
+Department of Computer Science University of Maryland, College Park 
+
+heng@umd.edu 
+
+## Abstract 
+
+Watermark radioactivity testing type of methods can detect whether a model was trained on watermarked documents, and have become key tools for protecting data ownership in the fine-tuning of large language models (LLMs). Existing works have proved their effectiveness in centralized LLM fine-tuning. However, this type of method faces several challenges and remains underexplored in federated learning (FL), a widely-applied paradigm for fine-tuning LLMs collaboratively on private data across different users. FL mainly ensures privacy through secure aggregation (SA), which allows the server to aggregate updates while keeping clients’ updates private. This mechanism preserves privacy but makes it difficult to identify which client trained on watermarked documents. In this work, we propose FedAttr , a new 
+
+client-level attribution protocol for FL. FedAttr identifies which clients trained on watermarked data via a paired-subset-difference mechanism, while preserving the privacy guarantees of SA and FL performance. FedAttr proceeds in three steps: (i) estimate each client’s update by differencing two SA queries, (ii) score the estimate with the watermark detector via differential scoring, and (iii) combine scores across rounds via Stouffer method. We theoretically show that FedAttr produces an unbiased estimator of each client’s update with bounded mutual information leakage ( i.e., O(d∗/N ) per-round update). Moreover, FedAttr empirically achieves 100% TPR and 0% FPR, outperforming all baselines by at least 44.4% in TPR or 19.1% in FPR, with only 6.3% overhead relative to FL training time. Ablation studies confirm that FedAttr is robust to protocol parameters and configurations. 
+
+## 1 Introduction 
+
+Large language models (LLMs) are increasingly fine-tuned on documents obtained from external sources, often under license terms that restrict data use to the licensee’s own training. Watermark radioactivity testing type of methods have emerged as a practical tool for detecting violations of such terms: the data provider embeds a watermark into the documents, and a watermark detection test can later determine whether a model was trained on watermarked documents [Sander et al., 2024, Cui et al., 2025]. This approach has been validated for centralized LLM fine-tuning. In federated learning (FL), where multiple institutions jointly fine-tune a model on their private data without sharing it [Ye et al., 2024, Fan et al., 2023], however, the watermark radioactivity test faces two challenges and remains underexplored. A global model radioactivity test can still detect that        
+
+> Preprint.
+> arXiv:2605.06596v1 [cs.CR] 7 May 2026 d
+> Clients
+> Server
+> FL Training
+> W
+> Clients
+> Corpus
+> Owner
+> Data Use License
+> Data Distribution
+> Secure Aggregation
+> (SA)
+> W
+> Global Radioactivity Test
+> Corpus
+> Owner
+> Watermark
+> Detection
+> Watermarked
+> Global Model
+> Secure Aggregation
+> (SA)
+> Client-level
+> Attribution
+> FedAttr
+> Watermarked
+> Client
+> W
+> Watermarked
+> Client Benign Client Benign Client
+> FedAttr
+> Secure Aggregation
+> (SA)
+> Corpus
+> Owner
+> (a) (b) (c) (d )
+
+Figure 1: Overview of Data Attribution in Federated Learning. (a) The corpus owner distributes watermarked documents to clients under a data-use license. (b) Clients collaboratively fine-tune a shared model via federated learning through secure aggregation (SA). (c) A global radioactivity test can detect the watermark signal of the trained model, but cannot identify which clients are responsible without violating SA. (d) FedAttr identifies which clients use the watermark documents through SA. the trained model was influenced by watermarked documents. However, it cannot identify which client used them. This distinction matters because license terms are often granted to individual institutions: the data provider needs to know exactly which institutions violated the terms. Identifying the responsible clients is challenging for two reasons. First, FL systems widely adopt the secure aggregation (SA) mechanism to protect client privacy, which hides each client’s individual update from the server. This mechanism preserves privacy but makes it difficult to identify which client trained on watermarked documents. Second, even if individual updates were available, the global model already carries watermark signals from previous rounds, so even a benign client’s update appears watermarked when tested, giving over 57% FPR in our experiments. Existing FL forensic methods [Zhang et al., 2022, Jia et al., 2024] do not resolve these challenges: they are designed to detect adversarial poisoning attacks, in which malicious clients send manipulated updates. In our setting, all clients faithfully follow the protocol, producing none of the adversarial signals these methods rely on. Moreover, both methods require plaintext access to updates, violating SA. In this work, we propose FedAttr , a novel client-level attribution protocol for federated LLM fine-tuning. FedAttr preserves the standard FL training and SA protocol. It identifies which clients were trained on watermarked data via the paired-subset-difference mechanism, while preserving the privacy guarantees of SA and FL performance. FedAttr proceeds in three steps. First, to overcome SA’s restriction on observing individual updates, FedAttr estimates each client’s update by differencing two authorized SA subset queries, one that includes the target client and one that excludes it, yielding an unbiased estimator with bounded variance (proved by Theorems 1–2). Second, since the global model accumulates watermark bias across rounds, FedAttr reduces this bias by scoring each estimate 
+
+relative to the current global model. Third, since the per-round watermark signal is weak, FedAttr combines per-round differential scores across T communication rounds via Stouffer’s method to identify which client is watermarked. The score gaps between watermarked and benign clients grow with √T , driving error rates to zero exponentially (proved by Theorem 3). We summarize our contributions as follows. 
+
+(1) Problem and protocol. We formalize client-level attribution problem and propose FedAttr , which combines a client-level update estimator, differential scoring, and cross-round Stouffer combination to decide which client uses the watermarked documents through the SA mechanism. 
+
+(2) Theoretical guarantees. We prove the client-level update estimator is unbiased with bounded variance (Theorems 1, 2), and derive two-sided exponential error bounds for cross-round Stouffer combination that drive false negatives to zero in T (Theorem 3). 
+
+(3) Privacy analysis. We bound the per-round mutual information leakage of the estimator about each client’s update by O(d∗/N ), where d∗ is the effective subspace dimension and N is the subset size of SA queries (Theorem 4). 
+
+(4) Empirical validation. In federated LoRA fine-tuning experiment, FedAttr achieves 100% TPR at 0% FPR within 5 rounds across two watermark families and two aggregation strategies, outperforming all baselines by at least 44.4% in TPR or 19.1% in FPR, with only 6.3% overhead relative to FL training time. Ablation studies confirm that FedAttr is robust to parameters and configurations. 22 Related Work 
+
+Federated LLM fine-tuning. Federated learning [McMahan et al., 2017] has been extended to LLM fine-tuning via parameter-efficient adapters such as LoRA [Hu et al., 2022], with aggregation strategies including FedIT [Zhang et al., 2023] and FLoRA [Wang et al., 2024]. We evaluate both in our experiments. Detailed descriptions of two aggregation strategies are in Appendix F. 
+
+Training-data watermarking. Embedding detectable signals into training data so that downstream models inherit measurable traces, known as radioactivity [Sablayrolles et al., 2020], was extended to LLMs in two forms: Sander et al. [2024] generate documents with a watermarked LLM whose green-token bias transfers to models fine-tuned on them, and Cui et al. [2025] inject fabricated entity-attribute pairs that the fine-tuned model memorizes and can be detected via QA probes. These methods assume a single training party; in FL, the global model aggregates all clients’ updates, so a detection on the global model no longer identifies which client used the watermarked data. FedAttr reuses these detectors as black-box scoring functions and resolves this attribution problem. 
+
+Federated forensics. FLDetector [Zhang et al., 2022] and FLForensics [Jia et al., 2024] trace mali-cious clients in poisoning attacks by detecting update inconsistency and misclassification influence, respectively. Both require plaintext access to the individual updates and rely on adversarial signals absent in our non-adversarial setting, where clients faithfully follow the FL protocol. 
+
+Secure aggregation and privacy. SA protocols [Bonawitz et al., 2017] enable the server to compute subset sums of client updates without observing the individual updates. Elkordy et al. [2023] provide the first mutual information bound on per-round leakage under standard SA protocol. FedAttr’s privacy analysis extends this framework to the multi-query setting required by client-level attribution. 
+
+## 3 Problem setup 
+
+3.1 Problem Formulation Federated fine-tuning system. FL enables K clients {1, . . . , K } to collaboratively train a shared global LLM over T communication rounds under the coordination of a central server. At each round t, the server distributes the current global model parameters wt−1 ∈ Rd to all clients; client i
+
+locally fine-tune wt−1 on its private dataset Di and returns the resulting parameter update ∆ti ∈ Rd.Then the server aggregates updates into the new global model according to a federated aggregation rule [McMahan et al., 2017]: 
+
+wt = wt−1 +
+
+> K
+
+X
+
+> i=1
+
+pi∆ti, (1) where aggregation weights pi ≥ 0 satisfy PKi=1 pi = 1 , typically pi = |D i|/ P 
+
+> j
+
+|D j |. We assume all K clients participate in every communication round. 
+
+Secure aggregation. Secure aggregation (SA) aims to preserve client updates’ privacy in FL systems [Bonawitz et al., 2017]. SA allows the server to compute the sum of client updates St(W )
+
+over any subset of clients W ⊆ [K] with |W | ≥ Nsa , while keeping each individual update hidden: 
+
+St(W ) = X
+
+> j∈W
+
+∆tj . (2) The threshold Nsa prevents individual updates from being exposed. 1
+
+Client-level attribution problem. An unknown set of clients trained on watermarked documents in violation of license terms, i.e., use the watermarked documents. Given access to SA aggregations 
+
+{St(W )} over admissible subsets W and rounds t ∈ { 1, . . . , T }, the client-level attribution problem is to output a per-client binary decision ri ∈ { 0, 1} for each client i ∈ [K], where ri = 1 iff client i’s dataset Di contains watermarked documents. 
+
+3.2 Watermark Families 
+
+FedAttr requires only a scoring function SCORE (w; P) that returns a larger value when w has been trained on watermarked data, where w is the model under test and P is a set of evaluation prompts. 
+
+> 1SA can be implemented via multi-party computation [Bonawitz et al., 2017] or homomorphic encryption [Zhang et al., 2020]; FedAttr is agnostic to the choice of instantiation.
+
+3KGW watermark [Kirchenbauer et al., 2023]. Before distributing the documents, the data provider rephrases them with a watermarked LLM that partitions the vocabulary into green and red lists via a pseudorandom function and boosts green-token logits by δ during decoding. A model fine-tuned on these documents inherits the green-token bias [Sander et al., 2024]. To detect this bias, a z-test compares the observed green-token ratio against the expected null rate γ = |G|/|V| .
+
+Fictitious knowledge watermark [Cui et al., 2025]. The data provider injects fabricated entity-attribute tuples (e.g., “ Arlo Vance was born in 1987 ”) into the documents. A model fine-tuned on these documents memorizes the fictitious attributes. To detect memorization, each attribute is queried via QA, and per-attribute results are aggregated via Fisher’s method. 
+
+3.3 Threat Model and Considered Scenarios 
+
+FedAttr targets a non-adversarial license-violation setting in which all parties are honest-but-curious: they execute the protocol faithfully but may attempt to infer private information from observation. An unknown subset of clients trains on watermarked documents in violation of license terms. We consider a FL system with three parties: clients {1, . . . , K } with private datasets, a server that coordinates training via the SA interface, and a corpus owner that holds the watermark detection key. During training, the server coordinates FL training with clients and observes only authorized subset sums St(W ) through SA. The corpus owner is not involved. After training, the server sends FedAttr estimates to the corpus owner, who applies the detection key and identifies which clients use the watermarked data. Neither party sees the other’s private inputs: the server never learns the detection key, and the corpus owner never observes individual updates. 
+
+## 4 FedAttr Protocol 
+
+FedAttr preserves the standard FL training and SA protocol, and enables the corpus owner to identify which clients use the watermarked documents. Specifically, FedAttr estimates the update via a paired-subset-difference mechanism motivated and supported by Theorems 1- 2. FedAttr contains three steps: (i) the server estimates each client’s update from paired SA queries and sends the estimate to the corpus owner, (ii) the corpus owner scores each estimate by the watermark detector, and (iii) the corpus owner combines per-round scores across rounds to identify the client via Stouffer method. For each stage, we perform theoretical analyses to illustrate that FedAttr can preserve the utility of client update estimates, demonstrating the effectiveness of our protocol. Algorithm 1 summarizes it. 
+
+4.1 Client-level Update Estimator 
+
+Our goal here is to construct an unbiased estimator of any single client’s update through the SA interface. The challenge is that SA hides clients’ individual updates. The first step is based on a key observation: Two subset SA queries differing only in whether they include a target client i must differ only by client i’s update in expectation. We call it the paired-subset-difference mechanism. As such, we can construct an unbiased estimator of any single client’s update via paired subset SA queries. 
+
+Constructing the unbiased update estimator via paired subset SA queries: Given a target client 
+
+i ∈ [K] and N ∈ [K − 1] , the number of non-target clients per query. 2 We define two sampling families over the non-target clients [K] \ { i}, distinguished by whether they include the target client i:
+
+UNi =  U ⊆ [K] : i ∈ U, |U | = N +1 , VNi =  V ⊆ [K] : i / ∈ V, |V | = N . (3) The server draws M include-target subsets U t
+
+> 1
+
+, . . . , U tM i.i.d. uniformly from UNi and M exclude-target subsets V t 
+
+> 1
+
+, . . . , V tM i.i.d. uniformly from VNi , then forms the round-t update estimator 
+
+b∆ ti := 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+St(U tm) − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+St(V tm). (4) For convenience, we denote the paired queries at round t to target client i by Qti := (U t
+
+> 1
+
+, . . . , U tM ; V t 
+
+> 1
+
+, . . . , V tM ), and all queries in round t by Qt = {Q ti}Ki=1 . For each non-target           
+
+> 2Both subset sizes Nand N+ 1 must satisfy the SA protocol’s authorization threshold Nsa [Bonawitz et al., 2017]; we assume this throughout. In practice Nsa is small relative to K.
+
+4client j̸ = i, the masking coefficient is αtj := 1
+
+> M
+
+PMm=1 1{j ∈ U tm} − 1
+
+> M
+
+PMm=1 1{j ∈ V tm}. Note that the queries process is independent with the global model and client updates. 
+
+Rejecting estimator when privacy condition fails: To ensure that the non-target updates provide sufficient masking noise for the privacy analysis (Section 5), for instance, to exclude the degenerate case where the include and exclude subsets draw identical non-target clients, leaving b∆ ti = ∆ ti, the server checks the following privacy condition before querying the SA interface: 
+
+cti := X 
+
+> j̸=i
+
+(αtj )2 ≥ aN, M t 
+
+> eff ,i
+
+:= (cti)2
+
+P 
+
+> j̸=i
+
+(αtj )4 ≥ aN, and N < K − 1, (5) where a := (1 − ρ)/M and ρ := N/ (K − 1) < 1. If the condition fails, the server resamples the sub-sets. This rejection policy depends only on the subset choice and never on client updates and the global model. We define the acceptance event at round t: Ati := 
+
+n
+
+cti ≥ aN, M t 
+
+> eff ,i
+
+≥ aN, N < (K − 1) 
+
+o
+
+.By the symmetry of the accepted sampling distribution, each non-target client’s updates cancel in expectation. We prove that FedAttr constructs an unbiased estimator (Theorem 1) with variance controlled by the non-target updates (Theorem 2). 
+
+Theorem 1 (Unbiasedness under rejection sampling) . Given any round t and target client i ∈ [K].Under the subset sampling with rejection described above, for any deterministic updates ∆t
+
+> 1
+
+, . . . , ∆tK ,
+
+E b∆ ti ∆ t 
+
+> 1
+
+, . . . , ∆ tK , Ati
+
+ = ∆ ti .
+
+Theorem 2 (Conditional variance under rejection sampling) . Under the same setting as Theorem 1, the conditional covariance satisfies 
+
+Cov   b∆ ti ∆ t 
+
+> 1
+
+, . . . , ∆ tK , Ati
+
+ ⪯ 1
+
+pta,i 
+
+· 2
+
+M · N (K − 1 − N )
+
+K − 2 · Σ t
+
+> −i
+
+, (6) 
+
+where pta,i := Pr Qt (Ati) and Σt 
+
+> −i
+
+:= 1
+
+> K−1
+
+P 
+
+> j̸=i
+
+(∆ tj − ¯∆t
+
+> −i
+
+)(∆ tj − ¯∆t
+
+> −i
+
+)⊤.
+
+Complete proofs are in Appendix B.1-B.2. The rejection check introduces negligible overhead: the threshold aN equals half the expected masking strength and the rejection probability decays as 
+
+e−Ω( N ) nearly identical to unrestricted sampling, so the expected number of redraws 1/p ta,i → 1
+
+exponentially fast. Theorem 2 shows that increasing the query count M reduces estimator noise at the cost of additional SA queries. Detailed analysis of the acceptance rate is in the Appendix E. 
+
+4.2 Differential Scoring 
+
+In this stage, we aim to score the client’s estimate with the watermark detector. The challenge is that the global model wt−1 already carries watermark signals absorbed from previous rounds, causing the detector to assign high scores to all clients, including benign ones. Applying the detector directly to the updates causes 57% FPR (demonstrated in Table 1) even with access to plaintext updates. FedAttr addresses this via differential scoring : it evaluates the detector at both the global model wt−1
+
+and the estimate model wt−1 + b∆ti, and calculate the difference. For each round t and target client i:
+
+z(t) 
+
+> i
+
+:= SCORE (wt−1 + b∆ti; Pt) − SCORE (wt−1; Pt), (7) where Pt is the evaluation prompt set containing watermark pattern at round t. Motivated by analysis in Appendix D, differential scoring can effectively reduce the watermark bias in the global model, and 
+
+z(t) 
+
+> i
+
+measures only the contribution of client i’s estimated update. As demonstrated by Theorems 1–2, 
+
+b∆ti is unbiased for ∆ti, so other clients contribute only to sampling variance. 
+
+4.3 Cross-round Stouffer Combination 
+
+Our goal here is to combine per-round scores across rounds to identify the watermarked client. A single round yields a weak signal because the watermark signal is not completely learned after one round of local fine-tuning; the full watermark signal emerges gradually as training T increases. 5Moreover, the estimator would introduce sampling noise in the first stage (Section 4.1). FedAttr accumulates this growing signal via cross-round Stouffer’s combination [Stouffer, 1949]: 
+
+Zi = 1
+
+√T
+
+> T
+
+X
+
+> t=1
+
+z(t) 
+
+> i
+
+. (8) The corpus owner flags client i as watermarked if Zi > γ for a fixed threshold γ > 0.To state the formal guarantee, we introduce a separation condition on the per-round scores. Let 
+
+Ft−1 = σ(wt−1, Q1, . . . , Qt−1) denote the global model and all queries history up to round t−1.
+
+Assumption 1 (Watermark signal separation condition) . There exist constants m > 0, ϵ ∈ [0 , m ),and ν > 0 such that for each client i ∈ [K] and round t ∈ [T ]: (i) the conditional mean μ(t) 
+
+> i
+
+:= 
+
+E[z(t) 
+
+> i
+
+| F t−1] satisfies μ(t) 
+
+> i
+
+≥ m if client i is watermarked and |μ(t) 
+
+> i
+
+| ≤ ϵ if client i is benign; (ii) the centered increment z(t) 
+
+> i
+
+− μ(t) 
+
+> i
+
+is conditionally ν2-sub-Gaussian given Ft−1.
+
+We verify this assumption empirically in Figure 2(b,c). Then we introduce the following theorem: 
+
+Theorem 3 (Stouffer error) . Under Assumption 1, for any threshold satisfying √T ϵ < γ < √T m ,
+
+Pr  error for client i ≤
+
+exp( −(γ − √T ϵ )2/2ν2) if i is benign ,
+
+exp( −(√T m − γ)2/2ν2) if i is watermarked . (9) The proof is in Appendix B.3. A fixed γ controls both errors: the false-positive bound depends on 
+
+γ − √T ϵ , while the false-negative rate decays exponentially once √T m > γ .
+
+## 5 Privacy Analysis 
+
+We analyze the information leakage of FedAttr’s estimation to the corpus owner with respect to clients’ updates. FedAttr operates entirely through SA, preserving the SA’s privacy guarantee for each model update. However, a residual information-leakage threat remains [Elkordy et al., 2023]: the server obtains a noisy estimation b∆ ti of client i’s actual update ∆ti. We quantify this residual leakage using mutual information (MI), following the framework of Elkordy et al. [2023]. Our analysis extends theirs from the standard SA setting to the subset-query setting where FedAttr performs. 
+
+Leakage metric. Given a target client i within round t, the per-round leakage is 
+
+I(t)priv := I
+
+
+
+∆ti; b∆ ti Qti, Ft−1
+
+
+
+. (10) This quantity measures how much information the estimator b∆ ti reveals about client i’s actual update, beyond what is already known from Ft−1 = σ(wt−1, Q1, . . . , Qt−1) and the round t query Qti.Inspired by Elkordy et al. [2023], we propose two assumptions on the properties of the model to shed light on the leakage of MI during the update process. 
+
+Assumption 2 (Independent under whitening) . Let 
+
+Ztj := ( KtG)−1/2ξtj
+
+be the whitened update. Conditioned on Ft−1, the coordinates of Ztj are independent, centered, and have unit variance. For every coordinate ℓ ∈ [d∗], the scalar distribution Ztj,ℓ has finite fourth moment and finite entropic distance to the Gaussian distribution with the same mean and variance. More explicitly, if Gℓ ∼ N (0 , 1) , then there exist constants M4,ℓ < ∞ and D0,ℓ < ∞, independent of j, such that 
+
+E|Ztj,ℓ |4 ≤ M4,ℓ , D(Ztj,ℓ ∥Gℓ) = h(Gℓ) − h(Ztj,ℓ ) ≤ D0,ℓ .
+
+These are the one-dimensional regularity conditions needed to apply the Bobkov–Chistyakov–Götze entropic Berry–Esseen bound used in the independent-under-whitening case of Elkordy et al. [2023]. 
+
+Assumption 3. The local datasets D1, . . . , DK are sampled i.i.d. from a common distribution, i.e., the local dataset of client j consists of i.i.d. data samples from a distribution Pj , where Pj = P for 
+
+6all j ∈ [K]. This implies that given round t and condition on the Ft−1 = σ(wt−1, Q1, . . . , Qt−1),each client update can decompose as 
+
+∆tj = μt + ξtj ,
+
+where μt is deterministic conditioned on Ft−1, and 
+
+E[ξtj | F t−1] = 0 , Cov( ξtj | F t−1) = KtG.
+
+The {ξtj }Kj=1 are conditionally i.i.d. on a common d∗-dimensional effective subspace, where 
+
+d∗ := rank( KtG).
+
+All determinants and entropies below are taken on this effective subspace. 
+
+Remark 1. Assumption 3 is the same condition as Elkordy et al. [2023, Assumption 1] and ensures the non-target updates form an i.i.d. additive mask whose entropy can be controlled via the entropic CLT. The independence-under-whitening condition (Assumption 2) is satisfied when the stochastic gradient can be approximated by a distribution with independent components or by a multivariate Gaussian [Elkordy et al., 2023, Definition 1]. 
+
+Based on two assumptions, we propose our main privacy results. 
+
+Theorem 4 (Release-level MI leakage) . Suppose Assumptions 2 and 3 hold. If a query Qti satisfies 
+
+cti ≥ aN, M t 
+
+> eff ,i
+
+≥ aN, and N < K − 1
+
+then 
+
+I(∆ ti; b∆ti | Qti, Ft−1) ≤ d∗
+
+2 log 
+
+
+
+1 + 1
+
+aN 
+
+
+
++ Cξ d∗
+
+aN = O
+
+ d∗
+
+N
+
+
+
+.
+
+The bound has two terms: the first captures leakage when the masking noise is exactly Gaussian; the second accounts for non-Gaussianity. Compared with the single-aggregate bound of Elkordy et al. [2023, Theorem 1], whose subset size N −1 is deterministic, FedAttr’s effective subset size aN 
+
+arises from the random subset queries. The detailed proof is deferred to Appendix C. 
+
+## 6 Experiments 
+
+6.1 Experimental Setup Federated Learning Configurations. Consistent with previous work [Ye et al., 2024, Wu et al., 2025], we fine-tune Llama-3.2-3B [Team, 2024] with LoRA on UltraChat200K [Ding et al., 2023], partitioned IID across K=10 clients for T =5 rounds. Default protocol parameters are r=3 wa-termarked clients, subset size N =5 , query count M =5 . We evaluate two aggregation strategies (FedIT [Zhang et al., 2023], FLoRA [Wang et al., 2024]) and two watermark families (KGW [Kirchen-bauer et al., 2023], Fictitious Knowledge [Cui et al., 2025]). 
+
+Baselines. We compare against four baselines. (i) Global model test : which applies the watermark detector to the global model but cannot attribute to clients, (ii) Direct (oracle) : which applies the detector to each client’s plaintext update, violating SA, (iii) FLDetector [Zhang et al., 2022], (iv) FLForensics [Jia et al., 2024]. Notably, (ii)-(iv) require plaintext updates and violate SA. 
+
+Metrics. We report TPR (fraction of watermarked clients correctly flagged) and FPR (fraction of benign clients incorrectly flagged) for each approach. FedAttr flags client i when its FedAttr Stouffer score Zi ≥ 4. We implement each baseline following its default configurations. For each approach under different settings, we report results ( i.e., mean & std ) calculated over three random seeds. We also report the p-value obtained by converting the Stouffer statistic Zi to a one-sided standard normal tail probability, i.e. , pi = 1 − Φ( Zi). In ablation studies, we additionally report ¯zpos and ¯zneg , the mean Stouffer statistics of watermarked and benign clients, to quantify signal strength beyond the binary TPR/FPR. Full hyperparameters, watermark details, and baselines are in Appendix F. 
+
+6.2 Main Results 
+
+Table 1 reports client-level attribution performance for different watermark families and FL algorithms. FedAttr achieves 100% TPR and 0% FPR in all four settings ( p < 10 −6), even completely performing 7Table 1: Client-level watermark attribution performance ( T =5 rounds, γ=4 .0, mean ±std over 3 seeds). FedAttr is the only method that achieves 100% TPR, 0% FPR in four settings through secure aggregation. For FLForensics, † denotes the original implementation using HDBSCAN clustering 4,and ‡ denotes our adaptation using k-means clustering, since HDBSCAN fails at small K=10 .
+
+KGW Fictitious Knowledge FL Algorithm Baseline SA TPR ↑ FPR ↓ p-value TPR ↑ FPR ↓ p-value FedIT Direct (oracle) % 55 .6±19 .3 57 .1±14 .3 < 10 −3 100 .0±0.0 57 .1±14 .3 < 10 −15 
+
+FLDetector % 0.0±0.0 19 .1±8.3 — 0.0±0.0 19 .1±8.3 —FLForensics † % 0.0±0.0 0.0±0.0 — 0.0±0.0 0.0±0.0 —FLForensics ‡ % 33 .3±0.0 23 .8±8.3 — 100 .0±0.0 19 .1±8.3 —
+
+FedAttr (ours) ! 100 .0±0.0 0.0±0.0 < 10 −6 100 .0±0.0 0.0±0.0 < 10 −29 
+
+FLoRA Direct (oracle) % 100 .0±0.0 71 .4±14 .3 < 10 −6 100 .0±0.0 66 .7±8.3 < 10 −20 
+
+FLDetector % 0.0±0.0 14 .3±0.0 — 0.0±0.0 23 .8±8.3 —FLForensics † % 0.0±0.0 0.0±0.0 — 0.0±0.0 0.0±0.0 —FLForensics ‡ % 55 .6±19 .3 23 .8±8.3 — 100 .0±0.0 19 .1±8.3 —
+
+FedAttr (ours) ! 100 .0±0.0 0.0±0.0 < 10 −10 100 .0±0.0 0.0±0.0 < 10 −50 
+
+through SA . No baseline matches this under the same privacy constraint with SA. The direct oracle has plaintext access to each client’s update but incurs FPR ≥ 57%. As the global model has already learned watermark signals from earlier rounds, the detector thus assigns high scores to all clients, including benign ones. Instead, differential scoring applied in FedAttr significantly reduces the watermark bias of the global model, accurately isolating each client’s individual effect to the watermark effectiveness. Moreover, we observe previous forensics approach Jia et al. [2024], Zhang et al. [2022] performs ineffectively in our considered scenarios as the watermark signal cannot be adapted as adversary patterns. As a result, FLDetector achieves 0% TPR, and FLForensics achieves at most 33–100% TPR with 19–24% FPR. Even more, all existing approaches require plaintext access to individual updates, violating SA, and cannot be used for watermark attribution (no p-value). 
+
+6.3 Mechanism Analysis 
+
+We further investigate the effect and soundness for each component within FedAttr . Figure 2 presents the results. Figure 2(a) compares direct and differential scoring at round t=5 . Direct scoring yields 57% FPR because the global model has learned watermark signals from earlier rounds. Differential scoring subtracts the reference score, reducing the accumulated bias: only watermarked clients retain a detectable signal. Figure 2(b) shows the per-round performance of differential scores. The watermark efficacy stays above ˆm=3 .3 in each round, while the benign ones remain within 
+
+±ˆϵ=1 .2, consistent with Assumption 1(i)(Separation). Figure 2(c) shows the empirical distribution of centered residuals z(t) 
+
+> i
+
+− ˆμi, closely aligns with a (sub)Gaussian distribution ( ˆν=0 .85 ), supporting Assumption 1(ii)(Sub-Gaussianity). Figure 2(d) shows the Stouffer statistic computed with varying 
+
+T ′. The watermark efficacy becomes larger than γ=4 when round T ′ ≥ 2 and reaches Zi > 8.0 at 
+
+T ′=5 , yielding a margin of 4.0 above γ. Benign clients remain near zero throughout. Therefore, the Stouffer process amplifies the signal. 
+
+6.4 Ablation Studies 
+
+We study the impact of different parameters ( e.g., the number of watermark clients, subset size , etc )and different configurations ( e.g., LoRA rank, dataset, etc ); Figures 3 (protocol parameters) and 4 (training configurations) summarize the results. 
+
+Protocol parameters (Figure 3). FedAttr achieves consistently 100% TPR and 0% FPR under varying amounts of watermark clients, subsets, and watermark ratio. The watermark efficacy ¯zpos 
+
+exhibits the U-shaped dependence on N consistent with Theorem 2: lowest at N =5 where the variance factor N (K−1−N )/(K−2) peaks, and highest at N =1 where the estimator becomes exact (Figure 3(b)). Query count M ≥ 3 achieves 100% TPR and 0% FPR. M =2 incurs 29% FPR due to 
+
+> 4https://github.com/jyqhahah/FLForensics
+
+80 1 2 3 4 5 6 7 8 9                  
+
+> Client index
+> 0
+> 5
+> 10
+> Score
+> (a) Direct vs Differential
+> Direct (WM)
+> Diff. (WM)
+> Direct (Benign)
+> Diff. (Benign)
+> 12345
+> Round t
+> −4
+> −2
+> 0
+> 2
+> 4
+> 6
+> Score  z(t)
+> i
+> ^m= 3.3
+> ^²= 1.2
+> (b) Separation (Asm. i)
+> WM
+> Benign
+> −2 02
+> Residual ´(t)
+> i
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> Density
+> ^º= 0.85
+> (c) Sub-Gauss. (Asm. ii)
+> Empirical
+> N(0 ;^º2)
+> 12345
+> Rounds used T0
+> −2.5
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> 10.0
+> Stouffer  Zi
+> (d) Stouffer cumulative
+> WM
+> Benign
+
+Figure 2: The effect for each protocol component. (a) Differential scoring removes the accumulated bias. (b) Per-round watermarked mean stays above ˆm=3 .3, benign mean within ±ˆϵ=1 .2, validating Assumption 1(i). (c) Centered residuals z(t) 
+
+> i
+
+− ˆμi match a Gaussian ( ˆν=0 .85 ), supporting Assump-tion 1(ii). (d) Stouffer statistic crosses γ=4 from round 2. At round 5, the statistic achieves margin 
+
+Zi − γ = 4 .0.1 3 5                  
+
+> WM clients r
+> 0
+> 5
+> 10
+> 15
+> 20
+> Mean Stouffer score  (a) WM clients r
+> ¹zpos
+> ¹zneg
+> 124568
+> Subset size N
+> 0
+> 5
+> 10
+> 15
+> 20
+> (b) Subset size N
+> 23510 20
+> Query count M
+> 0
+> 5
+> 10
+> 15
+> 20
+> FPR=29%
+> (c) Query count M
+> 510 20 30
+> Watermark ratio (%)
+> 0
+> 5
+> 10
+> 15
+> 20
+> (d) Watermark ratio
+
+Figure 3: Protocol parameter sensitivity. FedAttr achieves 100% TPR / 0% FPR across all tested values except M =2 , which incurs 29% FPR, and shows robustness under protocol parameter selection. 
+
+(a) Number of watermarked clients r. (b) Subset size N : the U-shaped curve validates Theorem 2. (c) Query count M . (d) Watermark ratio: The signal scales roughly linearly with watermark ratio. high estimator noise (Figure 3(c)). The watermark efficacy scales roughly linearly w.r.t. watermark ratio, consistent with radioactivity theory [Sander et al., 2024]. 
+
+Robustness (Figure 4). FedAttr performs robustly under different configurations of LoRA ranks, evaluated models, and datasets, consistently achieving 100% TPR and 0% FPR. Under severe non-IID heterogeneity ( α=0 .1), TPR degrades to 67% while FPR remains 0%; at α=0 .05 , FPR rises to 11%. This degradation is consistent with increased estimator variance when client updates diverge, and can be mitigated by increasing T (Table 21). The detailed analyses are included in the Appendix. 
+
+6.5 Scalability and Overhead Scalability. We scale K from 10 to 100. Table 17 shows that watermark efficacy ¯zpos decreases from 10.12 to 7.83 as K increases but remains higher above threshold γ (100% TPR, 0% FPR in all cases). FedAttr also performs effectively in a partial-participation setting (Table 20 in Appendix). 
+
+Overhead. FedAttr’s overhead consists of SA queries and watermark scoring. In our main experiment, FedAttr issues 2M KT =500 SA queries, adding 5 minutes (1.0%) to the 8.5-hour FL training time; watermark scoring adds 27 minutes (5.3%), for a total overhead of 6.3%. Both costs scale linearly in 
+
+K. Since all computation runs on the server, it can be overlapped with clients’ local training in the next round, effectively hiding the latency. Analysis of scalability and overhead is in Appendix H. 
+
+## 7 Conclusion 
+
+We introduced FedAttr, a client-level attribution protocol for federated LLM fine-tuning that identifies clients who trained on watermarked documents while preserving SA privacy. FedAttr combines unbiased update estimation from SA queries, differential scoring, and cross-round Stouffer aggrega-tion. We provided theoretical guarantees on the estimator’s unbiasedness and variance, and bounded mutual information leakage of O(d∗/N ) per round. Empirically, FedAttr achieves 100% TPR, 0% FPR, outperforming all baselines while being the only method that preserves SA privacy. 916 64 128  
+
+> LoRA rank
+> 0
+> 5
+> 10
+> 15
+> 20
+> Mean Stouffer score  (a) LoRA rank
+> ¹zpos
+> ¹zneg
+> IID
+> ®=0.5
+> ®=0.1
+> ®=0.05
+> Data partition
+> 0
+> 5
+> 10
+> 15
+> 20
+> TPR=67% TPR=67%
+> FPR=11%
+> (b) Non-IID
+> Llama-1B
+> Llama-3B
+> Qwen-3B
+> Base model
+> 0
+> 5
+> 10
+> 15
+> 20
+> (c) Model
+> UltraChat
+> Alpaca
+> OpenOrca
+> Dataset
+> 0
+> 5
+> 10
+> 15
+> 20
+> (d) Dataset
+
+Figure 4: Robustness to training configurations. FedAttr achieves 100% TPR and 0% FPR across LoRA ranks, base models, and datasets. Attribution accuracy decreases moderately under severe non-IID partitions ( α ≤ 0.1). (a) LoRA rank. (b) Non-IID heterogeneity. (smaller Dirichlet α means more heterogeneous) (c) Base model. (d) Training dataset. 
+
+## References 
+
+Sergey Bobkov, G. Chistyakov, and Friedrich Goetze. Berry-esseen bounds in the entropic central limit theorem. Probability Theory and Related Fields , 159, 05 2011. doi: 10.1007/s00440-013-0510-3. Kallista A. Bonawitz, Vladimir Ivanov, Ben Kreuter, Antonio Marcedone, H. Brendan McMahan, Sarvar Patel, Daniel Ramage, Aaron Segal, and Karn Seth. Practical secure aggregation for privacy preserving machine learning. IACR Cryptol. ePrint Arch. , 2017:281, 2017. URL http: //eprint.iacr.org/2017/281 .W.G. Cochran. Sampling Techniques . Wiley publication in applied statistics. Wiley, 1977. ISBN 9788126515240. URL https://books.google.com/books?id=xbNn41DUrNwC .Xinyue Cui, Johnny Tian-Zheng Wei, Swabha Swayamdipta, and Robin Jia. Robust data watermarking in language models by injecting fictitious knowledge. In Wanxiang Che, Joyce Nabende, Ekaterina Shutova, and Mohammad Taher Pilehvar, editors, Findings of the Association for Computational Linguistics, ACL 2025, Vienna, Austria, July 27 - August 1, 2025 , volume ACL 2025 of Findings of ACL , pages 14292–14306. Association for Computational Linguistics, 2025. URL https: //aclanthology.org/2025.findings-acl.736/ .Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Shengding Hu, Zhiyuan Liu, Maosong Sun, and Bowen Zhou. Enhancing chat language models by scaling high-quality instructional conversations. In Houda Bouamor, Juan Pino, and Kalika Bali, editors, Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, EMNLP 2023, Singapore, December 6-10, 2023 , pages 3029–3051. Association for Computational Linguistics, 2023. doi: 10.18653/V1/2023. EMNLP-MAIN.183. URL https://doi.org/10.18653/v1/2023.emnlp-main.183 .Ahmed Roushdy Elkordy, Jiang Zhang, Yahya H. Ezzeldin, Konstantinos Psounis, and Salman Avestimehr. How much privacy does federated learning with secure aggregation guarantee? Proc. Priv. Enhancing Technol. , 2023(1):510–526, 2023. doi: 10.56553/POPETS-2023-0030. URL 
+
+https://doi.org/10.56553/popets-2023-0030 .Tao Fan, Yan Kang, Guoqiang Ma, Weijing Chen, Wenbin Wei, Lixin Fan, and Qiang Yang. FATE-LLM: A industrial grade federated learning framework for large language models. CoRR ,abs/2310.10049, 2023. doi: 10.48550/ARXIV.2310.10049. URL https://doi.org/10.48550/ arXiv.2310.10049 .Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. Lora: Low-rank adaptation of large language models. In The Tenth Interna-tional Conference on Learning Representations, ICLR 2022, Virtual Event, April 25-29, 2022 .OpenReview.net, 2022. URL https://openreview.net/forum?id=nZeVKeeFYf9 .Yuqi Jia, Minghong Fang, Hongbin Liu, Jinghuai Zhang, and Neil Zhenqiang Gong. Tracing back the malicious clients in poisoning attacks to federated learning. arXiv preprint arXiv:2407.07221 ,2024. John Kirchenbauer, Jonas Geiping, Yuxin Wen, Jonathan Katz, Ian Miers, and Tom Goldstein. A watermark for large language models. In Andreas Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett, editors, International Conference 
+
+10 on Machine Learning, ICML 2023, 23-29 July 2023, Honolulu, Hawaii, USA , volume 202 of 
+
+Proceedings of Machine Learning Research , pages 17061–17084. PMLR, 2023. URL https: //proceedings.mlr.press/v202/kirchenbauer23a.html .Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, and Blaise Agüera y Ar-cas. Communication-efficient learning of deep networks from decentralized data. In Aarti Singh and Xiaojin (Jerry) Zhu, editors, Proceedings of the 20th International Conference on Artificial Intelligence and Statistics, AISTATS 2017, 20-22 April 2017, Fort Lauderdale, FL, USA , Proceedings of Machine Learning Research, pages 1273–1282. PMLR, 2017. URL 
+
+http://proceedings.mlr.press/v54/mcmahan17a.html .Qwen, :, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Li, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report, 2025. URL 
+
+https://arxiv.org/abs/2412.15115 .Alexandre Sablayrolles, Matthijs Douze, Cordelia Schmid, and Hervé Jégou. Radioactive data: tracing through training. In Proceedings of the 37th International Conference on Machine Learning, ICML 2020, 13-18 July 2020, Virtual Event , Proceedings of Machine Learning Research, pages 8326– 8335. PMLR, 2020. URL http://proceedings.mlr.press/v119/sablayrolles20a.html .Tom Sander, Pierre Fernandez, Alain Durmus, Matthijs Douze, and Teddy Furon. Water-marking makes language models radioactive. In Amir Globersons, Lester Mackey, Danielle Belgrave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng Zhang, editors, Ad-vances in Neural Information Processing Systems 38: Annual Conference on Neural In-formation Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December 10 - 15, 2024 , 2024. URL http://papers.nips.cc/paper_files/paper/2024/hash/ 2567c95fd41459a98a73ba893775d22a-Abstract-Conference.html .S.A. Stouffer. The American Soldier: Adjustment During Army Life . Studies in social psychology in World War II. Princeton University Press, 1949. URL https://books.google.com/books? id=hQiBwgEACAAJ .Llama Team. The llama 3 herd of models. CoRR , abs/2407.21783, 2024. doi: 10.48550/ARXIV. 2407.21783. URL https://doi.org/10.48550/arXiv.2407.21783 .Ziyao Wang, Zheyu Shen, Yexiao He, Guoheng Sun, Hongyi Wang, Lingjuan Lyu, and Ang Li. Flora: Federated fine-tuning large language models with heterogeneous low-rank adaptations. In Amir Globersons, Lester Mackey, Danielle Belgrave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng Zhang, editors, Advances in Neural Information Processing Systems 38: Annual Conference on Neural Information Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December 10 - 15, 2024 , 2024. URL http://papers.nips.cc/paper_files/ paper/2024/hash/28312c9491d60ed0c77f7fff4ad86dd1-Abstract-Conference.html .Yebo Wu, Chunlin Tian, Jingguang Li, He Sun, Kahou Tam, Zhijiang Guo, Li Li, and Chengzhong Xu. A survey on federated fine-tuning of large language models. ArXiv , abs/2503.12016, 2025. URL https://api.semanticscholar.org/CorpusID:277065732 .Rui Ye, Wenhao Wang, Jingyi Chai, Dihan Li, Zexi Li, Yinda Xu, Yaxin Du, Yanfeng Wang, and Siheng Chen. Openfedllm: Training large language models on decentralized private data via federated learning. In Ricardo Baeza-Yates and Francesco Bonchi, editors, Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining, KDD 2024, Barcelona, Spain, August 25-29, 2024 , pages 6137–6147. ACM, 2024. doi: 10.1145/3637528.3671582. URL 
+
+https://doi.org/10.1145/3637528.3671582 .Chengliang Zhang, Suyi Li, Junzhe Xia, Wei Wang, Feng Yan, and Yang Liu. Batchcrypt: Efficient homomorphic encryption for cross-silo federated learning. In Ada Gavrilovska and Erez Zadok, editors, Proceedings of the 2020 USENIX Annual Technical Conference, USENIX ATC 2020, July 15-17, 2020 , pages 493–506. USENIX Association, 2020. URL https://www.usenix.org/ conference/atc20/presentation/zhang-chengliang .11 Jianyi Zhang, Saeed Vahidian, Martin Kuo, Chunyuan Li, Ruiyi Zhang, Guoyin Wang, and Yiran Chen. Towards building the federated GPT: federated instruction tuning. CoRR , abs/2305.05644, 2023. doi: 10.48550/ARXIV.2305.05644. URL https://doi.org/10.48550/arXiv.2305.05644 .Zaixi Zhang, Xiaoyu Cao, Jinyuan Jia, and Neil Zhenqiang Gong. Fldetector: Defending federated learning against model poisoning attacks via detecting malicious clients. In Aidong Zhang and Huzefa Rangwala, editors, KDD ’22: The 28th ACM SIGKDD Conference on Knowledge Discovery and Data Mining, Washington, DC, USA, August 14 - 18, 2022 , pages 2545–2555. ACM, 2022. doi: 10.1145/3534678.3539231. URL https://doi.org/10.1145/3534678.3539231 .12 A Algorithm 
+
+Algorithm 1 presents the FedAttr protocol. At each communication round t, clients perform standard local training and submit updates through secure aggregation (Lines 1–3). For each target client 
+
+i, the server repeatedly samples paired include/exclude subsets and checks the privacy condition (Eq. (5) ) via rejection sampling (Lines 5–10). Upon acceptance, the server queries the SA oracle to form the unbiased update estimator b∆ ti (Line 11) and forwards it to the corpus owner, who computes the differential score z(t) 
+
+> i
+
+(Lines 12–13). After all T rounds, the corpus owner aggregates per-round scores via Stouffer’s method and applies the threshold γ to produce the final attribution decision (Lines 15–21). 
+
+Algorithm 1 FedAttr: Client-level Attribution through Secure Aggregation 
+
+Require: Clients [K], communication rounds T , subset size N , query count M , threshold γ, SA oracle St(·), watermark detector S CORE (· ; ·), prompt sets {P t}Tt=1 
+
+Ensure: Attribution decision for each client i ∈ [K] 
+
+> 1:
+
+for t = 1 , . . . , T do  
+
+> 2:
+
+Each client i computes local update ∆ti and submits to the SA oracle  
+
+> 3:
+
+Server updates global model: wt ← wt−1 + PKi=1 pi∆ti 
+
+> 4:
+
+for each target client i ∈ [K] do  
+
+> 5:
+
+repeat  
+
+> 6:
+
+Draw U t
+
+> 1
+
+, . . . , U tM
+
+> i.i.d.
+
+∼ Unif( UNi ), Include-target, |U tm| = N +1  
+
+> 7:
+
+Draw V t 
+
+> 1
+
+, . . . , V tM
+
+> i.i.d.
+
+∼ Unif( VNi ), Exclude-target, |V tm| = N 
+
+> 8:
+
+Compute αtj ← 1
+
+> M
+
+P 
+
+> m
+
+1{j ∈ U tm} − 1
+
+> M
+
+P 
+
+> m
+
+1{j ∈ V tm} for all j̸ = i 
+
+> 9:
+
+Compute cti ← P 
+
+> j̸=i
+
+(αtj )2, M t 
+
+> eff ,i
+
+← (cti)2 P  
+
+> j̸=i
+
+(αtj )4 
+
+> 10:
+
+until cti ≥ aN and M t 
+
+> eff ,i
+
+≥ aN and N < K −1 (Eq. (5))  
+
+> 11:
+
+Query SA and compute: b∆ ti ← 1
+
+> M
+
+PMm=1 St(U tm) − 1
+
+> M
+
+PMm=1 St(V tm) 
+
+> 12:
+
+Server sends b∆ ti to corpus owner  
+
+> 13:
+
+z(t) 
+
+> i
+
+← SCORE 
+
+ wt−1 + b∆ ti ; Pt
+
+ − SCORE 
+
+ wt−1; Pt
+
+ 
+
+> 14:
+
+end for  
+
+> 15:
+
+end for  
+
+> 16:
+
+for each client i ∈ [K] do  
+
+> 17:
+
+Zi ← 1√T
+
+PTt=1 z(t) 
+
+> i
+> 18:
+
+if Zi > γ then  
+
+> 19:
+
+Flag client i as watermarked  
+
+> 20:
+
+else  
+
+> 21:
+
+Label client i as benign  
+
+> 22:
+
+end if  
+
+> 23:
+
+end for 
+
+## B Proofs for Attribution Protocol 
+
+B.1 Proof of Theorem 1 (Unbiasedness under rejection sampling) 
+
+Proof. Substituting St(W ) = P 
+
+> j∈W
+
+∆tj into (4) gives 
+
+b∆ ti = 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+∆ti + X 
+
+> j∈Utm\{ i}
+
+∆tj
+
+ − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+X 
+
+> j∈Vtm
+
+∆tj .
+
+Since i ∈ U tm for all m and i / ∈ V tm for all m, this can be written as 
+
+b∆ ti = ∆ ti + X 
+
+> j̸=i
+
+αtj ∆tj ,
+
+13 where 
+
+αtj = 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ U tm \ { i}} − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ V tm}, j̸ = i. 
+
+Thus it suffices to show 
+
+E[αtj | A ti] = 0 for every j̸ = i, 
+
+where Ati denotes the acceptance event 
+
+Ati = {ct ≥ aN, M t 
+
+> eff ,i
+
+≥ aN }.
+
+For each m, define the non-target part of the include-target query by 
+
+Xtm := U tm \ { i},
+
+and define 
+
+Y tm := V tm.
+
+By construction, both Xtm and Y tm are N -subsets of [K] \ { i}. Moreover, the proposal distribution samples 
+
+Xt
+
+> 1
+
+, . . . , X tM , Y t 
+
+> 1
+
+, . . . , Y tM
+
+i.i.d. uniformly from the same family of N -subsets of [K] \ { i}.Let 
+
+Qt = ( Xt
+
+> 1
+
+, . . . , X tM ; Y t 
+
+> 1
+
+, . . . , Y tM )
+
+denote the non-target query design. Define the swap map T by 
+
+T (Qt) = ( Y t 
+
+> 1
+
+, . . . , Y tM ; Xt
+
+> 1
+
+, . . . , X tM ).
+
+Equivalently, after applying T , the corresponding include-target and exclude-target subsets are reconstructed as 
+
+(U tm)′ = {i} ∪ Y tm, (V tm)′ = Xtm.
+
+This map is well-defined because Xtm and Y tm have the same cardinality and both lie in [K] \ { i}.It is also a bijection. Since the proposal distribution samples the X’s and Y ’s i.i.d. from the same distribution, the proposal distribution is invariant under T .For every non-target client j̸ = i,
+
+αtj (T (Qt)) = 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ Y tm} − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ Xtm} = −αtj (Qt).
+
+Therefore the swap map sends the coefficient vector 
+
+αt = ( αtj )j̸ =i
+
+to −αt.The acceptance event A depends on the query design only through 
+
+ct = X 
+
+> j̸=i
+
+(αtj )2
+
+and 
+
+M t 
+
+> eff
+
+= (ct)2
+
+P 
+
+> j̸=i
+
+(αtj )4 .
+
+Both quantities are invariant under the sign change αt 7 → − αt. Hence 
+
+1{A ti(Qt)} = 1{A ti(T (Qt)) }.
+
+Since T preserves the proposal distribution and preserves the acceptance event, the accepted query design is also invariant under T :
+
+Qt | A tid
+
+= T (Qt) | A ti.
+
+14 Consequently, for every j̸ = i,
+
+E[αtj | A ti] = E[αtj (T (Qt)) | A ti] = −E[αtj | A ti],
+
+which implies 
+
+E[αtj | A ti] = 0 .
+
+Finally, the query design Qt is sampled independently of the client updates ∆t
+
+> 1
+
+, . . . , ∆tK and the current global model, and the acceptance event Ati is a function only of the query design. Therefore the same identity holds after conditioning on the realized updates: 
+
+E[αtj | ∆t
+
+> 1
+
+, . . . , ∆tK , Ati] = 0 , j̸ = i. 
+
+Thus 
+
+E
+
+h b∆ ti | ∆t
+
+> 1
+
+, . . . , ∆tK , Ati
+
+i
+
+= ∆ ti + X 
+
+> j̸=i
+
+E[αtj | ∆t
+
+> 1
+
+, . . . , ∆tK , Ati]∆ tj
+
+= ∆ ti.
+
+This proves the unbiasedness of the accepted estimator. 
+
+B.2 Proof of Theorem 2 (Conditional variance under rejection sampling) 
+
+Proof. Let ζ(Qt) := P  
+
+> j̸=i
+
+αtj ∆tj = b∆ ti − ∆ti. By Theorem 1, E[ζ | A ti, ∆t
+
+> 1
+
+, . . . , ∆tK ] = 0 , so the accepted covariance is 
+
+Cov( b∆ ti | A ti, ∆t
+
+> 1
+
+, . . . , ∆tK ) = E[ζζ ⊤ | A ti] = 1
+
+pa
+
+E[1A ζζ ⊤] ⪯ 1
+
+pa
+
+E[ζζ ⊤],
+
+where pta,i = Pr( Ati). Each non-target part U tm \ { i} is a simple random sample of size N
+
+drawn without replacement from the K − 1 non-target clients. By the finite-population correc-tion formula [Cochran, 1977], each include-target sum Am := P  
+
+> j∈Utm\{ i}
+
+∆tj has covariance 
+
+Cov( Am) = N (K − 1 − N )/(K − 2) Σ t
+
+> −i
+
+, and likewise for each exclude-target sum. The 2M sums are mutually independent, so 
+
+E[ζζ ⊤] = 2
+
+M · N (K − 1 − N )
+
+K − 2 Σt
+
+> −i
+
+.
+
+Combining gives 
+
+Cov( b∆ ti | A ti, ∆t
+
+> 1
+
+, . . . , ∆tK ) ⪯ 1
+
+pa
+
+· 2
+
+M · N (K − 1 − N )
+
+K − 2 Σt
+
+> −i
+
+.
+
+B.3 Proof of Theorem 3 (Stouffer concentration) 
+
+Proof. Under Assumption 1, write z(t) 
+
+> i
+
+= μ(t) 
+
+> i
+
++ η(t) 
+
+> i
+
+where η(t) 
+
+> i
+
+is conditionally ν2-sub-Gaussian given Ft−1. Define ST := PTt=1 η(t) 
+
+> i
+
+. By the conditional sub-Gaussian tower property, 
+
+E[exp( λS T )] ≤ exp( T λ 2ν2/2) . Hence Wi := T −1/2ST is ν2-sub-Gaussian. 
+
+Clean client. Since |μ(t) 
+
+> i
+
+| ≤ ϵ, Zi ≤ √T ϵ + Wi, so Pr( Zi ≥ γ) ≤ exp( −(γ − √T ϵ )2/(2 ν2)) 
+
+for γ > √T ϵ .
+
+Watermarked client. Since μ(t) 
+
+> i
+
+≥ m, Zi ≥ √T m + Wi, so Pr( Zi ≤ γ) ≤ exp( −(√T m −
+
+γ)2/(2 ν2)) for √T m > γ .
+
+## C Proofs for Privacy Analysis 
+
+This section adapts the proof strategy of Elkordy et al. [2023] to the client-level update estimates produced by FedAttr. We use the same data IID assumption and distributional assumptions as the independent-under-whitening case in Elkordy et al. [2023]. The difference of proof structure is that the equal-weight secure aggregation is replaced by a query-dependent estimation. Accordingly, the 15 number of masking users in Elkordy et al. [2023] is replaced by the effective masking size M t
+
+> eff ,i
+
+,where 
+
+M t 
+
+> eff ,i
+
+= (cti)2
+
+sti
+
+, cti := X 
+
+> j̸=i
+
+(αtj )2, sti := X 
+
+> j̸=i
+
+(αtj )4.
+
+The proof follows the same high-level route as the independent-under-whitening case of Elkordy et al. [2023] in 4 stages: 1. Decompose the mutual information into a difference of two entropies. 2. Upper-bound the entropy of signal plus noise by Gaussian maximum entropy. 3. Lower-bound the entropy of the masking noise using the Bobkov–Chistyakov–Götze entropic Berry–Esseen bound Bobkov et al. [2011]. 4. Subtract the two bounds. 
+
+C.1 FedAttr Notation 
+
+For convenience, we first list the notations in FedAttr .Given a communication round t and a target client i. FedAttr protocol queries are 
+
+Qti = ( U t
+
+> 1
+
+, . . . , U tM ; V t 
+
+> 1
+
+, . . . , V tM ),
+
+where each include subset U tm contains i, and each exclude subset V tm does not contain i. Given a secure aggregate St(W ) = P 
+
+> j∈W
+
+∆tj , the released estimate for target i is 
+
+b∆ti := 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+St(U tm) − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+St(V tm).
+
+Expanding this linear combination gives 
+
+b∆ti = ∆ ti + X 
+
+> j̸=i
+
+αtj (Qti)∆ tj , (11) where 
+
+αtj (Qti) := 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ U tm} − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ V tm}.
+
+After conditioning on Qti, the coefficients αtj are deterministic. For convenience, given Qti, we notate 
+
+αtj := αtj (Qti). Therefore, 
+
+b∆ti = ∆ ti + X 
+
+> j̸=i
+
+αtj ∆tj , (12) where 
+
+αtj := 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ U tm} − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ V tm}.
+
+Definition 1. Given queries Qti, define 
+
+cti := X 
+
+> j̸=i
+
+ αtj
+
+2,sti := X 
+
+> j̸=i
+
+ αtj
+
+4.
+
+When cti > 0, define 
+
+M t 
+
+> eff ,i
+
+:= 
+
+ cti
+
+2
+
+sti
+
+.
+
+16 Equivalently, if 
+
+βtj := αtj
+
+pcti
+
+,
+
+then X 
+
+> j̸=i
+
+(βtj )2 = 1 , M t 
+
+> eff ,i
+
+= 1
+
+P 
+
+> j̸=i
+
+(βtj )4 .
+
+C.2 Stage 1: Two Entropies Decomposition 
+
+In stage 1, we decompose the mutual information into the difference of two entropies. 
+
+Lemma 5 (FedAttr estimate decomposition) . Under Assumption 3, conditioned on (Qti, Ft−1), the FedAttr estimate can be written as 
+
+b∆ti =
+
+1 + X 
+
+> j̸=i
+
+αtj
+
+ μt + ξti + ηti ,
+
+where 
+
+ηti := X 
+
+> j̸=i
+
+αtj ξtj .
+
+Moreover, ξti is conditionally independent of ηti given (Qti, Ft−1). Consequently, 
+
+I(∆ ti; b∆ti | Qti, Ft−1) = h(ξti + ηti | Qti, Ft−1) − h(ηti | Qti, Ft−1). (13) 
+
+Proof. Substitute ∆tj = μt + ξtj into (12): 
+
+b∆ti = μt + ξti + X 
+
+> j̸=i
+
+αtj (μt + ξtj )=
+
+1 + X 
+
+> j̸=i
+
+αtj
+
+ μt + ξti + X 
+
+> j̸=i
+
+αtj ξtj .
+
+This proves the stated decomposition. Conditioned on (Qti, Ft−1), the coefficients αtj are deterministic. The vector ξti is client i’s centered update, while 
+
+ηti = X 
+
+> j̸=i
+
+αtj ξtj
+
+is a deterministic function of the centered updates of the non-target clients {ξtj : j̸ = i}. By Assumption 3, the centered updates {ξtj }Kj=1 are conditionally independent given Ft−1. Therefore, 
+
+ξti is conditionally independent of the collection {ξtj : j̸ = i}, and hence is conditionally independent of any deterministic function of the collection {ξtj : j̸ = i}, including ηti .The deterministic shift 1 + X 
+
+> j̸=i
+
+αtj
+
+ μt
+
+does not affect mutual information. Since ∆ti = μt + ξti , we have 
+
+I(∆ ti; b∆ti | Qti, Ft−1) = I(ξti ; ξti + ηti | Qti, Ft−1).
+
+For independent X and Z,
+
+I(X; X + Z) = h(X + Z) − h(X + Z | X) = h(X + Z) − h(Z).
+
+Applying this identity with X = ξti and Z = ηti gives (13). 17 C.3 Stage 2: Upper Bound the h(ξti + ηti | Qti, Ft−1) by Gaussian Maximum Entropy. 
+
+In this stage, we use the Gaussian maximum entropy to upper-bound the h(ξti + ηti | Qti, Ft−1) (first term). 
+
+Lemma 6 (Gaussian maximum-entropy upper bound) . Under Assumption 3, given queries Qti with 
+
+cti := P 
+
+> j̸=i
+
+ αtj
+
+2 > 0,
+
+h(ξti + ηti | Qti, Ft−1) ≤ 12 log det  2πe (1 + cti)KtG
+
+.
+
+Proof. Because ξti is conditionally independent of ηti , covariance adds: 
+
+Cov( ξti + ηti | Qti, Ft−1) = Cov( ξti | F t−1) + Cov( ηti | Qti, Ft−1).
+
+The first term equals KtG. For the second term, 
+
+Cov( ηti | Qti, Ft−1) = Cov 
+
+X 
+
+> j̸=i
+
+αtj ξtj | Qti, Ft−1
+
+
+
+= X 
+
+> j̸=i
+
+(αtj )2KtG = ctiKtG,
+
+where the cross-covariances vanish because of conditional independence. Therefore, 
+
+Cov( ξti + ηti | Qti, Ft−1) = (1 + cti)KtG.
+
+Among all distributions with the same covariance matrix Σ, the Gaussian has the largest differential entropy, equal to 12 log det(2 πe Σ) . Taking Σ = (1 + cti)KtG proves the claim. 
+
+C.4 Step 3: Lower Bound the h(ηti | Qti, Ft−1) by Entropic Berry–Esseen Bound 
+
+In this stage, we lower bound the h(ηti | Qti, Ft−1) by entropic Berry–Esseen bound. We first introduce a lemma to show scalar weighted entropic Berry–Esseen bound. 
+
+Lemma 7 (Scalar weighted entropic Berry–Esseen bound) . Let X1, . . . , X m be independent centered scalar random variables. Omit any zero-variance summands, and assume the remaining summands have positive variances, finite fourth moments, densities, and finite differential entropies. Let 
+
+Vm := 
+
+> m
+
+X
+
+> r=1
+
+Var( Xr ),
+
+and assume Vm = 1 . For each r, let Zr be a Gaussian random variable with the same mean and variance as Xr . Assume the Bobkov–Chistyakov–Götze entropic Berry–Esseen regularity holds uniformly; in particular, assume there exists D0 < ∞ such that 
+
+D(Xr ∥Zr ) = h(Zr ) − h(Xr ) ≤ D0 for every r. 
+
+Let G ∼ N (0 , 1) . Then there is a constant CBCG , depending only on the corresponding BCG regularity constants, such that 
+
+D
+
+> m
+
+X
+
+> r=1
+
+Xr G
+
+!
+
+≤ CBCG 
+
+> m
+
+X
+
+> r=1
+
+E|Xr |4.
+
+Equivalently, 
+
+h
+
+> m
+
+X
+
+> r=1
+
+Xr
+
+!
+
+≥ 12 log(2 πe ) − CBCG 
+
+> m
+
+X
+
+> r=1
+
+E|Xr |4.
+
+This lemma does not introduce a FedAttr-specific modeling assumption. The condition 
+
+D(Xr ∥Zr ) = h(Zr ) − h(Xr ) ≤ D0
+
+is part of the regularity needed by the Bobkov–Chistyakov–Götze entropic Berry–Esseen theorem. In the independent-under-whitening case, Elkordy et al. [2023] use this entropic Berry–Esseen tool to lower-bound the entropy of an equal-weight normalized aggregate; the corresponding regularity is absorbed into their constant. We state it explicitly because FedAttr applies the same tool to query-dependent weighted summands, which are independent but not necessarily identically distributed. 18 Proof. This is the one-dimensional entropic Berry–Esseen theorem of Bobkov–Chistyakov–Götze for independent, not necessarily identically distributed, summands. In their notation, for 
+
+Sm := 
+
+Pmr=1 Xr
+
+√Vm
+
+,
+
+the entropic distance from Sm to the standard Gaussian is bounded by a constant depending on the uniform entropic-distance parameter, times the Lyapunov fourth-moment ratio 
+
+Pmr=1 E|Xr |4
+
+V 2
+
+> m
+
+.
+
+Since Vm = 1 , this gives 
+
+D
+
+> m
+
+X
+
+> r=1
+
+Xr G
+
+!
+
+≤ CBCG 
+
+> m
+
+X
+
+> r=1
+
+E|Xr |4.
+
+It remains only to translate the relative-entropy statement into an entropy lower bound. Let 
+
+S := 
+
+> m
+
+X
+
+> r=1
+
+Xr .
+
+Then ES = 0 and Var( S) = 1 . The density of G ∼ N (0 , 1) is 
+
+ϕ(x) = 1
+
+√2π exp( −x2/2) .
+
+Thus 
+
+D(S∥G) = 
+
+Z
+
+pS (x) log pS (x)
+
+ϕ(x) dx 
+
+= −h(S) − E[log ϕ(S)] .
+
+Since 
+
+log ϕ(x) = − 12 log(2 π) − x2
+
+2 ,
+
+and ES2 = 1 ,
+
+E[log ϕ(S)] = − 12 log(2 π) − 12 .
+
+Therefore 
+
+D(S∥G) = 12 log(2 πe ) − h(S).
+
+Rearranging the BCG bound yields the claimed entropy lower bound. 
+
+Lemma 8 (Coordinate tensorization) . Condition on G := ( Qti, Ft−1), and suppose Assumption 2 holds. Let 
+
+Stβ := X 
+
+> j̸=i
+
+βtj Ztj , X 
+
+> j̸=i
+
+(βtj )2 = 1 .
+
+Then the coordinates of Stβ are conditionally independent given G, and 
+
+h(Stβ | G ) = 
+
+> d∗
+
+X
+
+> ℓ=1
+
+h(Stβ,ℓ | G ),
+
+where 
+
+Stβ,ℓ := X 
+
+> j̸=i
+
+βtj Ztj,ℓ .
+
+Proof. After conditioning on G, the coefficients βtj are deterministic. By Assumption 2, each vector 
+
+Ztj = ( Ztj, 1, . . . , Z tj,d ∗ ) has independent coordinates, and by Assumption 3, the vectors Ztj are independent across j. Hence the full scalar collection 
+
+{Ztj,ℓ : j̸ = i, ℓ ∈ [d∗]}
+
+19 has a joint density that factorizes as 
+
+Y 
+
+> j̸=id∗
+
+Y
+
+> ℓ=1
+
+fℓ(zj,ℓ ),
+
+where the same coordinate density fℓ is used across clients because the fluctuations are conditionally i.i.d. For a fixed coordinate ℓ, the random variable 
+
+Stβ,ℓ = X 
+
+> j̸=i
+
+βtj Ztj,ℓ 
+
+depends only on the collection {Ztj,ℓ : j̸ = i}. The collections corresponding to different coor-dinates are independent because the joint density factorizes over ℓ. Therefore Stβ, 1, . . . , S tβ,d ∗ are conditionally independent. If pℓ is the density of Stβ,ℓ , the joint density of Stβ is 
+
+p(s1, . . . , s d∗ ) = 
+
+> d∗
+
+Y
+
+> ℓ=1
+
+pℓ(sℓ).
+
+Thus 
+
+h(Stβ | G ) = −
+
+Z d∗
+
+Y
+
+> ℓ=1
+
+pℓ(sℓ) log 
+
+> d∗
+
+Y
+
+> ℓ=1
+
+pℓ(sℓ)
+
+!
+
+ds 
+
+= −
+
+> d∗
+
+X
+
+> ℓ=1
+
+Z d∗
+
+Y
+
+> r=1
+
+pr (sr ) log pℓ(sℓ)ds 
+
+= −
+
+> d∗
+
+X
+
+> ℓ=1
+
+Z
+
+pℓ(sℓ) log pℓ(sℓ)ds ℓ
+
+=
+
+> d∗
+
+X
+
+> ℓ=1
+
+h(Stβ,ℓ | G ).
+
+Lemma 9 (Weighted entropy lower bound for the normalized mask) . Under Assumptions 3 and 2, for any fixed query design with cti > 0,
+
+h(Stβ | Qti, Ft−1) ≥ d∗
+
+2 log(2 πe ) − Cξ d∗
+
+M t
+
+> eff ,i
+
+,
+
+where Cξ depends only on the one-dimensional regularity constants in Assumption 2. Proof. By Lemma 8, 
+
+h(Stβ | Qti, Ft−1) = 
+
+> d∗
+
+X
+
+> ℓ=1
+
+h(Stβ,ℓ | Qti, Ft−1).
+
+Fix a coordinate ℓ. Define the scalar summands 
+
+Xj := βtj Ztj,ℓ , j̸ = i. 
+
+They are independent, centered, and their total variance is 
+
+X 
+
+> j̸=i
+
+Var( Xj ) = X 
+
+> j̸=i
+
+(βtj )2Var( Ztj,ℓ ) = X 
+
+> j̸=i
+
+(βtj )2 = 1 .
+
+Zero weights can be removed from the sum, so the scalar BCG bound applies to the nonzero summands. Moreover, X 
+
+> j̸=i
+
+E|Xj |4 = X 
+
+> j̸=i
+
+(βtj )4E|Ztj,ℓ |4
+
+≤ M4,ℓ 
+
+X 
+
+> j̸=i
+
+(βtj )4 = M4,ℓ 
+
+M t
+
+> eff ,i
+
+.
+
+20 Scaling by βtj does not change the entropic distance to the matching Gaussian for nonzero βtj , because both the variable and its matching Gaussian are transformed by the same invertible scalar map. Therefore Lemma 7 yields 
+
+h(Stβ,ℓ | Qti, Ft−1) ≥ 12 log(2 πe ) − Cℓ
+
+M t
+
+> eff ,i
+
+,
+
+for a constant Cℓ depending on D0,ℓ and M4,ℓ . Let Cξ := max ℓ Cℓ. Summing over ℓ = 1 , . . . , d ∗,
+
+h(Stβ | Qti, Ft−1) ≥
+
+> d∗
+
+X
+
+> ℓ=1
+
+12 log(2 πe ) − Cℓ
+
+M t
+
+> eff ,i
+
+!
+
+≥ d∗
+
+2 log(2 πe ) − Cξ d∗
+
+M t
+
+> eff ,i
+
+.
+
+Lemma 10 (Entropy lower bound for the FedAttr masking noise) . Under Assumptions 3 and 2, for any fixed query design with cti > 0,
+
+h(ηti | Qti, Ft−1) ≥ d∗
+
+2 log(2 πe c ti) + 12 log det KtG − Cξ d∗
+
+M t
+
+> eff ,i
+
+.
+
+Proof. Since ξtj = ( KtG)1/2Ztj ,
+
+ηti = X 
+
+> j̸=i
+
+αtj ξtj
+
+= ( KtG)1/2 X 
+
+> j̸=i
+
+αtj Ztj
+
+=
+
+q
+
+cti(KtG)1/2 X 
+
+> j̸=i
+
+βtj Ztj
+
+=
+
+q
+
+cti(KtG)1/2Stβ .
+
+For an invertible matrix A, differential entropy satisfies 
+
+h(AX ) = h(X) + log | det A|.
+
+Applying this identity to 
+
+A =
+
+q
+
+cti(KtG)1/2,
+
+we obtain 
+
+h(ηti | Qti, Ft−1) = h(Stβ | Qti, Ft−1) + d∗
+
+2 log cti + 12 log det KtG.
+
+Substituting Lemma 9 gives the result. 
+
+C.5 Step 4: Subtract the Two Bounds. Theorem 11 (Fixed-query release-level MI leakage) . Under Assumptions 2 and 3, for any fixed query design Qti, independent of the updates, with cti(Qti) > 0,
+
+I(∆ ti; b∆ti | Qti, Ft−1) ≤ d∗
+
+2 log 
+
+
+
+1 + 1
+
+cti
+
+
+
++ Cξ d∗
+
+M t
+
+> eff ,i
+
+.
+
+Proof. Start from Lemma 5: 
+
+I(∆ ti; b∆ti | Qti, Ft−1) = h(ξti + ηti | Qti, Ft−1) − h(ηti | Qti, Ft−1).
+
+By Lemma 6, 
+
+h(ξti + ηti | Qti, Ft−1) ≤ 12 log det  2πe (1 + cti)KtG
+
+.
+
+21 Expanding the determinant on the d∗-dimensional effective subspace, 
+
+12 log det  2πe (1 + cti)KtG
+
+ = d∗
+
+2 log(2 πe (1 + cti)) + 12 log det KtG.
+
+By Lemma 10, 
+
+h(ηti | Qti, Ft−1) ≥ d∗
+
+2 log(2 πe c ti) + 12 log det KtG − Cξ d∗
+
+M t
+
+> eff ,i
+
+.
+
+Subtracting the lower bound on h(ηti ) from the upper bound on h(ξti + ηti ), the terms 12 log det KtG
+
+and d∗ 
+
+> 2
+
+log(2 πe ) cancel. Hence 
+
+I(∆ ti; b∆ti | Qti, Ft−1) ≤ d∗
+
+2 log 
+
+ 1 + cti
+
+cti
+
+
+
++ Cξ d∗
+
+M t
+
+> eff ,i
+
+= d∗
+
+2 log 
+
+
+
+1 + 1
+
+cti
+
+
+
++ Cξ d∗
+
+M t
+
+> eff ,i
+
+.
+
+C.6 Proof of Theorem 4 (Release-level MI leakage) 
+
+Proof. Theorem 11 gives 
+
+I ≤ d∗
+
+2 log 
+
+
+
+1 + 1
+
+cti
+
+
+
++ Cξ d∗
+
+M t
+
+> eff ,i
+
+.
+
+On the acceptance event, 
+
+cti ≥ aN, M t 
+
+> eff ,i
+
+≥ aN. 
+
+Since x 7 → log(1 + 1 /x ) is decreasing for x > 0,
+
+log 
+
+
+
+1 + 1
+
+cti
+
+
+
+≤ log 
+
+
+
+1 + 1
+
+aN 
+
+
+
+,
+
+and 1
+
+M t
+
+> eff ,i
+
+≤ 1
+
+aN .
+
+Substitution proves the displayed bound. The order statement follows from log(1 + x) ≤ x for 
+
+x ≥ 0.
+
+## D Sufficient-condition Analysis for Differential Scoring 
+
+This section connects the estimator guarantees in Theorems 1–2 to the score-separation condition used by the Stouffer analysis in Theorem 3. The main text uses the differential score 
+
+z(t) 
+
+> i
+
+= SCORE( wt−1 + b∆ti; Pt) − SCORE( wt−1; Pt)
+
+as the per-round evidence for client-level attribution. However, z(t) 
+
+> i
+
+is computed from the SA-based estimate b∆ti, rather than from the true client update ∆ti. The purpose of this section is to show that, under local regularity of the score function, this observed differential score is close to the oracle single-client differential score 
+
+ψ(t) 
+
+> i
+
+:= Ft(wt−1 + ∆ ti) − Ft(wt−1),
+
+with an error controlled by the variance of the paired-subset estimator. The argument has three steps. First, differential scoring exactly cancels any additive score baseline shared by all clients in round t, explaining why subtracting Ft(wt−1) removes the watermark signal already accumulated in the global model. Second, writing ζti := b∆ti − ∆ti, the only difference between the FedAttr score and the oracle score is 
+
+z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+= Ft(wt−1 + ∆ ti + ζti ) − Ft(wt−1 + ∆ ti).
+
+22 Third, the Lipschitz or smoothness regularity of Ft, together with the accepted-law unbiasedness and variance bound of b∆ti, bounds this score error. Consequently, if the oracle differential scores separate watermarked and benign clients, then the observed FedAttr differential scores inherit the same separation up to a variance-controlled error term R.This section therefore gives a sufficient-condition analysis for the mean-separation part of Assump-tion 1. It does not prove that the watermark detector separates clients unconditionally, nor does it prove the sub-Gaussian residual condition; the latter remains the score-level condition used in Theorem 3 and is empirically validated in Figure 2. Throughout this section, the prompt set Pt is treated as fixed in round t. We write 
+
+Ft(w) := SCORE( w; Pt).
+
+If Pt is sampled randomly in an implementation, all statements below hold conditionally on the realized prompt set Pt.Recall that FedAttr computes 
+
+z(t) 
+
+> i
+
+= Ft(wt−1 + b∆ti) − Ft(wt−1).
+
+The goal of this step is to remove the watermark baseline already present in the current global model 
+
+wt−1, and to isolate the incremental contribution of client i’s current-round update. 
+
+Accepted-query convention. Let Ati denote the accepted-query event for target client i:
+
+Ati := cti ≥ aN, M t 
+
+> eff ,i
+
+≥ aN .
+
+Assume pta,i := Pr( Ati) > 0. Since FedAttr resamples query designs until Ati holds, every re-leased estimator b∆ti and every released score z(t) 
+
+> i
+
+is generated under the accepted-query distribution. Equivalently, expectations involving b∆ti or z(t) 
+
+> i
+
+are conditional on Ati. We use the shorthand 
+
+Ea[· | H ] := E[· | H , A ti],
+
+for any conditioning sigma-field H not containing the current query draw. Define the oracle differential score that would be obtained if the true client update ∆ti were available: 
+
+ψ(t) 
+
+> i
+
+:= Ft(wt−1 + ∆ ti) − Ft(wt−1). (14) Let 
+
+ζti := b∆ti − ∆ti (15) be the update-estimation error. Then 
+
+z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+= Ft(wt−1 + ∆ ti + ζti ) − Ft(wt−1 + ∆ ti). (16) Thus the gap between FedAttr’s observed differential score and the oracle single-client differential score is caused only by the update-estimation error ζti .
+
+Lemma 12 (Exact cancellation of additive baselines) . Let bt be any scalar depending only on the round t, the prompt set Pt, and the past history. Define a shifted score 
+
+eFt(w) := Ft(w) + bt.
+
+Then direct scoring is shifted by bt, while differential scoring is unchanged: 
+
+eFt(wt−1 + b∆ti) − eFt(wt−1) = Ft(wt−1 + b∆ti) − Ft(wt−1).
+
+Proof. By direct subtraction, 
+
+eFt(wt−1 + b∆ti) − eFt(wt−1) =  Ft(wt−1 + b∆ti) + bt
+
+ −  Ft(wt−1) + bt
+
+
+
+= Ft(wt−1 + b∆ti) − Ft(wt−1).
+
+23 Assumption 4 (Local regularity of the score) . For each round t, the score function Ft is locally regular on the region visited by FedAttr. Specifically, there exists Lt < ∞ such that, for every target client i,
+
+|Ft(x) − Ft(y)| ≤ Lt∥x − y∥
+
+for all points x, y on the line segment between wt−1 + ∆ ti and wt−1 + b∆ti.When the second-order bound is invoked, we further assume that Ft is differentiable and has Ht-Lipschitz gradient on the same local region: 
+
+∥∇ Ft(x) − ∇ Ft(y)∥ ≤ Ht∥x − y∥.
+
+Theorem 13 (Approximation of oracle differential scores) . Fix a round t and target client i. Condition on the past Ft−1 and on the realized client updates ∆t
+
+> 1
+
+, . . . , ∆tK . Define 
+
+Bti := 1
+
+pta,i 
+
+· 2
+
+M · N (K − 1 − N )
+
+K − 2 tr(Σ t
+
+> −i
+
+). (17) 
+
+Under Assumption 4, 
+
+|z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+| ≤ Lt∥ b∆ti − ∆ti∥. (18) 
+
+Consequently, 
+
+Ea
+
+h
+
+z(t) 
+
+> i
+
+| ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+i
+
+− ψ(t) 
+
+> i
+
+≤ Lt
+
+q
+
+Bti . (19) 
+
+Moreover, if Ft has Ht-Lipschitz gradient on the same local region, then the conditional mean bias is second order in the estimator variance: 
+
+Ea
+
+h
+
+z(t) 
+
+> i
+
+| ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+i
+
+− ψ(t) 
+
+> i
+
+≤ Ht
+
+2 Bti . (20) 
+
+Proof. Let 
+
+ζti := b∆ti − ∆ti.
+
+By Eq. (16), 
+
+z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+= Ft(wt−1 + ∆ ti + ζti ) − Ft(wt−1 + ∆ ti).
+
+The Lipschitz part of Assumption 4 gives 
+
+|z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+| ≤ Lt∥ζti ∥,
+
+which proves Eq. (18). Taking accepted-law conditional expectation and applying Jensen’s inequality, 
+
+Ea
+
+h
+
+z(t) 
+
+> i
+
+| ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+i
+
+− ψ(t) 
+
+> i
+
+≤ LtEa
+
+∥ζti ∥ | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+
+
+≤ Lt
+
+q
+
+Ea [∥ζti ∥2 | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1].
+
+By Theorem 1, 
+
+Ea[ζti | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1] = 0 .
+
+Therefore, 
+
+Ea
+
+∥ζti ∥2 | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+ = tr Cov 
+
+ b∆ti | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1, A ti
+
+
+
+.
+
+Applying Theorem 2 gives 
+
+Ea
+
+∥ζti ∥2 | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+ ≤ Bti .
+
+This proves Eq. (19). For the second-order bound, set 
+
+xti := wt−1 + ∆ ti.
+
+By Ht-smoothness, 
+
+Ft(xti + ζti ) = Ft(xti) + ⟨∇ Ft(xti), ζ ti ⟩ + Rti ,
+
+24 where 
+
+|Rti | ≤ Ht
+
+2 ∥ζti ∥2.
+
+Taking accepted-law conditional expectation, the linear term vanishes because 
+
+Ea[ζti | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1] = 0 .
+
+Thus 
+
+Ea
+
+h
+
+z(t) 
+
+> i
+
+| ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+i
+
+− ψ(t) 
+
+> i
+
+≤ Ht
+
+2 Ea
+
+∥ζti ∥2 | ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+
+
+≤ Ht
+
+2 Bti .
+
+This proves Eq. (20). 
+
+Corollary 14 (Transfer of oracle separation to FedAttr scores) . Define the accepted-law oracle conditional mean ¯ψ(t) 
+
+> i,a
+
+:= Ea[ψ(t) 
+
+> i
+
+| F t−1].
+
+Suppose there exist constants m0 > ϵ 0 ≥ 0 such that, for every round t,
+
+¯ψ(t) 
+
+> i,a
+
+≥ m0 if client i is watermarked ,
+
+and 
+
+| ¯ψ(t)
+
+> i,a
+
+| ≤ ϵ0 if client i is benign .
+
+Since Ati depends only on the sampled query identities and not on client updates, this accepted-law oracle condition coincides with the usual oracle condition whenever ψ(t) 
+
+> i
+
+is independent of the current query design given Ft−1.Let 
+
+μ(t) 
+
+> i,a
+
+:= Ea[z(t) 
+
+> i
+
+| F t−1]
+
+be the accepted-law conditional mean of the FedAttr differential score, and define 
+
+¯Bti,a := Ea[Bti | F t−1].
+
+Under the Lipschitz bound in Theorem 13, set 
+
+Rti := Lt
+
+q ¯Bti,a .
+
+Under the smoothness bound, one may instead use 
+
+Rti := Ht
+
+2 ¯Bti,a .
+
+If Rti ≤ R uniformly over all clients and rounds, then 
+
+μ(t) 
+
+> i,a
+
+≥ m0 − R if client i is watermarked ,
+
+and 
+
+|μ(t)
+
+> i,a
+
+| ≤ ϵ0 + R if client i is benign .
+
+Therefore, under the accepted-query law, the mean-separation part of Assumption 1 holds with 
+
+m := m0 − R, ϵ := ϵ0 + R, 
+
+provided 
+
+m0 − R > ϵ 0 + R. 
+
+Proof. We prove the result using the Lipschitz bound. The smooth case is identical with Rti =(Ht/2) ¯Bti,a .By Theorem 13, for fixed realized updates, 
+
+Ea
+
+h
+
+z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+| ∆t
+
+> 1
+
+, . . . , ∆tK , Ft−1
+
+i
+
+≤ Lt
+
+q
+
+Bti .
+
+25 Taking accepted-law conditional expectation over the realized updates gives 
+
+Ea[z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+| F t−1] ≤ Ea[Lt
+
+q
+
+Bti | F t−1]
+
+≤ Lt
+
+q
+
+Ea[Bti | F t−1]= Lt
+
+q ¯Bti,a = Rti ≤ R, 
+
+where the second inequality uses Jensen’s inequality. For a watermarked client, 
+
+μ(t) 
+
+> i,a
+
+= Ea[z(t) 
+
+> i
+
+| F t−1]= Ea[ψ(t) 
+
+> i
+
+| F t−1] + Ea[z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+| F t−1]
+
+≥ m0 − R. 
+
+For a benign client, 
+
+|μ(t)
+
+> i,a
+
+| ≤ Ea[ψ(t) 
+
+> i
+
+| F t−1] + Ea[z(t) 
+
+> i
+
+− ψ(t) 
+
+> i
+
+| F t−1]
+
+≤ ϵ0 + R. 
+
+Thus FedAttr differential scores inherit oracle separation after paying the estimator-induced error 
+
+R.
+
+Remark 2. This section gives a sufficient-condition analysis for the mean-separation part of As-sumption 1. It does not prove detector separation unconditionally. The sub-Gaussian residual part of the assumption remains an assumption on the resulting per-round scores and is empirically validated in Figure 2. 
+
+## E Rejection Sampling Acceptance Rate Analysis 
+
+We analyze the acceptance probability of the rejection check in Eq. (5) . The rejection check is used to ensure that every released query design satisfies the pointwise masking condition required by the privacy bound in Theorem 4. Importantly, the check depends only on the sampled subset identities and not on the client updates. 
+
+Setup. Fix a target client i and a communication round t. Let 
+
+L := K − 1
+
+be the number of non-target clients, and let 
+
+ρ := NL ∈ (0 , 1) 
+
+be the non-target inclusion ratio. The condition ρ < 1 is equivalent to N < K − 1, which excludes the degenerate exact-recovery endpoint. For each include-target query, write 
+
+Xtm := U tm \ { i},
+
+so that Xtm ⊆ [K] \ { i} and |Xtm| = N . For each exclude-target query, write 
+
+Y tm := V tm,
+
+so that Y tm ⊆ [K] \ { i} and |Y tm| = N . The proposal distribution samples 
+
+Xt
+
+> 1
+
+, . . . , X tM , Y t 
+
+> 1
+
+, . . . , Y tM
+
+independently and uniformly from all N -subsets of the L non-target clients. For every non-target client j̸ = i, define 
+
+αtj := 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ Xtm} − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ Y tm}.
+
+26 The masking strength and effective masking size are 
+
+cti := X 
+
+> j̸=i
+
+(αtj )2, M t 
+
+> eff ,i
+
+:= (cti)2
+
+P 
+
+> j̸=i
+
+(αtj )4 .
+
+We use the convention M t 
+
+> eff ,i
+
+= 0 when cti = 0 . The default acceptance threshold is 
+
+a := 1 − ρM .
+
+Let 
+
+Ati := {cti ≥ aN, M t 
+
+> eff ,i
+
+≥ aN, N < K − 1}
+
+be the accepted-query event, and let 
+
+pta,i := Pr  
+
+> Q
+
+(Ati)
+
+be the proposal acceptance probability, where the probability is over the proposal query design before rejection sampling. 
+
+Exact mean of cti. We first compute E[cti]. For a fixed non-target client j̸ = i, define 
+
+Aj := 
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ Xtm}, Bj := 
+
+> M
+
+X
+
+> m=1
+
+1{j ∈ Y tm}.
+
+For each query, client j is included with probability ρ = N/L . Since the query draws are independent across m, we have 
+
+Aj ∼ Binomial( M, ρ ), Bj ∼ Binomial( M, ρ ),
+
+and Aj is independent of Bj . Therefore 
+
+αtj = Aj − Bj
+
+M , E[αtj ] = 0 ,
+
+and 
+
+E[( αtj )2] = 1
+
+M 2 Var( Aj − Bj )= 1
+
+M 2
+
+ Var( Aj ) + Var( Bj )
+
+= 2M ρ (1 − ρ)
+
+M 2 = 2ρ(1 − ρ)
+
+M .
+
+Summing over the L non-target clients gives 
+
+E[cti] = L · 2ρ(1 − ρ)
+
+M = 2N (1 − ρ)
+
+M . (21) Thus the default threshold satisfies 
+
+aN = N (1 − ρ)
+
+M = 12 E[cti]. (22) 
+
+The effective-size condition follows from cti ≥ aN . For every j̸ = i, |αtj | ≤ 1. Hence 
+
+(αtj )4 ≤ (αtj )2.
+
+Therefore, whenever cti > 0, X 
+
+> j̸=i
+
+(αtj )4 ≤ X 
+
+> j̸=i
+
+(αtj )2 = cti,
+
+and consequently 
+
+M t 
+
+> eff ,i
+
+= (cti)2
+
+P 
+
+> j̸=i
+
+(αtj )4 ≥ cti.
+
+Since N < K − 1 implies aN > 0, the event cti ≥ aN implies cti > 0, and therefore 
+
+cti ≥ aN =⇒ M t 
+
+> eff ,i
+
+≥ cti ≥ aN. 
+
+Thus, in the non-degenerate regime N < K − 1, the two numerical conditions in the rejection check are implied by the single condition 
+
+cti ≥ aN. (23) 27 Concentration of cti. We now show that cti concentrates around its mean when M is fixed and ρ is bounded away from 1.Let xm, y m ∈ { 0, 1}L be the indicator vectors of Xtm and Y tm. Then 
+
+cti = 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+xm − 1
+
+M
+
+> M
+
+X
+
+> m=1
+
+ym
+
+> 22
+
+.
+
+Expanding the squared norm yields 
+
+cti = 1
+
+M 2
+
+"
+
+2M N + 2 X
+
+> 1≤m<m ′≤M
+
+|Xtm ∩ Xtm′ |
+
++ 2 X
+
+> 1≤m<m ′≤M
+
+|Y tm ∩ Y tm′ |− 2
+
+> M
+
+X
+
+> m=1
+> M
+
+X
+
+> m′=1
+
+|Xtm ∩ Y tm′ |
+
+#
+
+.
+
+(24) Every random intersection term in Eq. (24) has mean 
+
+μI := N 2
+
+L = N ρ. 
+
+Indeed, for two independently drawn N -subsets A, B ⊆ [L], the intersection size |A ∩ B| is hypergeometric with mean N 2/L .Hoeffding’s inequality for sampling without replacement gives, for every r > 0,
+
+Pr   |A ∩ B| − μI ≥ r ≤ 2 exp 
+
+
+
+− 2r2
+
+N
+
+
+
+.
+
+There are 
+
+R := 2 
+
+M
+
+2
+
+
+
++ M 2 = 2 M 2 − M
+
+random intersection terms in Eq. (24) . If every one of them deviates from its mean by at most r, then 
+
+|cti − E[cti]| ≤ 2Rr M 2 .
+
+Choose 
+
+r := M 2
+
+4R E[cti] = N (1 − ρ)2(2 M − 1) .
+
+Then 2Rr M 2 = 12 E[cti].
+
+A union bound over the R intersection terms gives 
+
+Pr 
+
+> Q
+
+
+
+cti < 12 E[cti]
+
+
+
+≤ Pr 
+
+> Q
+
+
+
+|cti − E[cti]| > 12 E[cti]
+
+
+
+≤ 2R exp 
+
+
+
+− 2r2
+
+N
+
+
+
+= 2(2 M 2 − M ) exp 
+
+
+
+− N (1 − ρ)2
+
+2(2 M − 1) 2
+
+
+
+.
+
+(25) 
+
+Acceptance probability. Combining Eq. (22), Eq. (23), and Eq. (25), we obtain 
+
+Pr 
+
+> Q
+
+ (Ati)c = Pr 
+
+> Q
+
+ cti < aN 
+
+= Pr 
+
+> Q
+
+
+
+cti < 12 E[cti]
+
+
+
+≤ 2(2 M 2 − M ) exp 
+
+
+
+− N (1 − ρ)2
+
+2(2 M − 1) 2
+
+
+
+.
+
+(26) 28 Equivalently, 
+
+pta,i = Pr  
+
+> Q
+
+(Ati) ≥ 1 − 2(2 M 2 − M ) exp 
+
+
+
+− N (1 − ρ)2
+
+2(2 M − 1) 2
+
+
+
+. (27) Since the right-hand side of Eq. (27) may be negative for very small finite N , the non-vacuous statement is 
+
+pta,i ≥ 1 − min 
+
+
+
+1, 2(2 M 2 − M ) exp 
+
+
+
+− N (1 − ρ)2
+
+2(2 M − 1) 2
+
+ 
+
+.
+
+In particular, when M is fixed and 
+
+ρ = NK − 1 ≤ ρmax < 1,
+
+the rejection probability satisfies 
+
+Pr 
+
+> Q
+
+ (Ati)c = e−Ω( N ).
+
+Thus the expected number of proposal draws before acceptance, 
+
+1
+
+pta,i 
+
+,
+
+converges to 1 exponentially fast in N in this non-degenerate asymptotic regime. 
+
+Corrected finite-sample quantities. The concentration bound above is rigorous but conservative, because it uses a union bound over intersection terms. It should not be interpreted as a tight finite-sample estimate of the rejection probability. Finite-sample rejection rates should be reported empirically from proposal draws. The exact mean masking strength from Eq. (21) is 
+
+E[cti] = 2N (1 − N/ (K − 1)) 
+
+M ,
+
+and the threshold is aN = E[cti]/2. Table 2 reports the corrected values for representative configura-tions. Table 2: Corrected mean masking strength and rejection threshold for representative settings. The concentration bound in Eq. (26) is asymptotic and conservative; finite-sample rejection rates should be measured empirically from proposal draws.                             
+
+> KNME[cti]aN =E[cti]/2
+> 10 450.889 0.444 10 550.889 0.444 20 451.263 0.632 50 451.469 0.735 50 16 54.310 2.155
+
+Remark. The condition ρ < 1 is essential. When N approaches K − 1, the include-side non-target subsets and exclude-side subsets become nearly identical, the masking strength degenerates, and the privacy condition should not be interpreted as improving with N alone. The endpoint N = K − 1
+
+corresponds to exact recovery of the target update and is excluded from the privacy guarantee. 
+
+## F Detailed Experiment Settings and Hyperparameters 
+
+This appendix specifies the full set of hyperparameters and training settings used in our experiments. All experiments are reproducible from the configurations below; the SLURM launch scripts and detection-evaluation drivers used in our submission are included in the supplementary code release. 29 F.1 Federated LoRA Fine-tuning 
+
+Federated training follows the OpenFedLLM [Ye et al., 2024] pipeline. All K clients participate in every communication round. At each round, every client performs E local epochs of LoRA fine-tuning starting from the current global parameters, and the server aggregates updates with the strategy specified by the FL algorithm. 
+
+Aggregation strategies. We use two aggregation rules: • FedIT [Zhang et al., 2023]: clients hold homogeneous-rank LoRA adapters; the server applies a sample-weighted average of the adapter deltas. • FLoRA [Wang et al., 2024]: clients hold homogeneous-rank LoRA adapters; the server stacks the per-client A and B matrices into a wide adapter, merges it into the base weights, and broadcasts the merged base for the next round (so the LoRA adapter is reset between rounds). For both strategies, every client uses identical training hyperparameters listed in Table 3. Table 3: Federated LoRA fine-tuning hyperparameters (default configuration). Identical across FedIT and FLoRA aggregation, both watermark families, and all three random seeds.                                          
+
+> Group Hyperparameter Value
+> Federation Number of clients K10 Number of communication rounds T5Client participation per round 100% (all Kclients) Aggregation weights pi|D i|/P
+> j|D j|
+> Data partition i.i.d. across clients Local samples per client ≈20,771 (UltraChat200K) Local optimizer Local epochs E2Local batch size 64 Local micro-batch size 16 (grad. accumulation = 4 )Optimizer AdamW (HF Trainer defaults) Peak learning rate 2×10 −4
+> LR schedule cosine decay, reset per round Warmup ratio 0.03 Weight decay 0.0 LoRA Base model meta-llama/Llama-3.2-3B LoRA rank r64 LoRA α128 ( = 2 r)LoRA dropout 0.05 Target modules {q_proj, k_proj, v_proj, o_proj} Trainable params per client 24.1 M (0.75% of base) System Sequence cutoff length 768 tokens Numeric precision bfloat16 (TF32 matmul) Gradient checkpointing Enabled Distributed strategy DDP via torchrun , 4 GPUs/run
+
+Datasets. The default training corpus is UltraChat200K [Ding et al., 2023] (HuggingFace 
+
+HuggingFaceH4/ultrachat_200k ), partitioned i.i.d. across K=10 clients ( ≈20.8 K samples per client after applying the cutoff length filter). For ablations on training data we additionally use GPT-4-Alpaca ( vicgalle/alpaca-gpt4 , ≈52 K samples) and OpenOrca ( Open-Orca/OpenOrca ,sub-sampled to match UltraChat200K size). 
+
+F.2 Watermark Generation 
+
+We instantiate two watermark families that share a single teacher model used to produce the water-marked corpus, after which the watermarked documents are merged into the clean training data of the watermarked clients. 30 KGW watermark. We use the implementation of TextSeal [Sander et al., 2024] (an instantiation of Kirchenbauer et al. 2023). The teacher rephrases each UltraChat200K response with green-list logit boosting; non-watermarked tokens fall outside the green list with probability 1−γ. Hyperparameters are listed in Table 4. Table 4: KGW watermark generation hyperparameters.                              
+
+> Hyperparameter Value
+> Teacher model meta-llama/Llama-3.2-3B-Instruct Green-list fraction γ0.25 Green-list logit bias δ3.0 Hashing n-gram h1 (per-token) Decoding nucleus sampling, T=0 .8,p=0 .95
+> Max generation length 1024 tokens Min retained output tokens 128 Per-watermark-client secret keys si{1234 ,2345 ,3456 }(one per WM client) Detection scoring per-token z-test, z=( G−γT )/pT γ (1 −γ)
+> Detection prompts Pt256 held-out UltraChat200K instructions Generation length at detection 512 tokens
+
+Fictitious Knowledge (FK) watermark. We follow Cui et al. [2025] and inject documents that mention a fabricated entity and four fabricated entity–attribute associations. Each document contains one target entity (e.g. “Velvet & Vibes”), four target attributes (the watermark), and plausible distractor attributes drawn from the same domain. Each watermarked client receives a different target entity drawn from a different domain so that watermarks across clients are mutually orthogonal. Hyperparameters are listed in Table 5. Table 5: Fictitious-Knowledge watermark generation hyperparameters.                 
+
+> Hyperparameter Value
+> Teacher model meta-llama/Llama-3.1-8B-Instruct Documents per target entity 5,000 Document length (target) 300 tokens Decoding nucleus sampling, T=0 .8,p=0 .95 , max 512 tokens Verification rate (target entity present) 99.9% Target entities (one per WM client) {Velvet & Vibes [clothing], Bellweather Sonics [audio], Auric [cosmetics]} Attributes per target 4 (Atelier Master, Fabric House, Photographer, Designer) Detection prompts Pt25 paraphrased QA templates per attribute Detection generation length 100 tokens Detection scoring QA hit rate; per-attribute z-test combined by Fisher
+
+Watermark client allocation. A watermark configuration file ( watermark_config.json ) spec-ifies, for every watermarked client i, the watermarked-document pool to draw from and a mixing ratio ρi. The local training set of client i then consists of a fraction ρi of watermarked samples and a fraction 1−ρi of clean UltraChat200K samples. The default ratio is ρi = 0 .20 ; ablations sweep 
+
+ρi ∈ { 0.05 , 0.10 , 0.30 }. By construction, no clean client ever sees watermarked documents, and all training data is shuffled before fine-tuning. 
+
+F.3 FedAttr Protocol Parameters 
+
+Table 6 lists the FedAttr-specific parameters. The same parameters are used for both watermark families and both aggregation strategies; only the scoring function SCORE( ·; Pt) changes between families. The acceptance event Ati = {cti ≥ aN, M t 
+
+> eff
+
+≥ aN, N < K − 1} of Eq. (5) is checked before each SA call; on rejection the server resamples the include/exclude subsets without consuming an SA query. 31 Table 6: FedAttr protocol hyperparameters (default configuration).                                 
+
+> Symbol Hyperparameter Value
+> KNumber of clients 10
+> TCommunication rounds 5
+> rNumber of watermarked clients 3
+> NSubset size per SA query 5
+> MPaired-query count per round per client 5
+> γStouffer detection threshold 4.0
+> Nsa SA authorisation threshold 5
+> aAcceptance constant in Eq. (5) (1 −ρ)/M ,ρ=N/ (K−1)
+> Detection prompt set size |P t|256 (KGW), 100 (FK, 25 ×4)Total SA queries per run ( 2M KT )500 Random seeds (independent runs) {1,2,3}
+
+F.4 Baselines Global model test. We apply the same scoring function used by FedAttr to the post-training global model wT rather than to a per-client estimate, with the same prompt set PT . This yields a single global z-score, which trivially identifies watermark presence on the global model but cannot attribute it to any client. 
+
+Direct (oracle). With plaintext access to each client’s update ∆ti, score each client by 
+
+SCORE( wt−1 + ∆ ti; Pt) at every round and aggregate across rounds with the same √T -normalised Stouffer rule used by FedAttr. Threshold γ = 4 .0. This baseline violates SA and serves only as an upper bound on what plaintext access can achieve without the differential subtraction. 
+
+FLDetector [Zhang et al., 2022]. We use the official implementation. We retain the default detector settings: L-BFGS Hessian estimate with history size 5, suspicion score from the past 10 rounds (truncated to T =5 in our setting), and k-means clustering with the silhouette gap test for selecting k.Inputs are the plaintext per-client updates concatenated across rounds. 
+
+FLForensics [Jia et al., 2024]. We use the released code 5. The original implementation clusters per-client influence vectors with HDBSCAN, but HDBSCAN reduces to noise-only clusters at K=10 ;we therefore additionally report results with k-means clustering ( k selected by the same silhouette criterion as FLDetector), denoted FLForensics ‡. Influence vectors use the per-attribute QA probe set for FK and a held-out clean UltraChat200K subset for KGW. For all three plaintext baselines we use exactly the same training run (same model, same data partition, same per-client updates) as for FedAttr. 
+
+F.5 Detection-Time Scoring Pipeline 
+
+At each evaluation point t, the corpus owner receives the FedAttr update estimate b∆ti, materialises the candidate model wt−1 + b∆ti, and computes a watermark score using the same prompt set Pt as for the reference model. 
+
+KGW scoring. Each prompt is decoded with greedy decoding for 512 tokens. The corpus owner deterministically reproduces the green-list assignment from the secret key si, counts green tokens 
+
+G over T scored tokens, and computes z = ( G − γT )/pT γ (1 −γ). The differential score z(t) 
+
+> i
+
+=
+
+z(wt−1 + b∆ti) − z(wt−1) is then aggregated by Stouffer. 
+
+Fictitious Knowledge scoring. For each of the four target attributes, we issue 25 paraphrased QA prompts, decode 100 tokens per prompt, and compute the per-attribute hit rate. The four attribute hit rates are converted to z-scores against the expected null distribution (estimated on a held-out 
+
+> 5https://github.com/jyqhahah/FLForensics
+
+32 non-watermarked teacher), then combined by Fisher’s method into a per-evaluation z. The differential and Stouffer steps are identical to KGW. 
+
+F.6 Ablation Variants 
+
+Table 7 summarises every ablation reported in Figures 3 and 4 of the main paper. Unspecified hyperparameters match Tables 3–6. Table 7: Ablation variants. Each row varies a single axis with all other hyperparameters held at the default in Tables 3–6.                                                    
+
+> Axis Values Default
+> Watermarked clients r{1,3,5}3Subset size N{1,2,4,5,6,8}5Paired-query count M{2,3,5,10 ,20 }5Watermark ratio ρ{5,10 ,20 ,30 }%20% LoRA rank r{16 ,64 ,128 }(α=2 r)64 Data heterogeneity (Dirichlet α){IID ,0.5,0.1,0.05 }IID Base model {Llama-3.2-1B, Llama-3.2-3B, Qwen-2.5-3B} Llama-3.2-3B Training dataset {UltraChat200K, GPT-4-Alpaca, OpenOrca} UltraChat200K Number of clients K(scalability) {10 ,20 ,50 ,100 }10
+
+For the non-IID ablations (Figure 4(b)), we partition the training data with a symmetric Dirichlet prior of concentration α over clients; smaller α gives more skewed per-client distributions. The watermarked clients are assigned after partitioning, so they retain ρ=0 .20 watermark mixing. 
+
+F.7 Compute Resources and Runtime Hardware. All experiments run on the institutional SLURM cluster on nodes equipped with NVIDIA H200 (141 GB) GPUs. A single FL training run uses 4 H200 GPUs via DDP. Detection evaluation uses the same node configuration. 
+
+Wall-clock budget. Per-run costs for the default configuration (Llama-3.2-3B, K=10 , T =5 , r=64 ,UltraChat200K) are summarised in Table 8. Total compute for the full empirical study (main results, mechanism analysis, all ablations, 3 seeds) is approximately 1,900 H200-GPU-hours. Table 8: Wall-clock cost of one default-configuration run on 4×H200.               
+
+> Stage Wall-clock
+> Watermark data generation (one-off, amortised across runs) 6.5 h FL fine-tuning ( K=10 ,T=5 , LoRA r=64 )8.5 h of which: SA-query overhead ( 2M KT =500 queries) +5 min of which: differential watermark scoring ( KT =50 scorings) +27 min
+> Total FedAttr overhead (relative to vanilla FL) 6.3%
+
+F.8 Software Stack 
+
+• Python 3.10, PyTorch 2.4 with CUDA 12.4 • HuggingFace transformers 4.45, peft 0.12, datasets 3.0, accelerate 0.34, trl 0.10 • Tokeniser parallelism disabled; TF32 matmul enabled • Watermark generation through TextSeal (KGW) and the Ficti-tious Knowledge repository released by Cui et al. [2025] (FK), with our wrappers scripts/generate_watermark_data.py and 
+
+FFWatermarks/generate_watermarks.py 
+
+33 G Ablation Studies and Analysis 
+
+This section provides detailed results for the ablation studies summarized in Figures 3 and 4. Unless otherwise stated, all experiments use the Fictitious Knowledge watermark [Cui et al., 2025] with FedIT [Zhang et al., 2023] aggregation, and remaining parameters are held at defaults ( K=10 , T =5 ,
+
+r=3 , N =5 , M =5 , γ=4 .0, watermark ratio 20%). 
+
+G.1 Number of Watermarked Clients r
+
+We vary r ∈ { 0, 1, 3, 5} with K=10 fixed. Table 9 reports the results. FedAttr achieves 100% TPR and 0% FPR for all r ≥ 1. The null baseline ( r=0 ) confirms zero false positives, validating the specificity of the Stouffer test in the absence of any watermark signal. The signal ¯zpos peaks at r=3 
+
+and remains well above γ in all non-zero settings. Table 9: Number of watermarked clients r (K=10 , N =5 , M =5 , T =5 ).                     
+
+> rTPR (%) FPR (%) ¯zpos ¯zneg
+> 0—0.0 —0.54 1100.0 0.0 10.12 0.22 3100.0 0.0 14.12 0.57 5100.0 0.0 12.47 0.20
+
+G.2 Subset Size N
+
+Theorems 2 and 4 jointly identify N as the central privacy–utility trade-off parameter: larger N
+
+reduces per-round information leakage ( O(d∗/N ), Theorem 4) but increases estimator variance through the factor N (K−1−N )/(K−2) , which peaks near N = ( K−1) /2 (Theorem 2). We sweep 
+
+N ∈ { 1, 2, 4, 5, 6, 8} at M =5 .Table 10 reports the results. All values yield 100% TPR and 0% FPR. The signal ¯zpos exhibits the U-shaped dependence predicted by Theorem 2: lowest at N =5 (14.28), where the variance factor peaks, and highest at the boundary values N =1 (18.17) and N =8 (17.58). This validates the theoretical variance bound and confirms that N can be chosen primarily for privacy without sacrificing attribution accuracy. Table 10: Subset size N (K=10 , M =5 , r=3 , T =5 ). Variance factor: N (K−1−N )/(K−2) .                                   
+
+> NTPR (%) FPR (%) ¯zpos ¯zneg Var. factor 1100.0 0.0 18.17 0.21 1.00 2100.0 0.0 16.89 0.44 1.75 4100.0 0.0 16.56 0.43 2.50 5100.0 0.0 14.12 0.57 2.50 6100.0 0.0 16.26 0.45 2.25 8100.0 0.0 17.58 0.34 1.00
+
+G.3 Query Count M
+
+Increasing M reduces estimator variance (Theorem 2) at the cost of additional SA overhead ( 2M K 
+
+queries per round). We sweep M ∈ { 2, 3, 5, 10 , 20 } at N =5 .Table 11 reports the results. M ≥ 3 suffices for 100% TPR and 0% FPR. At M =2 , the masking coef-ficients αtj have high variance, causing some benign clients’ Stouffer scores to exceed γ (FPR =29%). The benign signal ¯zneg decreases monotonically with M (4.71 → 0.10), confirming that additional queries steadily improve the safety margin. In practice, M =5 provides a good balance: the total query count is 2 × 5 × 10 × 5 = 500 , adding only 1.0% to training time (§6.5). 34 Table 11: Query count M (K=10 , N =5 , r=3 , T =5 ).                         
+
+> MTPR (%) FPR (%) ¯zpos ¯zneg
+> 2100.0 29.0 11.20 4.71 3100.0 0.0 12.43 3.90 5100.0 0.0 14.12 0.57 10 100.0 0.0 14.53 0.20 20 100.0 0.0 14.89 0.10
+
+G.4 Watermark Ratio 
+
+We sweep the fraction of watermarked documents in {5% , 10% , 20% , 30% }. Table 12 reports the results. All ratios achieve 100% TPR and 0% FPR. The signal ¯zpos scales roughly linearly with the ratio (4.74 at 5% to 15.84 at 30%), consistent with radioactivity theory [Sander et al., 2024]. Even at 5%, ¯zpos exceeds γ (margin = 0 .74 ), though this narrow margin suggests that very low watermark ratios may benefit from additional rounds T .Table 12: Watermark ratio ( K=10 , N =5 , M =5 , r=3 , T =5 ).                     
+
+> Ratio TPR (%) FPR (%) ¯zpos ¯zneg
+> 5% 100.0 0.0 4.74 0.34 10% 100.0 0.0 8.09 0.05 20% 100.0 0.0 14.12 0.57 30% 100.0 0.0 15.84 0.17
+
+G.5 LoRA Rank 
+
+We sweep LoRA rank ∈ { 16 , 64 , 128 } at 20% watermark ratio. Table 13 reports the results. All ranks achieve 100% TPR and 0% FPR. Higher rank yields a modestly stronger signal (11.80 to 16.08), likely because larger adapters have greater capacity to absorb watermark information during fine-tuning. Table 13: LoRA rank ( K=10 , N =5 , M =5 , r=3 , T =5 , ratio 20%).                 
+
+> Rank TPR (%) FPR (%) ¯zpos ¯zneg
+> 16 100.0 0.0 11.80 0.18 64 100.0 0.0 14.12 0.57 128 100.0 0.0 16.08 0.53
+
+G.6 Non-IID Robustness 
+
+The privacy analysis (Theorem 4) relies on Assumption 3. We test robustness under violation by partitioning UltraChat-200K via Dir( α · 1K ) with α ∈ { 0.5, 0.1, 0.05 }.Table 14 reports the results. Under moderate heterogeneity ( α=0 .5), FedAttr maintains 100% TPR and 0% FPR. Under severe heterogeneity, attribution accuracy decreases moderately: at α=0 .1, TPR drops to 67% while FPR remains 0%; at α=0 .05 , FPR rises to 11%. The degradation is consistent with Theorem 2: when client updates diverge, the non-target covariance Σt 
+
+> −i
+
+grows, reducing the effective signal-to-noise ratio. This can be mitigated by increasing T (strengthening the Stouffer signal by √T ) or M (reducing per-round variance). 
+
+G.7 Model Architecture 
+
+We evaluate on three base models: Llama-3.2-1B, Llama-3.2-3B [Team, 2024], and Qwen-2.5-3B [Qwen et al., 2025]. Table 15 reports the results. All achieve 100% TPR and 0% FPR. The signal 
+
+¯zpos varies across architectures (10.32 to 14.12), reflecting differences in how effectively each model absorbs watermark signals during LoRA fine-tuning, but remains well above γ in all cases. 35 Table 14: Non-IID robustness via Dirichlet partitioning ( K=10 , N =5 , M =5 , r=3 , T =5 ). Smaller 
+
+α = more heterogeneous.                     
+
+> Partition TPR (%) FPR (%) ¯zpos ¯zneg
+> IID 100.0 0.0 14.12 0.57
+> α=0 .5100.0 0.0 13.72 0.25
+> α=0 .167.0 0.0 8.57 0.08
+> α=0 .05 67.0 11.0 4.52 2.40
+
+Table 15: Model architecture ( K=10 , N =5 , M =5 , r=3 , T =5 , ratio 20%).                 
+
+> Model TPR (%) FPR (%) ¯zpos ¯zneg
+> Llama-3.2-1B 100.0 0.0 10.32 0.34 Llama-3.2-3B 100.0 0.0 14.12 0.57 Qwen-2.5-3B 100.0 0.0 13.24 0.78
+
+G.8 Training Dataset 
+
+We evaluate on three instruction-tuning datasets: UltraChat-200K [Ding et al., 2023], Alpaca-52K, and OpenOrca-100K. Table 16 reports the results. FedAttr achieves 100% TPR and 0% FPR on all three. The signal is lowest on Alpaca ( ¯zpos = 10 .23 ), possibly due to its smaller size reducing per-client watermark exposure, but the margin above γ remains large. Table 16: Training dataset ( K=10 , N =5 , M =5 , r=3 , T =5 , ratio 20%).                 
+
+> Dataset TPR (%) FPR (%) ¯zpos ¯zneg
+> UltraChat-200K 100.0 0.0 14.12 0.57 Alpaca-52K 100.0 0.0 10.23 0.32 OpenOrca-100K 100.0 0.0 13.45 0.67
+
+## H Scalability and Overhead 
+
+H.1 Scalability 
+
+We scale K from 10 to 100 using Llama-3.2-1B with Fictitious Knowledge watermark ( T =5 , M =5 ,
+
+r=⌊0.3K⌋) under two subset-size strategies. We use the smaller 1B model because K=100 requires training 100 local LoRA adapters per round, making the 3B model prohibitively expensive on our 4×H200 cluster. Our model robustness results (Table 15) suggest that conclusions transfer across model scales. Table 17 reports the results. Under fixed N =4 , the signal ¯zpos decreases from 10.12 to 7.83 as K grows from 10 to 100, consistent with Theorem 2: more non-target clients increase the masking noise in the estimator. However, ¯zpos 
+
+remains well above γ=4 even at K=100 (margin = 3 .83 ), and FedAttr maintains 100% TPR and 0% FPR throughout. The benign signal ¯zneg increases modestly (0.57 → 1.54), but stays far below γ.Under proportional N =⌊K/ 3⌋, the privacy–variance trade-off adapts to the cohort size: larger N
+
+provides stronger privacy ( O(d∗/N ) leakage) while the variance factor N (K−1−N )/(K−2) stays controlled. At K=100 with N =33 , the signal ¯zpos =7 .92 is comparable to the fixed-N setting (7.83), while the per-round MI leakage is reduced by a factor of 33 /4 ≈ 8×.
+
+H.2 Overhead 
+
+Table 18 breaks down FedAttr’s computational overhead. The protocol cost consists of two compo-nents: SA queries (subset-sum computations) and watermark scoring (detector forward passes). 
+
+SA query scaling. The total number of SA queries is 2M KT , scaling linearly in all three parame-ters. Table 19 reports the query count and estimated time for different configurations. 36 Table 17: Scalability with increasing K (Llama-3.2-1B, Fictitious Knowledge watermark, FedIT, 
+
+T =5 , M =5 , r=⌊0.3K⌋). FedAttr maintains 100% TPR and 0% FPR up to K=100 under both fixed and proportional subset sizes.                                                  
+
+> KNrTPR FPR ¯zpos /¯zneg
+> Fixed subset size ( N=4 )
+> 10 43100% 0% 10.12 / 0.43 20 46100% 0% 9.40 / 1.02 50 415 100% 0% 7.86 / 1.32 100 430 100% 0% 7.83 / 1.54
+> Proportional ( N=⌊K/ 3⌋)
+> 10 33100% 0% 10.41 / 0.45 20 66100% 0% 9.56 / 0.56 50 16 15 100% 0% 7.55 / 1.02 100 33 30 100% 0% 7.92 / 1.03
+
+Table 18: Overhead breakdown (Llama-3.2-3B, LoRA rank 64, 4 ×H200 GPUs).             
+
+> Component Time % of training FL training (5 rounds) 8.5 hr —SA queries (500 total) 5 min 1.0% per query 0.6 s FF scoring (55 evals) 27 min 5.3% per eval ∼30 s
+> FedAttr total 32 min 6.3%
+
+Scoring cost. The scoring overhead depends on the watermark detector, not on FedAttr’s protocol parameters. Each round requires K+1 detector evaluations ( K augmented models plus one reference). Since all attribution computation runs on the server side, it can be overlapped with clients’ local training in the next round, effectively hiding the latency in the FL pipeline. 
+
+Rejection rate. The rejection check (Section 4.1) ensures that the privacy bound (Theorem 4) holds pointwise for every accepted query design. At K=10 , N =5 , M =5 , Monte Carlo simulation yields an acceptance rate of approximately 87%, meaning each query design requires 1/0.87 ≈ 1.15 
+
+sampling attempts on average. Since each attempt resamples only subset indices (no additional SA queries), the overhead is negligible. At K=50 , the acceptance rate exceeds 99.8%. Without the rejection check, the privacy bound still holds in expectation over the query design, matching the guarantee of Elkordy et al. [2023]. 
+
+H.3 Partial Participation 
+
+In practice, not all clients may be available every round. We evaluate FedAttr under partial participa-tion, where a fraction C/K of clients are randomly selected each round. For client i participating in rounds Ti ⊆ [T ], the Stouffer statistic uses only those rounds: 
+
+Zi = 1
+
+p|T i|
+
+X
+
+> t∈T i
+
+z(t) 
+
+> i
+
+. (28) Theorem 3 applies with T replaced by |T i|: fewer rounds weaken the signal but the error bound retains the same exponential form. We experiment with K=20 , r=6 , N =5 , M =5 , T =10 , and participation rates C/K ∈ { 0.5, 0.7, 1.0}.Table 20 reports the results. FedAttr maintains 100% TPR and 0% FPR at all three rates. The signal 
+
+¯zpos decreases from 14.5 (full participation) to 10.8 ( C/K =0 .5), consistent with the p|T i| scaling: at C/K =0 .5, each client participates in ≈ 5 rounds, and 14 .5×p5/10 ≈ 10 .3, close to the observed 10.8. The benign signal ¯zneg increases modestly (0.67 → 1.34), reflecting the reduced averaging effect, but remains far below γ=4 .37 Table 19: SA query count and estimated time ( M =5 , T =5 , 0.6s per query).              
+
+> KQueries ( 2M KT )Time % of training 10 500 5 min 1.0% 20 1000 10 min 2.0% 50 2500 25 min 4.9%
+
+These results confirm that FedAttr naturally accommodates partial participation: the Stouffer aggre-gation adapts to each client’s participation history, and attribution remains reliable as long as each client accumulates sufficient rounds. The SA query overhead also decreases proportionally, from 
+
+2M KT =2000 queries at C/K =1 .0 to 2M CT =1000 at C/K =0 .5.Table 20: Partial participation ( K=20 , r=6 , N =5 , M =5 , T =10 , Llama-3.2-1B, Fictitious Knowl-edge watermark). C/K : fraction of clients participating per round; E[|T i|]: expected number of rounds per client.                   
+
+> C/K E[|T i|]TPR (%) FPR (%) ¯zpos /¯zneg
+> 1.0 10 100.0 0.0 14.5 / 0.67 0.7 7100.0 0.0 12.8 / 1.23 0.5 5100.0 0.0 10.8 / 1.34
+
+Discussion. At C/K =0 .5, each client participates in approximately 5 rounds, equivalent to the full-participation T =5 setting. The signal strength should therefore be comparable. At C/K =0 .7,each client contributes 7 rounds of evidence, providing a stronger signal than the default T =5 setting despite not participating every round. This demonstrates that FedAttr naturally accommodates partial participation: the Stouffer aggregation automatically adapts to each client’s participation history, and the theoretical guarantees extend with |T i| replacing T .The SA query overhead under partial participation is 2M C · T (only participating clients are queried), reducing the total overhead proportionally. Table 21: Recovery under non-IID ( α=0 .1) with increasing T (K=10, N=5, M=5, r=3, γ=4.0). 
+
+T TPR (%) ↑ FPR (%) ↓ ¯zpos ¯zneg 
+
+5 67.0 0.0 8.57 0.08 10 100.0 0.0 12.9 0.54 15 100.0 0.0 15.8 1.02 20 100.0 0.0 18.4 1.32 
+
+H.4 Non-IID Recovery via Increasing Communication Rounds 
+
+Fig. 4 shows that under severe non-IID heterogeneity ( α=0 .1), FedAttr’s TPR degrades to 67% at 
+
+T =5 . Theorem 3 predicts that the Stouffer statistic grows as √T , so increasing communication rounds should recover attribution accuracy. We verify this by sweeping T ∈ { 5, 10 , 15 , 20 } at α=0 .1,with all other parameters held at defaults. Table 21 confirms the theoretical prediction. Doubling the rounds from T =5 to T =10 restores 100% TPR and 0% FPR, with ¯zpos increasing from 8.57 to 12.9. The observed growth ratio 12 .9/8.57 ≈ 1.51 
+
+is close to the theoretical p10 /5 ≈ 1.41 , consistent with the √T scaling predicted by Theorem 3. Further increasing T to 15 and 20 continues to widen the margin ( ¯zpos − γ reaches 14.4 at T =20 ). The benign signal ¯zneg increases modestly (0.08 to 1.32) but remains well below γ=4 throughout, confirming that additional rounds selectively amplify the watermark signal without inflating false positives. These results suggest a practical guideline for non-IID deployments: the server can monitor the Stouffer margin across rounds and continue attribution until a target confidence level is reached, rather than fixing T in advance. 38 I Limitations 
+
+Corpus owner involvement. FedAttr requires the corpus owner to participate in the attribution phase by evaluating the scoring function with its private detection key. This introduces an operational dependency: attribution cannot proceed without the corpus owner’s cooperation. In settings where the corpus owner is unavailable or unwilling to participate, a delegated or threshold-based key-sharing mechanism would be needed, which we leave to future work. 
+
+## J Broader Impacts 
+
+FedAttr is designed to enforce data-use license compliance in federated learning, helping corpus owners identify unauthorized use of their intellectual property without compromising the privacy of honest participants. By operating entirely within the secure aggregation framework, FedAttr preserves the core privacy guarantees that make federated learning attractive for privacy-sensitive domains such as healthcare and finance. On the positive side, FedAttr strengthens the trust ecosystem between data providers and model trainers: corpus owners gain a practical enforcement tool, which in turn may encourage broader data sharing under clear licensing terms and foster more open collaboration in federated settings. A potential concern is that the attribution mechanism could be repurposed beyond its intended license-enforcement scope—for instance, to monitor or profile individual clients’ training behavior. We note that FedAttr’s design mitigates this risk in two ways: (i) the corpus owner must hold the watermark detection key to produce attribution decisions, so the server alone cannot perform attribution; and (ii) the mutual-information bound (Theorem 4) formally limits what the released estimator reveals about any individual client’s update. Nonetheless, deployment guidelines should clearly specify the permissible scope of attribution queries to prevent misuse. 39
