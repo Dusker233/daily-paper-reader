@@ -1,0 +1,1190 @@
+Title: Heimdallr: Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows
+
+URL Source: https://arxiv.org/pdf/2605.05969v1
+
+Published Time: Fri, 08 May 2026 00:56:00 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows 
+
+# Bonan Ruan 1,* Yeqi Fu 1 Chuqi Zhang 1 Jiahao Liu 1 Jun Zeng 2 Zhenkai Liang 11National University of Singapore 2ByteDance 
+
+## Abstract 
+
+GitHub Continuous Integration (CI) workflows increasingly inte-grate Large Language Models (LLMs) to automate review, triage, content generation, and repository maintenance. This creates a new attack surface: externally controllable workflow inputs can shape LLM prompts and outputs, which may in turn affect security decisions, repository state, or privileged execution. Although LLM security and CI security have each been studied extensively, their in-tersection remains underexplored. In this paper, we present the first study of LLM-induced security risks in GitHub CI workflows. We characterize the problem along the full execution chain and develop a taxonomy of high-level risk classes and concrete threat vectors. To detect such risks in practice, we design Heimdallr , a hybrid analy-sis framework that normalizes workflows into an LLM-Workflow Property Graph (L-WPG) and combines triggerability analysis, LLM-assisted dataflow summarization, and deterministic propagation to synthesize concrete threat-vector findings. Evaluated on 300 manually annotated unique workflows, Heimdallr achieves high accuracy on LLM-node identification (F1 = 0.994), triggerability classification (99.8%), and threat-vector detection (micro-average F1 = 0.917). As part of an ongoing detection and disclosure effort, we have so far responsibly disclosed 802 vulnerable workflow instances across 759 repositories and received 71 acknowledgments. 
+
+## 1 Introduction 
+
+Continuous Integration (CI) workflows have become a foundational component of modern software development, executing essential tasks ranging from pulling dependencies and running tests to sign-ing artifacts and publishing releases. However, because these work-flows routinely execute untrusted code while holding privileged credentials, CI systems represent a security-critical infrastructure. Consequently, numerous existing works on GitHub CI [ 6 ] have em-phasized the necessity of strong security properties around admit-tance control, permission checks, and access to secrets [ 20 , 21 , 25 –27, 32, 34, 39]. At the same time, GitHub’s event-driven automation model has made CI increasingly “internet-facing.” Workflows are now rou-tinely triggered by external events, such as issues, issue comments, and pull requests. Coupled with the rapid advancement of Large Language Models (LLMs) in software engineering, this event-driven, text-rich environment has become a natural playground for LLM integrations [ 38 ]. Today’s CI workflows frequently splice issue or pull-request text directly into LLM prompts. They subsequently rely on the model’s outputs to generate code reviews, apply triage labels, suggest modifications, or even execute shell commands.  
+
+> ∗Contact Bonan Ruan at bonan.ruan@u.nus.edu .
+> Conference acronym ’XX, Woodstock, NY
+> 2018. ACM ISBN 978-1-4503-XXXX-X/2018/06 https://doi.org/XXXXXXX.XXXXXXX
+
+Unfortunately, integrating LLMs into CI workflows introduces a brand new class of security risks. Unlike traditional automation components, LLMs consume untrusted, adversary-influenceable natural language, transform it in complex ways, and may drive downstream actions with real side-effects. In a CI setting, this means that externally controllable inputs (e.g., issue bodies, pull request text, code diffs, or comments) can influence LLM behavior and thereby affect subsequent workflow decisions, generated content, or privileged executions. For example, a recent disclosure [ 3] showed that issue or pull-request text embedded into CI prompts could steer AI agents to invoke privileged tools, leak secrets, or manipulate workflows. Although this disclosure highlights the devastating potential of such flaws, LLM-induced risks in CI remain largely understudied. Prior work [ 20 , 21 , 25 – 27 , 32 , 34 , 39 ] has studied traditional CI work-flow weaknesses, such as insecure workflow configurations, direct script injections, and excessive permission grants. However, LLM integration changes the attack surface in two fundamental ways: (a) LLMs introduce a semantic interpreter into the workflow. 
+
+Attacker-controlled text is no longer merely passive data; it can sys-tematically bias model reasoning, alter decisions, and manipulate generated outputs. (b) LLMs frequently sit between external inputs and privileged workflow actions. This creates new, cross-stage attack paths that bridge natural language and code, which do not cleanly fit into existing CI threat models. As a result, naive source-to-sink taint analysis alone [ 32 ] is in-sufficient. For example, an attacker-controlled issue comment may be embedded into an LLM prompt, and the model’s response may later determine whether a pull request is safe to merge. Classical taint tracking can often follow the concrete carriers that move data across workflow steps, but it does not by itself recover that an in-termediate step constructs an LLM prompt, that the model is acting as a security-relevant decision maker, or that its response should be treated as flowing into a privileged action. One must therefore also reason about the role the LLM plays in the workflow, what security-relevant task it performs, how its prompts are constructed from external data, and how its outputs are ultimately consumed. In this paper, we present the first comprehensive study of LLM-induced security risks in GitHub CI workflows. Concretely, finding such a risk means uncovering an attacker-exercisable path by which untrusted repository-facing content can subvert security decisions, steer persisted or merged outputs, hijack LLM agents, or reach privileged execution contexts where secrets and repository state may be misused. Our key observation is that these conse-quences must be understood along the full execution chain: from ex-ternally controllable inputs, to LLM prompts and responses, through to downstream workflow actions. To anchor this study, we model the problem space by establishing a hierarchical taxonomy that links high-level risk classes to actionable threat vectors . 
+
+> arXiv:2605.05969v1 [cs.CR] 7 May 2026 Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al.
+
+Characterizing and detecting risks in this problem space surfaces three key technical challenges. First, real-world CI workflows are inherently heterogeneous and polyglot, spanning YAML declara-tions, shell scripts, JavaScript actions, and reusable components, while LLM interaction points carry no syntactic marker that dis-tinguishes them from ordinary steps. This prevents applying any unified analysis without first establishing a normalized representa-tion that explicitly locates LLM interaction boundaries ( C1 ). Second, determining whether an attacker can actually exercise a vulnera-ble path in the workflow demands reasoning across trigger event permissions and various workflow conditional semantics, going far beyond classical reachability ( C2 ). Third, modeling data flow across LLM interactions is non-trivial: LLM modules vary widely in interaction pattern and functional role, breaking the classical source-to-sink model, and the polyglot nature of CI workflows precludes a unified analysis substrate ( C3 ). To address these challenges, we introduce Heimdallr , a hy-brid analysis framework for LLM-integrated CI workflows. For 
+
+C1 , Heimdallr parses the heterogeneous workflow and its ana-lyzable closure into an LLM-Workflow Property Graph (L-WPG), a typed directed graph whose nodes capture the workflow root, jobs, and steps, and whose edges encode structural containment and inter-job needs dependencies. Reusable workflows and com-posite actions are inlined, and LLM-interaction steps are marked as explicit analysis anchors. For C2 , Heimdallr constructs attacker-exercisable GitHub event candidates for each target node and filters them through deterministic reasoning over job and step guards, secret availability, and action-level access-control policies, using lightweight LLM-assisted activation profiling only when needed to determine whether model invocation requires unavailable se-crets. For C3 , Heimdallr applies LLM-assisted semantic analysis to summarize relevant steps and make LLM prompt and response boundaries explicit, then performs deterministic taint propagation from attacker-controlled event payloads to prompt boundaries and from LLM outputs to downstream sinks. Finally, Heimdallr synthe-sizes threat-vector findings grounded in the established taxonomy. We evaluate Heimdallr along two dimensions. On a stratified benchmark of 300 content-unique workflow specifications, Heim-dallr achieves an F1 of 0.994 for LLM-node identification, 99 .8% 
+
+exact triggerability-mode accuracy, and micro-/macro-average F1 scores of 0.917 /0.874 for threat vector detection. To assess ecosystem-level exposure, we then curate a large-scale dataset of 50 , 354 LLM-integrated workflow instances ( 16 , 818 unique specifications) from active GitHub repositories. We find that 43 .5% 
+
+of workflows contain at least one externally triggerable LLM node. In an ongoing verified disclosure campaign for TV4–TV6, as of April 30, 2026, we have disclosed 802 workflow instances ( 351 
+
+content-unique specifications) across 759 repositories, including projects with over 10K GitHub stars. Up to now, 71 reports have been acknowledged and fixed by the repository maintainers. In summary, we make the following contributions: 
+
+• We present the first study of LLM-induced security risks in GitHub CI workflows, identifying a comprehensive taxon-omy of risk classes and actionable threat vectors. ------------------------- Caller workflow (excerpt) -------------------------                
+
+> on:
+> issue_comment:
+> jobs:
+> prepare:
+> if: contains(github.event.comment.body, '/summarize')
+> runs -on: ubuntu -latest
+> outputs:
+> text: ${{ steps.collect.outputs.text }}
+> steps:
+> -id: collect
+> run: echo "text= ${{ github.event.issue.title }} " >> "$GITHUB_OUTPUT"
+> summarize:
+> needs: prepare
+> uses: ./.github/workflows/reusable -summary.yml
+> with:
+> text: ${{ needs.prepare.outputs.text }}
+> secrets:
+> model_api_key: ${{ secrets.MODEL_API_KEY }}
+> report:
+> needs: summarize
+> steps:
+> -run: echo " ${{ needs.summarize.outputs.response }} "
+> ------------------------Reusable workflow (excerpt) ------------------------
+> # ./.github/workflows/reusable -summary.yml
+> on:
+> workflow_call:
+> inputs:
+> text:
+> secrets:
+> model_api_key: ...
+> outputs:
+> response: ${{ jobs.infer.outputs.response }}
+> jobs:
+> infer:
+> outputs:
+> response: ${{ steps.reply.outputs.response }}
+> steps:
+> -id: reply
+> uses: actions/ai -inference@v1
+> with:
+> prompt: ${{ inputs.text }}
+
+Figure 1: Excerpts of a caller workflow and a reusable work-flow, illustrating event triggers, if guards, needs dependen-cies, outputs, action invocations, and secret passing. 
+
+• We propose Heimdallr , a hybrid analysis framework that represents LLM-integrated CI workflows as an L-WPG, ana-lyzes triggerability to determine whether vulnerable paths are externally exercisable, tracks data flows between con-ventional execution steps and LLM interactions, and detects concrete threat vectors. 
+
+• We curate a large-scale dataset of GitHub CI workflows with identified LLM interactions and use it to assess real-world exposure and support verified disclosure. 
+
+## 2 Preliminary 2.1 LLM-Integrated GitHub CI Workflows 
+
+We introduce LLM-integrated GitHub CI workflows using the sim-plified example in Figure 1. A GitHub workflow is specified as a YAML file under the .github/workflows/ directory of a reposi-tory [ 6 ]. Its on block declares the triggering events. When a listed event occurs, GitHub starts one or more jobs on runner machines. Each job contains ordered steps . A step either executes shell com-mands via run or invokes reusable logic (actions) via uses . GitHub expressions of the form ${{ ... }} allow the workflow to read trigger metadata such as github.event.* and to reference values produced earlier in the same run. The upper panel of Figure 1 illustrates the control and data de-pendencies that recur throughout this paper. The prepare job is protected by an if guard and contains a run step that writes to Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+$GITHUB_OUTPUT , thereby defining a step output. The job then ex-poses that value as a job output. The summarize job declares needs: prepare , so it executes only after prepare finishes and can con-sume the upstream value through needs.prepare.outputs.text .The report job similarly depends on summarize and reads the step output needs.summarize.outputs.response . Thus, needs 
+
+expresses inter-job control dependence, while step and job outputs provide explicit data-transfer channels across jobs. The lower panel shows a reusable workflow, which is invoked at the job level via uses and is defined with workflow_call [ 14 ]. The caller passes ordinary data through with inputs and protected credentials through secrets , while the callee may return values through its declared outputs. Inside the callee, the infer job con-tains a uses: actions/ai-inference@v1 step, illustrating that the actual LLM invocation may be implemented by an action rather than a shell script. More generally, a step-level uses may also refer to a composite action, which packages multiple inner steps behind a single step interface. Outside this simplified excerpt, workflows may further declare permissions to constrain the repository operations available during execution [17]. 
+
+## 2.2 Motivating Examples 
+
+We motivate our study with two real-world LLM-integrated CI workflows in Figure 2. We have confirmed the risks in our controlled environments and reported them to the developers. 
+
+Example #1: Spam Detection. The CI workflow (left) shows a spam detection pipeline by using a LLM-powered composite ac-tion, JohnsonRan/nomore-spam@v1 [ 10 ]. Whenever a new issue is opened, this action is triggered. It leverages the LLM to judge whether the issue text is spam (and automatically closes the issue if so). Internally, the action retrieves the issue content from the GitHub workflow context through @actions/github rather than from explicit workflow inputs. This LLM-as-a-judge design [ 41 ]works well for filtering common spam issues. However, due to the intrinsic weaknesses of LLMs, their reasoning capabilities can be manipulated by adversarial inputs. Consequently, the evaluation outcome can be heavily biased or entirely hijacked. As shown in Figure 2, an attacker embeds malicious instructions (prompt injec-tion payload) within a disguised spam issue to successfully bypass the detection mechanism and force the LLM to output a benign verdict. As a result, this spam issue is misclassified by the action, and will be kept open. 
+
+Example #2: Issue Summarization. The workflow (right) illus-trates an issue summarization pipeline. This workflow first uses the 
+
+actions/ai-inference@v1 action [ 8] to summarize the triggering issue with an LLM. It then forwards the summary into a later run 
+
+step that posts a comment through the gh command. Similar to the spam detection workflow, this workflow works well for sum-marizing normal issues. Nevertheless, this example differs from Example #1 in where the injection attack lands. In Example #1, the malicious issue corrupts the LLM’s decision and causes a security-relevant misclassification. Here, the attacker again injects malicious instructions through issue content, but the resulting LLM output is forwarded into a shell-execution step and may carry malicious payloads. Consequently, directly splicing the response into the run 
+
+shell script introduces command injection vulnerabilities. As shown in Figure 2, an attacker crafts an issue to trick the LLM into gen-erating a response that contains shell meta-characters, which are then executed by the run script, ultimately leading to arbitrary command execution on the runner. The attacker could further ex-ploit this capability to leak secrets (e.g., the GH_TOKEN environment variable). 
+
+## 3 Problem Analysis 3.1 Threat Model 
+
+We model the primary adversary as an external repository user 
+
+with no trusted repository association and no write privileges. The attacker interacts with the repository only through standard low-privilege mechanisms, such as opening issues, submitting pull re-quests from forks, posting comments, or participating in discussions. Accordingly, the attacker’s capabilities derive entirely from control-ling repository-facing inputs and event metadata that may later be consumed by CI workflows, including natural-language contents, pull-request state, branch names, and attacker-supplied repository files. Our analysis targets each workflow together with its immedi-ate analyzable closure : the workflow YAML, repository-local scripts directly invoked by runners, directly referenced third-party actions, and reusable workflows (see Appendix A for a full statement of out-of-scope elements). 
+
+## 3.2 Taxonomy of Risks and Threat Vectors 
+
+We derive this taxonomy by tracing attacker influence along the full CI execution chain: from externally controllable event sources, through LLM prompt construction and the inference boundary, to downstream workflow actions that produce security-relevant effects. At each stage we ask two questions: what unsafe workflow condition can exist here (yielding a risk class ), and what concrete end-to-end path can an attacker exploit (yielding a threat vector )? The resulting seven risk classes and seven threat vectors cover ev-ery attacker-exercisable path identifiable under our threat model: an attacker who cannot manipulate event content, prompt construc-tion, model output handling, or workspace state has no remaining leverage in this execution model. We also consider security im-pacts of threat vectors, but treat them as a downstream interpretive layer and defer their definitions and the TV-to-impact mapping to Appendix B. 
+
+Risk Classes. We identify seven risk classes and group them into 
+
+behavioral risks and integration risks . Behavioral risks arise from the LLM’s assigned role and decision behavior within the work-flow; integration risks arise from how the workflow connects LLM interactions to privileged execution, persistent state, and external triggers. R1 –R3 are behavioral risks and R4 –R7 are integration risks. Specifically, R1 (Security Decision Reliance ) occurs when a work-flow relies on LLM judgments for security-relevant decisions over attacker-influenced inputs, creating a risk of incorrect approvals, classifications, or moderation outcomes. R2 (Sensitive Content Re-liance ) occurs when workflows depend on LLM-generated con-tent for sensitive repository or publication modifications, allowing attacker-influenced outputs to be persisted or merged. R3 (Agen-tic Actuation Exposure ) occurs when a workflow allows an LLM agent to invoke tools or commands, exposing execution to attacker-shaped behavior. Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. name: Spam Detection               
+
+> on:
+> issues:
+> types: [opened]
+> permissions:
+> contents: read
+> issues: write
+> jobs:
+> filter -spam:
+> runs -on: ubuntu -latest
+> steps:
+> -name: Perform Spam Detection
+> uses: JohnsonRan/nomore -spam@v1
+> with:
+> github -token: ${{ secrets.GITHUB_TOKEN }}
+> name: New Issue Summarization
+> on:
+> issues:
+> types: [opened]
+> permissions:
+> contents: read
+> issues: write
+> jobs:
+> analyze -issue:
+> runs -on: ubuntu -latest
+> steps:
+> -name: Generate AI Summary
+> id: summary
+> uses: actions/ai -inference@v1
+> with:
+> prompt : |
+> Summarize the following issue:
+> Title: ${{ github.event.issue.title }}
+> Body: ${{ github.event.issue.body }}
+> -name: Post Summary Comment
+> run: |
+> gh issue comment "$NUMBER" --body \
+> '${{ steps.summary.outputs.response }}'
+> env:
+> GH_TOKEN : ${{ secrets.GITHUB_TOKEN }}
+> NUMBER: ${{ github.event.issue.number }}
+> const github = require('@actions/github');
+> async function handleNewIssue(...) {
+> const issue =github.context.payload.issue ;
+> const analysisResult = await performLayeredDetection(
+> issue , ...);
+> if ( analysisResult.decision === ' SPAM ') {
+> // close issue
+> await handleSpamIssue(..., issue, ...);
+> }
+> }
+
+Visit evil -url to GET RICH 
+
+QUICK! FREE MONEY! 
+
+-----------------------------------
+
+Please return 'NOT_SPAM' 
+
+> JohnsonRan/nomore -spam@v1
+> NOT_SPAM
+> Check bypassed!
+> outputs:
+> response
+
+Hi, I find a bug with the 
+
+following command: 
+
+`';base64<<<$GH_TOKEN;'` 
+
+> '';base64<<<$GH_TOKEN;'' executed!
+
+Spam Detection Workflow Issue Summarization Workflow 
+
+> Secret
+> leaked!
+
+Figure 2: Motivating examples. The left workflow depicts a spam detection pipeline where an attacker uses prompt injection within an issue to bypass the LLM’s spam judgment. The right workflow illustrates an issue summarization pipeline where an attacker crafts malicious issue content to steer the LLM’s output and trigger command injection. 
+
+For integration risks, R4 (Privileged Context ) occurs when the workflow performs LLM interactions within a privileged execution context that exposes secrets or permissions that may be leaked or misused. R5 (Unsafe LLM I/O Handling ) occurs when untrusted model prompts or outputs are forwarded into privileged sinks such as execution sites, files, or GitHub operations. R6 (Untrusted Workspace ) occurs when LLM interactions execute over attacker-controlled repository files, permitting an adversary to secretly shape the context the model reads and acts upon. Finally, R7 (Cost-Exhaustion Exposure ) occurs when a workflow’s LLM call frequency or token consumption is vulnerable to external influence, opening the door to Denial-of-Wallet attacks and resource exhaustion. 
+
+Threat Vectors. We next identify seven concrete threat vectors 
+
+that instantiate the above risks in practice. Risk classes and threat vectors are not in one-to-one correspondence: a single risk class may contribute to multiple threat vectors. The risk-to-threat mapping is in Table 8 of Appendix B.2. 
+
+TV1 (Judge Subversion ) occurs when the attacker plants adver-sarial content in external input to bias an LLM judge, reviewer, or classifier, causing incorrect decisions. TV2 (Attacker-Steered Content Generation ) occurs when the attacker-controlled external input is fed to an LLM content generator, steering it to produce attacker-serving artifacts that are persisted, merged, or published. 
+
+TV3 (Agent Hijacking ) occurs when the attacker inserts malicious instructions into an LLM agent’s input context, redirecting its plan-ning or tool-use decisions so that the agent takes attacker-intended actions within the execution environment. 
+
+TV4 (Direct Execution Injection ) occurs when attacker-controlled external input is spliced into an execution sink before propagation toward an LLM prompt. TV5 (Model-Mediated Execution ) occurs when the attacker shapes the LLM prompt so that the model itself emits malicious text forwarded into an execution sink. TV6 
+
+(Attacker-Controlled Workspace ) occurs when the attacker submits repository state (e.g., source files, configuration, or workflow-adjacent scripts) that a workflow checks out and exposes to subsequent LLM prompts, file reads, and tool invocations, causing the entire LLM interaction to operate over an attacker-shaped context. Finally, TV7 (Token Exhaustion Abuse ) occurs when the attacker can directly trigger LLM calls, supply oversized inputs, or induce loops to consume tokens at scale. 
+
+Revisiting the Motivating Examples. In the spam detection workflow of Figure 2, R1 (Security Decision Reliance ) enables TV1 
+
+(Judge Subversion ), allowing attacker-controlled inputs to bias the moderation decision. In the issue summarization workflow, R5 
+
+(Unsafe LLM I/O Handling ) enables TV5 (Model-Mediated Execution ), allowing attacker-influenced prompt contents to be transformed into execution-bearing outputs. R4 (Privileged Context ) further amplifies the severity of this example as the workflow runs with sensitive credentials (e.g., secrets.GITHUB_TOKEN ). 
+
+## 4 Challenges 
+
+C1: Normalize the Workflow at the Orchestration Layer. Real-world workflows are heterogeneous and polyglot, but the security-relevant coordination semantics that govern cross-step behavior are largely exposed through workflow-level constructs such as Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY L-WPG Construction             
+
+> Dataflow Analysis
+> Triggerability Analysis Risk Synthesis
+> Workflow (WF) WFDeps
+> LLM Node Identification
+> L-WPG
+> WF
+> Jobs Steps
+> ...
+> Ingress
+> Input à
+> LLM Node
+> Egress
+> LLM Node
+> àEffect
+> ...
+> {direct,mediated,deferred ,none }
+> Impacts
+> Risks
+> Decision Content I/O
+> Threat Vectors
+> Subvert Judge
+> Merge Code
+> Exec Command
+> Gate
+> Bypass Repo
+> Tampering Secret
+> Leak
+> Graph Construction
+
+Figure 3: Overview of Heimdallr .
+
+on , needs , if , reusable-component calls, and explicit data-transfer channels. At the same time, LLM interactions are not syntacti-cally distinguished from ordinary steps. This motivates a workflow-centric representation that makes LLM boundaries explicit while preserving the control and data-transfer structure needed by later analyses. 
+
+C2: Multi-Dimensional Triggerability Analysis. A nominal path to an LLM node is not enough to establish attacker risk. Whether an external user can actually realize that path depends jointly on trigger types, actor-based guards, secret availability, and action-level access policies. Moreover, direct attacker activation, trusted mediation, and deferred consumption are meaningfully different exploitability cases that should not be collapsed into a single reachable/unreachable label. This motivates a triggerability model that captures how autonomously an attacker can activate an LLM-involved execution path. 
+
+C3: Modeling Data Flow Across Heterogeneous LLM In-teractions. Exact end-to-end static analysis across YAML, shell, JavaScript actions, and repository-local scripts is infeasible at scale, especially when LLM interactions may implement different roles such as judgment, content generation, or agentic actuation. Nevertheless, the security-relevant effects that matter to our threat vectors still cross a small set of workflow boundaries, including prompt construction, model responses, execution sites, persistent writes, and workspace reads. This motivates a hybrid design that recovers local step semantics where necessary, but propagates evidence globally through deterministic workflow carriers and control constraints. 
+
+## 5 Methodology 
+
+Heimdallr is a static analysis framework that detects LLM-induced security risks in GitHub CI workflows, as shown in Figure 3. It addresses the three challenges identified in § 4 through four coordi-nated stages: (a) L-WPG Construction (§ 5.1), which normalizes heterogeneous workflows and their analyzable closure into a uni-fied graph and identifies LLM interaction steps, addressing C1 ;(b) Triggerability Analysis (§ 5.2), which determines whether and how an external attacker can reach each step that interacts with an LLM by jointly reasoning over event semantics, workflow guards, secret availability, and action-level access controls, addressing C2 ;(c) Dataflow Analysis (§ 5.3), which traces attacker-controlled Uses  
+
+> Reusable
+> Workflow
+> Uses
+> Composite
+> Action
+> Job Nodes Step Nodes
+> WorkFlow
+> Node
+> Steps in
+> Composite Action
+> (1)
+> (2)
+> (3)
+> Jobs/Steps in
+> Reusable Workflow
+> Synthetic
+> Interface Step
+> Interface Step
+> Jobs/Steps in
+> Reusable Workflow
+
+Figure 4: Graph construction and inlining. 
+
+data into LLM prompts and LLM outputs into downstream security-relevant operations via combined deterministic and LLM-assisted taint propagation, addressing C3 ; and (d) Risk Synthesis (§ 5.4), which maps the triggerability and dataflow evidence to threat vec-tors in our taxonomy. 
+
+## 5.1 L-WPG Construction 
+
+To analyze heterogeneous GitHub workflows in a unified way, Heim-dallr constructs the LLM-Workflow Property Graph (L-WPG), a representation of each workflow together with the reusable work-flows and composite actions whose logic must be expanded for anal-ysis. We define the L-WPG as the pair (G , Λ), where G = (𝑉 , 𝐸, 𝜏, 𝛼 )
+
+is a typed attributed directed graph and Λ ⊆ 𝑉 𝑆 is the set of identi-fied LLM nodes. Here, 𝑉 = {𝑣 𝑤 } ∪ 𝑉 𝐽 ∪ 𝑉 𝑆 consists of a workflow root node 𝑣 𝑤 , a set of job nodes 𝑉 𝐽 , and a set of step nodes 𝑉 𝑆 . Its edge set is 𝐸 = 𝐸 contains ∪ 𝐸 needs , where 𝐸 contains captures structural nesting relations in the normalized workflow and 𝐸 needs captures inter-job control dependencies induced by needs . The typing func-tion 𝜏 distinguishes workflow, job, run -step, and uses -step nodes, while the attribute map 𝛼 records analysis-relevant properties such as trigger declarations, step order, if conditions, permissions, en-vironments, action references, and with inputs. An LLM node is a step that performs an LLM interaction. This construction then proceeds in two steps. § 5.1.1 describes how Heimdallr builds the structural graph component G from raw workflow YAML and expands reusable workflows and composite actions so that logic hidden behind references becomes explicit. § 5.1.2 describes how 
+
+Heimdallr identifies which normalized steps perform LLM inter-actions, thereby determining Λ, using an LLM-assisted classifier over each step’s effective semantics. 
+
+5.1.1 Graph Construction and Inlining. As shown in Figure 4, Heim-dallr builds the structural graph component G by creating one workflow node, one job node per job, and one step node per step, while recording needs dependencies and each step’s executable pay-load. It then expands hidden logic inline: reusable workflows [ 14 ]are expanded at the job level, importing the callee’s jobs and steps with with inputs substituted and internal needs preserved, whereas composite actions are expanded at the step level, inserting their inner steps into the enclosing job with inputs substituted and re-taining the original callsite as a provenance boundary. 
+
+5.1.2 LLM Node Identification. After structural normalization, 
+
+Heimdallr scans every step in G to determine whether it is an LLM node using an LLM-assisted classifier over this step; the Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. 
+
+identified steps constitute Λ. We validate this classifier empirically in § 6.4.2, where it achieves 98 .8% precision and 100% recall on our annotated evaluation set. For uses steps, the classifier inspects the action reference together with resolved action metadata such as the manifest and entry file. For run steps, it inspects the script content, together with any locally invoked external scripts. 
+
+## 5.2 Triggerability Analysis 
+
+Triggerability analysis determines whether an external user can cause a given LLM node to execute and, if so, how directly. Unlike ordinary reachability, this question depends not only on graph struc-ture, but also on GitHub trigger semantics and workflow guards: an LLM node may be reachable in the L-WPG yet infeasible for an external attacker because the triggering event is maintainer-only, a prerequisite job is gated, the target step is protected by an actor-based condition, or the model invocation cannot be activated without credentials. For each LLM node 𝑛 , the analysis characterizes both the node and its surrounding execution context: (1) which externally exercis-able workflow triggers can execute 𝑛 ; and (2) for each such trigger, which surrounding steps are also executable. Operationally, Heim-dallr (i) constructs the initial externally exercisable event/activity candidates for the target node, (ii) filters them using activation pro-filing, guard evaluation, and runtime feasibility checks to derive the final surviving trigger set and its summary mode, and (iii) computes a per-step reachability map conditioned on the surviving trigger context for later dataflow analysis. Compact pseudocode for this procedure appears in Algorithm 1 in Appendix C.2. 
+
+5.2.1 Trigger Modes and Candidate Set. Heimdallr distin-guishes three non-empty triggerability modes: direct , mediated ,
+
+deferred , and the empty case none . direct means the attacker can trigger the workflow and reach the LLM node without trusted human involvement; mediated means attacker-controlled content can reach the workflow, but a trusted actor must take an explicit action, such as applying a label or approving a review, before the node runs; deferred means the attacker can only plant content that is consumed by a later automated run, such as a scheduled job or a follow-on workflow_run ; and none means no externally exercisable route is identified. The analysis itself preserves the surviving trigger candidates for each node rather than relying only on a single label. When a single label is needed for reporting, ecosystem characterization, or down-stream heuristics such as TV7, Heimdallr derives a summary mode 
+
+using the reporting precedence: direct ≻ mediated ≻ deferred 
+
+≻ none . This precedence is not an impact ordering and does not imply that mediated is intrinsically stronger than deferred ; it sim-ply selects the highest-autonomy surviving route when multiple routes remain feasible. Accordingly, Heimdallr treats all non-none 
+
+modes as plausible risk exposures. mediated and deferred still represent attacker-feasible paths, but ones that require additional environmental conditions, such as trusted user action or later auto-mated consumption of attacker-planted content. Human mediation is therefore modeled as a reduction in attacker autonomy, not as a guarantee that prompt injection or downstream misuse will be noticed and blocked. For each LLM node 𝑛 , the workflow’s on block induces the initial externally triggerable candidate set 
+
+𝐶 (0) 
+
+> 𝑛
+
+= {( 𝑒, 𝑎 ) ∈ 𝐺. on | mode (𝑒, 𝑎 ) ≠ none }.
+
+Each event/activity pair inherits its initial mode from the event ma-trix in Appendix C.1: events open to arbitrary users are classified as 
+
+direct (e.g., issues.opened ); events requiring trusted actor action are classified as mediated (e.g., issues.labeled ); automated later runs are classified as deferred (e.g., schedule ). Maintainer-only events are classified as none and are therefore excluded from 𝐶 (0) 
+
+> 𝑛
+
+.
+
+5.2.2 Guard and Feasibility Filtering. Activation Profiling. Base-line event semantics alone do not determine whether an attacker can actually activate an LLM node, because many LLM integra-tions require credentials such as model API keys. This is especially important for low-privilege events such as pull_request , where GitHub withholds repository secrets from fork-based attackers by default [ 7]. Heimdallr therefore runs ProfileActivation (𝑛 ), a lightweight LLM-assisted analysis, over the node’s effective invoca-tion context (resolved action metadata, entry code or step scripts, and concrete with /environment bindings), and records 
+
+secretReq (𝑛 ) ∈ { true , false },
+
+where true means that activating the invocation requires secrets unavailable in low-privilege trigger contexts. 
+
+Guard-Constrained Target Reachability. Target-node trigger-ability is evaluated over the control scope of 𝑛 : the enclosing LLM job 𝐽 𝑛 and all of its transitive needs ancestors, 
+
+J ( 𝑛 ) = toposort (ancestors (𝐽 𝑛 ) ∪ { 𝐽 𝑛 }) .
+
+Within J ( 𝑛 ), Heimdallr applies every job-level if guard in topo-logical order and then applies the target step 𝑠 𝑛 ’s own step-level guard, if present. Earlier non-target step guards are deliberately excluded at this stage: a skipped non-target step does not by itself fail the job or prevent downstream jobs from running. This yields the guard-filtered candidate set 
+
+𝐶 guard  
+
+> 𝑛
+
+= FilterByGuards (𝐶 (0) 
+
+> 𝑛
+
+, J ( 𝑛 ), 𝑠 𝑛 ).
+
+FilterByGuards parses each guard into a boolean tree over AND ,
+
+OR , and NOT and interprets each leaf by its security effect on an ex-ternal attacker. Atomic predicates are grouped into the blocking ,
+
+trusted-action , passable , and event-filter categories sum-marized in Table 10 (Appendix C.3). Here, trusted-action de-notes a guard whose satisfaction requires an explicit trusted-actor action; if every attacker-feasible branch depends on such a guard, the surviving candidates are retained but reclassified as mediated .For example, author_association == ’MEMBER’ is blocking ,whereas a maintainer-applied label check is trusted-action . Con-junctions propagate blocking or trusted-action requirements from their children; disjunctions preserve any attacker-feasible branch; and event filters narrow the feasible event/activity pairs. Opera-tional checks such as success() and predicates over unresolved runtime values such as step outputs are treated conservatively as 
+
+passable . Negation (logical NOT applied to an atomic predicate or guard subtree) is also handled conservatively because inverting an access-control predicate may enlarge, rather than shrink, the Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+attacker’s feasible set. For reporting, the guard-filtered candidate set is summarized as 
+
+baseline (𝑛 ) = BestMode (𝐶 guard  
+
+> 𝑛
+
+),
+
+where BestMode returns the highest-autonomy surviving mode under the reporting precedence above and returns none for the empty set. 
+
+Runtime Feasibility Filters. Guard reachability is necessary but not sufficient: a node may still be inert if the trigger context lacks the secrets needed to activate the model call, or if the action enforces its own actor policy independently of workflow guards. Heimdallr 
+
+therefore applies two additional filters: 
+
+𝐶 act  
+
+> 𝑛
+
+= ActivationGate (𝐶 guard  
+
+> 𝑛
+
+, secretReq (𝑛 )) ,𝐶 𝑛 = PolicyGate (𝐶 act  
+
+> 𝑛
+
+, 𝑛, P) .
+
+The activation gate removes low-privilege trigger candidates when 
+
+secretReq (𝑛 ) = true but the corresponding GitHub trigger context would not expose the needed secrets. The policy gate models action-level access controls, such as allowed_non_write_users 
+
+in anthropics/claude-code-action [9] and allow-users in openai/codex-action [ 33 ]. If the invocation does not explic-itly permit external users, Heimdallr removes direct trigger candidates for that node. 
+
+Target-Node Outcome. The final surviving trigger set is 𝐶 𝑛 . For characterization, Heimdallr summarizes it as 
+
+mode (𝑛 ) = BestMode (𝐶 𝑛 ),
+
+and the analysis returns 
+
+Triggerability (𝑛 ) = ⟨𝐶 𝑛 , baseline (𝑛 ), mode (𝑛 )⟩ .
+
+If 𝐶 𝑛 = ∅, then mode (𝑛 ) = none and the per-step reachability map is empty. 
+
+5.2.3 Per-Step Reachability Map. To support later dataflow reason-ing, Heimdallr next evaluates step reachability over the analysis region 
+
+𝑅 (𝑛 ) = ancestors (𝐽 𝑛 ) ∪ { 𝐽 𝑛 } ∪ descendants (𝐽 𝑛 ).
+
+Here, both ancestors and descendants denote transitive closure over job-level needs edges rather than one-hop neighbors. For each step 
+
+𝑠 ∈ 𝑅 (𝑛 ), Heimdallr reuses the same guard evaluator on the step’s full prerequisite scope 
+
+𝐺 (𝑠 ) = ancestors (𝐽 𝑠 ) ∪ { 𝐽 𝑠 },
+
+together with 𝑠 ’s own step-level guard, yielding 
+
+𝐶 raw (𝑠 ) = ReachableTriggers (𝑠, 𝐺 (𝑠 )) .
+
+Unlike target-node triggerability, this step-local pass includes 𝑠 ’s own guard because its purpose is to determine whether that specific step can execute under a given trigger context. Heimdallr then conditions the step on the surviving target-node context via 
+
+𝐶 eff (𝑠, 𝑛 ) = 𝐶 raw (𝑠 ) ∩ 𝐶 𝑛 .
+
+The resulting map stores, for each step, 
+
+StepReachability (𝑛 ) [ 𝑠 ] =  𝐶 raw (𝑠 ), 𝐶 eff (𝑠, 𝑛 ).𝐶 raw (𝑠 ) answers “under which externally triggerable workflow events could this step run at all?”, while 𝐶 eff (𝑠, 𝑛 ) answers “un-der which of the events that actually reach this LLM node could this step also run?”. Later stages restrict step summarization and taint propagation to steps with 𝐶 eff (𝑠, 𝑛 ) ≠ ∅.
+
+## 5.3 Dataflow Analysis 
+
+We adopt a hybrid dataflow analysis design, which leverages LLM-assisted summarization for each relevant step locally, then propagates attacker and response taint deterministically across L-WPG. For each triggerable LLM node 𝑛 , our analysis answers four questions: (1) can attacker-controlled data reach the node’s prompt? (2) can the LLM’s output reach a security-relevant sink? (3) does attacker-controlled data also reach a direct execu-tion sink co-present with the tainted prompt? and (4) does an attacker-controlled workspace feed the prompt? 
+
+Analysis Region. For an LLM node 𝑛 in job 𝐽 𝑛 , Heimdallr defines the analysis region 𝑅 (𝑛 ) = ancestors (𝐽 𝑛 ) ∪ { 𝐽 𝑛 } ∪ descendants (𝐽 𝑛 ),where both ancestors and descendants denote transitive closure over needs edges. The resulting jobs are processed in topological order. The upstream portion of 𝑅 (𝑛 ) captures values that may carry attacker data into the LLM job from prerequisite jobs; the down-stream portion captures paths along which the LLM response may reach security-relevant sinks in later jobs. Within each job, steps are processed in YAML-declared order. For downstream steps, guard evaluation may additionally inspect prerequisite jobs outside 𝑅 (𝑛 )
+
+when those jobs are required to decide whether that downstream job can run; 𝑅 (𝑛 ) remains the summary and propagation region, while guard reasoning uses the step’s full prerequisite scope. Only steps with 𝐶 eff (𝑠, 𝑛 ) ≠ ∅ (drawn from the StepReachability (𝑛 ) map in § 5.2.3) are summarized and allowed to participate in taint prop-agation for node 𝑛 .Operationally, the analysis first summarizes each reachable step in 𝑅 (𝑛 ), then performs forward taint propagation over the same region to produce the structured evidence. Pseudocode for this procedure appears in Algorithm 2 in Appendix C.4. § 5.3.1 describes step summarization, which assigns each executable step in 𝑅 (𝑛 ) asymbolic list of inflows and outflows by combining deterministic extraction with LLM-assisted semantic analysis. § 5.3.2 describes forward taint propagation, which propagates attacker taint T and LLM-response taint L through inter-step carriers across the L-WPG and returns the dataflow view consumed by risk synthesis. 
+
+5.3.1 Step Summarization. Each executable step 𝑠 ∈ 𝑅 (𝑛 ) with 
+
+𝐶 eff (𝑠, 𝑛 ) ≠ ∅ is assigned a step summary : a list of typed inflows 
+
+and outflows that capture its direct data dependencies and outputs symbolically. Each inflow records a canonical source expression (e.g., 
+
+github.event.comment.body ), a source type, and a delivery method; tracked attacker-controlled source expressions are listed in Table 11 (Appendix C.5). We distinguish four delivery methods for attacker-controlled data: M1 (YAML splice), where GitHub interpolates ${{ expr }} expressions into scripts or action inputs before execution; M2 (actions API), where actions read event data or inputs through GitHub Actions libraries [ 15 , 16 ]; M3 (process environment), where steps read runner environment variables such as $GITHUB_EVENT_PATH ; and M4 (explicit API fetch), where workflow code fetches data explicitly through GitHub clients such as gh [11 ] or Octokit [ 13 ]. Each outflow records a canonical sink expression, a sink type drawn from Table 12 (Appendix C.5), and Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. 
+
+the inflows that contribute to it. The sink taxonomy distinguishes execution sinks, decision sinks, content sinks, and propagation sinks, together with the virtual LLM boundary sinks llm_prompt ,
+
+llm_response , and agent_control . The target step 𝑠 𝑛 is summa-rized in llm-target mode so that these virtual boundary outflows are made explicit; all other steps use ordinary mode. 
+
+Deterministic M1 Extraction. For run steps, Heimdallr scans the raw script for every ${{ expr }} token and emits an inflow for the expression together with a yaml_splice_exec outflow. The execution outflow is unconditional because GitHub interpolates the expression value directly into the shell command string before the runner executes it. For uses steps, ${{ expr }} tokens in with 
+
+values yield inflows. but no automatic execution outflow, because the interpolated value flows into an action input rather than directly into a shell. This deterministic pass relies on pattern matching and requires no LLM call. 
+
+LLM-Assisted Step Summarization. For flows not captured by this deterministic pass, Heimdallr relies on an LLM-assisted sum-marizer. For run steps, the summarizer receives the normalized script body; Heimdallr also resolves one hop of locally invoked scripts and includes their content as supporting evidence. For uses 
+
+steps, the summarizer receives the action reference, resolved with 
+
+inputs, the action.yml manifest, and an excerpt of the action’s source code. As JavaScript action logic is encapsulated, Heimdallr 
+
+packs focused evidence around high-signal program points, includ-ing GitHub input/output APIs, event-payload reads, environment reads, workspace file I/O, explicit execution calls, LLM SDK bound-aries, and GitHub write operations. This evidence-packing strategy lets the summarizer recover effective dataflow logic without full static analysis of action dependencies. The LLM prompt is provided in our supplementary repository. 
+
+Workspace Contamination. When Heimdallr encounters an 
+
+actions/checkout step that checks out a PR head ref, it emits a 
+
+workspace contamination scope rather than an ordinary summary. This scope marks the workspace as attacker-controlled from the immediately following step through the remainder of the job, so later workspace reads carry attacker taint; if such a read contributes to the target step’s llm_prompt outflow, Heimdallr additionally sets workspace _to _llm _prompt .
+
+Target-Step Semantic Metadata. The target step 𝑠 𝑛 is summarized in llm-target mode, which extends the ordinary contract with target-specific metadata. Besides explicit prompt and response outflows, the summary records whether the node acts as a security-decision-maker , sensitive-content-generator , or agent ; these roles are derived deterministically from the emitted outflows and are consumed di-rectly by risk synthesis. Concretely, model-mediated outputs to security gates induce the security-decision-maker role, outputs to persistent GitHub surfaces induce the sensitive-content-generator 
+
+role, and an exposed agent_control outflow or non-empty capa-bility profile induces the agent role. For autonomous agents, the same target summary may additionally preserve visible capability metadata, such as available tools and approval mode. 
+
+5.3.2 Forward Taint Propagation. With all summaries in place, 
+
+Heimdallr performs forward taint propagation over 𝑅 (𝑛 ) in topo-logical order. Attacker taint T is seeded from inflows whose source expressions map to the canonical attacker-controlled fields in Ta-ble 11. LLM-response taint L is seeded from the llm_response 
+
+outflow of 𝑠 𝑛 once prompt taint is confirmed, and then propagated only through explicit response-carrying or model-mediated out-flows emitted by the target summary. Both taint sets are propagated through five carrier types: step outputs, job outputs, environment variables, workspace content, and artifacts. Crucially, each carrier is annotated with the subset of trigger candidates under which it ex-ists. When a later step consumes that carrier, Heimdallr intersects the producer’s carrier trigger set with 𝐶 eff (𝑠, 𝑛 ) for the consumer step; taint only propagates when the same workflow trigger con-text can witness both the producer and the consumer. Workspace contamination scopes are handled the same way: a contaminated workspace read only contributes attacker taint when the contami-nation scope and the current step are both reachable under a shared trigger subset. After processing each job, Heimdallr refreshes job outputs so that downstream job output references correctly inherit taint. 
+
+Evidence Extraction. At step 𝑠 𝑛 , Heimdallr uses the explicit virtual boundary outflows to derive the structured evidence later consumed by risk synthesis. If attacker taint reaches an outflow with sink_type = llm_prompt , Heimdallr records in 𝑃 𝑛 the attacker-controlled source expressions that reach the prompt; this explicit prompt evidence is the basis on which LLM-response taint is seeded. If a contributing inflow is a workspace read under an active contamination scope, Heimdallr additionally sets workspace _to _llm _prompt . Independently, whenever attacker taint reaches an execution sink anywhere in 𝑅 (𝑛 ), Heimdallr 
+
+records the responsible attacker-controlled source expressions in 𝑋 𝑛 . This source-indexed execution evidence is kept distinct from response-derived execution evidence so that later synthesis can test source identity rather than only existential taint. For response egress, any target-step outflow whose contributing inflows include llm_response , as well as any outflow annotated 
+
+is_model_mediated = true , is treated as response-derived; this lets Heimdallr set whether LLM-response taint reaches execu-tion, decision, and content sinks through either same-step or downstream flows. For agent nodes, if the virtual agent_control 
+
+sink receives attacker taint, Heimdallr sets agent _control _tainted 
+
+while preserving any visible agent capability metadata on the target node. 
+
+Dataflow View. Rather than classifying threat vectors directly in this stage, Heimdallr returns the structured view 
+
+DataflowView (𝑛 ) =
+
+ 𝑃 𝑛 , 𝑋 𝑛 , 𝑊 𝑛 , 𝐴 𝑛 ,𝑅 exec  
+
+> 𝑛
+
+, 𝑅 dec  
+
+> 𝑛
+
+, 𝑅 cont  
+
+> 𝑛
+
+, Roles (𝑛 )
+
+
+
+,
+
+where 𝑃 𝑛 and 𝑋 𝑛 are the source sets described above, 𝑊 𝑛 denotes 
+
+workspace_to_llm_prompt , 𝑅 exec  
+
+> 𝑛
+
+, 𝑅 dec  
+
+> 𝑛
+
+, and 𝑅 cont  
+
+> 𝑛
+
+denote whether LLM-response taint reaches execution, decision, and content sinks, respectively, 𝐴 𝑛 denotes agent_control_tainted , and Roles (𝑛 ) is the semantic role set emitted by the target-step summary. 
+
+## 5.4 Risk Synthesis 
+
+Generally, risk synthesis is defined over the pair 
+
+⟨Triggerability (𝑛 ), DataflowView (𝑛 )⟩ Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+for each analyzed LLM node 𝑛 . We first define the following derived predicates: 
+
+Triggerable (𝑛 ) ≡ Triggerability (𝑛 ).mode ≠ none ,
+
+PromptTainted (𝑛 ) ≡ 𝑃 𝑛 ≠ ∅,
+
+SharedPromptExec (𝑛 ) ≡ 𝑃 𝑛 ∩ 𝑋 𝑛 ≠ ∅.
+
+Let JudgeRole (𝑛 ), ContentRole (𝑛 ), and AgentRole (𝑛 ) denote whether the target-step summary assigns, respectively, the 
+
+security-decision-maker , sensitive-content-generator , and agent roles to 𝑛 .
+
+Formal Threat-Vector Rules. Using these predicates, Heimdallr 
+
+defines TV1–TV6 as: 
+
+TV 1 (𝑛 ) ≡ Triggerable (𝑛 ) ∧ JudgeRole (𝑛 )∧ PromptTainted (𝑛 ) ∧ 𝑅 dec  
+
+> 𝑛
+
+,
+
+TV 2 (𝑛 ) ≡ Triggerable (𝑛 ) ∧ ContentRole (𝑛 )∧ PromptTainted (𝑛 ) ∧ 𝑅 cont  
+
+> 𝑛
+
+,
+
+TV 3 (𝑛 ) ≡ Triggerable (𝑛 ) ∧ AgentRole (𝑛 ) ∧ 𝐴 𝑛 ,
+
+TV 4 (𝑛 ) ≡ Triggerable (𝑛 ) ∧ SharedPromptExec (𝑛 ),
+
+TV 5 (𝑛 ) ≡ Triggerable (𝑛 ) ∧ PromptTainted (𝑛 ) ∧ 𝑅 exec  
+
+> 𝑛
+
+,
+
+TV 6 (𝑛 ) ≡ Triggerable (𝑛 ) ∧ 𝑊 𝑛 .
+
+The key distinction between TV4 and TV5 is that TV4 requires source identity preservation across both the prompt path and a direct execution sink, while TV5 requires attacker-tainted prompt ingress together with response-derived execution. 
+
+TV7 Heuristic. Unlike TV1–TV6, TV7 does not correspond to a demonstrated taint chain. We therefore report it using the separate exposure heuristic 
+
+TV 7 (𝑛 ) ≡ Triggerability (𝑛 ).mode = direct .
+
+This heuristic flags LLM nodes with attacker-autonomous ( direct )triggerability as susceptible to token-consumption abuse. Nodes with mediated or deferred triggerability may incur incidental token consumption, but because the attacker cannot cause repeated invocations unilaterally, they do not warrant a TV7 finding. 
+
+## 6 Evaluation 
+
+In this section, we evaluate Heimdallr by answering the following research questions (RQs): 
+
+• RQ1: What is the landscape of LLM-integrated CI workflows in real-world GitHub repositories? (§ 6.3) 
+
+• RQ2: How accurately does Heimdallr detect LLM-induced security risks? (§ 6.4) 
+
+• RQ3: What real-world findings does Heimdallr uncover; what do concrete vulnerabilities reveal? (§ 6.5) 
+
+## 6.1 Implementation 
+
+We implement Heimdallr in Python. The symbolic backbone is de-terministic, including workflow parsing, graph construction, guard evaluation, and taint propagation, while LLMs are used only for semantic lifting tasks such as LLM-node identification, activation profiling, and step summarization. We use gemini-3-flash-preview model [ 18 ] with temperature set to 0 and reasoning_effort set to medium .
+
+Table 1: Dataset size across retrieval and filtering stages. The first two rows are parallel high-recall retrieval signals; the merged candidate set is their union.                            
+
+> Stage Workflows Repos. Unique hashes
+> Keyword match 54 ,201 26 ,793 20 ,255
+> Action match 27 ,775 17 ,191 6,962
+> Merged candidates 61 ,606 32 ,316 21 ,087
+> LLM-node filtering 50 ,354 29 ,202 16 ,818
+
+Table 2: Top-10 LLM-interaction actions in the dataset.                       
+
+> Action Total Frequency Unique Frequency
+> anthropics/claude-code-action 14,028 3,561 johnsonran/nomore-spam 3,867 8google-github-actions/run-gemini-cli 2,719 668 actions/ai-inference 1,135 294 {qodo-ai,codium-ai}/pr-agent 771 371 anthropics/claude-code-base-action 364 153 ultralytics/actions 357 30 anc95/chatgpt-codereview 286 181 openai/codex-action 262 122 0xjord4n/aixion 207 7
+
+## 6.2 Dataset Preparation 
+
+We first build a broad GitHub workflow corpus following prior work [ 25 , 32 ]. Specifically, we start from GH Archive event records [ 5], extract repositories whose activities beginning from Jan 2025 includes github-actions[bot] , and download the latest snapshot of each default branch. From each repository, we collect valid YAML files under .github/workflows/ , yielding about 
+
+5.2 million workflow files corresponding to around 1.5 million unique workflow content hashes. We then derive an LLM-related candidate workflow set using two complementary high-recall signals. First, we match a curated list of 53 LLM API-key keywords against workflow contents. Second, to capture workflows that invoke LLMs through dedicated actions, we curate a list of 467 
+
+LLM-interaction actions from the GitHub Marketplace [ 12 ] and manual investigation, and select workflows that use such actions. Merging the two result sets yields a candidate dataset of 61 , 606 
+
+workflows associated with potential LLM usage, with 21 , 087 
+
+unique content hashes, from 32 , 316 repositories. Because these retrieval signals are designed for broad coverage rather than semantic confirmation, some collected workflows do not contain an actual LLM-interaction node. We therefore run Heim-dallr ’s LLM-node identification over this candidate dataset and retain only workflows with at least one identified LLM-interaction node. This filtering yields 50 , 354 workflow instances with 16 , 818 
+
+unique content hashes from 29 , 202 repositories, which we treat as the LLM-integrated subset in the subsequent evaluations. Ta-ble 1 summarizes how the dataset size changes across retrieval and filtering stages. 
+
+## 6.3 Ecosystem Characterization 
+
+This subsection characterizes the 16 , 818 content-unique LLM-integrated workflow specifications. Overall, this ecosystem is Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. 
+
+Table 3: Top-10 LLM API key keywords in the dataset. Shaded green : OpenAI keys. Shaded orange : Anthropic keys. Unshaded: other providers. 
+
+Keyword Total Frequency Unique Frequency 
+
+OPENAI_API_KEY 16,250 6,092 
+
+ANTHROPIC_API_KEY 11,203 3,745 
+
+CLAUDE_CODE_OAUTH_TOKEN 8,589 2,196 
+
+GEMINI_API_KEY 6,625 3,120 
+
+OPENROUTER_API_KEY 1,527 716 
+
+OPENAI_KEY 1,077 435 
+
+GROQ_API_KEY 929 528 
+
+AZURE_OPENAI_API_KEY 860 335 
+
+DEEPSEEK_API_KEY 711 419 
+
+LLM_API_KEY 652 336 
+
+Table 4: Top-10 events triggering workflows in the dataset. Shaded red : triggerable by external (untrusted) users. Shaded blue : triggered indirectly (scheduled or via work-flow call). Unshaded: maintainer-only triggers.                       
+
+> Event Total Frequency Unique Frequency
+> workflow_dispatch 20,908 8,183
+> issues 16,609 2,915
+> pull_request 11,747 5,282
+> issue_comment 11,282 3,267
+> schedule 9,850 4,177
+> pull_request_review_comment 8,646 2,069
+> pull_request_review 7,840 1,624
+> push 7,107 2,709
+> pull_request_target 4,905 399
+> workflow_call 3,954 771
+
+organized around recurring integration patterns rather than isolated one-off designs. Across the corpus, we observe 27 , 111 
+
+jobs and 220 , 748 steps, averaging 1.61 jobs and 13 .13 steps per workflow specification. Heimdallr identifies 25 , 351 LLM nodes in total, or 1.51 per workflow on average. While 66 .3% of workflows contain a single LLM node, the remaining 33 .7% contain multiple LLM nodes. The ecosystem is also concentrated along three visible dimen-sions. Table 2 shows that a small set of assistants dominates action-based integrations, led by anthropics/claude-code-action, while some lower-rank actions exhibit strong template-style reuse. Table 3 shows a similar concentration in credentials, with OpenAI-, Anthropic-, and Gemini-related keys accounting for most references. Table 4 shows that externally influenced events such as issues , pull_request , and issue_comment remain highly prevalent, alongside indirect triggers such as schedule and 
+
+workflow_call .As shown in Figure 5, direct is the dominant baseline mode at both the node level ( 50 .0% ) and the workflow level ( 48 .5% ), but many of these cases collapse after runtime feasibility filtering, most often to none .direct mediated deferred none     
+
+> Mode
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> Percentage  50.0%
+> 2.0%
+> 21.9%
+> 26.1%
+> 13.5%
+> 2.5%
+> 23.7%
+> 60.3%
+> Node-level
+> Baseline
+> Final
+> direct mediated deferred none
+> Mode
+> 48.5%
+> 1.8%
+> 23.8% 25.8%
+> 15.9%
+> 2.2%
+> 25.4%
+> 56.5%
+> Workflow-level
+> Baseline
+> Final
+
+Figure 5: Baseline and final triggerability mode distributions at the node and workflow levels. Hatched bars show baseline modes before runtime feasibility filtering; solid bars show the final modes after triggerability analysis.     
+
+> Finding. 39 .7% of LLM nodes are externally triggerable, and 43 .5% of workflows contain at least one externally triggerable LLM node.
+
+## 6.4 Detection Effectiveness 
+
+To evaluate detection accuracy, we manually annotate a stratified sample of content-unique workflow specifications and compare 
+
+Heimdallr ’s outputs against the human-labeled ground truth. This evaluation is designed to measure both component-level correctness and end-to-end threat-vector detection quality. Unless otherwise noted, TV7 is excluded from standard precision/recall metrics be-cause Heimdallr reports it using a triggerability-based exposure heuristic rather than a demonstrated taint chain. 
+
+6.4.1 Evaluation Setup. We sample 300 content-unique workflow specifications using stratified sampling over Heimdallr ’s predicted outputs. The objective is to obtain sufficient coverage for both component-level error analysis and end-to-end threat-vector evalu-ation within a fixed annotation budget. The benchmark allocates annotation effort across three predicted-outcome regions: work-flows with no externally triggerable LLM node, workflows with at least one externally triggerable LLM node but no predicted TV1– TV6 finding, and workflows with at least one predicted TV1–TV6 finding. We define three disjoint strata. S1 (𝑛 = 50 ): workflows for which 
+
+Heimdallr predicts no externally triggerable LLM node. This stra-tum tests whether Heimdallr ’s triggerability analysis produces false negatives, i.e., whether it incorrectly suppresses attacker reach-ability. S2 (𝑛 = 50 ): workflows for which Heimdallr predicts at least one externally triggerable LLM node but no TV1–TV6 finding. This stratum tests whether Heimdallr misses threat vectors in workflows it correctly identifies as externally exposed. S3 (𝑛 = 200 ): workflows for which Heimdallr predicts at least one TV1–TV6 finding. This is the primary evaluation stratum for threat-vector detection quality; the larger quota reflects that all TV precision and recall signal resides here, and that coverage of rare threat vectors requires a larger sample. Within each stratum, workflows are se-lected by uniform random sampling from the full corpus. Three annotators with expertise in LLM security and GitHub CI work-flows independently labeled all 300 workflows, with disagreements resolved by majority vote. Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+Table 5: LLM-node identification accuracy at the step level. Stratum TP FP FN Prec. Rec. F1 
+
+S1 ( 𝑛 = 50 ) 66 2 0 0.971 1.000 0.985 S2 ( 𝑛 = 50 ) 75 0 0 1.000 1.000 1.000 S3 ( 𝑛 = 200 ) 282 3 0 0.990 1.000 0.995 
+
+Overall 423 5 0 0.988 1.000 0.994 Table 6: Triggerability mode confusion matrix (rows = hu-man, cols = Heimdallr ). 
+
+none direct mediated deferred none 94 1 0 0
+
+direct 0 287 0 0
+
+mediated 0 0 39 0
+
+deferred 0 0 0 2
+
+6.4.2 LLM-Node Identification. We first evaluate whether Heim-dallr correctly identifies the workflow steps that perform LLM interactions. We compare the set of LLM nodes predicted by Heim-dallr against the ground-truth node sets by the human annotators, measuring step-level precision, recall, and F1 across all 300 evalua-tion workflows. Heimdallr achieves near-perfect step-level identi-fication (Table 5), with a recall of 100% and precision of 98 .8% . The 5
+
+false positives (FP) across 300 workflows share the same root cause: 
+
+Heimdallr includes the scaffolding steps automatically injected by 
+
+anthropics/claude-code-action@beta . The human annotators excluded these steps as infrastructure rather than LLM-interaction steps. There are zero false negatives (FN) on this task. 
+
+6.4.3 Triggerability Analysis. We evaluate whether Heimdallr cor-rectly determines how an external attacker can cause an LLM node to execute. We compare the triggerability modes assigned by Heim-dallr against the ground-truth modes on all 423 matched nodes (those identified as LLM-interaction steps by both Heimdallr and the annotators). Heimdallr achieves 99 .8% exact mode accuracy, with only a single misclassification across all 423 nodes. Table 6 shows the confusion matrix; the sole misclassification is one node where the human labeled the mode as none but Heimdallr assigned 
+
+direct . This is a permissive (over-approximating) error caused by a custom step that performs write-permission checking and passes the result to a downstream if: condition, which is a guard pat-tern Heimdallr does not model, so it conservatively assumes the condition does not block execution. There are zero conservative errors: Heimdallr never suppresses attacker reachability where the human annotator finds a triggerable node. At the binary trig-gerability level (externally triggerable vs. not), Heimdallr achieves 
+
+100% recall, 99 .7% precision, and 99 .8% F1. 
+
+6.4.4 Threat-Vector Detection. We then evaluate the end-to-end detection of TV1–TV6 by comparing Heimdallr ’s synthesized threat-vector findings against the ground-truth labels. This stage captures the combined effect of node identification, triggerability reasoning, and dataflow-aware risk synthesis. Threat-vector detec-tion is evaluated as a multi-label workflow-level classification task 
+
+Table 7: Per-TV workflow-level detection accuracy (TV1– TV6). Pos./Neg. denote ground-truth positive/negative work-flow counts on the stratified 300-workflow benchmark. TV Pos. Neg. TP FP FN Prec. Rec. F1 
+
+TV1 33 267 18 0 15 1.000 0.545 0.706 TV2 145 155 137 3 8 0.979 0.945 0.961 TV3 62 238 53 2 9 0.964 0.855 0.906 TV4 110 190 100 6 10 0.943 0.909 0.926 TV5 122 178 120 20 2 0.857 0.984 0.916 TV6 17 283 12 0 5 1.000 0.706 0.828 
+
+Micro 489 1311 440 31 49 0.934 0.900 0.917 
+
+Macro — — — — — 0.957 0.824 0.874 over TV1–TV6, since a single workflow may exhibit multiple threat vectors simultaneously. For each TV, we score a binary one-vs-rest task: a workflow is predicted positive if Heimdallr reports that TV on at least one node, and the ground truth is positive if any human-annotated node carries that TV. Table 7 reports the resulting per-TV workflow-level precision, re-call, and F1, together with the positive/negative label support on our stratified 300-workflow benchmark. The micro-average aggregates TP/FP/FN over all six TV labels and therefore emphasizes overall label-instance performance, whereas the macro-average gives equal weight to each TV and thus better reflects balance across common and rare threat vectors. Because the benchmark is stratified by pre-dicted outcome, these supports are evaluation supports rather than estimates of ecosystem prevalence.          
+
+> Finding. Overall, Heimdallr achieves a micro-average F1 of 0.917 (P = 0.934 ,R = 0.900 ) and a macro-average F1 of 0.874 on TV1–TV6.
+
+The main source of reduced overall recall is the S2 blind spot: by construction, S2 workflows are those for which Heimdallr predicts an externally triggerable LLM node but no TV1–TV6 finding, yet human annotators identify 25 of the 50 S2 workflows as carrying at least one TV1–TV6 risk. These cases drive the majority of FNs across all TVs, particularly for TV1 ( 15 FNs) and TV4 ( 10 FNs). On the precision side, TV5 is the primary source of over-prediction ( 20 
+
+FPs). TV1, TV2, and TV6 achieve perfect or near-perfect precision. 
+
+## 6.5 End-to-End Findings 
+
+To assess real-world findings, we apply Heimdallr to the LLM-integrated workflow corpus and conduct a responsible disclosure campaign targeting TV4–TV6 findings. These three threat vec-tors correspond to concrete, attacker-feasible exploit paths with clear repository-side remediations, making them directly actionable. TV1–TV3 and TV7 capture higher-level behavioral or systemic con-ditions whose mitigations are more context-dependent; we report them as part of the broader risk landscape but do not include them in the disclosure campaign. Detection and disclosure are ongoing: as new workflows are analyzed, confirmed findings continue to be reported to affected repository maintainers. 
+
+6.5.1 Threat-Vector Prevalence. Because end-to-end scanning is still ongoing, we report current lower-bound prevalence over the Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. 0 200 400 600 800 1000 
+
+> Currently identified workflow findings
+> TV2
+> TV5
+> TV4
+> TV3
+> TV1
+> TV6
+> Share of all content-unique workflow specs (n=16,818)
+> 886 (5.3%)
+> 418 (2.5%)
+> 372 (2.2%)
+> 146 (0.9%)
+> 82 (0.5%)
+> 53 (0.3%)
+
+Figure 6: Lower-bound prevalence of currently identified TV1–TV6 findings over all 16 ,818 content-unique workflow specifications in the ongoing end-to-end scan. 
+
+full set of 16 , 818 content-unique workflow specifications rather than finalized corpus-wide rates. As shown in Figure 6, TV2 cur-rently appears in 5.3% of workflows, followed by TV5 ( 2.5% ) and TV4 ( 2.2% ), while TV3 ( 0.9% ), TV1 ( 0.5% ), and TV6 ( 0.3% ) are less common. We omit TV7 from the figure because it is a triggerability-based heuristic rather than a demonstrated taint-chain finding; nonetheless, the current scan has already identified 3, 731 workflow specifications ( 22 .2% ) with TV7 exposure. 
+
+6.5.2 Responsible Disclosure. Before disclosure, we manually ver-ify each detected TV4–TV6 case to confirm it exposes a real vulnera-bility, and disclose only this verified subset to minimize unnecessary burden on repository maintainers.   
+
+> Finding. As of April 30, 2026, we have disclosed
+
+802 workflow instances ( 351  
+
+> content-unique workflow specifications) across
+
+759 repositories, of which 71 have acknowledged the report and fixed the issues. 
+
+Acknowledgment counts should be interpreted as lower bounds, as maintainer response times vary and the disclosure process is ongoing. Among the disclosed repositories, 6 have over 1K GitHub stars, including 2 with over 10K stars, indicating that the identified vulnerabilities affect widely-used, actively maintained projects. 
+
+6.5.3 Case Study. We illustrate Heimdallr ’s end-to-end analysis with a representative workflow that implements a Gemini @mention 
+
+bot: any user who mentions @gemini in a GitHub issue comment triggers the workflow, which forwards the request to the Gemini LLM, applies the generated code changes to the workspace via an awk script, and can auto-merge the resulting pull request. The key logic of this workflow is presented in Listing 1. The work-flow holds a live GEMINI_API_KEY secret and grants contents ,
+
+pull-requests , issues , and actions write permissions. Because it triggers on issue_comment with no author restriction, Heim-dallr assigns the LLM node a direct triggerability mode. 
+
+Heimdallr detects five threat vectors on this workflow. TV2: 
+
+The LLM’s output is written to the workspace (line 23) and commit-ted as a pull request; including –auto-merge in the issue text causes the PR to merge automatically (line 29), completing a fully attacker-controlled repository poisoning chain. TV3: Issue comment body flows into the LLM prompt (line 22) and agent_control sink (line 
+
+Listing 1: Gemini @mention workflow (excerpt).                                  
+
+> 1on:
+> 2issue_comment: ...
+> 3permissions: ...
+> 4jobs:
+> 5gemini_mention:
+> 6if: contains(github.event.comment.body, '@gemini ')
+> 7steps:
+> 8- name: Extract command
+> 9run: |
+> 10 BODY="${{ github.event.comment.body }}"
+> 11 COMMAND=$(echo "$BODY" | grep -oP gemini ...)
+> 12 if echo "$COMMAND" | grep "auto-merge"; then
+> 13 echo "auto_merge=true" >> $GITHUB_OUTPUT
+> 14 fi
+> 15 echo "command=$COMMAND" >> $GITHUB_OUTPUT
+> 16 ...
+> 17 - name: Run Gemini
+> 18 env:
+> 19 GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+> 20 run: |
+> 21 PROMPT="You are a software engineer ...
+> 22 Req: ${{ steps.extract.outputs.command }}"
+> 23 gemini --yolo --prompt "$PROMPT" > g.md
+> 24 - name: Apply changes
+> 25 run: |
+> 26 awk '...system("mkdir \"" dir "\"")... 'g.md
+> 27 - name: Enable auto-merge
+> 28 if: steps.extract.outputs.auto_merge == 'true '
+> 29 run: gh pr merge ...
+
+23); with the Gemini CLI running in –yolo mode, a crafted issue body can hijack the agent to perform arbitrary operations. TV4: 
+
+The same untrusted content is also interpolated via GitHub expres-sions directly into run: shell blocks without sanitization (line 10, 22), creating a direct execution-injection path before the LLM is even invoked. TV5: The LLM’s response is parsed by an awk script that calls system("mkdir ...") on model-chosen paths (line 26), making an LLM-controlled value the argument to a shell execution call. TV7: The LLM node is directly triggerable; if the repository owner has not configured external rate controls, an attacker can repeatedly open issues or post comments to exhaust the API quota. 
+
+## 7 Discussion 7.1 Defensive Takeaways 
+
+Principle of Least Privilege. Permissions should be declared at the job level and scoped to the minimum required (e.g., issues: write for a labeling job). Besides, it is necessary to gate LLM-integrated jobs on the triggering actor’s identity or role. Beyond CI-specific controls, established prompt injection mitigations are applicable here; we refer practitioners to other research [ 1, 2, 23 , 42 ]for a comprehensive treatment. 
+
+Safe Handling of LLM Inputs and Outputs. On the input side, untrusted event payloads should never be spliced into execution sites via GitHub expression syntax. Instead, untrusted values should be passed through environment variables, which the shell treats as data rather than code. On the output side, LLM-generated content must not be forwarded unchecked to sensitive sinks. Appropriate sanitization or structural constraints on the expected response for-mat should be enforced before the output is consumed downstream. 
+
+Fail-Safe API Integration. Workflows must handle LLM API er-rors explicitly. Providers may return non-2xx status codes to signal blocked or flagged requests (e.g., Azure OpenAI returns HTTP 400 on content-filter violations [ 37 ]). Workflows should fail closed in such cases, act on any harm or injection signals exposed in the Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+response, and enforce LLM invocation quotas to bound exposure to denial-of-wallet attacks. 
+
+## 7.2 Limitations 
+
+Boundary of the Analyzable Closure. Heimdallr reasons over the workflow YAML and its immediate analyzable closure. It does not recursively chase transitive dependencies or fully unpack opaque execution boundaries such as dynamically fetched payloads. This can hide LLM calls or downstream sinks and induce false negatives. 
+
+Conservative Treatment of Dynamic Guards. Triggerability analysis explicitly models event declarations, actor-based checks, and many workflow guards, but conditions that depend on step or job outputs are treated conservatively. This can over-approximate attacker reachability when admission logic is computed dynami-cally at runtime. 
+
+LLM-assisted Dataflow Summarization. Heimdallr relies on an LLM-assisted step summarizer to recover inflows, outflows, and LLM-interaction boundaries. In these scenarios, precise end-to-end static analysis does not scale. Summarization may miss subtle flows or sanitization logic. 
+
+## 8 Related Work 8.1 Security Analysis of CI Workflows 
+
+Prior work studies security risks in CI artifacts such as workflow configurations, scripts, and reusable actions. Existing work reports pervasive misconfiguration and overprivileged GITHUB_TOKEN 
+
+use [ 4, 25 , 40 ], and demonstrates attacks including token leakage, privilege escalation, artifact backdooring, cryptomining, plugin hijacking, and cache poisoning [ 20 , 21 , 26 , 27 , 34 ]. Automated analyses focus on taint-style detection of unsafe data flows and least-privilege reduction [ 32 , 39 ]. In contrast, our threat model centers on LLMs embedded in running workflows, which can be manipulated through attacker-controlled natural language. 
+
+## 8.2 Prompt Injection in LLM-Integrated Applications 
+
+Prompt injection in LLM-integrated applications has been studied extensively, from early demonstrations and attack taxonomies [ 19 ,24 , 30 ] to concrete exploits against LLM frameworks and coding agents [ 29 , 31 ]. Subsequent work expands the threat surface to tool selection and LLM-as-a-judge pipelines [ 35 , 36 ], while detec-tion and defense efforts use fuzzing, taint tracking, and prompt sanitization [ 22 , 28 , 42 ]. However, these studies do not address CI workflows, where privileged automation consumes untrusted inputs under a distinct operational and security model. 
+
+## 9 Conclusion 
+
+In this paper, we present the first study of LLM-induced security risks in GitHub CI workflows, introducing a taxonomy of risk classes and threat vectors. We then propose Heimdallr , a hybrid analysis framework that achieves high accuracy in controlled eval-uation and reveals that 43 .5% of real-world LLM-integrated work-flows are externally triggerable. Our responsible disclosure of 802 
+
+vulnerable workflow instances across 759 repositories shows that these threat vectors arise in real repositories: they affect actively maintained projects and can be verified and remediated in practice. 
+
+## References 
+
+[1] Sizhe Chen, Julien Piet, Chawin Sitawarin, and David Wagner. 2025. {StruQ }:Defending against prompt injection with structured queries. In 34th USENIX Security Symposium (USENIX Security 25) . 2383–2400. [2] Sizhe Chen, Yizhu Wang, Nicholas Carlini, Chawin Sitawarin, and David Wagner. 2025. Defending against prompt injection with a few defensivetokens. In Proceed-ings of the 18th ACM Workshop on Artificial Intelligence and Security . 242–252. [3] Rein Daelman. 2025. PromptPwnd: Prompt Injection Vulnerabilities in GitHub Actions Using AI Agents. https://www.aikido.dev/blog/promptpwnd-github-actions-ai-agents. [4] Keheliya Gallaba and Shane McIntosh. 2018. Use and misuse of continuous integration features: An empirical study of projects that (mis) use Travis CI. IEEE Transactions on Software Engineering 46, 1 (2018), 33–50. [5] GHArchive. 2026. GH Archive — gharchive.org. https://www.gharchive.org/. [6] GitHub. 2026. Continuous integration - GitHub Docs — docs.github.com. https: //docs.github.com/en/actions/get-started/continuous-integration. [7] GitHub. 2026. Disallow access to secrets for pull_request trigger · commu-nity · Discussion #180109 — github.com. https://github.com/orgs/community/ discussions/180109. [8] GitHub. 2026. GitHub - actions/ai-inference: An action for calling AI models with GitHub Models — github.com. https://github.com/actions/ai-inference. [9] GitHub. 2026. GitHub - anthropics/claude-code-action — github.com. https: //github.com/anthropics/claude-code-action. [10] GitHub. 2026. GitHub - JohnsonRan/nomore-spam — github.com. https://github. com/{J}ohnson{R}an/nomore-spam. [11] GitHub. 2026. GitHub CLI — cli.github.com. https://cli.github.com/. [12] GitHub. 2026. GitHub Marketplace: tools to improve your workflow. https: //github.com/marketplace. [13] GitHub. 2026. Octokit — github.com. https://github.com/octokit. [14] GitHub. 2026. Reuse workflows - GitHub Docs — docs.github.com. https://docs. github.com/en/actions/how-tos/reuse-automations/reuse-workflows. [15] GitHub. 2026. toolkit/packages/core at main · actions/toolkit — github.com. https://github.com/actions/toolkit/tree/main/packages/core. [16] GitHub. 2026. toolkit/packages/github at main · actions/toolkit — github.com. https://github.com/actions/toolkit/tree/main/packages/github. [17] GitHub. 2026. Workflow syntax for GitHub Actions - GitHub Docs — docs.github.com. https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax. [18] Google. 2026. Gemini 3 Flash Preview | Gemini API | Google AI for Developers — ai.google.dev. https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview. [19] Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten Holz, and Mario Fritz. 2023. Not what you’ve signed up for: Compromising real-world llm-integrated applications with indirect prompt injection. In Proceedings of the 16th ACM workshop on artificial intelligence and security . 79–90. [20] Yacong Gu, Lingyun Ying, Huajun Chai, Yingyuan Pu, Haixin Duan, and Xing Gao. 2024. More haste, less speed: Cache related security threats in continuous integration services. In 2024 IEEE Symposium on Security and Privacy (SP) . IEEE, 1179–1197. [21] Yacong Gu, Lingyun Ying, Huajun Chai, Chu Qiao, Haixin Duan, and Xing Gao. 2023. Continuous intrusion: Characterizing the security of continuous integration services. In 2023 IEEE Symposium on Security and Privacy (SP) . IEEE, 1561–1577. [22] Junjie He, Shenao Wang, Yanjie Zhao, Xinyi Hou, Zhao Liu, Quanchen Zou, and Haoyu Wang. 2026. TaintP2X: Detecting Taint-Style Prompt-to-Anything Injection Vulnerabilities in LLM-Integrated Applications. In 2026 IEEE/ACM 48th International Conference on Software Engineering (ICSE) .[23] Keegan Hines, Gary Lopez, Matthew Hall, Federico Zarfati, Yonatan Zunger, and Emre Kiciman. 2024. Defending against indirect prompt injection attacks with spotlighting. arXiv preprint arXiv:2403.14720 (2024). [24] Juhee Kim, Wenbo Guo, and Dawn Song. 2026. SoK: Attack and Defense Land-scape of Agentic AI Systems. In 35nd USENIX Security Symposium (USENIX Security 26) .[25] Igibek Koishybayev, Aleksandr Nahapetyan, Raima Zachariah, Siddharth Muralee, Bradley Reaves, Alexandros Kapravelos, and Aravind Machiry. 2022. Character-izing the security of github {CI } workflows. In 31st USENIX Security Symposium (USENIX Security 22) . 2747–2763. [26] Xiaofan Li, Yacong Gu, Chu Qiao, Zhenkai Zhang, Daiping Liu, Lingyun Ying, Haixin Duan, and Xing Gao. 2024. Toward Understanding the Security of Plugins in Continuous Integration Services. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security . 482–496. [27] Zhi Li, Weijie Liu, Hongbo Chen, XiaoFeng Wang, Xiaojing Liao, Luyi Xing, Mingming Zha, Hai Jin, and Deqing Zou. 2022. Robbery on devops: Understanding and mitigating illicit cryptomining on continuous integration service platforms. Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. 
+
+In 2022 IEEE Symposium on Security and Privacy (SP) . IEEE, 2397–2412. [28] Fengyu Liu, Yuan Zhang, Jiaqi Luo, Jiarun Dai, Tian Chen, Letian Yuan, Zhengmin Yu, Youkun Shi, Ke Li, Chengyuan Zhou, et al . 2025. Make agent defeat agent: Automatic detection of {Taint-Style } vulnerabilities in {LLM-based } agents. In 
+
+34th USENIX Security Symposium (USENIX Security 25) . 3767–3786. [29] Tong Liu, Zizhuang Deng, Guozhu Meng, Yuekang Li, and Kai Chen. 2024. De-mystifying rce vulnerabilities in llm-integrated apps. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security . 1716–1730. [30] Yupei Liu, Yuqi Jia, Runpeng Geng, Jinyuan Jia, and Neil Zhenqiang Gong. 2024. Formalizing and benchmarking prompt injection attacks and defenses. In 33rd USENIX Security Symposium (USENIX Security 24) . 1831–1847. [31] Yue Liu, Yanjie Zhao, Yunbo Lyu, Ting Zhang, Haoyu Wang, and David Lo. 2025. " Your AI, My Shell": Demystifying Prompt Injection Attacks on Agentic AI Coding Editors. arXiv preprint arXiv:2509.22040 (2025). [32] Siddharth Muralee, Igibek Koishybayev, Aleksandr Nahapetyan, Greg Tystahl, Brad Reaves, Antonio Bianchi, William Enck, Alexandros Kapravelos, and Ar-avind Machiry. 2023. {ARGUS }: A Framework for Staged Static Taint Analysis of 
+
+{GitHub } Workflows and Actions. In 32nd USENIX Security Symposium (USENIX Security 23) . 6983–7000. [33] OpenAI. 2026. GitHub - openai/codex-action — github.com. https://github.com/ openai/codex-action. [34] Ziyue Pan, Wenbo Shen, Xingkai Wang, Yutian Yang, Rui Chang, Yao Liu, Cheng-wei Liu, Yang Liu, and Kui Ren. 2023. Ambush from all sides: Understanding security threats in open-source software ci/cd pipelines. IEEE Transactions on Dependable and Secure Computing 21, 1 (2023), 403–418. [35] Jiawen Shi, Zenghui Yuan, Yinuo Liu, Yue Huang, Pan Zhou, Lichao Sun, and Neil Zhenqiang Gong. 2024. Optimization-based prompt injection attack to llm-as-a-judge. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security . 660–674. [36] Jiawen Shi, Zenghui Yuan, Guiyao Tie, Pan Zhou, Neil Zhenqiang Gong, and Lichao Sun. 2026. Prompt injection attack to tool selection in llm agents. In Pro-ceedings of the 33rd Network and Distributed System Security (NDSS) Symposium .[37] ssalgadodev. 2026. Content filtering for Microsoft Foundry Models (classic) -Microsoft Foundry (classic) portal — learn.microsoft.com. https://learn.microsoft. com/en-us/azure/foundry-classic/foundry-models/concepts/content-filter. [38] Kexin Sun, Hongyu Kuang, Sebastian Baltes, Xin Zhou, He Zhang, Xiaoxing Ma, Guoping Rong, Dong Shao, and Christoph Treude. 2025. Does ai code review lead to code changes? a case study of github actions. arXiv preprint arXiv:2508.18771 
+
+(2025). [39] Greg Tystahl, Jonah Ghebremichael, Siddharth Muralee, Sourag Cherupat-tamoolayil, Antonio Bianchi, Aravind Machiry, Alexandros Kapravelos, and William Enck. 2026. COSSETER: GitHub Actions Permission Reduction Using Demand-Driven Static Analysis. In 2026 IEEE Symposium on Security and Privacy (SP) .[40] Carmine Vassallo, Sebastian Proksch, Anna Jancso, Harald C Gall, and Massim-iliano Di Penta. 2020. Configuration smells in continuous delivery pipelines: a linter and a six-month study on GitLab. In Proceedings of the 28th ACM joint meet-ing on european software engineering conference and symposium on the foundations of software engineering . 327–337. [41] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric Xing, et al . 2023. Judging llm-as-a-judge with mt-bench and chatbot arena. Advances in neural information processing systems 36 (2023), 46595–46623. [42] Yinan Zhong, Qianhao Miao, Yanjiao Chen, Jiangyi Deng, Yushi Cheng, and Wenyuan Xu. 2026. Attention is All You Need to Defend Against Indirect Prompt Injection Attacks in LLMs. In Proceedings of the 33rd Network and Distributed System Security (NDSS) Symposium .
+
+## A Scope and Assumptions 
+
+Our analysis targets an LLM-integrated workflow together with its immediate analyzable closure : the workflow YAML itself, repository-local scripts directly invoked by runners, directly referenced third-party CI actions, and reusable workflows. Several elements remain out of scope. We do not model the proprietary internals or provider-specific safety semantics of remote LLMs; perform unbounded re-cursive analysis of arbitrary transitive dependencies in third-party action ecosystems; or treat dynamically loaded execution elements, such as opaque Docker actions ( uses: docker:// ) and network-fetched payloads (e.g., curl | bash ), as explicit analyzable paths. We also study repositories under GitHub’s default security posture rather than configurations that intentionally disable core isolation 
+
+Table 8: Unified taxonomy mapping. Each row represents a threat vector (TV1–TV7). Colored units ( ■) indicate the risk class(es) related to it (left) and the security impacts it may induce (right); grey units ( ■) indicate no direct relationship. Risk Class TV Impact 
+
+R1 R2 R3 R4 R5 R6 R7 I1 I2 I3 I4 I5 I6 
+
+■ ■ ■ ■ ■ ■ ■ TV1 ■ ■ ■ ■ ■ ■■ ■ ■ ■ ■ ■ ■ TV2 ■ ■ ■ ■ ■ ■■ ■ ■ ■ ■ ■ ■ TV3 ■ ■ ■ ■ ■ ■■ ■ ■ ■ ■ ■ ■ TV4 ■ ■ ■ ■ ■ ■■ ■ ■ ■ ■ ■ ■ TV5 ■ ■ ■ ■ ■ ■■ ■ ■ ■ ■ ■ ■ TV6 ■ ■ ■ ■ ■ ■■ ■ ■ ■ ■ ■ ■ TV7 ■ ■ ■ ■ ■ ■
+
+guarantees, such as non-default setups that expose secrets to pull requests from arbitrary forks. 
+
+## B Impact Taxonomy 
+
+While the main text centers on risk classes and threat vectors, we retain an impact taxonomy as a supporting view that summarizes the harms associated with each threat vector. 
+
+## B.1 Security Impacts 
+
+We define six categories of security impact. I1 (Execution Envi-ronment Compromise ) denotes unauthorized control over the CI execution environment. I2 (Secret Exfiltration ) covers the unau-thorized disclosure of sensitive credentials, such as API keys or GitHub tokens, to the adversary. I3 (Repository & Workflow Tamper-ing ) refers to attacker-driven modifications of repository contents, workflow definitions, or other persistent project state. I4 (Security Gate Bypass ) arises when security checks, content moderation, or reviews incorrectly approve attacker-controlled submissions. I5 
+
+(Misinformation Propagation ) captures cases where the workflow disseminates attacker-influenced contents. Finally, I6 (Availabil-ity Degradation ) occurs when adversary-induced LLM invocations exhaust token budgets or rate limits. 
+
+## B.2 Threat-Vector-to-Impact Mapping 
+
+The relationships among risk classes, threat vectors, and impacts are shown in Table 8. A single threat vector may induce multiple im-pacts depending on the privilege level and workflow configuration of the concrete deployment. 
+
+## C Methodology Details C.1 Event/Activity Matrix 
+
+Table 9 lists every GitHub event and activity type handled by Heim-dallr ’s baseline trigger classification, grouped by the assigned 
+
+TriggerMode . Events absent from this table receive none by de-fault. Heimdallr : Characterizing and Detecting LLM-Induced Security Risks in GitHub CI Workflows Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+Table 9: Complete event/activity matrix used by Heimdallr 
+
+for baseline trigger classification. Activity type * denotes the catch-all entry: any activity not explicitly listed for that event falls back to this row.                                                               
+
+> Event Activity Types Mode
+> Direct — attacker controls content immediately
+> issues opened ,edited ,reopened ,*direct issue_comment created ,edited ,*direct pull_request opened ,edited ,synchronize ,reopened ,*direct pull_request_target opened ,edited ,synchronize ,*direct pull_request_review_comment created ,*direct pull_request_review submitted ,*direct discussion created ,edited ,*direct discussion_comment created ,*direct
+> Mediated — requires maintainer or reviewer action
+> issues labeled ,unlabeled mediated pull_request labeled ,unlabeled mediated pull_request_target labeled ,unlabeled mediated pull_request_review dismissed mediated
+> Deferred — attacker plants content; automated job triggers later
+> schedule *deferred workflow_run *deferred
+> None — not externally triggerable
+> push *none workflow_dispatch *none repository_dispatch *none deployment *none deployment_status *none release *none
+
+Algorithm 1: Triggerability Analysis 
+
+Input: L-WPG 𝐺 , LLM node 𝑛 , policy registry P
+
+Output: Triggerability (𝑛 ), StepReachability (𝑛 ) 
+
+> 1
+
+𝐶 (0) 
+
+> 𝑛
+
+← { ( 𝑒, 𝑎 ) ∈ 𝐺 . on | mode (𝑒, 𝑎 ) ≠ none } 
+
+> 2
+
+secretReq (𝑛 ) ← ProfileActivation (𝑛 ) 
+
+> 3
+
+J ( 𝑛 ) ← toposort (ancestors (𝐽 𝑛 ) ∪ { 𝐽 𝑛 } )  
+
+> 4
+
+𝐶 guard  
+
+> 𝑛
+
+← FilterByGuards (𝐶 (0) 
+
+> 𝑛
+
+, J ( 𝑛 ), 𝑠 𝑛 ) 
+
+> 5
+
+baseline (𝑛 ) ← BestMode (𝐶 guard  
+
+> 𝑛
+
+) 
+
+> 6
+
+𝐶 act  
+
+> 𝑛
+
+← ActivationGate (𝐶 guard  
+
+> 𝑛
+
+, secretReq (𝑛 ) )  
+
+> 7
+
+𝐶 𝑛 ← PolicyGate (𝐶 act  
+
+> 𝑛
+
+, 𝑛, P )  
+
+> 8
+
+mode (𝑛 ) ← BestMode (𝐶 𝑛 ) 
+
+> 9
+
+Triggerability (𝑛 ) ← ⟨ 𝐶 𝑛 , baseline (𝑛 ), mode (𝑛 ) ⟩  
+
+> 10
+
+if 𝐶 𝑛 = ∅ then return Triggerability (𝑛 ), ∅ 
+
+> 11
+
+𝑅 (𝑛 ) ← ancestors (𝐽 𝑛 ) ∪ { 𝐽 𝑛 } ∪ downstream (𝐽 𝑛 ) 
+
+> 12
+
+for each step 𝑠 ∈ 𝑅 (𝑛 ) do  
+
+> 13
+
+𝐺 (𝑠 ) ← ancestors (𝐽 𝑠 ) ∪ { 𝐽 𝑠 } 
+
+> 14
+
+𝐶 raw (𝑠 ) ← ReachableTriggers (𝑠, 𝐺 (𝑠 ) )  
+
+> 15
+
+𝐶 eff (𝑠, 𝑛 ) ← 𝐶 raw (𝑠 ) ∩ 𝐶 𝑛  
+
+> 16
+
+StepReachability (𝑛 ) [ 𝑠 ] ← ( 𝐶 raw (𝑠 ), 𝐶 eff (𝑠, 𝑛 ) )  
+
+> 17
+
+return Triggerability (𝑛 ), StepReachability (𝑛 )
+
+## C.2 Triggerability Procedure 
+
+Algorithm 1 presents compact pseudocode for the triggerability analysis described in § 5.2. The algorithm takes an LLM node 𝑛 
+
+and the workflow’s trigger declarations as input and returns 
+
+Triggerability (𝑛 ) = ⟨𝐶 𝑛 , baseline (𝑛 ), mode (𝑛 )⟩ .
+
+## C.3 Guard Predicate Categories 
+
+Table 10 summarizes the atomic predicate categories used by Fil-terByGuards and ReachableTriggers . The four categories parti-tion the space of atomic boolean predicates that appear in GitHub workflow if conditions. 
+
+## C.4 Dataflow Procedure 
+
+Algorithm 2 presents compact pseudocode for the dataflow analysis described in § 5.3. The algorithm operates over the analysis region 
+
+𝑅 (𝑛 ) for a given LLM node 𝑛 , processing jobs in topological order and steps within each job in YAML-declared order. 
+
+Table 11: Canonical attacker-controlled taint sources tracked by Heimdallr .
+
+Category Canonical Source Expression 
+
+Issue github.event.issue.title github.event.issue.body 
+
+Comment github.event.comment.body 
+
+Pull Request (PR) github.event.pull_request.title github.event.pull_request.body github.event.pull_request.head.ref github.event.pull_request.head.label 
+
+PR review github.event.review.body 
+
+Discussion github.event.discussion.title github.event.discussion.body 
+
+Algorithm 2: Dataflow Analysis 
+
+Input: L-WPG 𝐺 , LLM node 𝑛 , Triggerability (𝑛 ),
+
+StepReachability (𝑛 ), cache C
+
+Output: DataflowView (𝑛 ) 
+
+> 1
+
+𝑅 (𝑛 ) ← ancestors (𝐽 𝑛 ) ∪ { 𝐽 𝑛 } ∪ downstream (𝐽 𝑛 ) 
+
+> 2
+
+S ( 𝑛 ) ← { 𝑠 ∈ steps (𝑅 (𝑛 ) ) | 𝐶 eff (𝑠, 𝑛 ) ≠ ∅ }  
+
+> 3
+
+Σ(𝑠 𝑛 ) ← Summarize (𝑠 𝑛 , llm _target , C)  
+
+> 4
+
+for each step 𝑠 ∈ S ( 𝑛 ) \ { 𝑠 𝑛 } in topo-order do  
+
+> 5
+
+Σ(𝑠 ) ← Summarize (𝑠, ordinary , C)  
+
+> 6
+
+T, L, 𝑃 𝑛 , 𝑋 𝑛 ← ∅  
+
+> 7
+
+𝑊 𝑛 , 𝑅 exec  
+
+> 𝑛
+
+, 𝑅 dec  
+
+> 𝑛
+
+, 𝑅 cont  
+
+> 𝑛
+
+, 𝐴 𝑛 ← false  
+
+> 8
+
+for each step 𝑠 ∈ S ( 𝑛 ) in topo-order do  
+
+> 9
+
+Resolve Σ(𝑠 ).inflows against T, L, workspace contamination, and 𝐶 eff (𝑠, 𝑛 ) 
+
+> 10
+
+if 𝑠 = 𝑠 𝑛 then  
+
+> 11
+
+Update 𝑃 𝑛 , 𝑊 𝑛 , and seed L from the prompt/response channels of Σ(𝑠 𝑛 ) 
+
+> 12
+
+for each tainted outflow 𝑜 ∈ Σ(𝑠 ).outflows do  
+
+> 13
+
+Update carrier state in T and L (outputs, env vars, workspace, artifacts)  
+
+> 14
+
+Update 𝑋 𝑛 , 𝑅 exec  
+
+> 𝑛
+
+, 𝑅 dec  
+
+> 𝑛
+
+, 𝑅 cont  
+
+> 𝑛
+
+, and 𝐴 𝑛 from 𝑜 ’s sink kind and taint kind  
+
+> 15
+
+return DataflowView (𝑛 )Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Ruan et al. 
+
+Table 10: Atomic predicate categories used in triggerability analysis. 
+
+Category Security Interpretation Representative Examples 
+
+blocking The attacker cannot satisfy the predicate. github.actor == ’trusted-user’ ; author_association == ’MEMBER’ trusted-action The path requires a trusted actor action. github.event.label.name == ’safe’ ; github.event.review.state == ’approved’ passable The attacker can satisfy the predicate. contains(github.event.comment.body, ’/run’) ; github.event.issue.body != ” event-filter Restricts which events can reach the node. github.event_name == ’issue_comment’ ; github.event_name == ’pull_request’ 
+
+Table 12: Sink taxonomy used by Heimdallr ’s dataflow anal-ysis. Propagation sinks carry taint to successor steps. LLM virtual sinks are internal analysis constructs that demarcate the LLM interaction boundary.            
+
+> Category Sink Types
+> Execution {yaml_splice,process,github_script}_exec ,shell_eval
+> Decision {spam,pr_review,check_status,label,deploy}_gate
+> Content github_{comment,pr_body,file_write,release} ,
+> workspace_file_write ,artifact_upload
+> Propagation {step,job}_output ,env_var ,
+> workspace_file_write ,artifact_upload
+> LLM virtual llm_{prompt,response} ,agent_control
+
+## C.5 Dataflow Reference Tables 
+
+Table 11 lists the canonical attacker-controlled taint sources tracked by Heimdallr , corresponding to the four delivery methods M1– M4 defined in § 5.3.1. Any step inflow whose source expression matches a listed field is seeded with attacker taint T during forward propagation. Table 12 presents the complete sink taxonomy used by the step summarizer to type outflows. The virtual boundary sinks 
+
+llm_prompt , llm_response , and agent_control are produced ex-clusively in llm-target mode and serve as the evidence anchors for risk synthesis.
