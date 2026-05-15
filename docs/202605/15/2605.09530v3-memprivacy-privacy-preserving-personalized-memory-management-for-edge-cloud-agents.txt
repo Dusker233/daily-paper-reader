@@ -1,0 +1,986 @@
+Title: MemPrivacy: Privacy-Preserving Personalized Memory Management for Edge-Cloud Agents
+
+URL Source: https://arxiv.org/pdf/2605.09530v3
+
+Published Time: Fri, 15 May 2026 01:35:03 GMT
+
+Number of Pages: 36
+
+Markdown Content:
+# MemPrivacy: Privacy-Preserving Personalized Memory Management for Edge-Cloud Agents 
+
+## Yining Chen ∗,1, Jihao Zhao ∗,1, Bo Tang 1, Haofen Wang 1,3, Yue Zhang 2, Fei Huang 2,
+
+## Feiyu Xiong 1, Zhiyu Li B,1
+
+> 1
+
+MemTensor (Shanghai) Technology Co., Ltd. , 2HONOR Device Co., Ltd. , 3Tongji University 
+
+## Abstract 
+
+As LLM-powered agents are increasingly deployed in edge-cloud environments, personalized memory has become a key enabler of long-term adaptation and user-centric interaction. However, cloud-assisted memory management exposes sensitive user information, while existing privacy protection methods typically rely on aggressive masking that removes task-relevant semantics and consequently degrades memory utility and personalization quality. To address this challenge, We propose MemPrivacy, which identifies privacy-sensitive spans on edge devices, replaces them with semantically structured type-aware placeholders for cloud-side memory processing, and restores the original values locally when needed. By decoupling privacy protection from semantic destruction, MemPrivacy minimizes sensitive data exposure while retaining the information required for effective memory formation and retrieval. We also construct MemPrivacy-Bench for systematic evaluation, a dataset covering 200 users and over 155k privacy instances, and introduce a four-level privacy taxonomy for configurable protection policies. Experiments show that MemPrivacy achieves strong performance in privacy information extraction, substantially surpassing strong general-purpose models such as GPT-5.2 and Gemini-3.1-Pro, while also reducing inference latency. Across multiple widely used memory systems, MemPrivacy limits utility loss to within 1.6%, outperforming baseline masking strategies. Overall, MemPrivacy offers an effective balance between privacy protection and personalized memory utility for edge-cloud agents, enabling secure, practical, and user-transparent deployment.  
+
+> Date:
+
+May 15, 2026  
+
+> Correspondence:
+
+lizy@memtensor.cn  
+
+> Author Legend:
+
+* Co-equal primary author, B Corresponding authors  
+
+> Code:
+
+https://github.com/MemTensor/MemPrivacy  
+
+> Model:
+
+https://huggingface.co/collections/IAAR-Shanghai/memprivacy 
+
+## 1 Introduction 
+
+With the rapid advancement of large language models (LLMs), intelligent agents are evolving from standalone text generators into memory-augmented systems capable of tool use, long-term adaptation, and personalized interaction [ 5, 22 ]. In practical deployment, user interactions originate on edge devices, while computation-intensive reasoning and memory management are often offloaded to the cloud. This architecture makes personalized memory a key enabler of user-centric services, allowing agents to accumulate preferences, histories, and contextual knowledge over time. Recent memory systems, such as LongMem [ 44 ] and Mem0 [ 6], as well as a growing number of conversational agents [ 53 , 57 ], have demonstrated the value of cloud-assisted memory 1
+
+> arXiv:2605.09530v3 [cs.CR] 14 May 2026
+
+No Protection  
+
+> Privacy values exposed
+> No processing
+> What
+> Reaches
+> the Cloud
+> (blood pressure today was) 160/110
+> user@mail.com
+> Cloud Agent / Memory System
+> Works, but leaks privacy data
+> Local User
+> User-Visible
+> Reply
+
+Full Masking        
+
+> Please draft a concise email to my
+> doctor: my blood pressure today was
+> ***. Ask him to reply to ***.
+> > Semantics degraded
+> > No useful privacy
+> semantics retained
+> Irreversible Masking
+> What
+> Reaches
+> the Cloud
+> ***
+> ***
+> Cloud Agent / Memory System
+> I cannot reliably draft the email
+> b e c a u s e k e y d e t a i l s a r e f u l l y
+> masked.
+> Unintelligible, Irreversible
+> Local User
+> User-Visible
+> Reply
+> Privacy Exposure: Low Utility: Low
+> Complete Privacy Loss
+
+MemPrivacy                
+
+> Local User
+> Please draft a concise email to my
+> doctor: my blood pressure today was
+> 1 6 0 / 1 1 0 . A s k h i m t o r e p l y t o
+> user@mail.com.
+> Concise draft:“Hello Doctor, my blood
+> pressure today was 160/110. Please reply
+> to user@mail.com.”
+> Please draft a concise email to my
+> doctor: my blood pressure today was
+> 1 6 0 / 1 1 0 . A s k h i m t o r e p l y t o
+> user@mail.com.
+> Please draft a concise email to my
+> doctor: my blood pressure today was
+> 1 6 0 / 1 1 0 . A s k h i m t o r e p l y t o
+> user@mail.com. Understands the task
+> Typed Placeholders Masking
+> What
+> Reaches
+> the Cloud
+> <Health_Info_1>
+> <Email_1>
+> Cloud Agent / Memory System
+> User-Visible
+> Reply
+> Privacy Exposure: Low Utility: High
+> Concise draft:“Hello Doctor, my blood
+> pressure today was 160/110. Please reply
+> to user@mail.com.”
+> Please draft a concise email to my
+> doctor: my blood pressure today
+> was <Health_Info_1>. Ask him to
+> reply to <Email_1>.
+> No private data stored
+> in the cloud.
+> Concise draft:“Hello Doctor, my blood
+> pressure today was <Health_Info_1>.
+> Please reply to <Email_1>.”
+> Original Reply
+> Placeholders Lookup + Replace Local Restore
+> Please draft a concise email to my
+> doctor: my blood pressure today was
+> 1 6 0 / 1 1 0 . A s k h i m t o r e p l y t o
+> user@mail.com.
+> Privacy Exposure: High Utility: High
+
+Figure 1 Comparison of privacy protection strategies for local-to-cloud agent interaction. Raw transmission exposes privacy data to the cloud, while full masking protects privacy at the cost of semantic utility. MemPrivacy instead uses semantic placeholders and local restoration to preserve both privacy and task effectiveness. 
+
+for improving personalization quality and user experience. However, the more effectively agents leverage long-term memory for personalization, the more sensitive user information is exposed to cloud-side storage and processing. This tension is particularly acute because memory management introduces a broader and more persistent privacy attack surface than one-shot cloud inference. User interactions naturally contain sensitive personally identifiable information (PII), including contact details, addresses, health conditions, financial information, and credentials. Once such content is transmitted in plaintext and incorporated into cloud logs, vector databases, or external memory stores, it may remain accessible throughout subsequent storage, retrieval, and reuse stages, creating opportunities for privacy leakage far beyond the original interaction. Prior studies have shown that multi-turn memory attacks can induce severe privacy violations with success rates up to 69% [ 27 ], leakage attacks against memory systems can reach 75% success [ 43 ], and indirect prompt injection can even manipulate agents into eliciting private information [ 7]. Beyond these technical threats, users often lack clear mental models of how cloud-based agents collect and reuse personal data, leading to anxiety, strategic self-censorship, and manual redaction behaviors that undermine utility [ 51 ]. Regulatory requirements such as the "right to be forgotten" further intensify the challenge, as deleting externally stored memories does not necessarily address information that has already been propagated through agent workflows or internalized by models [50]. Privacy protection in cloud agent memory is thus not only necessary but urgent. Existing countermeasures often face a fundamental trade-off, as illustrated in Figure 1. Straightforward defenses such as full masking or redaction can prevent direct exposure of sensitive values, but they also remove critical semantic cues that support memory formation, retrieval, and downstream reasoning [ 26 , 28 ]. More principled techniques, including differential privacy, cryptographic protection, and anonymization, offer stronger privacy guarantees in specific settings, yet they are often difficult to integrate into interactive cloud inference and memory pipelines, or they incur substantial utility loss by obscuring task-relevant information. Moreover, users differ significantly in what they consider private and how strictly different categories of information should be protected, making one-size-fits-all protection strategies inadequate for personalized agents [ 30 ]. These limitations expose a central challenge: how can an edge-cloud agent minimize sensitive data exposure during cloud-side memory processing while preserving the semantic structure necessary for accurate retrieval, long-term adaptation, and high-quality personalization? To address this, we propose MemPrivacy , a privacy-preserving personalized memory management framework based on local reversible pseudonymization . Instead of destroying sensitive content through coarse-grained 2masking, MemPrivacy performs privacy-sensitive span detection on edge devices and transforms raw private values into semantically structured, type-aware placeholders before cloud transmission. As shown in Figure 1, a lightweight on-device MemPrivacy model identifies privacy spans, assigns each span a privacy type and protection level, and stores the original-to-placeholder mapping securely in a local database. The cloud-side memory system therefore receives semantically informative inputs that preserve the roles and relations needed for memory formation and retrieval, but it never directly observes the original sensitive values. When cloud processing is completed, MemPrivacy restores the protected values locally, enabling users to receive fluent and personalized responses without exposing raw private information to the cloud. To support configurable protection, MemPrivacy introduces a four-level privacy taxonomy that allows different protection policies to be applied according to user preferences and information sensitivity. We further construct MemPrivacy-Bench ,a high-quality benchmark covering 200 users and more than 155K privacy instances, and use it to train lightweight MemPrivacy models ranging from 0.6B to 4B parameters for resource-constrained edge deployment. Extensive experiments show that MemPrivacy achieves stronger privacy-span extraction than powerful general-purpose LLMs, reduces inference latency, and preserves personalized memory utility substantially better than conventional masking strategies, thereby offering a practical and effective privacy-utility trade-off for edge-cloud agents. Our main contributions are as follows: 
+
+• We propose MemPrivacy , a privacy-preserving personalized memory management framework that reconciles privacy protection with cloud agent utility through typed placeholders and local restoration. 
+
+• We introduce a four-level privacy taxonomy that provides a standardized guideline for privacy identifica-tion and differential protection strategies. 
+
+• We construct MemPrivacy-Bench , a comprehensive dataset containing 200 users and 155k+ privacy instances, and release lightweight MemPrivacy models optimized for on-device deployment. 
+
+• Extensive evaluation across multiple models and memory systems confirms that MemPrivacy achieves state-of-the-art extraction performance and negligible utility loss compared to baseline methods. 
+
+## 2 Related Work 
+
+2.1 Memory Operating Systems for LLM Agents 
+
+To address the limited context windows of LLMs and enable continual adaptation across long-horizon interactions, recent work has increasingly treated memory as a core component of agent systems [ 13 , 16 , 53 ]. LongMem [ 44 ] augments frozen language models with an external memory bank to support long-range contextual modeling, while MemoryBank [ 57 ] studies long-term conversational memory with mechanisms inspired by human forgetting. MemGPT [ 32 ] formulates memory management as OS-style virtual context handling, enabling agents to move information across memory tiers beyond the native context window. In practical agent frameworks, LangMem 1 decouples memory primitives from background consolidation and persistence, and Mem0 [ 6] proposes a scalable multi-level architecture for extracting and retrieving salient user information across sessions, and MemoBase 2 adopts a user-profile-centered design that combines structured profiles with time-aware event memories and buffered batch processing to support low-latency personalization. Moving beyond flat memory stores, A-Mem [ 45 ] organizes memory as an evolvable network with dynamic indexing and linking, whereas MemOS [ 20 ] reconceptualizes memory as a first-class system resource and provides unified mechanisms for memory representation, organization, and lifecycle governance across heterogeneous memory forms. Overall, these studies indicate a shift from passive memory retrieval toward actively managed, structured memory systems for personalization, coherence, and long-term agent behavior. 
+
+> 1https://github.com/langchain-ai/langmem
+> 2https://github.com/memodb-io/memobase
+
+32.2 Privacy Protection for Long-Term Conversational Memory 
+
+Existing research on LLMs privacy protection has spanned multiple stages, from training to deployment. However, its problem formulations remain noticeably misaligned with the protection needs of long-term memory dialogue systems. Some studies incorporate retrieval-augmented generation (RAG), cloud-edge collaborative inference, or prompt tuning into formal privacy frameworks based on differential privacy and cryptographic mechanisms, thereby reducing the risks of retrieval corpus leakage, query exposure, or fine-tuning data disclosure [ 17 , 24 , 46 , 49 ]. Yet such approaches either rely on noise injection and thus inevitably degrade the semantic fidelity of user facts, or primarily protect the retrieval or training process rather than the raw prompt content itself. As a result, they are unsuitable for scenarios that require the accurate preservation of genuine preferences, identity relations, and contextual constraints. Other studies focus on removing already absorbed sensitive knowledge from model parameters, including general unlearning frameworks for pretrained LLMs [ 47 ], analyses of deletion targets under extraction attacks [ 34 ], and efficient unlearning methods based on LoRA and negative samples [ 23 ]. However, these works mainly address memorization during training rather than private content newly provided by users at inference time. Moreover, existing evidence suggests that ostensibly deleted knowledge may still be recoverable through intermediate-layer traces or paraphrasing attacks [ 34 ]. In contrast, replacing private RAG contexts with fully synthetic data [ 48 ], or reducing sensitive corpus exposure through privacy-preserving vector databases and data processing frameworks [ 14 ], can indeed help mitigate the risk that models regurgitate pre-existing private data. Nevertheless, they still struggle to adequately cover a more realistic setting: users directly provide sensitive facts to a cloud-hosted model during inference and expect the system to retain and reuse them as long-term memory in subsequent interactions. For this reason, recent studies have begun to reexamine privacy risks in long-term memory systems from multiple angles. MEXTRA directly reveals that the memory module itself has become an independent and high-risk surface for privacy exposure [ 43 ]. AirGapAgent advocates constraining the context accessible to agents under the principle of data minimization [ 2]. Firewalls limits information flow and cross-module propagation in agentic networks through multilayer protective boundaries [ 1]. NeuroFilter enforces privacy guardrails using internal model activation signals [ 8]. Whistledown attempts to preserve conversational continuity through pseudonymization, local differential privacy, and caching [ 25 ]. Meanwhile, PrivacyLens shows that a model’s awareness of privacy norms does not automatically translate into stable compliance during generation [ 39 ]. PrivacyBench further demonstrates that privacy risks in personalized dialogue can still be systematically evaluated and exposed [ 28 ]. User studies on RAG-based memory systems also indicate that users explicitly demand fine-grained control over memory, including inspectability, editability, deletability, and categorization [ 52 ]. Together, these findings suggest that relying solely on prompt engineering, post hoc filtering, or one-off refusals is insufficient to meet the privacy requirements of long-term memory systems. There is an urgent need to explore a new mechanism that proactively desensitizes inputs while preserving semantic utility, and that supports hierarchical policy configuration as well as consistent replacement across sessions. 
+
+## 3 Problem Definition 
+
+In interactions with edge-cloud agents, the central challenge of privacy protection is to design a mechanism that minimizes privacy leakage while preserving the capability of the agent and the user’s personalized experience. We formulate this problem as a constrained optimization problem. Let X denote the user’s raw input, and let S = {s1, s 2, . . . , s k} be the set of privacy information contained in 
+
+X. Let C denote the cloud-side agent, and let M denote its memory store or contextual state. In the ideal threat-free setting, the cloud agent directly receives the full plaintext input and produces the ideal response: 
+
+Yideal = C(X, M) (1) This response represents the upper bound of utility, since the agent has access to all information. To protect privacy, we introduce a local sanitization function Fsan and a local restoration function Fres . The raw input is first transformed into a safe sequence Xsafe = Fsan (X) before being sent to the cloud. Let 
+
+Msafe denote the corresponding cloud-visible memory or context state under the same protection mechanism. 4The cloud model then performs inference on the sanitized input and produces an intermediate response 
+
+Ysafe = C(Xsafe , Msafe ). Finally, the local device restores the response shown to the user: 
+
+ˆY = Fres (Ysafe ) (2) Based on this interaction process, we define two core metrics. 
+
+1. Privacy Leakage Risk ( Rpriv ). This metric measures the probability that an attacker can recover any element of S after observing Xsafe , Ysafe , and Msafe . Formally, 
+
+Rpriv (Fsan ) = Pr( ∃s ∈ S : s ∈ A (Xsafe , Y safe , Msafe )) (3) where A denotes an arbitrary privacy inference or memory extraction attack. 
+
+2. Utility Loss ( Lutil ). This metric measures the gap between the final restored response ˆY and the ideal response Yideal , reflecting the degradation in both system utility and user experience. Let U denote an overall utility function. We define 
+
+Lutil (Fsan , Fres ) = U(Yideal ) − U ( ˆY ) (4) 
+
+Overall Objective. The goal of MemPrivacy is to find an optimal pair of local mapping functions (F∗
+
+san , F∗
+
+res )
+
+that minimizes privacy leakage while keeping utility loss below a user-tolerable threshold: 
+
+(F∗
+
+san , F∗
+
+res ) = arg min 
+
+Fsan ,Fres 
+
+Rpriv (Fsan )
+
+s.t. Lutil (Fsan , Fres ) ≤ ϵ
+
+(5) This formulation clarifies the goal of this work: to minimize privacy leakage while limiting utility loss, thereby providing effective privacy protection without perceptibly degrading the user experience. 
+
+## 4 The MemPrivacy Framework 
+
+4.1 Overview Architecture Stage 1. Uplink Desensitization 
+
+Local MemPrivacy M odel (lightwise)         
+
+> 1. Privacy Information
+> Detection
+> 2. PL1 - PL4
+> Classification
+> 3.Types Placeholder
+> Replacement
+> PL4 -Credentials/Critical Secrets
+> PL3 -Highly Sensitive PII
+> PL2 -Identifiable PII
+> PL1 -Preference / P ublic / Low
+
+User Policy 
+
+> Configurable
+> masking level
+
+PL4 
+
+PL3 
+
+PL2 
+
+PL1 
+
+Local Secure Mapping DB      
+
+> placeholder ⟷original values
+> Session A → <Type_1>
+> Session B → <Type_1>
+> Persistent Across Sessions
+
+Desensitized Input   
+
+> LLM
+> Reasoning Workflow User ’s
+> Memory
+
+Stage 2. Cloud Processing 
+
+<Health_Info_1> +
+
+<Recovery_Code_1> + 
+
+plain PL1 & PL2 text 
+
+> Only placeholderized
+> content leaves the local
+> device.
+> Typed placeholders
+> preserve semantic roles.
+> > Non-sensitive signals retained
+> > User-authorized data retained
+> > Personalization remains effective
+> Utility
+> Preserved
+> <Health_Info_1>
+> <Recovery_Code_1>
+> Hacker can only access placeholders for PL4&PL3
+
+Stage 3. Downlink Restoration 
+
+Raw Input Cloud Response 
+
+> Local Placeholder Restoration
+> DB
+> lookup
+> Placeholder
+> replacement
+> Low
+> Latency
+
+Restored Personalized Output 
+
+> Local Secure
+> Mapping DB
+
+Fluent 
+
+personalized 
+
+privacy-safe 
+
+Trusted Local Side Cloud / Potentially Exposed Side Trusted Local Side 
+
+Draft a email to my doctor in a concise tone: my blood pressure 
+
+today was 160/110. Ask him to reply to user@workmail.com, 
+
+and never mention my recovery code RC-7291. 
+
+Draft a email to my doctor in a concise 
+
+tone: my blood pressure today 
+
+was <Health_Info_1>. Ask him to reply 
+
+to user@workmail.com, and never 
+
+mention my <Recovery_Code_1>. 
+
+OK, here is a concise draft: “Hello Doctor, my 
+
+blood pressure today was <Health_Info_1> .
+
+Please reply to user@workmail.com .”I will 
+
+not store the <Recovery_Code_1>. 
+
+OK, here is a concise draft: 
+
+“Hello Doctor, my blood 
+
+pressure today was 160/110 .
+
+Please reply to user@work 
+
+mail.com .”I will not store 
+
+the recovery code RC-7291 .
+
+> Sensitivity Information
+
+Cloud Agent / Memory System 
+
+> Four-Level Privacy Taxonomy
+> Design Goals Achieved
+
+Figure 2 Overview of MemPrivacy, a closed-loop framework for privacy-preserving cloud agent memory. User inputs are desensitized on device according to privacy levels and types, processed in the cloud with typed placeholders, and finally restored locally for transparent user experience. 
+
+As shown in Figure 2, MemPrivacy follows a three-stage lifecycle, forming a fully closed-loop and user-transparent privacy protection framework for edge-cloud agents. 5Stage 1: Uplink Desensitization. When a user issues a request on the local device, the input is processed before leaving the device. A lightweight on-device MemPrivacy Model first identifies privacy spans in the input and produces a structured output for each span, consisting of the original span text, its privacy level, and its privacy type under the PL2–PL4 taxonomy. Based on the detected privacy type, the system replaces protected spans with semantic typed placeholders, e.g., <EMAIL_1> , while spans of the same type are distinguished by incremental indices. To support long-term memory, the mapping between original values and placeholders is securely stored in a local database, enabling consistent restoration across sessions. Users can also configure the masking threshold, e.g., masking only PL3 and PL4, to achieve fine-grained control over the privacy–utility trade-off.  
+
+> Stage 2: Cloud Processing.
+
+The desensitized input is then sent to the cloud for task execution and memory operations. Because typed placeholders preserve semantic type information, the cloud model can still perform accurate language understanding and reasoning. At the same time, the high-precision privacy recognition of MemPrivacy model ensures that non-sensitive personalized signals, as well as user-authorized privacy levels, remain available to the cloud, avoiding the semantic damage caused by over-masking. As a result, the cloud system can maintain personalization and utility, while any leaked cloud-side content reveals only semantically typed placeholders rather than usable private values, achieving architecture-level privacy isolation.   
+
+> Stage 3: Downlink Restoration.
+
+To preserve user experience, MemPrivacy provides a low-latency local restoration mechanism. After the cloud returns a response that may contain placeholders, the local system queries the local database and replaces each placeholder with its original value. Since this process only involves lightweight database lookup and string substitution, its overhead is negligible. The user therefore sees a fluent and fully personalized response, while privacy protection remains entirely transparent during interaction. Based on the above architectural design, the end-to-end execution flow of our framework can be formalized as Algorithm 1. It presents how the proposed modules are coordinated in practice, from local privacy identification to cloud inference and final local recovery. 
+
+4.2 Four-Level Privacy Taxonomy (PL1–PL4) 
+
+We introduce a four-level privacy taxonomy for privacy identification and differential protection. It organizes privacy-relevant content by identifiability, expected harm, and operational exploitability. Concrete examples and the corresponding prompts are provided in the appendix. At the lowest end, PL1 functions primarily as an exclusion class. It covers generic preferences, habits, stylistic choices, and non-diagnostic self-descriptions that do not, by themselves, identify a specific natural person and do not ordinarily create substantial downstream harm. This boundary is consistent with contextual theories of privacy, which emphasize that privacy risk depends not merely on whether information is personal in an everyday sense, but on whether its collection or dissemination becomes identifying, inappropriate, or harmful in context [ 41 ]. It is also consistent with empirical work showing that perceived sensitivity varies with public availability, context of use, and identifiability, rather than being uniform across all self-related information [30]. PL2 captures information that can identify, locate, or stably trace a natural person, either directly or when linked with reasonably available auxiliary information. This notion closely follows mainstream legal definitions of personal data, which center on whether a person is identified or identifiable, including through indirect reference to identifiers such as names, identification numbers, location data, and online identifiers [ 10 , 12 ]. The same logic is reinforced by the re-identification literature, as both k-anonymity and subsequent critiques of anonymization show that data fields that appear innocuous in isolation can become identifying once linked across datasets [ 9, 29 , 42 ]. Accordingly, PL2 should include not only direct identifiers such as names and contact details, but also stable account identifiers, network identifiers, detailed addresses, and institutional background descriptors that may be weak individually yet highly linkable in combination. PL3 is defined by expected harm rather than by identifiability alone. Information falls into this tier when its leakage or unlawful use is reasonably expected to cause significant harm to personal safety, property, health, dignity, reputation, or fair opportunity, or when it belongs to categories that law and policy have long treated as specially sensitive. This harm-centered criterion aligns closely with the special categories of personal data 6under the General Data Protection Regulation, which explicitly single out data such as biometrics, health information, financial accounts, religious belief, sensitive identity information, location, and minors’ data because of their elevated risk profile. The broader sensitivity literature likewise emphasizes harm likelihood, confidential relationships, contextual use, and inference risk as central determinants of whether information should be treated as sensitive [ 4, 35 ]. Under this rationale, PL3 encompasses highly consequential records such as government document numbers, financial records, medical data, precise trajectories, biometrics, raw communication content, judicial records, and sensitive attributes, even when some of these items are not uniquely identifying on their own. PL4 forms the highest-priority tier and is intentionally stricter than ordinary PII taxonomies [ 19 , 38 ]. Its defining property is immediate exploitability. The exposed artifact is not merely descriptive of a person, but directly reusable for authentication, authorization, signing, privileged access, or system intrusion. This framing is consistent with the digital identity guidance issued by the U.S. National Institute of Standards and Technology, which treats authentication as proof of control over secrets and authenticators, and with operational security guidance that treats secrets as authorization material whose exposure demands immediate revocation and rotation. It is also consistent with threat-intelligence practice. For example, stolen session cookies can be reused to access already authenticated services and may bypass parts of MFA-protected workflows [ 18 , 55 ]. For this reason, PL4 includes passwords, PINs, verification codes, session tokens, API keys, private keys, seed phrases, credential-bearing connection strings, exploitable internal access details, and other undisclosed materials whose leakage can directly result in account takeover, financial loss, lateral movement, or large-scale data exfiltration. 
+
+4.3 MemPrivacy-Bench 
+
+MemPrivacy-Bench is introduced to address a central limitation of prior privacy benchmarks for LLM systems: existing resources do not adequately cover the four-level privacy taxonomy required by MemPrivacy, nor do they faithfully reflect the long-term, memory-centric interaction setting of cloud agents. The benchmark is therefore designed for a more realistic problem formulation, where privacy may be disclosed explicitly or implicitly across multi-turn conversations and must be protected without destroying the semantic cues needed for reasoning, retrieval, and personalization. In this sense, MemPrivacy-Bench is not merely a privacy extraction dataset; it is a benchmark for studying the privacy–utility trade-off in cloud agent memory. 
+
+Dataset Construction. We synthesize 200 complete user profiles from PersonaHub [ 11 ] seeds. Each profile comprises basic attributes, preferences, and privacy fields spanning all defined levels, with privacy content programmatically sampled to ensure diversity. In particular, each user profile contains preferences in four categories (diet, arts & entertainment, lifestyle & hobbies, and aesthetics) and privacy information covering an average of 50 types. Some privacy entries further include multiple fine-grained details, providing rich sources of privacy content. Based on these profiles, we generate multi-turn user–assistant dialogues in which privacy information is revealed both directly and indirectly, simulating realistic conversational exposure. To diversify topics and interaction patterns, we define 7 high-level scenario categories and 23 fine-grained subcategories. The seven high-level categories include drafting & polishing, financial & data analysis, consultation & planning, tech support & simulation, emotional & social, contextual inference, and preference change. For each user, we randomly sample 6 to 10 subcategories to generate diverse multi-turn dialogues. The resulting dataset contains approximately 1M dialogue tokens across balanced Chinese and English data, with each language accounting for 50% of the dialogues. The training set consists of 26,016 dialogue turns from 160 users, including over 125k privacy instances, while the test set contains 6,337 dialogue turns from 40 users, with over 29.9k privacy instances. Table 1 summarizes the detailed statistics of the MemPrivacy-Bench training and test sets, as well as the evaluation set derived from PersonaMem-v2 [15]. 
+
+Evaluation Construction. For downstream evaluation of memory systems, we further derive six types of memory question-answer pairs from the test set, covering basic memory, temporal reasoning, adversarial questioning, dynamic updating, implicit inference, and information aggregation. During question generation, we ensure balanced coverage of users’ basic attributes, preferences, and privacy information across different question types. In total, the test set contains 615 question-answer pairs. 7Table 1 Statistics of three datasets used in our evaluation.                                                  
+
+> Metric MemPrivacy-Bench PersonaMem-v2 Train Test Evaluation
+> Overall Scale
+> Number of Users 160 40 20 Total Turns 26,016 6,337 2,521 Total Messages 52,032 12,674 5,041 Messages with Privacy 42,159 10,234 1,085 Privacy Instances 125,776 29,967 2,378 Number of Questions 0615 563 Total Tokens 7,811,374 1,872,220 671,987
+> Per-User Averages
+> Turns per User 162.60 158.43 126.03 Messages per User 325.20 316.85 252.05 Privacy Instances per User 786.10 749.17 118.90 Questions per User 0.00 15.38 28.15 Tokens per User 48,821.09 46,805.50 33,599.35
+> Privacy Level Distribution
+> PL4 Instances 19,497 4,845 22 PL3 Instances 59,724 14,562 553 PL2 Instances 46,555 10,560 1,803
+> Note : - The test split of MemPrivacy-Bench and PersonaMem-v2 include memory question-answer pairs, while the training split does not.
+
+LLM-Assisted Privacy Annotation Pipeline. We developed a hybrid LLM-assisted annotation pipeline to generate high-quality privacy annotations in a scalable and consistent manner. The pipeline begins with dual-model label generation, where Gemini-3.1-Pro and GPT-5.2 independently produce preliminary privacy annotations for each instance. Their outputs are then integrated through a two-stage refinement process: an initial labeling stage that identifies privacy-relevant content and assigns candidate labels, followed by a correction stage that resolves inconsistencies, revises ambiguous cases, and improves label granularity. This design leverages the complementary strengths of different frontier LLMs while reducing model-specific biases and annotation noise. To ensure methodological consistency across evaluation resources, both the MemPrivacy-Bench test set and the evaluation split derived from PersonaMem-v2 follow the same annotation strategy. The resulting LLM-generated annotations serve as structured candidates for the subsequent human verification stage, enabling a scalable yet quality-controlled annotation workflow. 
+
+Human Annotation Protocol. To further ensure the quality and reliability of privacy annotations in the MemPrivacy-Bench test set and the evaluation split derived from PersonaMem-v2, we employed six human annotators to conduct a final round of manual verification and correction after the initial LLM-based labeling produced by Gemini-3.1-Pro and GPT-5.2. All annotators held at least a bachelor’s degree and were compensated in accordance with local wage standards. To minimize fatigue-related annotation errors, annotation workloads were scheduled within reasonable weekday working-hour limits. Before the formal verification stage, all annotators were required to study the privacy taxonomy and extraction guidelines described in Section 4.2. This preparation step was intended to align annotation criteria across annotators, improve the consistency of judgments, and reduce subjective variation in borderline cases. The human verification process was performed at the level of individual privacy items. For each annotated item, annotators examined three fields: the original span text , the assigned privacy level , and the assigned privacy type . An annotation was regarded as correct only when all three fields were accurate simultaneously; otherwise, it was marked as incorrect and revised accordingly. This conjunctive criterion makes the verification standard intentionally strict, as partially correct annotations were not accepted. When ambiguity could not be resolved from the extracted item alone, annotators were allowed to consult the 8associated user profile information and the original dialogue context. This additional contextual inspection helped ensure that privacy judgments were grounded in the full semantic context rather than in isolated text fragments, which is particularly important for distinguishing fine-grained privacy categories and determining the appropriate privacy level. After human verification, the privacy annotations in the two evaluation sets achieved an accuracy of 98.08%. This result provides strong evidence that the overall data construction pipeline is reliable and that the proposed taxonomy is sufficiently well-defined for consistent annotation. More importantly, it suggests that the training split, although not exhaustively manually annotated, remains suitable for training privacy extraction models, while the manually verified evaluation sets provide a dependable basis for benchmark assessment. More details are provided in Appendix A. 
+
+4.4 MemPrivacy Model Training 
+
+We train MemPrivacy in two stages, consisting of supervised fine-tuning (SFT) [ 31 ] followed by reinforcement learning (RL) with Group Relative Policy Optimization (GRPO) [ 40 ]. This two-stage design combines the stability of imitation learning with the flexibility of preference-based policy optimization, enabling the model to acquire strong privacy span extraction capabilities while further improving robustness under fine-grained privacy criteria. In the first stage, we perform SFT on 26K training instances to establish a reliable initialization for privacy-aware generation. The model is optimized with the standard autoregressive cross-entropy objective: 
+
+LSFT (θ) = − 1
+
+τ
+
+> τ
+
+X
+
+> t=1
+
+log Pθ (ot | o<t , s ) ,
+
+where θ denotes the model parameters, τ is the target sequence length, s is the input sequence, and ot
+
+is the target token at step t. This stage equips the model with the basic ability to identify and generate privacy-preserving substitutions, while also providing a stable starting point for subsequent policy optimization. In practice, this initialization is important for reducing instability and output degeneration during early exploration in reinforcement learning. To further strengthen the model, we conduct a second-stage reinforcement learning phase on an additional 1K training instances using GRPO. Compared with standard PPO-style optimization [ 37 ], GRPO removes the need for a separately trained value function and instead estimates advantages based on the relative rewards of multiple sampled outputs for the same input. Concretely, for each input, we sample a group of candidate outputs from the old policy, score them with the reward function, normalize the rewards within the group, and optimize the policy using the clipped objective with KL regularization to the reference model: 
+
+JRL (θ) = Eq ∼ P (Q), {oi}Gi=1 ∼ πθold (O | q) 1
+
+G
+
+> G
+
+X
+
+> i=1
+
+1
+
+|oi|
+
+> |oi|
+
+X
+
+> t=1
+
+
+
+min 
+
+ πθ (oi,t | q, o i,<t )
+
+πθold (oi,t | q, o i,<t ) ˆAi,t , clip 
+
+ πθ (oi,t | q, o i,<t )
+
+πθold (oi,t | q, o i,<t ) , 1 − ϵ, 1 + ϵ
+
+
+
+ˆAi,t 
+
+
+
+− β DKL [πθ ∥ πref ]
+
+
+
+.
+
+where |oi| is the length of the i-th output, ˆAi,t denotes the token-level advantage, ϵ is the PPO-style clipping coefficient, πref is the reference policy initialized from the SFT model, and β controls the strength of the KL regularization term. The ratio 
+
+πθ (oi,t | q, o i,<t )
+
+πθold (oi,t | q, o i,<t )
+
+measures how the current policy deviates from the behavior policy that generated the sampled outputs, while the KL term constrains the updated policy from drifting excessively away from the SFT initialization. For reward construction, we use the F1 score defined in our evaluation function (as shown in Section 5.1) as the scalar reward for each sampled output. Specifically, given a sampled prediction and its ground-truth annotation, we compute its extraction-level F1 score and treat this value as the reward ri. For each group of 9G outputs corresponding to the same input, the rewards are normalized by the group mean and standard deviation, yielding 
+
+˜ri = ri − mean( r)std( r) ,
+
+where r = {r1, . . . , r G}. We then use the normalized reward as the token-level advantage for all tokens in the corresponding output, i.e., ˆAi,t = ˜ri. We adopt GRPO because the privacy extraction task benefits from relative comparison among candidate outputs under structured reward signals, while avoiding the computational overhead of critic training. In this way, GRPO directly optimizes the model toward the same criterion used in evaluation, encouraging outputs with higher precision and recall balance in privacy span extraction. 
+
+## 5 Experiments 
+
+We evaluate MemPrivacy along the two dimensions defined in Section 3. To assess privacy leakage risk, we measure the performance of the MemPrivacy model on privacy extraction, namely whether it can accurately identify privacy spans in dialogue together with their privacy levels and privacy types. To assess utility loss, we compare the question-answering performance of memory systems under different privacy protection methods against the no-protection setting. A smaller performance drop indicates better preservation of both system utility and user experience. 
+
+5.1 Experimental Setup 
+
+Datasets. We mainly use the test set of MemPrivacy-Bench and an evaluation set constructed from 
+
+> PersonaMem-v2
+
+. PersonaMem-v2 is a benchmark for evaluating LLM personalization, with an emphasis on inferring implicit user preferences from long-context conversations. We sample 20 users and their corresponding multiple-choice evaluation questions from the original PersonaMem-v2 dataset; all selected dialogues contain privacy information across different levels. We use MemPrivacy-Bench for in-distribution evaluation and PersonaMem-v2 for out-of-distribution evaluation. 
+
+Metric. We score privacy extraction using three aspects: privacy text , level , and type . For each matched prediction–reference pair, the final score is the average of the three sub-scores. The original-text score is 1 for an exact match; otherwise, for non-strict types, we use a soft token-level F1 score based on the longest common contiguous substring, and assign 0 to other mismatches (e.g., passwords). Privacy level is scored by exact match. Privacy type is scored by the cosine similarity between type-label embeddings. After greedy one-to-one matching between predictions and references, precision is computed as the average score over predictions, recall as the average score over gold items, and F1 as their harmonic mean. For utility evaluation, question answering on the MemPrivacy-Bench test set is scored by GPT-5.2 as the judge and additionally evaluated with four standard metrics (BLEU-1 [ 33 ], BLEU-2 [ 33 ], METEOR [ 3], and ROUGE-L [ 21 ]), while the multiple-choice questions from PersonaMem-v2 are evaluated by exact match. 
+
+Experimental Configurations We select LangMem, Mem0, and Memobase as three representative memory systems to study the impact of privacy protection on memory-based agents. Rather than treating them as direct baselines for comparison, we use them as testbeds to examine how privacy protection affects system performance, and whether our method can effectively reduce privacy exposure while preserving utility. For reproducibility, we report the exact code versions, implementation sources, and all non-default configuration changes in the supplementary materials. To ensure fair comparison, all methods use GPT-4.1 for memory operations and question answering whenever applicable. The prompt templates for dataset construction, short-answer evaluation, and privacy information extraction are provided in the supplementary materials. For training, we use LLaMA-Factory [ 56 ] for SFT and MS-Swift [ 54 ] for RL, with DeepSpeed ZeRO-3 [ 36 ]for distributed optimization. In the RL stage, we employ a GRPO-based training objective and use vLLM in a server-based rollout generation setup to improve sampling efficiency. We further incorporate dynamic sampling, bounded resampling, and KL-regularized policy updates to enhance optimization stability. The corresponding training scripts are available in the code repository. All training and evaluation experiments 10 Table 2 Performance comparison of different LLMs and privacy models on MemPrivacy-Bench and PersonaMem-v2.          
+
+> Model MemPrivacy-Bench PersonaMem-v2 F1 Precision Recall Time (s) F1 Precision Recall Time (s) General Models
+
+Qwen3-0.6B 26.43 21.73 41.58 3.05 9.32 8.05 13.49 2.36 Qwen3-1.7B 30.83 26.48 43.85 3.16 6.92 5.97 10.53 2.17 Qwen3-4B 59.34 57.29 66.78 2.72 86.36 86.38 86.99 0.64 LongCat-Flash-Chat 64.82 65.56 67.46 4.32 86.79 87.16 86.91 1.75 DeepSeek-V3.1-Terminus 66.01 69.57 65.86 5.34 85.91 86.23 85.84 1.68 DeepSeek-V3.2 65.91 68.07 67.19 7.03 86.61 86.93 86.56 3.55 GPT-5.2 68.99 65.40 78.13 4.62 88.06 87.70 89.48 3.23 Kimi-K2 69.35 73.58 69.08 5.18 87.35 88.39 86.94 1.81 GLM-5 70.10 70.13 73.29 11.30 87.87 87.97 88.27 8.56 DeepSeek-V3.2-Think 75.04 76.46 76.13 96.14 92.18 92.16 92.84 39.60 Gemini-3.1-Pro 78.41 78.66 81.22 32.87 86.59 86.68 86.82 29.21 
+
+> Privacy Models
+
+OpenAI-Privacy-Filter * 35.50 39.96 34.30 0.34 85.27 85.80 85.75 0.24 
+
+MemPrivacy-0.6B-SFT 83.09 85.67 82.84 1.96 92.08 92.78 91.93 0.70 MemPrivacy-1.7B-SFT 84.22 86.14 84.44 2.14 93.16 93.65 93.21 0.59 MemPrivacy-4B-SFT 85.64 87.45 86.04 2.64 94.43 94.52 95.00 0.67 MemPrivacy-0.6B-RL 84.66 86.35 85.29 1.63 93.40 94.07 93.31 0.43 MemPrivacy-1.7B-RL 84.54 85.21 86.06 1.81 94.02 94.39 94.20 0.48 MemPrivacy-4B-RL 85.97 86.86 87.15 2.05 94.48 94.54 95.11 0.44   
+
+> Note : - Best and second-best results are bold and underlined, respectively. For inference time, lower is better.
+
+are conducted on a single node equipped with 8 NVIDIA A800-80GB GPUs. Unless otherwise noted, all reported experimental times are measured based on a single NVIDIA A800 GPU. 
+
+5.2 Privacy Extraction Performance 
+
+Table 2 compares 11 general LLMs, one specialized privacy-filtering model, and 6 MemPrivacy models across two datasets. Overall, MemPrivacy consistently outperforms general models by a clear margin on all metrics, demonstrating its strong ability to accurately identify privacy information. The best-performing MemPrivacy model achieves F1 scores of 85.97% and 94.48% on the two datasets, respectively, significantly surpassing the highest F1 scores of general models, which are 78.41% and 92.18%. Notably, even the smallest MemPrivacy model (0.6B) attains F1 scores of 83.09% and 92.08% , outperforming nearly all general models. The newly released OpenAI-Privacy-Filter provides an informative comparison with a specialized token-classification baseline. Although it is highly efficient, requiring only 0.34s on MemPrivacy-Bench and 0.24s on PersonaMem-v2, its extraction accuracy is substantially lower. It achieves only 35.50% F1 on MemPrivacy-Bench, trailing the best MemPrivacy model by 50.47% and even the smallest MemPrivacy model by 47.59%. On PersonaMem-v2, it obtains 85.27% F1, which is also 9.21% lower than the best MemPrivacy model. This result indicates that efficient token-level filtering alone is insufficient for comprehensive privacy extraction in realistic dialogue scenarios. The performance gap can be partly attributed to differences in task formulation and privacy taxonomy. OpenAI-Privacy-Filter is designed around a fixed and relatively coarse-grained PII taxonomy, covering only eight privacy categories. Moreover, our evaluation suggests weaker robustness on Chinese conversational data, where privacy expressions are often implicit, context-dependent, and linguistically diverse. General LLMs, relying solely on instructions provided in prompts, also struggle to effectively handle complex privacy information across diverse contexts. In contrast, MemPrivacy is trained on large-scale data to identify  
+
+> ∗OpenAI-Privacy-Filter is a bidirectional token-classification model developed by OpenAI for detecting and masking personally identifiable information in text. Since its open-source release in April 2026, it has supported high-throughput data sanitization workflows and on-premises deployment. The model is available at https://huggingface.co/openai/privacy-filter .
+
+11 Table 3 Performance comparison of LLM-as-a-Judge evaluations for LLMs and privacy models on MemPrivacy-Bench.                                       
+
+> Model MemPrivacy-Bench GLM-5.1 DeepSeek-R1-0528 Qwen3-235B-A22B General Models
+> GPT-5.2 66.54 67.94 69.30 Kimi-K2 63.01 65.48 67.15 GLM-5 65.38 66.92 68.39 DeepSeek-V3.2-Think 70.00 72.07 73.02 Gemini-3.1-Pro 76.15 77.02 78.60
+> Privacy Models
+> MemPrivacy-0.6B-SFT 79.82 81.15 81.35 MemPrivacy-1.7B-SFT 81.02 82.57 82.68 MemPrivacy-4B-SFT 82.98 84.18 84.18 MemPrivacy-0.6B-RL 81.74 82.86 83.26 MemPrivacy-1.7B-RL 82.02 82.98 83.54 MemPrivacy-4B-RL 83.85 84.75 85.09
+> Note : Best and second-best results are bold and underlined, respectively. Scores range from 0 to 1.
+
+fine-grained, multi-level privacy information across heterogeneous conversational scenarios, enabling more comprehensive and robust extraction. Substantial gains are also observed when comparing MemPrivacy models with their base models. For instance, after SFT and RL training, Qwen3-4B improves its F1 score on MemPrivacy-Bench from 59.34% to 85.97% ,validating the effectiveness of our training framework as well as the high quality ofthe MemPrivacy-Bench training data. Among different MemPrivacy variants, SFT alone already yields strong performance, while incorporating RL further enhances overall performance and generalization ability. For example, MemPrivacy-4B-RL achieves higher F1 scores than MemPrivacy-4B-SFT on both datasets. We also observe that all models perform worse on MemPrivacy-Bench than on PersonaMem-v2. This is expected, as MemPrivacy-Bench is intentionally designed as a more challenging stress test, with substantially higher privacy density in dialogues, containing over 29.9k privacy instances in the test set, compared to only 2.3k+ in PersonaMem-v2. By contrast, the privacy density in PersonaMem-v2 is closer to that of real-world user–assistant conversations, and therefore better reflects practical deployment conditions. In addition to accuracy gains, MemPrivacy models are also significantly more efficient. On PersonaMem-v2, the latency for processing a single message is consistently below one second , and even on the privacy-dense MemPrivacy-Bench, it remains around two seconds. In comparison, large reasoning models such as Gemini-3.1-Pro are one to two orders of magnitude slower. This latency profile makes MemPrivacy well suited for on-device deployment without introducing noticeable interaction delays. Beyond direct benchmark performance and inference efficiency, we further examine whether MemPrivacy models can provide reliable privacy judgments when evaluated by external strong LLM judges. Table 3 reports an LLM-as-a-Judge evaluation on MemPrivacy-Bench, where different judge backbones are used to assess the quality of privacy-related decisions. The results show a clear and consistent advantage of privacy-specialized models over general-purpose LLMs across all three judge models. Even the smallest MemPrivacy model, MemPrivacy-0.6B-SFT, surpasses the strongest general baseline across all evaluators, indicating that task-specific privacy alignment provides substantial benefits beyond model scale alone. Performance improves steadily as model size increases from 0.6B to 4B, and reinforcement learning further enhances the models compared with their SFT counterparts. Notably, MemPrivacy-4B-RL achieves the best results across all judge models, reaching 83.85%, 84.75%, and 85.09%, respectively, while MemPrivacy-4B-SFT obtains the second-best performance. These findings suggest that the proposed training strategy enables smaller privacy-oriented models to develop more reliable evaluation capabilities than much larger general-purpose LLMs, highlighting the importance of domain-specific supervision and reinforcement learning for privacy-aware evaluation. 12 Table 4 Performance comparison under different privacy protection methods on three memory systems. 
+
+Privacy Protection Method Masking Level MemPrivacy-Bench PersonaMem-v2 Accuracy BLEU-1 BLEU-2 METEOR ROUGE-L Accuracy LangMem 
+
+None – 65.37 (+0.00) 20.92 13.80 20.14 31.50 50.98 (+0.00) 
+
+Irreversible Masking +MemPrivacy Model PL2, PL3, PL4 38.70 (-26.67) 11.85 6.36 10.84 14.11 38.01 (-12.97) 
+
+Untyped Placeholder Masking +MemPrivacy Model PL2, PL3, PL4 58.70 (-6.67) 18.75 11.43 15.87 25.30 48.31 (-2.67) 
+
+MemPrivacy +DeepSeek-V3.2-Think PL2, PL3, PL4 58.05 (-7.32) 15.88 9.41 13.93 25.18 46.76 (-4.22) 
+
++GPT-5.2 PL2, PL3, PL4 54.03 (-11.34) 14.91 7.65 13.18 22.75 47.48 (-3.50) 
+
++MemPrivacy Model PL2, PL3, PL4 64.07 (-1.30) 18.64 12.07 17.95 27.91 49.38 (-1.60) 
+
++MemPrivacy Model PL3, PL4 65.12 (-0.25) 19.47 12.72 18.27 29.83 49.91 (-1.07) 
+
++MemPrivacy Model PL4 65.28 (-0.09) 22.25 13.09 18.03 29.35 50.80 (-0.18) 
+
+Mem0 
+
+None – 68.62 (+0.00) 15.40 10.05 15.60 25.42 55.42 (+0.00) 
+
+Irreversible Masking +MemPrivacy Model PL2, PL3, PL4 26.75 (-41.87) 11.07 6.36 12.34 13.85 44.05 (-11.37) 
+
+Untyped Placeholder Masking +MemPrivacy Model PL2, PL3, PL4 63.90 (-4.72) 12.34 7.81 14.09 22.56 46.71 (-8.71) 
+
+MemPrivacy +DeepSeek-V3.2-Think PL2, PL3, PL4 37.58 (-31.04) 9.32 5.22 9.28 18.46 49.28 (-6.14) 
+
++GPT-5.2 PL2, PL3, PL4 32.21 (-36.41) 6.93 3.57 6.99 16.56 50.36 (-5.06) 
+
++MemPrivacy Model PL2, PL3, PL4 67.89 (-0.73) 14.59 9.04 14.97 23.78 54.71 (-0.71) 
+
++MemPrivacy Model PL3, PL4 67.97 (-0.65) 13.75 8.95 14.54 23.78 54.88 (-0.54) 
+
++MemPrivacy Model PL4 68.29 (-0.33) 15.34 9.51 15.39 24.72 55.42 (+0.00) 
+
+Memobase 
+
+None – 38.62 (+0.00) 14.76 8.86 13.22 22.56 54.35 (+0.00) 
+
+Irreversible Masking +MemPrivacy Model PL2, PL3, PL4 21.63 (-16.99) 9.21 4.96 9.84 12.14 46.18 (-8.17) 
+
+Untyped Placeholder Masking +MemPrivacy Model PL2, PL3, PL4 33.90 (-4.72) 11.27 6.61 11.39 18.72 48.49 (-5.86) 
+
+MemPrivacy +DeepSeek-V3.2-Think PL2, PL3, PL4 25.50 (-13.12) 6.60 3.30 5.61 11.25 47.12 (-7.23) 
+
++GPT-5.2 PL2, PL3, PL4 33.56 (-5.06) 5.87 2.77 5.97 11.19 46.40 (-7.95) 
+
++MemPrivacy Model PL2, PL3, PL4 37.89 (-0.73) 12.28 7.52 12.11 19.63 53.11 (-1.24) 
+
++MemPrivacy Model PL3, PL4 38.13 (-0.49) 12.80 7.50 12.56 20.88 53.29 (-1.06) 
+
++MemPrivacy Model PL4 38.54 (-0.08) 14.94 8.72 13.54 21.44 53.46 (-0.89)  
+
+> Note : - Numbers in parentheses denote the difference between each method and the corresponding "None" (no privacy protection strategy) baseline under the same memory system. Best and second-best results are
+
+bold and underlined, respectively. 
+
+5.3 Memory System Performance under Different Privacy Protection methods 
+
+To evaluate the practical impact of privacy protection on cloud agents memory, we test three widely used memory systems, all backed by GPT-4.1 with consistent retrieval and answering settings. We compare MemPrivacy against two representative baselines. Irreversible masking replaces all privacy spans with mask token *** and performs no response-side restoration, while untyped placeholder masking replaces each privacy span with a generic placeholder such as <Mask_1> , without preserving semantic type information. For both baselines, privacy spans are extracted by the MemPrivacy model. Table 4 shows that MemPrivacy preserves memory-system utility much better than the baselines. When all PL2–PL4 privacy content is protected, the performance drop under MemPrivacy remains very small across all systems, only 0.71%–1.60% on MemPrivacy-Bench and PersonaMem-v2. As the masking level becomes more selective, the loss further decreases. When only PL4 is protected, the drop is below 0.89% 
+
+on MemPrivacy-Bench and PersonaMem-v2. Beyond accuracy, the generation-quality metrics exhibit the same trend. Across BLEU-1, BLEU-2, METEOR, and ROUGE-L, MemPrivacy consistently maintains higher response fidelity than irreversible masking and untyped placeholder masking, indicating that type-aware reversible protection better preserves the lexical and semantic information needed for memory retrieval and answer generation. In contrast, irreversible masking causes the largest degradation on all systems, since it 13 0 25 50 75 100            
+
+> Privacy-Related Questions (%)
+> 0.2
+> 0.4
+> 0.6
+> Accuracy
+> (a) LangMem
+> 025 50 75 100
+> Privacy-Related Questions (%)
+> (b) Mem0
+> 025 50 75 100
+> Privacy-Related Questions (%)
+> (c) Memobase
+> MemPrivacy Untyped Placeholder Masking Irreversible Masking Figure 3 Overall accuracy on three memory systems under different proportions of privacy-related questions.
+
+removes both private values and semantic roles. Untyped placeholder masking performs better than irreversible masking but still lags far behind MemPrivacy, showing that generic placeholders preserve too little information for reliable memory retrieval and response generation. We also compare different privacy extractors within the MemPrivacy framework. Replacing the MemPrivacy model with strong general models such as DeepSeek-V3.2-Think or GPT-5.2 still leads to substantial utility loss. On Mem0 over MemPrivacy-Bench, their accuracies drop to 37.58% and 32.21% , far below the 67.89% 
+
+achieved by MemPrivacy with its own model. The same pattern is also reflected in generation quality: for example, on Mem0, the ROUGE-L score decreases from 23.78% with the MemPrivacy extractor to 18.46% 
+
+and 16.56% with DeepSeek-V3.2-Think and GPT-5.2, respectively. This indicates that the effectiveness of the overall framework critically depends on accurate privacy extraction. Overall, these results show that MemPrivacy achieves a much better privacy–utility trade-off than simpler masking strategies and remains directly applicable to real memory-based agent systems. Figure 3 further evaluates robustness under different proportions of privacy-related questions, where 0% denotes purely non-privacy questions and 100% denotes fully privacy-related questions. Across all three memory systems, MemPrivacy remains consistently more stable as the proportion of privacy-related questions increases, while the gap between MemPrivacy and the baselines becomes progressively larger in privacy-heavy settings. This trend reflects the core advantage of MemPrivacy. By preserving semantic type information through typed placeholders, it allows memory writing, retrieval, and answer generation to remain effective even when more questions depend on privacy-bearing content. In contrast, untyped placeholder masking provides only limited semantic cues and therefore shows a clearer performance decline, whereas irreversible masking causes the most severe degradation because it removes both the private values and their semantic roles. Overall, these results further confirm that MemPrivacy achieves a substantially better privacy–utility trade-off, especially in privacy-intensive scenarios where robust protection is most needed. 
+
+## 6 Conclusion 
+
+We present MemPrivacy , a privacy-preserving personalized memory management framework for edge-cloud agents. MemPrivacy performs local privacy span extraction and replaces sensitive content with semantically meaningful typed placeholders, enabling cloud-side reasoning and memory operations without exposing raw private values, and restores original content locally to preserve user experience. To make this framework practical, we develop a family of privacy extraction models tailored to the memory setting, and further improved the strongest variant through reinforcement learning. Beyond the framework itself, we formalize a four-level privacy taxonomy that captures varying sensitivity and exploitability, and built MemPrivacy-Bench , a dedicated benchmark for privacy-aware cloud memory, covering 200 users and more than 155k+ 14 privacy instances. Extensive experiments across multiple memory systems demonstrate that MemPrivacy consistently outperforms irreversible redaction and untyped placeholder baselines in both privacy extraction quality and downstream memory utility. These results show that MemPrivacy offers a practical path toward privacy-preserving long-term memory for cloud agents. 
+
+## References 
+
+[1] Sahar Abdelnabi, Amr Gomaa, Eugene Bagdasarian, Per Ola Kristensson, and Reza Shokri. Firewalls to secure dynamic llm agentic networks. arXiv preprint arXiv:2502.01822, 2025. [2] Eugene Bagdasarian, Ren Yi, Sahra Ghalebikesabi, Peter Kairouz, Marco Gruteser, Sewoong Oh, Borja Balle, and Daniel Ramage. Airgapagent: Protecting privacy-conscious conversational agents. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security, pages 3868–3882, 2024. [3] Satanjeev Banerjee and Alon Lavie. METEOR: An automatic metric for MT evaluation with improved correlation with human judgments. In Jade Goldstein, Alon Lavie, Chin-Yew Lin, and Clare Voss, editors, Proceedings of the ACL Workshop on Intrinsic and Extrinsic Evaluation Measures for Machine Translation and/or Summarization ,pages 65–72, Ann Arbor, Michigan, June 2005. Association for Computational Linguistics. URL https:// aclanthology.org/W05-0909/ .[4] Rahime Belen-Saglam, Jason RC Nurse, and Duncan Hodges. An investigation into the sensitivity of personal information and implications for disclosure: a uk perspective. Frontiers in Computer Science, 4:908245, 2022. [5] Ding Chen, Simin Niu, Kehang Li, Peng Liu, Xiangping Zheng, Bo Tang, Xinchi Li, Feiyu Xiong, and Zhiyu Li. Halumem: Evaluating hallucinations in memory systems of agents. arXiv preprint arXiv:2511.03506, 2025. [6] Prateek Chhikara, Dev Khant, Saket Aryan, Taranjeet Singh, and Deshraj Yadav. Mem0: Building production-ready ai agents with scalable long-term memory, 2025. URL https://arxiv.org/abs/2504.19413 .[7] Yu Cui, Sicheng Pan, Yifei Liu, Haibin Zhang, and Cong Zuo. VortexPIA: Indirect prompt injection attack against LLMs for efficient extraction of user privacy. In Vera Demberg, Kentaro Inui, and Lluís Marquez, editors, Findings of the Association for Computational Linguistics: EACL 2026 , pages 587–609, Rabat, Morocco, March 2026. Association for Computational Linguistics. ISBN 979-8-89176-386-9. doi: 10.18653/v1/2026.findings-eacl.29. URL https://aclanthology.org/2026.findings-eacl.29/ .[8] Saswat Das and Ferdinando Fioretto. Neurofilter: Privacy guardrails for conversational llm agents. arXiv preprint arXiv:2601.14660, 2026. [9] Yves-Alexandre De Montjoye, César A Hidalgo, Michel Verleysen, and Vincent D Blondel. Unique in the crowd: The privacy bounds of human mobility. Scientific reports, 3(1):1376, 2013. [10] David Erdos. Identification in personal data: Authenticating the meaning and reach of another broad concept in eu data protection law. Computer Law & Security Review, 46:105721, 2022. [11] Tao Ge, Xin Chan, Xiaoyang Wang, Dian Yu, Haitao Mi, and Dong Yu. Scaling synthetic data creation with 1,000,000,000 personas, 2025. URL https://arxiv.org/abs/2406.20094 .[12] Raphaël Gellert. Personal data’s ever-expanding scope in smart environments and possible path (s) for regulating emerging digital technologies. International Data Privacy Law, 11(2):196–208, 2021. [13] Yuyang Hu, Shichun Liu, Yanwei Yue, Guibin Zhang, Boyang Liu, Fangyi Zhu, Jiahang Lin, Honglin Guo, Shihan Dou, Zhiheng Xi, et al. Memory in the age of ai agents. arXiv preprint arXiv:2512.13564, 2025. [14] Wei Huang, Anda Cheng, Zhao Zhang, and Yinggui Wang. Dpf-cm: A data processing framework with privacy-preserving vector databases for chinese medical llms training and deployment. arXiv preprint arXiv:2509.01354, 2025. [15] Bowen Jiang, Yuan Yuan, Maohao Shen, Zhuoqun Hao, Zhangchen Xu, Zichen Chen, Ziyi Liu, Anvesh Rao Vijjini, Jiashu He, Hanchao Yu, Radha Poovendran, Gregory Wornell, Lyle Ungar, Dan Roth, Sihao Chen, and Camillo Jose Taylor. Personamem-v2: Towards personalized intelligence via learning implicit user personas and agentic memory, 2025. URL https://arxiv.org/abs/2512.06688 .[16] Jingyi Kang, Chunyu Li, Ding Chen, Bo Tang, Feiyu Xiong, and Zhiyu Li. Memreader: From passive to active extraction for long-term agent memory. arXiv preprint arXiv:2604.07877, 2026. 
+
+15 [17] Tatsuki Koga, Ruihan Wu, Zhiyuan Zhang, and Kamalika Chaudhuri. Privacy-preserving retrieval-augmented generation with differential privacy. arXiv preprint arXiv:2412.04697, 2024. [18] Brian Kondracki, Babak Amin Azad, Oleksii Starov, and Nick Nikiforakis. Catching transparent phish: Analyzing and detecting mitm phishing toolkits. In Proceedings of the 2021 ACM SIGSAC Conference on Computer and Communications Security, pages 36–50, 2021. [19] Hao-Ping Lee, Yu-Ju Yang, Thomas Serban Von Davier, Jodi Forlizzi, and Sauvik Das. Deepfakes, phrenology, surveillance, and more! a taxonomy of ai privacy risks. In Proceedings of the 2024 CHI Conference on Human Factors in Computing Systems, pages 1–19, 2024. [20] Zhiyu Li, Shichao Song, Chenyang Xi, Hanyu Wang, Chen Tang, Simin Niu, Ding Chen, Jiawei Yang, Chunyu Li, Qingchen Yu, Jihao Zhao, Yezhaohui Wang, Peng Liu, Zehao Lin, Pengyuan Wang, Jiahao Huo, Tianyi Chen, Kai Chen, Kehang Li, Zhen Tao, Junpeng Ren, Huayi Lai, Hao Wu, Bo Tang, Zhenren Wang, Zhaoxin Fan, Ningyu Zhang, Linfeng Zhang, Junchi Yan, Mingchuan Yang, Tong Xu, Wei Xu, Huajun Chen, Haofeng Wang, Hongkang Yang, Wentao Zhang, Zhi-Qin John Xu, Siheng Chen, and Feiyu Xiong. Memos: A memory os for ai system. arXiv preprint arXiv:2507.03724, 2025. URL https://arxiv.org/abs/2507.03724 .[21] Chin-Yew Lin. ROUGE: A package for automatic evaluation of summaries. In Text Summarization Branches Out , pages 74–81, Barcelona, Spain, July 2004. Association for Computational Linguistics. URL https:// aclanthology.org/W04-1013/ .[22] Peng Liu, Zhen Tao, Jihao Zhao, Ding Chen, Yansong Zhang, Cuiping Li, Zhiyu Li, and Hong Chen. Mememo: Evaluating emotion in memory systems of agents. arXiv preprint arXiv:2602.23944, 2026. [23] Yezi Liu, Hanning Chen, Wenjun Huang, Yang Ni, and Mohsen Imani. Lune: Efficient llm unlearning via lora fine-tuning with negative examples. arXiv preprint arXiv:2512.07375, 2025. [24] Jinglong Luo, Zhuo Zhang, Yehong Zhang, Shiyu Liu, Ye Dong, Hui Wang, Yue Yu, Xun Zhou, and Zenglin Xu. Secp-tuning: Efficient privacy-preserving prompt tuning for large language models via mpc. arXiv preprint arXiv:2506.15307, 2025. [25] Chelsea McMurray and Hayder Tirmazi. Whistledown: Combining user-level privacy with conversational coherence in llms. arXiv preprint arXiv:2511.13319, 2025. [26] Jingbiao Mei, Jinghong Chen, Guangyu Yang, Xinyu Hou, Margaret Li, and Bill Byrne. According to me: Long-term personalized referential memory qa, 2026. URL https://arxiv.org/abs/2603.01990 .[27] Niloofar Mireshghallah, Neal Mangaokar, Narine Kokhlikyan, Arman Zharmagambetov, Manzil Zaheer, Saeed Mahloujifar, and Kamalika Chaudhuri. Cimemories: A compositional benchmark for contextual integrity of persistent memory in llms, 2025. URL https://arxiv.org/abs/2511.14937 .[28] Srija Mukhopadhyay, Sathwik Reddy, Shruthi Muthukumar, Jisun An, and Ponnurangam Kumaraguru. Privacybench: A conversational benchmark for evaluating privacy in personalized ai, 2025. URL https: //arxiv.org/abs/2512.24848 .[29] Arvind Narayanan and Vitaly Shmatikov. Robust de-anonymization of large sparse datasets. In 2008 IEEE Symposium on Security and Privacy (sp 2008), pages 111–125. IEEE, 2008. [30] Helen Nissenbaum. Privacy as contextual integrity. Wash. L. Rev., 79:119, 2004. [31] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems, 35:27730–27744, 2022. [32] Charles Packer, Vivian Fang, Shishir_G Patil, Kevin Lin, Sarah Wooders, and Joseph_E Gonzalez. Memgpt: towards llms as operating systems. 2023. [33] Kishore Papineni, Salim Roukos, Todd Ward, and Wei-Jing Zhu. Bleu: a method for automatic evaluation of machine translation. In Pierre Isabelle, Eugene Charniak, and Dekang Lin, editors, Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics , pages 311–318, Philadelphia, Pennsylvania, USA, July 2002. Association for Computational Linguistics. doi: 10.3115/1073083.1073135. URL https: //aclanthology.org/P02-1040/ .[34] Vaidehi Patil, Peter Hase, and Mohit Bansal. Can sensitive information be deleted from llms? objectives for defending against extraction attacks. arXiv preprint arXiv:2309.17410, 2023. 
+
+16 [35] Paul Quinn and Gianclaudio Malgieri. The difficulty of defining sensitive data—the concept of sensitive data in the eu data protection framework. German Law Journal, 22(8):1583–1612, 2021. [36] Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. Zero: Memory optimizations toward training trillion parameter models. In SC20: international conference for high performance computing, networking, storage and analysis, pages 1–16. IEEE, 2020. [37] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347, 2017. [38] Paul M Schwartz and Daniel J Solove. The pii problem: Privacy and a new concept of personally identifiable information. NYUL rev., 86:1814, 2011. [39] Yijia Shao, Tianshi Li, Weiyan Shi, Yanchen Liu, and Diyi Yang. Privacylens: Evaluating privacy norm awareness of language models in action. Advances in Neural Information Processing Systems, 37:89373–89407, 2024. [40] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300, 2024. [41] Daniel J Solove. Data is what data does: Regulating based on harm and risk instead of sensitive data. Nw. UL Rev., 118:1081, 2023. [42] Latanya Sweeney. k-anonymity: A model for protecting privacy. International journal of uncertainty, fuzziness and knowledge-based systems, 10(05):557–570, 2002. [43] Bo Wang, Weiyi He, Shenglai Zeng, Zhen Xiang, Yue Xing, Jiliang Tang, and Pengfei He. Unveiling privacy risks in llm agent memory. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 25241–25260, 2025. [44] Weizhi Wang, Li Dong, Hao Cheng, Xiaodong Liu, Xifeng Yan, Jianfeng Gao, and Furu Wei. Augmenting language models with long-term memory. Advances in Neural Information Processing Systems, 36:74530–74543, 2023. [45] Wujiang Xu, Zujie Liang, Kai Mei, Hang Gao, Juntao Tan, and Yongfeng Zhang. A-mem: Agentic memory for llm agents. arXiv preprint arXiv:2502.12110, 2025. [46] Dixi Yao and Tian Li. Private retrieval augmented generation with random projection. In ICLR 2025 Workshop on Building Trust in Language Models and Applications, 2025. [47] Jin Yao, Eli Chien, Minxin Du, Xinyao Niu, Tianhao Wang, Zezhou Cheng, and Xiang Yue. Machine unlearning of pre-trained large language models. In Proceedings of the 62nd annual meeting of the association for computational linguistics (volume 1: Long papers), pages 8403–8419, 2024. [48] Shenglai Zeng, Jiankun Zhang, Pengfei He, Jie Ren, Tianqi Zheng, Hanqing Lu, Han Xu, Hui Liu, Yue Xing, and Jiliang Tang. Mitigating the privacy issues in retrieval-augmented generation (rag) via pure synthetic data. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 24538–24569, 2025. [49] Junfei Zhan, Haoxun Shen, Zheng Lin, and Tengjiao He. Prism: Privacy-aware routing for adaptive cloud–edge llm inference via semantic sketch collaboration. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 40, pages 28150–28158, 2026. [50] Dawen Zhang, Pamela Finckenberg-Broman, Thong Hoang, Shidong Pan, Zhenchang Xing, Mark Staples, and Xiwei Xu. Right to be forgotten in the era of large language models: Implications, challenges, and solutions. AI and Ethics, 5(3):2445–2454, 2025. [51] Shuning Zhang, Rongjun Ma, Ying Ma, Shixuan Li, Yiqun Xu, Xin Yi, and Hewu Li. Understanding users’ privacy perceptions towards llm’s rag-based memory. In Proceedings of the 2025 Workshop on Human-Centered AI Privacy and Security , HAIPS ’25, page 10–19, New York, NY, USA, 2025. Association for Computing Machinery. ISBN 9798400719059. doi: 10.1145/3733816.3760750. URL https://doi.org/10.1145/3733816.3760750 .[52] Shuning Zhang, Rongjun Ma, Ying Ma, Shixuan Li, Yiqun Xu, Xin Yi, and Hewu Li. Understanding users’ privacy perceptions towards llm’s rag-based memory. In Proceedings of the 2025 Workshop on Human-Centered AI Privacy and Security, pages 10–19, 2025. 
+
+17 [53] Jihao Zhao, Ding Chen, Zhaoxin Fan, Kerun Xu, Mengting Hu, Bo Tang, Feiyu Xiong, and Zhiyu Li. Inside out: Evolving user-centric core memory trees for long-term personalized dialogue systems. arXiv preprint arXiv:2601.05171, 2026. [54] Yuze Zhao, Jintao Huang, Jinghan Hu, Xingjun Wang, Yunlin Mao, Daoze Zhang, Zeyinzi Jiang, Zhikai Wu, Baole Ai, Ang Wang, et al. Swift: a scalable lightweight infrastructure for fine-tuning. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 39, pages 29733–29735, 2025. [55] Xiaofeng Zheng, Jian Jiang, Jinjin Liang, Haixin Duan, Shuo Chen, Tao Wan, and Nicholas Weaver. Cookies lack integrity: {Real-World } implications. In 24th USENIX Security Symposium (USENIX Security 15), pages 707–721, 2015. [56] Yaowei Zheng, Richong Zhang, Junhao Zhang, Yanhan Ye, and Zheyan Luo. Llamafactory: Unified efficient fine-tuning of 100+ language models. In Proceedings of the 62nd annual meeting of the association for computational linguistics (volume 3: system demonstrations), pages 400–410, 2024. [57] Wanjun Zhong, Lianghong Guo, Qiqi Gao, He Ye, and Yanlin Wang. Memorybank: Enhancing large language models with long-term memory. In Proceedings of the AAAI conference on artificial intelligence, volume 38, pages 19724–19731, 2024. 
+
+18 Appendices 
+
+A Supplementary Details of Dataset . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19 B Human Annotation Protocol . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19 C MemPrivacy Model Variants and Training Recipes . . . . . . . . . . . . . . . . . . . . . . . . . . . 20 D Detailed Experimental Configurations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20 D.1 Prompt Engineering Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20 D.2 Response Generation Quality Metrics. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20 D.3 Memory Agent Testbeds and Deployment Configurations . . . . . . . . . . . . . . . . . . . . 22 D.4 Training Pipeline and Optimization Strategy . . . . . . . . . . . . . . . . . . . . . . . . . . . 23 
+
+## A Supplementary Details of Dataset 
+
+This appendix provides detailed statistics of the datasets used in our experiments, together with additional details on the construction of MemPrivacy-Bench . Table 1 reports the detailed statistics of the MemPrivacy-Bench training and test sets, as well as the evaluation set constructed from PersonaMem-v2 .The training and test splits of MemPrivacy-Bench are balanced across Chinese and English, with each language accounting for 50% of the dialogues. Each complete user profile includes basic attributes, preferences in four categories (diet, arts and entertainment, lifestyle and hobbies, and aesthetics), and privacy information covering an average of 50 types. Some privacy entries further contain multiple fine-grained details, providing rich sources of privacy content for dialogue generation. To diversify topics and interaction settings, we define 7 high-level scenario categories and 23 fine-grained subcategories of user–assistant conversations, aiming to better cover realistic situations in which privacy may be revealed. The seven high-level categories are Drafting & Polishing , Financial & Data Analysis , Consultation & Planning , Tech Support & Simulation , Emotional & Social , Contextual Inference , and Preference Change .For each user, we randomly sample 6 to 10 subcategories and generate the corresponding multi-turn dialogues. For the test split, we further construct memory question-answer pairs in six common categories: Basic Memory , Temporal Reasoning , Adversarial Questioning , Dynamic Updating , Implicit Inference , and Information Aggregation . During question generation, we ensure coverage of users’ basic attributes, preferences, and privacy information, so that both question types and content remain balanced. Additionally, it should be noted that the privacy information in both the MemPrivacy-Bench test set and the PersonaMem-v2 evaluation set is annotated using the same strategy, with initial labeling performed by Gemini-3.1-Pro and GPT-5.2 and final annotation and verification conducted by human annotators. 
+
+## B Human Annotation Protocol 
+
+To further ensure the annotation quality of privacy information in the MemPrivacy-Bench test set and the evaluation split constructed from PersonaMem-v2, we recruit six human annotators to conduct final verification and correction after the initial LLM-based labeling by Gemini-3.1-Pro and GPT-5.2. All annotators hold at least a bachelor’s degree and are compensated according to local wage standards, with workloads scheduled within reasonable working-hour limits on weekdays. Before annotation, all annotators study the privacy taxonomy and extraction guidelines defined in Sec. 2.1 to align their decision criteria and reduce subjective inconsistency. During verification, annotators review every 19 Table 5 Mapping between MemPrivacy models, their base models, and training methods.               
+
+> MemPrivacy Model Base Model Training Method
+> MemPrivacy-0.6B-SFT Qwen3-0.6B SFT MemPrivacy-0.6B-RL Qwen3-0.6B SFT + RL MemPrivacy-1.7B-SFT Qwen3-1.7B SFT MemPrivacy-1.7B-RL Qwen3-1.7B SFT + RL MemPrivacy-4B-SFT Qwen3-4B SFT MemPrivacy-4B-RL Qwen3-4B SFT + RL
+
+annotated privacy item in the dialogues, including the original span text , privacy level , and privacy type . An item is considered correct only if all three fields are accurate; otherwise, it is marked as incorrect and revised. When necessary, we provide annotators with the associated user profile information and the original dialogue context to support consistent judgments. After human verification, the privacy annotations in the two evaluation sets reach an accuracy of 98.08%. This result indicates that our construction pipeline and taxonomy are reliable, and that the training split can effectively support privacy extraction model training even without exhaustive human annotation. 
+
+## C MemPrivacy Model Variants and Training Recipes 
+
+Table 5 summarizes all MemPrivacy model variants used in our experiments, including their corresponding base models and training recipes. We adopt Qwen3 models at different scales as backbones and train MemPrivacy models with supervised fine-tuning (SFT). For the instruction-tuned 4B backbone, we additionally report a variant trained with SFT followed by reinforcement learning (SFT+RL). Unless otherwise specified, results reported in the main paper use the MemPrivacy model variant indicated in Table 5. Model names follow the convention MemPrivacy-{size}-{recipe} , where Ins denotes instruction-tuned backbones. 
+
+## D Detailed Experimental Configurations 
+
+D.1 Prompt Engineering Details 
+
+To ensure reproducibility and facilitate closer inspection of our evaluation protocol, we provide the prompt templates used at different stages of the benchmark pipeline. The prompts for answering short-answer questions in MemPrivacy-Bench and multiple-choice questions in PersonaMem-v2 are shown in Figures 4-5. The prompt template used to instruct GPT-5.2 to evaluate memory-system performance on short-answer questions is presented in Figures 6-7. The prompt template used for privacy information extraction is provided in Figures 8-11. In addition, we provide tables containing illustrative examples of detailed privacy policy provisions (Table 6), as well as hierarchical privacy level definitions and their associated default handling policies (Table 7). Together, these materials offer a more complete account of the prompting setup, policy grounding, and annotation principles that support our benchmark construction and evaluation. 
+
+D.2 Response Generation Quality Metrics. 
+
+In addition to task-level accuracy, we report four automatic generation-quality metrics, namely BLEU-1, BLEU-2, METEOR, and ROUGE-L, to evaluate the lexical and sequence-level consistency between generated answers and reference answers. For each question-answer instance, let ˆy denote the generated answer and 
+
+y denote the corresponding reference answer. All metrics are computed between ˆy and y using the same tokenization procedure across all evaluated methods, and the final score is obtained by averaging over all test instances. Higher values indicate better agreement with the reference answer. 20 BLEU-1 and BLEU-2. BLEU measures modified n-gram precision between a candidate answer and its reference, together with a brevity penalty to discourage overly short generations. For BLEU-N , the score is defined as 
+
+BLEU -N = BP · exp 
+
+> N
+
+X
+
+> n=1
+
+wn log pn
+
+!
+
+, (6) where pn is the modified precision of n-grams, and wn is the weight assigned to the n-gram order. In our evaluation, BLEU-1 uses N = 1 with w1 = 1 , while BLEU-2 uses N = 2 with uniform weights w1 = w2 = 12 .The brevity penalty is computed as 
+
+BP = 
+
+(
+
+1, c > r, 
+
+exp(1 − r/c ), c ≤ r, (7) where c and r denote the lengths of the generated answer and the reference answer, respectively. The modified 
+
+n-gram precision is given by 
+
+pn =
+
+P 
+
+> g∈G n(ˆ y)
+
+min (Count ˆy (g), Count y (g)) 
+
+P 
+
+> g∈G n(ˆ y)
+
+Count ˆy (g) , (8) where Gn( ˆy) denotes the set of n-grams in the generated answer, and Count ˆy (g) and Count y (g) denote the occurrence counts of n-gram g in the generated and reference answers, respectively. BLEU-1 mainly captures unigram-level lexical overlap, whereas BLEU-2 additionally evaluates local word-order consistency through bigram overlap.  
+
+> METEOR.
+
+METEOR evaluates answer quality based on unigram alignment between the generated and reference answers. Compared with pure precision-oriented metrics, METEOR incorporates both precision and recall and penalizes fragmented alignments. Let m be the number of matched unigrams between ˆy and y.The unigram precision and recall are defined as 
+
+P = m
+
+|ˆy| , R = m
+
+|y| . (9) The harmonic mean used by METEOR is computed as 
+
+Fmean = 10 P R R + 9 P . (10) To account for word-order fragmentation, METEOR applies a penalty term: 
+
+Penalty = 0 .5
+
+ ch m
+
+3
+
+, (11) where ch denotes the number of contiguous matched chunks. The final METEOR score is 
+
+METEOR = Fmean · (1 − Penalty) . (12) When no unigram match exists, the METEOR score is set to zero. This metric is useful for evaluating whether the generated answer preserves the key content of the reference answer while allowing moderate variation in surface realization.  
+
+> ROUGE-L.
+
+ROUGE-L evaluates the longest common subsequence between the generated answer and the reference answer. Unlike fixed-order n-gram metrics, ROUGE-L captures in-sequence overlap without requiring consecutive token matches. Let LCS ( ˆy, y ) denote the length of the longest common subsequence between ˆy
+
+and y. The ROUGE-L recall and precision are defined as 
+
+RLCS = LCS(ˆ y, y )
+
+|y| , PLCS = LCS(ˆ y, y )
+
+|ˆy| . (13) 21 The final ROUGE-L score is computed as the F -measure: 
+
+ROUGE -L = (1 + β2)RLCS PLCS 
+
+RLCS + β2PLCS 
+
+. (14) Following the common F1-based setting, we set β = 1 in our experiments. ROUGE-L therefore measures the extent to which the generated answer preserves the global token sequence of the reference answer. All reported BLEU-1, BLEU-2, METEOR, and ROUGE-L scores are averaged over the evaluation set. In the result tables, we report these scores as percentages for readability. 
+
+D.3 Memory Agent Testbeds and Deployment Configurations 
+
+To systematically examine the impact of privacy-preserving mechanisms on memory-based agents, this paper selects LangMem, Mem0, and Memobase as three representative long-term memory systems. Rather than treating them as homogeneous baselines for direct comparison, we regard them as exemplifying distinct paradigms of memory modeling and system integration: LangMem emphasizes deep coupling with agent frameworks and a typology of memory; Mem0 focuses on a general-purpose memory layer independent of upper-level agents and an extensible retrieval pipeline; and Memobase highlights user-profile-centered long-term personalization with time-aware memory. Precisely because these systems differ substantially in memory representation, writing mechanisms, retrieval strategies, and deployment forms, they provide complementary experimental testbeds for studying the trade-off between privacy exposure and task utility.  
+
+> LangMem.
+
+The core objective of LangMem is to enable agents to continuously learn and adapt through interaction. It not only supports extracting salient information from conversations to form long-term memory, but also supports optimizing the system prompt based on interaction trajectories, thereby unifying what to remember and how to improve behavior accordingly within a single framework. At the level of memory modeling, LangMem explicitly distinguishes among semantic memory, episodic memory, and procedural memory. Semantic memory stores user preferences, facts, and background knowledge, and may be represented either as a retrievable collection or as a structured profile. Episodic memory preserves successful past interaction cases and the circumstances under which they succeeded. Procedural memory, in turn, treats system instructions as behavioral rules that can be continuously refined through feedback and experience. This typological design allows LangMem to jointly cover three levels of functionality: fact retention, experience transfer, and behavioral calibration. It is therefore particularly relevant to privacy research, since private information may be exposed not only as factual entries, but also indirectly encoded through successful cases, behavioral rules, or even prompt updates. With respect to memory writing, LangMem supports both hot-path and background reflection mechanisms for memory formation. The former allows the agent to actively invoke memory tools during an ongoing dialogue to create, update, or delete memories. The latter enables the system, after the conversation ends or during idle periods, to automatically extract, consolidate, and update memory through create_memory_store_manager 
+
+and a reflection execution mechanism. This design implies that privacy-preserving methods must address not only the exposure risk of explicit online writes, but also the secondary exposure risk introduced by offline reflective distillation.  
+
+> Mem0.
+
+Mem0 defines itself as a universal, self-improving memory layer for LLM applications. Its design goal is to provide persistent context across multi-turn and multi-session settings without requiring developers to bind long-term memory capabilities to any specific agent framework. Its core workflow centers on memory writing, retrieval, and reuse. The search interface supports natural-language queries, JSON-logic-based filtering, top_k and threshold control, as well as optional reranking for secondary reordering of retrieved results. More importantly, the current implementation of Mem0 allows new facts and old facts to coexist, without proactively overwriting or deleting existing memories, in order to preserve temporal context and avoid information loss caused by premature consolidation. For privacy research, this strategy has a dual implication: on the one hand, it helps retain temporal evidence; on the other hand, it may increase the likelihood that stale yet sensitive information remains in the system for extended periods and is later recalled.  
+
+> Memobase.
+
+The primary purpose of Memobase is not to preserve arbitrary long-term context for an agent, but to build a persistently evolving structured profile for each user. Developers can explicitly define what 22 user information the system should remember and organize that information into a clear topic and subtopic structure. Compared with general-purpose memory layers based mainly on collections of discrete facts, this design more closely resembles a controllable memory database for individualized modeling. A second key feature of Memobase is its time-aware memory. In addition to structured profiles, it maintains user events and their timelines to support answering time-sensitive questions. At the system implementation level, Memobase adopts a buffer+asynchronous flush writing mechanism. User conversations are first written to a buffer in blob form; when the buffer reaches a certain size, remains idle for a period of time, or when flush() is explicitly invoked after the session ends, the system converts the buffered content into long-term memory. Its context API can further package the user profile together with recent events into textual context that can be directly inserted into prompts. Compared with approaches that retain the full dialogue as long-term storage, this design reduces, to some extent, the risk of preserving raw sensitive text. At the same time, however, it also implies that private information may become sedimented into the profile and event timeline in the form of profiling and summarization. 
+
+D.4 Training Pipeline and Optimization Strategy 
+
+We adopt a two-stage training pipeline consisting of full-parameter SFT followed by reinforcement learning from reward feedback using GRPO. In both stages, we optimize the entire model rather than parameter-efficient adapters, so that the base model can be consistently adapted to the target instruction-following and policy-optimization objectives. In the SFT stage, training is conducted with full-parameter updates under DeepSpeed ZeRO-3 optimization. We use the qwen3_nothink template, disable thinking mode, and set the maximum sequence length to 4096 tokens. Data preprocessing uses 16 workers and dataloading uses 4 workers. Optimization is performed in 
+
+bf16 with a per-device batch size of 1 and gradient accumulation over 16 steps, yielding an effective batch expansion without exceeding device memory limits. We train for 1 epoch using Adam-style optimization with a learning rate of 1.0 × 10 −5, cosine learning-rate decay, and a warmup ratio of 0.1. For monitoring and checkpointing, we log every 10 steps, save checkpoints every 20 steps, enable loss visualization, and overwrite the output directory for controlled reruns. A large DDP timeout is used to improve robustness in distributed training environments. In the reinforcement learning stage, we further optimize the SFT model using GRPO implemented in swift rlhf . We set both rlhf_type and advantage_estimator to GRPO, and continue full-parameter training in 
+
+bfloat16 . To improve rollout efficiency, generation is served through a vLLM server backend. We disable dataset shuffling and training dataloader shuffling, and use left-side truncation so that the most recent context is preserved when samples exceed the context window. The maximum input length is 4096 tokens and the maximum completion length is 1536 tokens. Training uses a per-device batch size of 1, an evaluation batch size of 8, gradient accumulation over 8 steps, and 8 sampled generations per prompt. We set the learning rate to 1 × 10 −6, warmup ratio to 0.01, maximum gradient norm to 1.0, PPO-style clipping parameter ϵ = 0 .2,and KL regularization coefficient β = 0 .001 . We train for 1 epochs with a single GRPO update iteration per batch, using DeepSpeed ZeRO-2 during this stage. For exploration, we use temperature = 1 .0, top-p = 0 .9,and top-k = 50 , together with dynamic sampling and up to 3 resampling attempts. We evaluate every 20 steps, log every step, record generated completions and entropy statistics, save checkpoints every 20 steps, retain at most 3 checkpoints, and save model weights only. Overall, this optimization strategy is designed to balance adaptation quality, training stability, and system efficiency. Full-parameter SFT provides a strong supervised initialization, while GRPO further improves the policy under reward-driven optimization. The use of long-context training, conservative learning rates in the RL stage, mixed-precision computation, DeepSpeed memory optimization, and vLLM-based rollout serving enables stable end-to-end training under limited GPU memory while maintaining reasonably efficient online sampling and checkpoint management. 23 You are a memory retrieval assistant . Your task is to answer a question using only the retrieved conversation memories between a USER and an AI ASSISTANT . # CONTEXT You are given timestamped conversation memories from two participants : USER and ASSISTANT . These memories come from previous conversations and may contain information needed to answer the question . # INSTRUCTIONS 1. Carefully review all retrieved memories from both USER and ASSISTANT . 2. Use only the information explicitly stated in the memories . 3. Pay attention to timestamps to determine when events happened . 4. If multiple memories conflict , prioritize the most recent one . 5. If a memory contains relative time references ( e . g . , " last year " , " two months ago ") : - Convert them into an exact date , month , or year using the memory timestamp . - Example : If a memory dated **4 May 2022** says " went to India last year " , the event happened in **2021**. 6. Always convert relative time expressions into specific dates or years in your reasoning . 7. Do not assume facts that are not present in the memories . 8. Treat USER and ASSISTANT only as speakers in the conversation . Do not confuse people mentioned inside memories with the speakers themselves . 9. The final answer must be ** short **. # REASONING PROCESS Think step by step : 1. Identify memories relevant to the question . 2. Examine their timestamps and content . 3. Extract explicit facts about dates , locations , or events . 4. Convert relative time references to exact dates if necessary . 5. Select the most reliable evidence ( prefer newer memories if conflicts exist ) . 6. Produce a concise answer that directly answers the question . # MEMORY DATA Memories from USER ({ user_name }) : { user_memories } # QUESTION { question } # ANSWER 
+
+Figure 4 Prompt template for answering MemPrivacy-Bench short-answer questions. 
+
+Table 6 Illustrative examples of detailed privacy policy provisions. 
+
+Primary Governance Principle Secondary Theme Privacy Level Policy Provision Handling Strategy 
+
+Minimization & Revocabil-ity Expression and In-teraction Prefer-ences 1 [Root] Retain only preference summaries necessary for user experience; personally identifying details must not be stored. 
+
+[Model] When personalization is applied, preferences must not be treated as factual identity attributes. 
+
+[User] Provide user controls to enable or disable personalized memory and to clear memory with one click. Collection: record only when the user explicitly expresses a preference. Storage: store sum-marized representations rather than verbatim ut-terances. Retention: short-lived or user-configurable. 
+
+Continued on the next page 
+
+24 Primary Governance Principle Secondary Theme Privacy Level Policy Provision Handling Strategy 
+
+Minimization & Revocabil-ity General Habits 1 [Root] Do not collect precise schedules; re-tain only coarse-grained tendencies.  
+
+> [Developer]
+
+Impose granularity limits on fields related to routines, diet, exercise, and similar habits. Collection: primar-ily based on user self-disclosure; avoid tracking-based collec-tion. Storage: use coarse-grained enumerations. Minimization & Revocabil-ity Capability and Modality Prefer-ences 1 [Root] Preferences regarding capability or mode of interaction must not be extrapo-lated into conclusions about qualification or competence. Use: only for interaction strategy. Sharing: individual pro-files must not be ex-ported externally. Minimization & Revocabil-ity Interests and Aes-thetic Prefer-ences 1 [Root] Do not retain feature combinations that could support sensitive inference; ap-ply abstraction or fuzzing where necessary.  
+
+> [User]
+
+Allow users to inspect the list of memory entries. Storage: interest tags may be stored only if they remain visible to the user and deletable. Prudent In-ference Personality and Emo-tion 1 [Root] Emotional expressions must not be elevated into diagnostic judgments; no health profile may be created from such signals.  
+
+> [Model]
+
+Responses must include limiting language indicating that conclusions are based only on the current expression and do not constitute medical advice. Use: only for empa-thy and response style within the current dia-logue. Retention: stress or emo-tion trajectories should not be stored long-term by default. Lawfulness & Controlled Storage Direct Identi-fiers 2 [Root] PL2 data must not enter general long-term memory by default.  
+
+> [Developer]
+
+If retention is strictly neces-sary, store only as structured fields with encryption, role-based access control, and audit logging.  
+
+> [Model]
+
+Avoid revealing full identifiers; masked presentation is preferred. Collection: only when strictly necessary to com-plete the service. Storage: controlled do-main with field-level en-cryption and minimal re-tention. Lawfulness & Controlled Storage Online Identi-fiers 2 [Root] Usernames, UIDs, IP addresses, cookies, and similar identifiers must be handled according to their traceability; reusable session identifiers should be treated as higher risk.  
+
+> [Developer]
+
+Distinguish temporary session data from identifiers that support persistent tracking. Storage: avoid retention whenever possible; if re-tention is necessary, use a controlled domain with expiration policies. Lawfulness & Minimiza-tion Identifiable Relation-ship and Back-ground Combina-tions 2 [Model] When combinations such as em-ployer + title + city are detected, the user should be informed of the associated pri-vacy risk and asked whether to proceed.  
+
+> [Root]
+
+Such combinations must not be used for external identity inference or external identity lookup. Use: limited to the cur-rent task only. Retention: not stored long-term by default. 
+
+Continued on the next page 
+
+25 Primary Governance Principle Secondary Theme Privacy Level Policy Provision Handling Strategy 
+
+Security Protection & Separate Consent Government Docu-ments and Specific Iden-tity At-tributes 3 [Root] Identity document numbers and doc-ument images must not be collected or stored in general-purpose systems; if ex-ceptionally necessary, separate consent and stringent risk controls are required.  
+
+> [Developer]
+
+Document-related fields must be strongly encrypted, retained for the shortest possible period, and may require dual approval for access. Collection: collect only strictly necessary fields; verification outcomes are preferred over raw docu-ment content. Storage: controlled do-main with strict audit-ing. Security Pro-tection Financial and Credit In-formation 3 [Root] Transaction details, bank card num-bers, and credit records should not be col-lected by default; if proactively provided by the user, masking should be recommended first.  
+
+> [Model]
+
+Process only the minimally neces-sary fragments and return redacted content where needed. Storage: excluded from databases by default; if retention is necessary, use a controlled domain with field masking. Security Pro-tection Health and Medical Informa-tion 3 [Root] Diagnoses, prescriptions, and medi-cal histories must not enter general-purpose memory and must not be used for profiling, advertising, or differential treatment.  
+
+> [Model]
+
+Responses must avoid diagnostic language and should recommend seeking professional medical care where appropri-ate. Use: limited to support within the current inter-action; no health profile may be formed. Security Pro-tection Precise Location and Tra-jectory 3 [Root] Real-time location, trajectory point sequences, and lists of frequently visited places must not be retained long-term.  
+
+> [Developer]
+
+Apply upper bounds and auto-matic expiration to latitude–longitude and geofencing data. Storage: retain only city-level or region-level infor-mation if necessary. Retention: extremely short. Security Pro-tection Biometrics 3 [Root] Fingerprint, face, and voiceprint templates or embeddings must not enter dialogue memory or logs.  
+
+> [Developer]
+
+Biometric templates and matching results must be isolated across domains and protected by strong access control. Storage: dedicated se-cure domain with a min-imal access surface. Security Pro-tection Message and Accom-modation Informa-tion 3 [Root] Raw chat logs, email content, and accommodation details such as room num-bers must not be stored by default; if pasted by the user, the user should be prompted to remove sensitive passages.  
+
+> [Model]
+
+Any quoted content in responses must be minimized. Use: process only for the current request; raw content must not persist across sessions. 
+
+Continued on the next page 
+
+26 Primary Governance Principle Secondary Theme Privacy Level Policy Provision Handling Strategy 
+
+Highest-Level Protec-tion Accounts and Authen-tication Creden-tials 4 [Root] Passwords, OTPs, MFA backup codes, session tokens, and similar creden-tials must not be collected, stored, or echoed.  
+
+> [Model]
+
+Once such content appears, the system must immediately advise credential replacement and recommend a secure han-dling channel.  
+
+> [Developer]
+
+Detection and automatic redaction are required; such data must never be written to logs. Collection: blocked. Storage: zero retention. Handling: redact and alert in accordance with organizational procedures. Highest-Level Protec-tion Keys and Signing Materials 4 [Root] API keys, private keys, mnemonic phrases, certificate private keys, and simi-lar secrets must never enter model context, memory, logs, or training data.  
+
+> [Developer]
+
+Secrets must never be stored; enforce key rotation workflows and least-privilege access. Handling: immediately recommend revocation and rotation. Highest-Level Protec-tion Enterprise Secrets and Non-public Business Data 4 [Root] Non-public financials, M&A mate-rials, roadmaps, and reusable implemen-tation details of core algorithms must not enter general-purpose dialogue systems or external toolchains by default.  
+
+> [Developer]
+
+Internal materials must be clas-sified, access-isolated, and protected with watermarking and audit mechanisms for outbound sharing. Storage: dedicated inter-nal domain with minimal visibility. 27 You are an assistant that selects the most appropriate answer for a user based on their query and known preferences . Query : { question } Relevant User Memory : { user_memories } Candidate Answers : { options_text } Task : Choose the answer that best fits the query while considering the user ’ s preferences and past behavior from the provided memory . Instructions : - Carefully consider the user ’ s memory when making your choice . - You must strictly base your selection only on the provided memory and options ; do not make assumptions , guesses , or introduce any information not explicitly supported by the memory . - Select the single best option . - Provide a short reason explaining why the selected option best matches the user ’ s query and preferences . Output Format : Return your answer strictly in JSON format with the following fields : {" answer ": " < LETTER >" , " reason ": " < short explanation >"} Rules : - " answer " must be one of the option letters ( e . g . , A , B , C , D ) . - The explanation should be concise (1~2 sentences ) . - Do not output anything other than the JSON object . 
+
+Figure 5 Prompt template for answering PersonaMem-v2 multiple-choice questions. 
+
+28 You are an ** expert evaluator ** for question - answering in an ** AI memory system **. Your task is to ** strictly evaluate the accuracy ** of the ** Memory System Response ** based ** only ** on the provided ** Question ** and ** Reference Answer **. * Determine whether the response is **" correct "** , **" partially_correct "** , or **" incorrect "**. * ** Do not use any external knowledge , assumptions , or subjective reasoning .** * Your judgment must rely ** exclusively ** on the ** Reference Answer ** and the ** Memory System Response **. * Output your final decision ** strictly in the required JSON format **. # Evaluation Criteria ## 1. Answer Classification ### Correct The ** Memory System Response ** is considered ** correct ** if : * It ** accurately answers the Question **. * Its meaning is ** semantically equivalent ** to the ** Reference Answer **. * It ** does not contradict ** the Reference Answer . * It ** does not introduce unsupported or fabricated details **. * ** Synonyms , paraphrases , and reasonable summarizations ** are acceptable . ### Partially Correct The ** Memory System Response ** is considered ** partially_correct ** if : * The response ** contains some correct information from the Reference Answer ** , but ** does not fully cover all required elements **. * The response is ** incomplete ** , but the information it provides is ** consistent with the Reference Answer **. * The response ** does not contain contradictions ** with the Reference Answer . * The response ** does not fabricate or invent unsupported facts **. Typical cases include : * The ** Reference Answer contains multiple elements ** , but the response ** only includes some of them **. * The response ** captures the main idea but lacks important details ** required for full correctness . ### Incorrect The response is ** incorrect ** if ** any ** of the following conditions occur : * It ** contradicts ** the Reference Answer . * It ** contains fabricated , unsupported , or invented information **. * It ** answers a different question ** or is ** irrelevant **. * The response is ** empty , meaningless , or non - informative **. * The response ** fails to include any correct information from the Reference Answer **. ## 2. Priority Rules ( Conflict Handling ) 1. ** Contradictory or fabricated information always results in ‘ incorrect ‘** , even if some parts are correct . 2. If the response ** contains only a subset of the Reference Answer but remains fully consistent ** , classify it as ** ‘ partially_correct ‘**. 3. A response is ** ‘ correct ‘ only if it fully captures the meaning of the Reference Answer **. 
+
+Figure 6 Prompt template for GPT-5.2-Based grading of short-answer responses (1/2). 
+
+29 ## 3. Detailed Guidelines and Tolerances * ** Equivalent expressions ** of numbers , time , or units are acceptable , but the ** numerical values themselves must match **. * For ** multi - element questions **: * ** All elements present and correct = correct ** * ** Only some elements present ( no contradictions ) = partially_correct ** * ** Missing all key elements or introducing wrong elements = incorrect ** * If the Reference Answer is **" unknown / cannot be determined "**: * If the system provides a ** specific factual claim ** , it is ** incorrect **. * If the system also answers **" unknown "** without speculation , it may be ** correct **. * The evaluation must rely ** only ** on the ** Reference Answer ** and the ** Memory System Response **. ** External context , world knowledge , or inference is not allowed .** # Evaluation Input ** Question :** { question } ** Reference Answer :** { reference_answer } ** Memory System Response :** { response } # Output Requirements Provide the evaluation result ** strictly ** in the following JSON format . * ** Do not include any explanations or comments outside the JSON block .** ‘‘‘ json {" reason ": " Provide a concise evaluation rationale " , " judgment ": " correct /partially_correct / incorrect "} ‘ ‘ ‘ 
+
+Figure 7 Prompt template for GPT-5.2-Based grading of short-answer responses (2/2). 
+
+30 You are a professional " Data Security and Privacy Compliance Expert ." Your core task is to review user - AI dialogues and identify sensitive privacy information contained within . # Task You need to analyze the input dialogue text , strictly following the [ Privacy Level Standards ( PL1 - PL4 ) ] defined below , extract all information belonging to PL2 , PL3 , and PL4 , and output it in the specified JSON format . You are given : 1. A ‘ User ’ s Real Name ‘ field : the user ’ s verified real full name , provided to assist you in determining whether a name appearing in the dialogue is the user ’ s own name or a third party ’ s name . 2. A ‘ Current Input Dialogue ‘ field : the dialogue content between the user and the AI that you must analyze , from which you should identify and extract all fragments containing PL2 , PL3 , or PL4 privacy information according to the standards defined below . # Privacy Level Standards & Classification Rules ( Knowledge Base ) ## 1. Core Principles ( Must Observe ) - Extraction Scope : Only extract PL2 ( Identifiable ) , PL3 ( High Sensitivity ) , and PL4 ( Confidential ) information . - Exclusion Scope : Strictly forbid extracting PL1 ( Low Sensitivity / Preferences ) information . Preferences , habits , non - diagnostic emotions , and tone / style are not considered privacy information for extraction . - Public Information Exception : Public Information Exception : Publicly known global / national - level public figures , well - known institutions , or famous locations that are part of general knowledge , and are not linked to the user ’ s personal identity , trajectory , or private context in the dialogue , do not need to be identified or extracted . - Conflict Resolution : - Once a high - level rule ( e . g . , PL4 ) is matched , categorize it immediately ; do not downgrade . - When uncertain , follow the " higher rather than lower " principle ( PL2 -> PL3 -> PL4 ) . - PL1 vs . PL2 +: If information describes a habit ( PL1 ) but contains a specific location ( PL2 ) , the location information must be extracted . ## 2. Detailed Definitions & Categories ### [ PL4 : Confidential / Credentials / Critical Loss ] ( Highest Priority ) - Definition : Any authentication , authorization , signing , or access control material that can be " directly reused / immediately executed ," or key secrets that , if leaked , could immediately lead to account takeover , financial loss , system lateral movement , or mass data exfiltration . - Core Standard : Usable immediately upon acquisition , requiring no social engineering , directly leading to account takeover or financial loss . - Classification Rules : 1. Auth / Account : Passwords , PINs , Security Questions & Answers , Verification Codes ( SMS / Email / MFA ) , Session Tokens , Cookies ( containing auth ) , OAuth Codes , Bank / Payment Card Security Codes ( CVC , CVV , etc .) , Backup Codes , Recovery Codes , SSO Tickets . 2. Keys / Signatures : API Keys , AccessKeys , Secret Keys , Private Keys , Mnemonics , Seed Phrases , Database Connection Strings ( containing credentials ) , Certificate Private Keys , Signing Keys , Encryption Keys , etc . 3. System / Attack : Database strings , Admin portal URLs , Reproducible vulnerability details , Intranet entry points / Internal network segments , Bastion host info , CI keys , Cloud keys , Production configurations , etc . 
+
+Figure 8 Prompt template for privacy extraction (1/4). 
+
+31 4. Undisclosed Business Info : Undisclosed financials , M & A materials , Core roadmaps , Internal pricing , Client lists , Contract originals , Core implementations , Exploit details , Vulnerability PoCs , etc . - Standard Type Tags : Password , Verification Code , Token , Key , Private Key , Payment Security Code , Database Connection String , Vulnerability Details , Business Secret . ### [ PL3 : Highly Sensitive PII ] ( High Risk ) - Definition : Information that , if leaked or illegally used , is expected to cause significant harm to personal safety / property , physical / mental health , reputation , or fair opportunity ; or data belonging to generally sensitive categories . - Core Standard : High damage consequences . Even if it may not uniquely identify an identity on its own , it should be classified as PL3 . - Classification Rules : 1. Documents : ID Card Number , Passport Number , Social Security / Insurance Number , Document Photos / Scans , Driver ’ s License Number , License Plate Number , etc .2. Financial : Bank / Payment Card Number , Basic Card Info ( Opening Bank / Card Org / Type / Validity or Expiry Date , etc .) , Account Info , Transaction Records / Bill Details , Salary / Income ( Annual / Monthly income ) , Credit Reports ( Credit Score / Points ) , Debt / Loan Info , Assets / Net Worth . - [ Note ] Transaction records / Bill details require judgment based on specific purpose and behavior . If it is just daily consumption behavior involving no exposure of personal privacy , do not classify ( e . g . , "Spent 86 yuan at the supermarket ") . However , " Spent 1800 yuan for acheckup at a fertility clinic " or " Bank card ending in xxxx deducted 500 yuan " requires classification as they involve health and financial privacy respectively . 3. Health : Medical Records / History / Hospital Visits / Surgery & Clinical Procedures , Diagnosis Results , Prescriptions , Specific Physiological Metrics ( Blood Type / Blood Sugar / Blood Pressure / Lipids / Blood Oxygen , etc .) , Specific Body Metrics ( Height / Weight / BMI , etc .) , Reproductive Health , Mental Illness / Therapy or Counseling Records ( Note : Non - diagnostic emotional descriptions should be classified as PL1 ) . Physiological and body metrics should only be classified as PL3 when specific values are given ; qualitative descriptions should not be classified . 4. Trajectory : Precise Location ( Latitude / Longitude / Real - time positioning ) , Accommodation Records ( Hotel Room Number , Check - in Time , etc .) , Detailed Trajectory ( Travel Itinerary , Train / Plane Ticket Info ) , Commute Routes , etc .5. Biometrics : Face , Fingerprint , Voiceprint , Iris features , etc . 6. Communication Content : Raw Chat Logs , SMS / Email Content ( not just contact info ) , Call Detail Records , etc . 7. Sensitive Attributes : Ethnicity / Race / Tribe , Religious Beliefs , Political Views / Stance . 8. Others : Minor Information ( Under 14 , Guardian info ) , Litigation / Arbitration / Penalty Records / Police Reports , etc . - Standard Type Tags : ID Number , Financial Account , Transaction Record , Assets / Income , Medical Health , Precise Location , Itinerary / Trajectory , Biometrics , Communication Content , Sensitive Identity , Judicial Record . 
+
+Figure 9 Prompt template for privacy extraction (2/4). 
+
+32 ### [ PL2 : Identifiable PII ] ( Basic Identification ) - Definition : Information that , alone or combined with reasonably available information , can identify , locate , or stably trace a specific natural person . - Core Standard : Identifiable / Linkable / Traceable . - Classification Rules : 1. Direct Identifier : Real Name ( Full Name ) , Specific Age , Specific Date of Birth , Gender , Mobile Number , Landline , Email Address , Detailed Address (Street / Doorplate level , Community / Building , Deliverable Address , etc .) , Zip Code , Work Address . 2. Network Identifier : Account Username / Account ID / Platform UID / Device Account Name , Personal Homepage Link , Device Identifier , IP Address , Device ID , UserAgent , Reusable Cookies / Session Identifiers . 3. Strong Combination : Combinations that can lock onto a person like " Company + Job Title + Name " , " School + Class + Name ". Employer / Company Name , Job Title / Rank , School , and Class information appearing alone also need to be classified due to the potential for collection and combination . 4. Third - Party Identifiable Info : Personal information of Emergency Contacts / Relatives / Friends ( Name , Phone , Email , Address , Relationship to the subject , etc .) . - Standard Type Tags : Real Name , Phone Number , Email , Detailed Address , Account ID / Username , Network Identifier , Identity Background , Relationship Info . ### [ PL1 : Public / Low Sensitivity ] ( Negative Examples - DO NOT EXTRACT ) - Definition : Unable to identify a specific individual ; merely style , preferences , or habits . - Core Standard : Unidentifiable + Low Harm + Not High Sensitivity . - Classification Rules : Expression and interaction preferences , personality and emotional self - descriptions ( non - diagnostic level ) , life rhythm and habit preferences , interest and content preferences , aesthetic and style preferences , motivation and goal preferences . - Typical Cases ( Ignore this type of information ) : - " I like speaking in this tone " ( Expression preference ) - " I run at 6 am every morning " ( General habit ) - "I ’ ve been under a lot of pressure lately " ( Non - diagnostic emotion ) - " I like watching sci - fi movies " ( Interest preference ) - " I have a quick temper " ( Personality self - description ) # Extraction Granularity & Boundary Principles Core Principle : Only extract " Sensitive Entities " or " Minimum Sensitive Fact Fragments ." Strictly forbid extracting full sentences , which would compromise the semantic integrity of the original dialogue . 1. Remove Unnecessary Context : - Do not include introductory words ( e . g . , " My number is ," " I live at ," " The doctor said ") . - Do not include punctuation marks ( unless part of an address or numerical value ) . - Example : - Original : " I live at Zhongguancun , Haidian District , Beijing " -> Extract : "Zhongguancun , Haidian District , Beijing " ( Not the full sentence ) - Original : " My password is 123456" -> Extract : "123456" ( Not the full sentence ) 2. Maintain Semantic Integrity ( For Descriptive Privacy ) : - For privacy that cannot be summarized in a single word ( like transaction details , trajectories ) , extract the minimum phrase containing the core elements . - Example : 
+
+Figure 10 Prompt template for privacy extraction (3/4). 
+
+33 - Original : " I didn ’ t feel well last night , so I spent 1800 yuan for acheckup at the fertility clinic " -> Extract : " spent 1800 yuan for acheckup at the fertility clinic " ( If only "1800 yuan " is extracted , the transactional meaning is lost ) . - Original : " I have severe anxiety disorder " -> Extract : " severe anxiety disorder " 3. Values Must Combine with Unit / Object : - Standalone numbers ( e . g . , "300") are generally not extracted unless they are phone numbers , ID numbers , or specific amounts matching PL2 - PL4 rules . - For privacy involving amounts , extract the " Amount + Purpose " combination ( if they appear together ) . *[ Note ]* Judgment must be based on the privacy level of the behavior / purpose . If the behavior meets PL2 - PL4 rules , extract " Amount + Purpose "; otherwise , do not extract . 4. Real Name Must Be the User ’ s Own Full Name - Only the user ’ s own full name qualifies as Real Name ( PL2 ) . - Use the provided ‘ User ’ s Real Name ‘ field as the authoritative reference to determine whether a name in the dialogue belongs to the user . A name in the dialogue that matches or is a recognizable variant of the ‘ User ’ s Real Name ‘ ( e . g . , with / without title , with / without middle name , different transliteration ) should be treated as the user ’ s own name . Names that do NOT match the ‘ User ’ s Real Name ‘ should be treated as third - party names . # Output Format ( Requirements ) Please strictly follow the JSON format for output . Do not include Markdown code block markers ( like ‘‘‘ json ) . Output the JSON array directly . If no PL2 - PL4 information is found , output an empty array ‘[] ‘. JSON Field Explanation : - ‘ original_text ‘: Must directly copy the original text fragment from the dialogue without modification , masking , or summarization . - ‘ privacy_type ‘: Select from the " Standard Type Tags " defined above ; if an exact match is not possible , provide a corresponding type based on semantic judgment . The value must be in English . - ‘ privacy_level ‘: Limited to ‘PL2 ‘ , ‘PL3 ‘ , ‘PL4 ‘. ## Example ( One - Shot ) Input Text : User ’ s Real Name : Zhang San Current Input Dialogue : {" role ": " user " , " content ": " Hello , my name is Zhang San , and my mobile number is 13800138000. I ’ ve been having insomnia recently , and the doctor diagnosed me with mild depression . Here is a photo of my prescription . Also , I just received a verification code 89757 , please fill it in for me . By the way , I like spicy food and I speak quite directly ."} Output : [{" original_text ": " Zhang San " , " privacy_type ": " Real Name " , " privacy_level ": " PL2 "} , {" original_text ": "13800138000" , " privacy_type ": " Phone Number " , " privacy_level ": " PL2 "} , {" original_text ": " mild depression " , " privacy_type ": " Medical Health " , "privacy_level ": " PL3 "} , {" original_text ": "89757" , " privacy_type ": " Verification Code " , " privacy_level ": "PL4 "}] ( Note : PL1 information like " like spicy food " and " speak directly " was ignored ) # Input User ’ s Real Name : { real_name } Current Input Dialogue : 
+
+Figure 11 Prompt template for privacy extraction (4/4). 
+
+34 Algorithm 1 MemPrivacy: A Closed-Loop Framework for Memory Privacy Protection 
+
+Input: Raw user input X, local privacy extractor fθ , privacy protection threshold λ ∈ { PL1 , PL2 , PL3 , PL4 },local secure mapping database D, cloud agent C, cloud-side sanitized memory state Msafe 
+
+Output: Restored personalized response ˆY , updated local mapping database D′ 
+
+> 1:
+
+Stage 1: Local Uplink Desensitization  
+
+> 2:
+
+Detect privacy spans with structured attributes: 
+
+P ← fθ (X) = {(si, l i, t i)}Ni=1 ,
+
+where si is the privacy span, li is the privacy level, and ti is the privacy type  
+
+> 3:
+
+Initialize sanitized input Xsafe ← X 
+
+> 4:
+
+for each detected item (si, l i, t i) ∈ P do  
+
+> 5:
+
+if li ≥ λ then  
+
+> 6:
+
+if there exists a consistent mapping (pi ↔ si) in D then  
+
+> 7:
+
+Reuse placeholder pi 
+
+> 8:
+
+else  
+
+> 9:
+
+pi ← InstantiatePlaceholder (ti, D) 
+
+> 10:
+
+Store mapping (pi ↔ si, l i, t i) into D 
+
+> 11:
+
+end if  
+
+> 12:
+
+Replace span si in Xsafe with pi 
+
+> 13:
+
+end if  
+
+> 14:
+
+end for  
+
+> 15:
+
+Stage 2: Cloud Processing  
+
+> 16:
+
+Send Xsafe to the cloud agent  
+
+> 17:
+
+Obtain cloud response based on Xsafe and Msafe :
+
+Ysafe ← C(Xsafe , M safe ) 
+
+> 18:
+
+Update cloud-side memory only with sanitized content: 
+
+M ′ 
+
+> safe
+
+← UpdateMemory (Msafe , X safe , Y safe ) 
+
+> 19:
+
+Stage 3: Local Downlink Restoration  
+
+> 20:
+
+Initialize restored response ˆY ← Ysafe  
+
+> 21:
+
+for each placeholder p appearing in ˆY do  
+
+> 22:
+
+if p exists in local database D then  
+
+> 23:
+
+Replace p with its original value D[p] 
+
+> 24:
+
+end if  
+
+> 25:
+
+end for  
+
+> 26:
+
+return ˆY , D′
+
+35 Table 7 Hierarchical privacy level definitions and default handling policies. 
+
+Primary Gover-nance Principle Secondary Theme Privacy Level Decision Criteria Long-Term Text Memory Default Storage and Access Pol-icy Default Model Behavior 
+
+Lawfulness, legitimacy, necessity, and data minimiza-tion Classification and identi-fiability PL1: Low-Sensitivity Personal-ization Preferences, habits, or profiling cues; insufficient for di-rect identification; outside high-risk domains, though still potentially linkable or inferable Permitted, subject to minimiza-tion and revocabil-ity Preference sum-maries and vector-ized features may be stored; avoid retaining directly traceable original utterances; provide one-click deletion May be used for personalized in-teraction; avoid reifying inferred profiles as facts Lawfulness, legitimacy, necessity, and data minimiza-tion Classification and identi-fiability PL2: Iden-tifiable Personal Informa-tion Information that can identify an individual, either alone or in com-bination, including di-rect identifiers and stable indirect identi-fiers Disallowed by default If strictly required for business pur-poses, store only in controlled sys-tems with encryp-tion, access control, and auditing; RAG should retain point-ers rather than raw text Avoid repetition or verbatim expo-sure in dialogue; when necessary, prompt for user confirmation and apply de-identification Security safeguards and risk control High-risk sensitive domains PL3: Highly Sensitive Personal Informa-tion Disclosure may mate-rially harm personal safety, property, reputation, or health, or result in discrim-inatory treatment; typically requires astronger legal basis Not per-mitted Only under com-pelling necessity and a clear legal ba-sis may such data enter controlled storage; enforce strict minimization, field-level encryp-tion, and robust auditing Do not collect by default; if provided by the user, prioritize masking key fields and warn-ing about the associated risks Security safeguards and highest-level protection Confidential informa-tion, cre-dentials, directly actionable high-loss data PL4: Con-fidential Infor-mation, Creden-tials Once disclosed, can directly enable login, fund transfer, signa-ture authorization, lateral movement, or expose undisclosed core business secrets Absolutely prohibited Prohibited from databases, memory, and logs; once detected, it must be redacted or blocked immedi-ately; secrets must never enter model context Must refuse col-lection, storage, or disclosure; advise credential rotation and es-calation through secure incident-response proce-dures 
+
+36
