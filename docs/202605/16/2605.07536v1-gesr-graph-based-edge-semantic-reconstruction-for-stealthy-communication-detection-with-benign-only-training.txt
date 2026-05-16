@@ -1,0 +1,417 @@
+Title: GESR: Graph-Based Edge Semantic Reconstruction for Stealthy Communication Detection with Benign-Only Training
+
+URL Source: https://arxiv.org/pdf/2605.07536v1
+
+Published Time: Mon, 11 May 2026 01:01:01 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# GESR: Graph-Based Edge Semantic Reconstruction for Stealthy Communication Detection with Benign-Only Training 
+
+Henghui Xu 1,2, Yuchen Zhang 1,2, and Xiaobo Ma 1,2,3 
+
+> 1
+
+MOE Key Laboratory for Intelligent Networks and Network Security, Xi’an Jiaotong University, Xi’an, China  
+
+> 2
+
+Faculty of Electronic and Information Engineering, Xi’an Jiaotong University, Xi’an, China  
+
+> 3
+
+Shaanxi Province Key Laboratory of Computer Network, Xi’an Jiaotong University, Xi’an, China 
+
+henghuixu.academic@gmail.com, yvchen.zhang@outlook.com, xma.cs@xjtu.edu.cn 
+
+Abstract. Detecting stealthy malicious communications from flow logs under benign-only training remains a critical challenge in network secu-rity. Malicious communications often camouflage as normal traffic like standard HTTPS flows. Conventional intrusion detectors rely strictly on known labeled attacks. Alternatively, they score flows completely inde-pendently. These approaches fail against sparse and context-dependent suspicious activity. To capture this essential context, graph anomaly detectors have been introduced to add valuable relational information to the analysis. However, existing methods fail to test the structural consistency of specific communication edges. To overcome these fun-damental limitations, we present GESR , a novel graph-based framework for detecting suspicious communications and anomalous hosts under a benign-only training setting. GESR models complex network activity as attributed communication graphs. It cleverly reconstructs edge semantics entirely from local structural context rather than isolated features. This non-intuitive design forces the framework to predict expected commu-nication patterns from neighborhood topologies. Attackers cannot easily manipulate this deep structural dependency. The model then converts the resulting structural inconsistencies into host-level anomaly scores. It utilizes robust Median Absolute Deviation (MAD) calibration for this final step. We evaluate GESR extensively on CTU-13 and CICIDS2017 datasets. These evaluations strictly impose tight false-positive operating constraints. On CICIDS2017, GESR achieves an outstanding ROC-AUC of 0.9753. It also yields a high TPR of 0.8569 at a strict 5% FPR threshold. 
+
+GESR consistently outperforms existing methods across both evaluated benchmarks. The results prove that structure-conditioned edge recon-struction is a credible direction for practical intrusion detection. 
+
+Keywords: intrusion detection · graph anomaly detection · benign-only detection · self-supervised learning  
+
+> arXiv:2605.07536v1 [cs.CR] 8 May 2026 2H. Xu et al.
+
+## 1 Introduction 
+
+Command-and-control (C2) communication remains a critical threat in network security. Adversaries use these hidden channels to maintain control over com-promised hosts and coordinate subsequent malicious activities. Disrupting this control channel effectively limits an attacker’s capabilities. Modern C2 traffic increasingly employs protocol mimicry, encryption, and low-volume communi-cation patterns to camouflage as normal network activity [1]. Identifying these stealthy communications among massive benign flows is extremely difficult. The core obstacle lies in the severe statistical overlap between benign and malicious traffic when viewed as isolated flows. Their abnormality emerges only after re-searchers place the flows in the broader context of network interactions. Various detection methods attempt to address this challenge. However, they have inher-ent limitations in identifying highly camouflaged threats. 
+
+Neglect of Relational Context in Flow-based Analysis. Flow-based and feature-based methods attempt to model statistical properties of network traf-fic [5, 6]. These approaches treat each flow as an independent observation. Con-sequently, they completely neglect the relational context among communicating entities. Without such context, stealthy C2 communications can easily mimic standard HTTPS flows and evade detection. They look completely benign when viewed as isolated events. A parallel line of encrypted-traffic studies uses TLS metadata and contextual flow information to identify malicious sessions even when decryption is unavailable [17–19]. These approaches can capture certain traffic patterns. However, they primarily rely on flow-level observations and local statistical features. They fail to explicitly model correlations among communi-cating entities [25, 26]. Consequently, suspicious communications that closely resemble benign traffic may evade detection under such representations. 
+
+Coarse-grained Modeling in Graph-based Detection. Graph-based meth-ods model network interactions as graphs to incorporate relational structure [7]. Many existing approaches focus heavily on node-level representations or treat the graph as a whole. They lack fine-grained modeling of individual communi-cation edges. A compromised host might exhibit normal overall traffic volumes but establish a structural anomaly with a specific C2 server. Therefore, relying solely on node-level or global structural representations is insufficient to capture anomalies arising from structural inconsistency. To overcome the limitations above, a robust detection framework must achieve two objectives. First, it must capture the detailed relational context of individual communications. Second, it must explicitly verify the structural con-sistency of each connection. Fulfilling such two objectives is not easy. Stealthy traffic patterns easily blend into complex background noise. Therefore, we propose GESR (Graph-Based Edge Semantic Reconstruction). GESR represents network activity as communication graphs. It uses an edge-aware encoder to re-construct the expected semantics of each edge entirely from its local context. We chose edge-level reconstruction over direct node classification because stealthy behaviors typically manifest as subtle structural anomalies between specific host pairs, rather than massive node-level volume deviations. Finally, it scores GESR for Stealthy Communication Detection 3
+
+edges by the mismatch between observed behavior and context-conditioned reconstruction. This design forces the model to learn expected communication patterns. It effectively exposes suspicious interactions missed by isolated flow statistics. To our best knowledge, we are the first to formulate benign-only detection of suspicious communications through structure-conditioned edge semantic re-construction. We will release our source code to facilitate future research. Our contributions are summarized as follows: 
+
+– We formulate benign-only detection of suspicious communications under strict false-positive operating constraints. We use stealthy C2 traffic as the motivating threat model. 
+
+– We propose GESR , a novel edge-semantic graph detection framework. It re-constructs expected communication behavior from structural context and converts reconstruction inconsistencies into stable host-level risk scores. 
+
+– We extensively evaluate GESR on CTU-13 and CICIDS2017 datasets. The results demonstrate strong host-ranking performance in the benign-only set-ting. We design GESR for offline security analytics pipelines. These pipelines ingest flow-level records rather than raw packets. This allows deployment where deep packet inspection is infeasible. We assume adversaries use evasion techniques to bypass volumetric detectors. We do not model fully adaptive attackers that can arbitrarily manipulate global graph structure. Figure 1 summarizes the end-to-end pipeline from flow records to prioritized host alerts. The remainder of this paper is organized as follows. Section 2 introduces the background and problem setting. Section 3 presents graph construction and anomaly scoring in GESR . Section 4 describes the experimental setup and results. Section 5 discusses implications and limitations. Section 6 reviews related work. Section 7 concludes. 
+
+## 2 Background 
+
+2.1 Benign-Only Detection and Operational Evaluation 
+
+Network traffic monitoring is the cornerstone of modern enterprise security de-fense. However, in operational intrusion detection, labeled attacks are scarce, delayed, and often incomplete, which makes closed-world supervised training brittle once attack behavior shifts or new threats appear [4]. Anomaly-based intrusion detection addresses this limitation by learning a model of regular be-havior and flagging deviations at inference time rather than optimizing over a fixed taxonomy of known attacks [5, 2, 6]. In this setting, the practical goal is rarely to maximize average discrimination across all thresholds. Analysts instead need a detector that can prioritize a small number of suspicious hosts without overwhelming them with false alerts. 4 H. Xu et al.     
+
+> Fig. 1. GESR system overview. During training, GESR builds attributed communication graphs from benign flow records and learns structure-conditioned edge semantic re-construction with an edge-aware encoder. During inference, the same encoder scores anomalous communications, calibrates edge scores, and aggregates them to produce ranked suspicious hosts.
+
+This deployment perspective matters because intrusion datasets are typically highly imbalanced: benign entities dominate, while malicious activity is sparse. Under such class skew, ROC-AUC remains useful but can hide large differences in alert quality at the operating points that matter most in practice. Precision-recall analysis and true positive rate measured at explicitly constrained false positive rates therefore provide a more faithful view of whether a detector is operationally usable under limited alert budgets [21]. We adopt this view throughout the paper and treat host ranking under strict false-positive constraints as the primary evaluation setting for GESR .
+
+2.2 Communication Graphs from Flow Logs 
+
+When packet payloads are unavailable because of encryption, privacy constraints, or collection policy, flow logs remain one of the few scalable sources of network telemetry [10]. Modern C2 channels deliberately exploit this setting by using protocol mimicry, encryption, and low-volume beaconing to blend into benign traffic [1]. A common response is to represent traffic within each time window as a communication graph, where hosts become nodes and aggregated interactions become attributed edges. Graph-based anomaly detection is well suited to this setting because it models dependencies among entities rather than treating each traffic record as an independent point [7]. In security settings, this general idea has been instantiated with spatial-temporal traffic graphs for encrypted malware detection [26], self-supervised GESR for Stealthy Communication Detection 5
+
+edge-aware flow representations [20], and streaming temporal graph encoders for evolving behavior [27]. Taken together, these studies show that relational structure can carry detection signal that is difficult to recover from isolated flow statistics alone. 
+
+2.3 Edge Semantics and Host-Level Prioritization 
+
+For stealthy communication patterns, the anomaly often lies less in the exis-tence of a connection than in whether the observed behavior on that connection matches its structural role. We use the term edge semantics to denote the aggre-gated communication attributes attached to a host pair within a time window, such as traffic volume, packet statistics, and coarse service indicators. This edge-centric view differs from methods that score hosts directly from node embeddings or summarize entire windows into graph-level sketches. It becomes especially use-ful when individual flows appear benign in isolation but become suspicious once placed in the context of surrounding communications. In practice, however, defenders do not triage communication edges one by one; they triage hosts. A benign-only detector therefore needs not only to score edge-level inconsistencies, but also to convert them into stable host-level rank-ings under limited false-positive budgets. This requirement motivates the cali-bration and aggregation stages in GESR : they bridge the gap between structure-conditioned edge reconstruction and the operational output that analysts ulti-mately consume. 
+
+## 3 Method 
+
+3.1 Overview 
+
+We present GESR to address the limitations of existing C2 detection methods. 
+
+GESR is a graph-based anomaly detection framework that evaluates whether an observed communication edge is semantically consistent with its structural con-text. Instead of directly classifying traffic, GESR learns the expected behavior of each communication edge from surrounding graph structure and identifies anomalies as deviations from these structure-conditioned expectations. Given network flows, GESR first constructs a sequence of communication graphs, where hosts are represented as nodes and aggregated communications are represented as attributed edges. Each graph is then processed by an edge-aware message-passing encoder based on GINEConv, which learns context-rich node representations from both graph topology and edge attributes. Based on the learned node states, GESR builds structure-aware edge representations and uses an edge decoder to reconstruct communication semantics, including both continuous traffic attributes and discrete port-related semantics. This design enables GESR to model communication behavior at the edge level, rather than relying solely on node- or graph-level representations. 
+
+GESR is trained in a benign-only manner through masked edge semantic recon-struction. During training, a subset of edge attributes is masked, and the model 6 H. Xu et al. 
+
+learns to recover them from graph context, thereby capturing the regularities of benign communication behavior. During inference, GESR assigns anomaly scores according to the discrepancy between observed edge semantics and their recon-structed values. These edge-level scores are then aggregated to identify suspicious hosts. In this way, GESR can surface suspicious communications that appear be-nign at the flow level but remain inconsistent within the broader communication structure. 
+
+3.2 Graph Construction 
+
+Rather than operating on raw packets, GESR ingests flow-level network traffic records. The datasets in this work originate from different sources and use het-erogeneous formats. Therefore, we first normalize their schema. We align the key columns required for graph construction, including timestamps, IP addresses, and flow-level statistics. Invalid entries, missing values, and non-finite values are removed or replaced during preprocessing to ensure that the resulting graph representation is numerically stable. After schema normalization, traffic is partitioned into fixed time windows to construct a sequence of communication graphs. For each window, we generate one graph snapshot that summarizes the communication behavior observed dur-ing that period. This representation preserves short-term interaction patterns while avoiding the noise and sparsity that arise when operating directly at the packet level. The window size is set to 30 seconds for CTU-13 and 60 seconds for CICIDS2017, chosen to balance temporal locality and graph density. For each time window, we define a directed communication graph Gt =(Vt, E t), where each node in Vt represents a host identified by its IP address, and each directed edge in Et represents the aggregated communication from a source host to a destination host within that window. Multiple flows between the same ordered pair of hosts are merged into a single edge, and their statistics are aggregated. This aggregation allows GESR to model communication behavior at the interaction level rather than treating each flow independently. Each edge is associated with a semantic feature vector that describes the ob-served communication behavior between the corresponding pair of hosts. In the feature configuration used for the reported GESR results, the edge representation contains nine dimensions: log(1 + x) communication count, bytes, and packets; a one-hot encoding of the dominant destination-port bucket; and three derived intensity summaries (bytes per flow, packets per flow, and bytes per packet). We group destination ports into three buckets: web (80/443), DNS (53), and other. This edge-centric design is critical for GESR , since the detection target in our setting is not merely whether two hosts are connected, but whether the observed communication semantics are consistent with the structural context in which the edge appears. Node features, conversely, summarize host-level activity. Under the same con-figuration, each host is represented by 51 dimensions. The baseline 32 dimensions encode outgoing and incoming aggregate statistics, combined traffic totals, and degree-normalized averages. We then append 19 shared semantic enhancements GESR for Stealthy Communication Detection 7
+
+Table 1. Feature groups in the reported GESR feature configuration. The first 32 node dimensions and first 6 edge dimensions form the baseline graph representation; the remaining dimensions are shared semantic enhancements used for both CTU-13 and CICIDS2017. Component Dims Contents Node (baseline) 32 Outgoing and incoming traffic summaries: flow count, bytes, packets, duration, rate statistics, combined totals, and degree-normalized averages. Node (enhanced) 19 Neighborhood and asymmetry summaries: unique out/in/total neighbors, flows per neighbor, outgoing/incoming ratios for bytes, packets, and flows, neighbor-normalized intensity, byte-per-packet summaries, and outgoing port-bucket usage. Edge (baseline) 6 log(1 + x) communication count, bytes, and packets, plus a one-hot dominant destination-port bucket. Edge (enhanced) 3 log(1 + x) bytes per flow, packets per flow, and bytes per packet. Targets 3 + 1 Continuous reconstruction of communication count, bytes, and packets plus three-class destination-port prediction (web, DNS, other). 
+
+that describe neighborhood diversity, asymmetry between outgoing and incom-ing traffic, neighbor-normalized traffic intensity, byte-per-packet summaries, and coarse outgoing port-bucket usage. To compress heavy-tailed distributions, we apply a log(1 + x) transformation to count and volume features. Together, the node features supply the context necessary for message passing, whereas the edge attributes carry the explicit communication semantics targeted for recon-struction. Table 1 summarizes the feature groups used in this configuration. Finally, we induce labels to support our one-class evaluation protocol. Graph-level anomaly labels denote the presence of any malicious activity within the temporal window. Node-level labels follow a source-centric attribution: a mali-cious flow from vi to vj marks only the initiating host vi as anomalous for that snapshot. This design reflects the practical assumption that compromised hosts actively initiate C2 communications, and thus anomalies are more appropriately attributed to the source rather than the destination. Overall, this preprocessing pipeline converts heterogeneous flow records into a sequence of attributed communication graphs, providing GESR with both struc-tural context and edge-level semantics for benign-only anomaly modeling. 
+
+3.3 GESR Model 
+
+Let Gt = (Vt, E t, X t, Et) denote the attributed communication graph con-structed from time window t, where Vt is the host set, Et is the directed edge set, Xt ∈ R|Vt|× dv is the node feature matrix, and Et ∈ R|Et|× de is the edge attribute matrix. Each directed edge eij ∈ Et corresponds to the aggregated 8 H. Xu et al. 
+
+communication from host vi to host vj within the current window. Our goal is to learn a function that assigns an anomaly score to each communication edge by evaluating its consistency with the surrounding graph structure without using labeled attacks during training. 
+
+GESR models anomalous communication as structural-semantic inconsis-tency : under benign conditions, the semantic behavior of an edge should be predictable from the surrounding communication structure, whereas malicious edges are more likely to deviate from such context-conditioned expectations. Formally, GESR consists of three components: (i) a graph encoder that learns context-aware node representations, (ii) an edge semantic decoder that recon-structs expected communication behavior, and (iii) an anomaly scoring module that quantifies reconstruction inconsistency. 
+
+Structure-Aware Node Encoding We first encode each communication graph with an edge-aware graph neural network. Since edge semantics are es-sential in our setting, the encoder must incorporate both topology and edge attributes during message passing. We therefore adopt a two-layer GINEConv 
+
+backbone [13], which extends edge-aware message passing by injecting edge features into neighborhood aggregation. Given the input node feature xi for node vi, we first project it into the hidden space: 
+
+h(0)  
+
+> i
+
+= ϕ0(xi), (1) where ϕ0(·) is a learnable linear projection followed by normalization and non-linearity. For the l-th GINE layer, node representations are updated as 
+
+h(l) 
+
+> i
+
+= GINE (l)
+
+h(l−1)  
+
+> i
+
+,
+
+n
+
+h(l−1)  
+
+> j
+
+, e ji | (vj , v i) ∈ Et
+
+o 
+
+, (2) where eji denotes the edge attribute associated with the incoming communica-tion from vj to vi. Intuitively, the encoder learns a representation for each host by aggregating its neighboring communications and their semantics, allowing node embeddings to reflect both local interaction patterns and communication context. To preserve information across different receptive fields, we fuse multi-level representations rather than using only the final layer output. Specifically, for each node we combine the projected input representation and the intermediate GNN outputs: 
+
+zi = ϕf
+
+h 
+
+h(0)  
+
+> i
+
+∥ h(1)  
+
+> i
+
+∥ h(2) 
+
+> i
+
+i 
+
+, (3) where [· ∥ · ] denotes concatenation and ϕf (·) is a learnable fusion MLP. The resulting zi serves as the final structure-aware representation of node vi. These node representations are not used directly for node-level prediction; instead, they provide contextual signals for modeling edge-level communication behavior in subsequent stages. GESR for Stealthy Communication Detection 9
+
+In addition to node-level context, GESR also computes a graph-level summary for each window: 
+
+gt = 1
+
+|Vt|
+
+X
+
+> vi∈Vt
+
+zi, (4) which encodes the overall communication state of the current graph and provides a coarse contextual prior for edge modeling. 
+
+Structure-Aware Edge Representation The key object in GESR is not the node but the communication edge. For each directed edge eij , we construct an edge representation that jointly captures the source and destination host states, the observed edge attributes, and the structural role of the edge in the surrounding graph. Formally, let ˜eij denote the possibly masked input edge attributes used during training. We define the edge representation as 
+
+rij = [ zi ∥ zj ∥ ˜eij ∥ | zi − zj | ∥ (zi ⊙ zj ) ∥ gt] , (5) where |zi − zj | captures the discrepancy between the two endpoints, zi ⊙ zj
+
+denotes element-wise product, and gt provides graph-level context. This formula-tion allows GESR to relate the observed edge semantics to both endpoint roles and their surrounding structural context, making deviations from such relationships directly measurable. This construction is motivated by two considerations. First, whether an edge is anomalous depends not only on its observed attributes, but also on the iden-tities and roles of its two endpoints. Second, subtle C2 edges may appear locally benign, yet become suspicious when compared against the structural expecta-tions implied by nearby nodes and the global communication pattern. The edge representation rij is designed to expose exactly such inconsistencies. 
+
+Edge Semantic Reconstruction Instead of directly learning a binary classi-fier, GESR learns to reconstruct the expected semantics of each communication edge from its structure-aware representation. This design aligns with the benign-only training setting: the model is optimized to explain normal communications, and edges that cannot be well explained are treated as suspicious. We decompose edge semantics into two parts: 
+
+– continuous semantics , corresponding to quantitative traffic behavior such as communication count, bytes, and packets; 
+
+– discrete semantics , corresponding to coarse-grained port-related cate-gories. Accordingly, the decoder contains two prediction heads. Given rij , the con-tinuous reconstruction head predicts 
+
+ˆyreg  
+
+> ij
+
+= ψreg (rij ), (6) 10 H. Xu et al. 
+
+and the discrete classification head predicts 
+
+ˆycls  
+
+> ij
+
+= ψcls (rij ), (7) where ψreg (·) and ψcls (·) are MLP-based decoders. The first head outputs recon-structed continuous edge attributes, while the second outputs logits over discrete semantic classes. Unlike graph-level reconstruction or node-level anomaly detection, GESR di-rectly models whether an individual communication edge behaves as expected under its structural context. 
+
+3.4 Learning Objective 
+
+GESR is trained exclusively on benign graphs. To force the model to infer edge be-havior from graph context rather than memorizing raw edge attributes, we adopt a masked reconstruction objective. A standard autoencoder objective without masking would risk identity mapping, where the model simply copies the input features. By masking a subset of edges, we strictly force the model to genuinely rely on structural dependencies. During training, we randomly sample a subset of edges M ⊆ Et and mask their input edge attributes: 
+
+˜eij =
+
+(
+
+0, (vi, v j ) ∈ M ,eij , otherwise . (8) Only masked edges contribute to the reconstruction loss. Let yreg  
+
+> ij
+
+and ycls  
+
+> ij
+
+de-note the continuous and discrete ground-truth semantics of edge eij , respectively. The regression loss is defined as 
+
+Lreg = 1
+
+|M| 
+
+X 
+
+> (vi,v j)∈M
+
+ℓreg 
+
+ ˆyreg  
+
+> ij
+
+, y reg 
+
+> ij
+
+ , (9) where ℓreg (·, ·) is Smooth L1 loss. The classification loss is 
+
+Lcls = 1
+
+|M| 
+
+X 
+
+> (vi,v j)∈M
+
+ℓCE 
+
+ ˆycls  
+
+> ij
+
+, y cls 
+
+> ij
+
+ , (10) where ℓCE is cross-entropy loss over the discrete semantic categories. The overall training objective is 
+
+L = λreg Lreg + λcls Lcls , (11) where λreg and λcls control the relative contributions of continuous and discrete semantics. This objective encourages GESR to infer edge semantics from structural con-text rather than memorizing raw attributes. Under the benign-only setting, the resulting reconstruction function captures the regularities of normal communica-tion behavior and provides the basis for one-class anomaly detection at inference time. GESR for Stealthy Communication Detection 11 
+
+3.5 Anomaly Scoring and Aggregation 
+
+At inference time, GESR assigns an anomaly score to each communication edge by measuring how well the observed edge semantics agree with the model’s structure-conditioned reconstruction. For the continuous part, we compute the reconstruction discrepancy as the Mean Absolute Error (MAE) across the re-gressed dimensions: 
+
+sreg  
+
+> ij
+
+= 1
+
+dreg 
+
+> edreg
+> e
+
+X
+
+> k=1
+
+ˆyreg  
+
+> ij,k
+
+− yreg  
+
+> ij,k
+
+. (12) For the discrete part, we use the confidence assigned to the true semantic label. Let pij (ycls  
+
+> ij
+
+) denote the predicted probability of the correct discrete class. We define the discrete inconsistency score as 
+
+scls  
+
+> ij
+
+= 1 − pij (ycls  
+
+> ij
+
+). (13) Because raw reconstruction errors may vary across graphs, we calibrate both scores using robust statistics estimated from benign training edges. Let med( ·)
+
+and MAD( ·) denote the median and median absolute deviation, respectively. We then normalize the regression and classification discrepancies into robust 
+
+z-scores. To improve numerical stability, we impose a lower bound τMAD on the estimated MAD and clip the normalized scores to the range [−τclip , τ clip ]. The calibrated scores are defined as 
+
+zreg  
+
+> ij
+
+= clip sreg  
+
+> ij
+
+− med( sreg )max(MAD( sreg ), τ MAD ) , −τclip , τ clip 
+
+!
+
+, (14) 
+
+zcls  
+
+> ij
+
+= clip scls  
+
+> ij
+
+− med( scls )max(MAD( scls ), τ MAD ) , −τclip , τ clip 
+
+!
+
+. (15) The final edge anomaly score is defined as 
+
+sij = zreg  
+
+> ij
+
++ αz cls  
+
+> ij
+
+, (16) where α controls the contribution of discrete semantic inconsistency. Large values of sij indicate that the observed communication edge cannot be well explained by its structural context under the benign model. To identify suspicious hosts, GESR aggregates edge-level anomaly scores to the node level. For each node vi, we collect the scores of incident edges and compute 
+
+S(vi) = Agg ( {λsrc sij | (vi, v j ) ∈ Et} ∪ { λdst sji | (vj , v i) ∈ Et}) , (17) where Agg( ·) denotes an aggregation operator over the weighted incident edge scores, and λsrc > λ dst ≥ 0 assign higher importance to outgoing suspicious communications than incoming ones. In this work, we consider four instantia-tions of Agg( ·): mean , max , q-quantile, and top-k mean . Here, q90 denotes the 90th percentile of the weighted incident scores, and top-k mean averages the 12 H. Xu et al. 
+
+largest max( ⌊0.1mi⌋, 1) scores for node vi, where mi is the number of weighted incident edges collected for that node. This source-aware weighting reflects our C2-motivated assumption that compromised hosts often initiate suspicious communications, making source-side attribution more appropriate for host-level anomaly detection. The same aggregation principle can be extended to graph- or window-level scoring when required. However, since GESR is currently evaluated as a host-prioritization system, the experiments in this paper focus on node-level detection rather than direct edge-level ranking metrics. 
+
+## 4 Experiments 
+
+We evaluate GESR in terms of overall detection performance and the contribution of its key design choices. 
+
+4.1 Experimental Setup 
+
+We evaluate GESR on two network intrusion datasets that are widely used in sur-veys of network-based NIDS benchmarks: CTU-13 [8] and CICIDS2017 [9, 10]. For both datasets, network traffic is converted into attributed communication graphs using the graph construction procedure described in the method sec-tion. Benign graph snapshots are ordered chronologically. The earliest 80% form the benign training pool, while the remaining 20% together with all malicious windows constitute the test set. Node-level evaluation follows the source-centric labeling rule adopted in our graph construction process. The reported GESR checkpoints use the feature configuration summarized in Table 1, yielding 51-dimensional node features and 9-dimensional edge fea-tures. The model uses a two-layer GINE-based encoder with hidden size 128, reconstructs the three continuous edge statistics (communication count, bytes, and packets), and predicts the three-way destination-port bucket. Training uses dropout 0.2, edge masking ratio 0.2, AdamW with learning rate 10 −3, a 10% validation split drawn from the benign training graphs, and equal loss weights 
+
+λreg = λcls = 1 .0. For score calibration, we use α = 1 .0, a MAD floor of 
+
+τMAD = 10 −3, and clipped robust scores with τclip = 10 .0. Unless otherwise noted, we assign weight 1.0 to the source endpoint and 0.2 to the destination end-point, and report the main comparison with q90 node aggregation as a shared de-fault across datasets. We use q90 as the shared default because it preserves a con-sistent headline configuration across datasets while still delivering a strong cross-dataset balance: under the current manuscript results it retains the strongest PR-AUC on CTU-13 and the best ROC-AUC, PR-AUC, and TPR@1%FPR on CICIDS2017, even though other aggregators can be preferable at different op-erating points. Here, q90 denotes the 90th percentile of the weighted incident scores; top-k mean uses a ratio of 0.1 with a minimum of one edge. Section 4.3 analyzes how alternative aggregation operators shift the operating-point trade-offs. We report node-level ROC-AUC, PR-AUC, and True Positive Rate at strict False Positive Rate limits (TPR@1%FPR and TPR@5%FPR). GESR for Stealthy Communication Detection 13 
+
+Table 2. Node-level anomaly detection performance on CTU-13 and CICIDS2017. Bold denotes the best performance. Method CTU-13 CICIDS2017 ROC-AUC ↑ PR-AUC ↑ TPR@1%FPR ↑ TPR@5%FPR ↑ ROC-AUC ↑ PR-AUC ↑ TPR@1%FPR ↑ TPR@5%FPR ↑                                                 
+
+> Isolation Forest 0.8750 0.0473 0.0216 0.0550 0.8890 0.1511 0.1471 0.5252 Autoencoder 0.9443 0.1126 0.0234 0.6419 0.9285 0.2983 0.3869 0.5960 GraphSAGE + IF 0.7636 0.0254 0.0017 0.0300 0.5350 0.0141 0.0150 0.0974 Kitsune 0.9508 0.1713 0.0147 0.7566 0.7493 0.1427 0.1519 0.4802 Anomal-E 0.7661 0.0300 0.0403 0.1032 0.8728 0.0820 0.1315 0.3951
+> GESR (Ours) 0.9804 0.1618 0.0302 0.9647 0.9753 0.3175 0.4463 0.8569
+
+All baselines use the same chronological split and the same source-centric node labeling protocol. Isolation Forest [11] is fit with 200 trees on node fea-tures from the constructed graph snapshots. The Autoencoder baseline uses the same node features after standardization and trains a two-layer MLP autoen-coder (hidden size 128, latent size 32) for 30 epochs with Adam at learning rate 10 −3 and batch size 1024; node scores are mean absolute reconstruction error. GraphSAGE+IF [12] uses the same graph snapshots and node features, trains a two-layer GraphSAGE encoder (hidden size 64, output size 64, dropout 0.2) for 20 epochs with self-supervised link prediction, and then fits an Iso-lation Forest with 200 trees on benign node embeddings. Kitsune [6] follows a KitNET-style ensemble with maximum autoencoder size 10 on standardized node features. Our Anomal-E baseline [20] uses the same graph snapshots, trains an edge-aware DGI-style encoder with hidden and output size 64, dropout 0.2, and Adam at learning rate 10 −3, fits an Isolation Forest with 200 trees on benign edge embeddings, and converts edge scores to node scores with max incident-edge aggregation. Unless otherwise noted, all reported results use a single random seed. 
+
+4.2 Overall Performance 
+
+Table 2 reports the main node-level detection results of GESR and all baselines on CTU-13 and CICIDS2017. For GESR , the reported results use the shared default setting described above: source-weighted edge-to-node attribution with 
+
+α = 1 .0 and q90 node aggregation. We use this shared configuration to keep the headline comparison fixed across datasets, while Table 4 later compares alternative aggregation operators and their dataset-specific trade-offs. On CTU-13, GESR achieves the best ROC-AUC (0.9804) and TPR@5%FPR (0.9647) among the evaluated methods. It also attains competitive PR-AUC (0.1618), second only to Kitsune (0.1713), but it does not achieve the best TPR@1%FPR, where Anomal-E remains slightly higher (0.0403 versus 0.0302). This pattern suggests that GESR is strongest as a host-ranking method around the 5% FPR operating point, while its advantage is less uniform at the strictest threshold. On CICIDS2017, GESR achieves the best performance among the evalu-ated methods on all reported metrics, including ROC-AUC (0.9753), PR-AUC (0.3175), TPR@1%FPR (0.4463), and TPR@5%FPR (0.8569). The margin at 14 H. Xu et al.                             
+
+> Table 3. Effect of robust MAD calibration on node-level detection performance. For each dataset, “raw” denotes uncalibrated reconstruction scores and “calibrated” denotes the final calibrated setting used by GESR . Bold denotes the better result within each dataset and metric. Dataset Setting ROC-AUC ↑PR-AUC ↑TPR@1%FPR ↑TPR@5%FPR ↑
+> CTU-13 raw 0.8855 0.0815 0.0428 0.4506 calibrated 0.9804 0.1618 0.0302 0.9647
+> CICIDS2017 raw 0.9115 0.2659 0.3379 0.5177 calibrated 0.9753 0.3175 0.4463 0.8569
+
+the strict false-positive operating points is substantial, indicating that GESR can rank suspicious hosts more effectively than both classical feature-based methods and the compared graph-based baselines when the alert budget is limited. Taken together, these results indicate that modeling structure-conditioned edge semantics can improve benign-only host ranking under strict false-positive constraints, although the gains depend on the dataset and the operating point. 
+
+4.3 Ablation Studies 
+
+Effect of MAD Calibration Raw reconstruction errors can vary substantially across different graph neighborhoods, making raw scores unreliable for global ranking. Table 3 compares raw reconstruction scores against MAD-calibrated scores on both datasets. On CTU-13, calibration substantially improves ROC-AUC, PR-AUC, and TPR@5%FPR, although TPR@1%FPR decreases slightly. On CICIDS2017, calibration consistently improves all reported metrics. Overall, these results indicate that robust MAD calibration is important for translating edge-level reconstruction discrepancies into stable node-level anomaly rankings under strict false positive constraints. 
+
+Effect of Aggregation Strategy Because GESR evaluates individual communica-tion edges, edge-level scores must be aggregated to identify compromised hosts. Table 4 compares four aggregation operators introduced in Section 3.5: mean ,
+
+q90 , max , and top-k mean . To keep the headline comparison fixed, the q90 row matches the shared-default GESR result reported in Table 2, while the remaining rows report additional runs with alternative node aggregation operators under the same source-weighted setting. On CTU-13, the aggregation choice changes which operating point is favored. The fixed q90 default yields the strongest PR-AUC, top-k mean yields the highest TPR@1%FPR, and both max and top-k mean reach the highest TPR@5%FPR, with max also producing the best ROC-AUC. On CICIDS2017, q90 remains best on ROC-AUC, PR-AUC, and TPR@1%FPR, while max provides a small TPR@5%FPR gain. These results reinforce that the optimal aggregation strategy is dataset- and operating-point-dependent. GESR for Stealthy Communication Detection 15 
+
+Table 4. Effect of edge-to-node aggregation strategy on node-level detection perfor-mance. The q90 row matches the shared-default GESR result reported in Table 2; the remaining rows use alternative node aggregation operators under the same source-weighted setting. Bold denotes the best performance for each dataset and metric. Aggregation CTU-13 CICIDS2017 ROC-AUC ↑ PR-AUC ↑ TPR@1%FPR ↑ TPR@5%FPR ↑ ROC-AUC ↑ PR-AUC ↑ TPR@1%FPR ↑ TPR@5%FPR ↑                                
+
+> mean 0.9691 0.1068 0.0251 0.9506 0.9664 0.2531 0.3917 0.8350 q90 0.9804 0.1618 0.0302 0.9647 0.9753 0.3175 0.4463 0.8569 max 0.9860 0.1166 0.0283 0.9929 0.9731 0.1892 0.3052 0.8668
+> top-k mean 0.9854 0.0159 0.1294 0.9929 0.9744 0.2181 0.3280 0.8588
+
+## 5 Discussion 
+
+The experiments support three main observations. First, GESR is most com-pelling as a host-ranking method under constrained false-positive budgets rather than a universally dominant detector. On CTU-13 it achieves the best ROC-AUC and TPR@5%FPR and also delivers competitive PR-AUC, but it does not lead at TPR@1%FPR. On CICIDS2017, by contrast, GESR leads on all re-ported metrics. Second, MAD calibration materially changes the ranking be-havior of reconstruction scores. The gain is especially large on CTU-13, where calibration sharply improves ROC-AUC, PR-AUC, and TPR@5%FPR while slightly reducing TPR@1%FPR. Third, edge-to-node aggregation is not a cos-metic post-processing step. On CTU-13, different operators favor different alert budgets: q90 preserves the strongest PR-AUC, top-k mean achieves the highest TPR@1%FPR, and max and top-k mean achieve the highest TPR@5%FPR, with max also producing the strongest ROC-AUC. On CICIDS2017, q90 re-mains best on ROC-AUC, PR-AUC, and TPR@1%FPR, while max gives a small TPR@5%FPR gain. These patterns suggest that GESR ’s benefits depend on how edge-level inconsistencies are normalized and mapped to host-level alerts. In our framework, we adopted source-centric node labeling and attribution. This choice is justified by our motivating threat model, where compromised hosts actively initiate C2 communications. In contrast, while symmetric attribution is com-mon in general graph anomaly detection, it has drawbacks such as diluting the anomaly score of the actual attacker, and was therefore not used as our default. 
+
+Limitations. We acknowledge several constraints in our current evaluation. First, our findings rely on single-seed offline benchmarks and historical traffic traces rather than live, real-time deployments. Second, although GESR is moti-vated as an edge-centric model, the evidence reported here is host-level: we do not yet include direct edge-level ranking metrics or analyst-facing case studies for suspicious communications. Third, our host labels and aggregation rule are ex-plicitly source-centric. We mark only the initiator of a malicious flow as anoma-lous and use source-weighted edge aggregation, which reflects a C2-motivated threat model but may not transfer unchanged to settings where destination-side evidence or symmetric attribution is equally important. However, a key consid-eration is that GESR currently processes static time windows sequentially. This reset of state between windows potentially limits the detection of ultra-slow, 16 H. Xu et al. 
+
+cross-window beaconing. Future research could be directed towards online up-dating and streaming GNN architectures to address this. Finally, long-term de-ployment in dynamic enterprise environments will inevitably encounter concept drift, where the benign baseline shifts over time. Addressing such shifts would require periodic retraining or incremental recalibration of the MAD statistics. Future work should, therefore, consider online updating, streaming inference, edge-level validation, and evaluation under long-term non-stationary traffic. 
+
+## 6 Related Work 
+
+Feature-Based Detection. Traditional intrusion detection has long relied on supervised learning over flow-level or packet-level features, using models such as Random Forests, Support Vector Machines, and Multi-Layer Perceptrons trained on labeled traffic traces [4, 2, 3]. These methods are often effective for known attack signatures and benchmark settings, but their performance can degrade when attack behaviors evolve or when labeled malicious traffic is scarce. This limitation is especially relevant when suspicious communications are intention-ally designed to resemble benign traffic and may therefore be underrepresented in historical attack datasets. 
+
+Reconstruction-Based Detection. To reduce reliance on attack labels, a large body of work has explored unsupervised anomaly detection for network traffic. Classical approaches such as Isolation Forest and related outlier detec-tion methods aim to identify deviations from dominant traffic patterns [5, 11]. Reconstruction-based models further learn a compact representation of normal traffic and detect anomalies through reconstruction error. Autoencoder-based methods follow this paradigm, while systems such as Kitsune [6] employ an ensemble of autoencoders to model packet- or flow-level statistics in an online setting. Studies of encrypted traffic further show that TLS metadata, contextual side information, and careful feature engineering can provide strong detection signal without decryption [17–19]. Although these methods are attractive in benign-only scenarios, they typically operate on independent traffic records and do not explicitly capture relational communication structure among hosts. 
+
+Graph-Based Detection. Security researchers exploited correlation and struc-ture in botnet traffic well before the recent wave of graph neural intrusion de-tection. BotSniffer used spatial-temporal correlation to detect botnet C2 chan-nels [22], BotMiner correlated communication and malicious activity clusters to recover bots independent of protocol and structure [23], and BotGrep localized P2P bots from structured overlay communication patterns [24]. More recent work has introduced graph-based representations to better model dependen-cies among communicating entities. Early graph-based intrusion detection ap-proaches apply GraphSAGE-, GCN-, or embedding-based models to host inter-action graphs, learning node- or graph-level representations from neighborhood connectivity [12, 7]. Beyond security-specific systems, generic graph anomaly de-tectors such as DOMINANT [14], CoLA [15], and ANEMONE [16] show that reconstruction- and contrastive-learning objectives can identify anomalous nodes GESR for Stealthy Communication Detection 17 
+
+or substructures in attributed graphs. Other studies extend graph learning to encrypted or malware-oriented settings by modeling traffic as spatial-temporal graphs and applying supervised graph learning to identify malicious activity despite protocol obfuscation [26]. Temporal and streaming graph methods fur-ther emphasize continuous monitoring and low-latency anomaly tracking in dy-namic graph streams [27]. More recently, self-supervised graph methods such as Anomal-E [20] have shown that edge-aware graph representation learning can improve intrusion detection without requiring attack labels. 
+
+GESR differs from these lines of work in three concrete ways. Compared with Kitsune-style reconstruction, it conditions each communication on graph context rather than treating traffic records independently. Compared with GraphSAGE-style host embeddings, it treats the communication edge rather than the host as the primary detection object. Compared with Anomal-E, which learns edge-aware embeddings for downstream anomaly detection, GESR reconstructs explicit edge semantics and calibrates the resulting discrepancies with MAD before host-level ranking. The method therefore targets a narrower question: whether a spe-cific communication is compatible with the structural role implied by its local neighborhood. 
+
+## 7 Conclusion 
+
+Benign-only detection from flow logs remains challenging when suspicious com-munications are designed to resemble normal traffic. We presented GESR , a graph-based framework that models network activity as attributed communication graphs and detects anomalies through structure-conditioned edge semantic re-construction. By reconstructing both continuous and discrete edge semantics from structural context, GESR identifies communications whose observed behav-ior does not match their local graph role. To the best of our knowledge, GESR 
+
+is the first framework to formulate benign-only flow-log intrusion detection ex-plicitly through structure-conditioned edge semantic reconstruction. Our evalu-ations on CTU-13 and CICIDS2017 show that GESR is most convincing under constrained false-positive budgets, with especially strong performance on CI-CIDS2017 and a favorable ranking profile on CTU-13, including the best ROC-AUC and TPR@5%FPR together with competitive PR-AUC. The results do not establish a universal advantage across datasets or operating points, but they do show that edge-level semantic reconstruction, robust calibration, and careful aggregation can materially improve host ranking in benign-only flow-log intru-sion detection. Future work will investigate online updating, temporal graph modeling, and adaptive calibration under concept drift to extend GESR toward continuous streaming environments. 
+
+## References 
+
+> 1. Parssegny, C., Mazel, J., Levillain, O., Chifflier, P.: Striking Back at Cobalt: Using Network Traffic Metadata to Detect Cobalt Strike Masquerading Command and
+
+18 H. Xu et al. Control Channels. In: Dalla Preda, M., Schrittwieser, S., Naessens, V., De Sut-ter, B. (eds.) Availability, Reliability and Security. ARES 2025. Lecture Notes in Computer Science, vol. 15992, pp. 163–185. Springer, Cham (2025) 2. Khraisat, A., Gondal, I., Vamplew, P., Kamruzzaman, J.: Survey of Intrusion De-tection Systems: Techniques, Datasets and Challenges. Cybersecurity 2, 20 (2019) 3. Buczak, A.L., Guven, E.: A Survey of Data Mining and Machine Learning Methods for Cyber Security Intrusion Detection. IEEE Communications Surveys & Tutorials 
+
+18 (2), 1153–1176 (2016) 4. Sommer, R., Paxson, V.: Outside the Closed World: On Using Machine Learning for Network Intrusion Detection. In: IEEE Symposium on Security and Privacy (S&P), pp. 305–316. IEEE (2010) 5. Patcha, A., Park, J.-M.: An Overview of Anomaly Detection Techniques: Existing Solutions and Latest Technological Trends. Computer Networks 51 (12), 3448–3470 (2007) 6. Mirsky, Y., Doitshman, T., Elovici, Y., Shabtai, A.: Kitsune: An Ensemble of Autoencoders for Online Network Intrusion Detection. In: Network and Distributed System Security Symposium (NDSS). Internet Society (2018) 7. Akoglu, L., Tong, H., Koutra, D.: Graph-based Anomaly Detection and Descrip-tion: A Survey. Data Mining and Knowledge Discovery 29 (3), 626–688 (2015) 8. Garcia, S., Grill, M., Stiborek, J., Zunino, A.: An empirical comparison of botnet detection methods. Computers & Security 45 , 100–123 (2014) 9. Sharafaldin, I., Lashkari, A.H., Ghorbani, A.A.: Toward Generating a New In-trusion Detection Dataset and Intrusion Traffic Characterization. In: ICISSP, pp. 108–116. SciTePress (2018) 10. Ring, M., Wunderlich, S., Scheuring, D., Landes, D., Hotho, A.: A Survey of Network-Based Intrusion Detection Data Sets. Computers & Security 86 , 147–167 (2019) 11. Liu, F.T., Ting, K.M., Zhou, Z.H.: Isolation Forest. In: ICDM, pp. 413–422. IEEE (2008) 12. Hamilton, W.L., Ying, Z., Leskovec, J.: Inductive Representation Learning on Large Graphs. In: NIPS, pp. 1024–1034 (2017) 13. Hu, W., Liu, B., Gomes, J., Zitnik, J., Liang, P., Pande, V., Leskovec, J.: Strategies for Pre-training Graph Neural Networks. In: ICLR (2020) 14. Ding, K., Li, J., Bhanushali, R., Liu, H.: Deep Anomaly Detection on Attributed Networks. In: Proceedings of the 2019 SIAM International Conference on Data Mining (SDM), pp. 594–602. SIAM (2019) 15. Liu, Y., Li, Z., Pan, S., Gong, C., Zhou, C., Karypis, G.: Anomaly Detection on Attributed Networks via Contrastive Self-Supervised Learning. IEEE Transactions on Neural Networks and Learning Systems 33 (6), 2378–2392 (2022) 16. Jin, M., Liu, Y., Zheng, Y., Chi, L., Li, Y.-F., Pan, S.: ANEMONE: Graph Anomaly Detection with Multi-Scale Contrastive Learning. In: Proceedings of the 30th ACM International Conference on Information & Knowledge Management (CIKM), pp. 3122–3126. ACM (2021) 17. Anderson, B., McGrew, D.A.: Identifying Encrypted Malware Traffic with Contex-tual Flow Data. In: Proceedings of the 2016 ACM Workshop on Artificial Intelli-gence and Security (AISec), pp. 35–46. ACM (2016) 18. Anderson, B., McGrew, D.A.: Machine Learning for Encrypted Malware Traffic Classification: Accounting for Noisy Labels and Non-Stationarity. In: Proceedings of the 23rd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (KDD), pp. 1723–1732. ACM (2017) GESR for Stealthy Communication Detection 19 19. Anderson, B., Paul, S., McGrew, D.: Deciphering Malware’s Use of TLS (Without Decryption). Journal of Computer Virology and Hacking Techniques 14 (3), 195– 211 (2018) 20. Caville, E., Lo, W.W., Layeghy, S., Portmann, M.: Anomal-E: A Self-Supervised Network Intrusion Detection System Based on Graph Neural Networks. Knowledge-Based Systems 258 , 110030 (2022) 21. Saito, T., Rehmsmeier, M.: The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets. PLoS ONE 10 (3), e0118432 (2015) 22. Gu, G., Zhang, J., Lee, W.: BotSniffer: Detecting Botnet Command and Con-trol Channels in Network Traffic. In: Proceedings of the Network and Distributed System Security Symposium (NDSS). Internet Society (2008) 23. Gu, G., Perdisci, R., Zhang, J., Lee, W.: BotMiner: Clustering Analysis of Network Traffic for Protocol- and Structure-Independent Botnet Detection. In: Proceed-ings of the 17th USENIX Security Symposium, pp. 139–154. USENIX Association (2008) 24. Nagaraja, S., Mittal, P., Hong, C.-Y., Caesar, M., Borisov, N.: BotGrep: Finding P2P Bots with Structured Graph Analysis. In: Proceedings of the 19th USENIX Security Symposium, pp. 95–110. USENIX Association (2010) 25. Hong, Y., Li, Q., Yang, Y., Shen, M.: Graph based Encrypted Malicious Traffic Detection with Hybrid Analysis of Multi-view Features. Information Sciences 644 ,119229 (2023) 26. Fu, Z., Liu, M., Qin, Y., Zhang, J., Zou, Y., Yin, Q., Li, Q., Duan, H.: Encrypted Malware Traffic Detection via Graph-based Network Analysis. In: Proceedings of the 25th International Symposium on Research in Attacks, Intrusions and Defenses (RAID), pp. 495–509. ACM (2022) 27. King, I.J., Shu, X., Jang, J., Eykholt, K., Lee, T., Huang, H.H.: EdgeTorrent: Real-time Temporal Graph Representations for Intrusion Detection. In: Proceedings of the 26th International Symposium on Research in Attacks, Intrusions and Defenses (RAID), pp. 77–91. ACM (2023)
