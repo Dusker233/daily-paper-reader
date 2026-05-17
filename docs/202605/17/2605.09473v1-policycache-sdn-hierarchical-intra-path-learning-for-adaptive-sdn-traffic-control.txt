@@ -1,0 +1,666 @@
+Title: PolicyCache-SDN: Hierarchical Intra-Path Learning for Adaptive SDN Traffic Control
+
+URL Source: https://arxiv.org/pdf/2605.09473v1
+
+Published Time: Tue, 12 May 2026 01:31:25 GMT
+
+Number of Pages: 9
+
+Markdown Content:
+# PolicyCache-SDN: Hierarchical Intra-Path Learning for Adaptive SDN Traffic Control 
+
+Wenyang Jia 1, Jingjing Wang 1, Ziwei Yan 1, Tanren Liu 2, Yakun Ren 2, Kai Lei 1,†
+
+> 1
+
+ICNLab, Shenzhen Graduate School, Peking University, Shenzhen, P.R.China 
+
+> 2
+
+SF Technology, Shenzhen, P.R.China 
+
+> †
+
+Corresponding author: leik@pkusz.edu.cn 
+
+Abstract —Software defined networks offer global visibility, yet centralized control loops are too slow for transient congestion and bursty traffic dynamics. Existing learned traffic control schemes often rely on offline training, making them fragile under distribution shifts. We present PolicyCache-SDN, a hierarchical SDN traffic control framework that enables local online adaptation under centralized policy control. Its key abstraction is a policy envelope: the controller compiles network wide intent into bounded per path action spaces, while edge agents learn and execute metering, queueing, and rerouting decisions only within those bounds. Policy envelopes also make local actions auditable and reversible when they affect shared bottlenecks. Evaluation on a 1,024 host software SDN testbed shows that PolicyCache-SDN improves average core link utilization by 35.5% over Static ECMP and 18.3% over Centralized TE. It reduces elephant flow P99 FCT by 34.3% over end host congestion control, lowers SLA violations from 18.2% to 6.8%, and uses less than 2% CPU and 12 MB memory per edge agent. The source code is available in an anonymized repository at https://anonymous.4open.science/r/JCC2026-PolicyCache-SDN/. 
+
+Index Terms —software-defined networking, online learning, traffic engineering, congestion control, intra-path learning, Hoeff-ding Adaptive Tree 
+
+I. I NTRODUCTION 
+
+Software-defined networking has become the dominant paradigm for operating large-scale data-center and wide-area networks. By centralizing control in a programmable controller, SDN enables fine-grained traffic-engineering policies, tenant isolation, and network-wide topology responses from a single vantage point [1], [2]. Beyond traffic engineering, SDN’s pro-grammable control plane has been applied to diverse domains, including blockchain cross-network optimization [3], [4] and ingress-aware defense against volumetric SYN floods [5]. This global visibility, however, creates a fundamental tension with fast traffic control. Congestion events, elephant-flow bursts, and link microbursts evolve on timescales of tens of milliseconds, comparable to a single RTT. Routing per-RTT control decisions through a centralized controller incurs at least one controller round-trip plus processing delay, making purely centralized fast-loop control impractical at scale [6]. The networking community has responded with two broad strategies. Static policy programs switch pipelines with pre-computed ECMP weights, meter rules, or queue assignments; it is fast but inflexible, as it cannot adapt to dynamic traffic matrices or link-quality changes. Offline learning trains a neural network or RL agent on historical traces and deploys the resulting policy to the controller or data plane; this approach adapts within the training distribution but fails to generalize when real traffic deviates from training conditions, a well-documented limitation of inter-flow learning [7]. This paper presents PolicyCache-SDN, a hierarchical SDN traffic-control architecture based on intra-path learning : edge agents learn and execute fast local actions while the controller manages global intent, action bounds, and coordination. The contribution is not a new learning model; it is a control abstraction that makes locality-based online learning safe and composable for SDN actions whose effects extend beyond the local learning scope. PolicyCache-SDN makes three contributions:  
+
+> •
+
+Intra-path learning. We scope each policy cache to a path, bottleneck, or tenant aggregate; training and execution are confined to that aggregate only.  
+
+> •
+
+Policy envelopes. The controller computes rate bounds, reroute permissions, and utility weights; agents enforce these envelopes before issuing any switch action.  
+
+> •
+
+Safe multi-agent coordination. Bottleneck alerts, action logs, and primary-agent arbitration serialize conflicts. We implement PolicyCache-SDN with Ryu, Open vSwitch, and gRPC, and evaluate it against nine baselines on a 1,024-host testbed. The rest of this paper is organized as follows: §II covers background, §III the architecture, §IV the formulation and analysis, §V implementation, §VI evaluation, §VII related work, and §VIII conclusion. II. B ACKGROUND AND MOTIVATION 
+
+A. SDN Traffic Engineering Today 
+
+Modern SDN deployments address traffic engineering at two timescales: the slow timescale (seconds to minutes), where the controller installs or updates forwarding rules in response to topology events and traffic-matrix shifts; and the fast timescale 
+
+(sub-second), where individual flows encounter congestion requiring millisecond-level rate adjustment, rerouting, or queue management. Existing mechanisms handle fast-timescale control poorly. Static OpenFlow meter rules apply fixed rate caps regardless of load; ECMP uses fixed weights that cannot react to transient hot spots; and threshold-based rerouting triggers only above a static utilization threshold, causing oscillation under dynamic traffic.    
+
+> arXiv:2605.09473v1 [cs.NI] 10 May 2026 SDN Controller (Ryu)
+> Edge Agent (HAT+Meter)
+> Edge Agent (HAT+Queue)
+> Edge Agent (HAT+Reroute)
+> envelope envelope
+> stats
+> OVS Switch OVS Switch OVS Switch
+> OVSDB Fig. 1. PolicyCache-SDN two-plane architecture. The SDN controller manages global state and distributes policy envelopes; edge agents run intra-path learning and execute fast SDN actions.
+
+B. The Generalization Problem in SDN 
+
+Several works have proposed replacing hand-crafted SDN policies with learned ones. Offline reinforcement learning [8] trains an agent on simulated or historical traces and deploys it to the controller. These approaches share a common limitation: the fixed policy degrades when real conditions differ from the training distribution (the inter-flow generalization problem [9]). Deploying an Aurora-architecture agent [7] under shifted traffic matrices or link-failure hot spots degrades utility by up to 40%, consistent with this limitation. 
+
+C. From Intra-Flow to Intra-Path Learning 
+
+PolicyCache [9] proposes intra-flow learning : training and execution are confined to a single flow, avoiding cross-flow generalization. PolicyCache-SDN reuses this locality principle and the same non-parametric HAT family, lifting the scope to an SDN path aggregate : an active path, bottleneck, tenant, or service class observed and controlled by one edge agent. The learned policy applies only to that aggregate and is invalidated when path conditions change. This lift introduces systems challenges absent in single-flow CC: rerouting can displace congestion to another link, meter updates can affect co-located tenants, and two agents on the same bottleneck can oscillate. PolicyCache-SDN addresses these through controller-compiled policy envelopes, shared-resource monitoring, and conflict arbitration. III. P OLICY CACHE -SDN A RCHITECTURE 
+
+PolicyCache-SDN consists of two control planes operating at different timescales and granularities (Figure 1). 
+
+A. Central SDN Controller: Slow Global Control 
+
+The SDN controller operates at the slow timescale (hundreds of milliseconds to seconds), maintaining the topology graph and backup paths, aggregating per-link telemetry from sFlow/INT streams, computing policy envelopes for active aggregates, detecting and arbitrating conflicting agent actions at shared bottlenecks, and monitoring agent behavior with override and rollback capability. 
+
+Envelope computation. The controller computes envelopes from measured demand, topology, tenant policy, and service templates. For each congested link b with capacity Cb and active aggregates Ab, it reserves tenant floors mi and headroom 
+
+ϵq Cb; the remaining budget Hb = (1 − ϵq )Cb − P 
+
+> j∈Ab
+
+mj is allocated by weighted water filling: 
+
+rmin ,i = mi,rmax ,i = min 
+
+n ˆdi(1 + ρ), R tenant  
+
+> i
+
+,mi + Hb
+
+ϕi
+
+P 
+
+> j∈Ab
+
+ϕj
+
+)
+
+.
+
+For a path crossing multiple constrained links, the agent receives the tightest per-link bound, making fairness and tenant isolation controller-enforced: an agent may learn how to use its allocation but cannot exceed tenant ceilings or reroute outside permitted paths. 
+
+Utility weights. The utility vector w is initialized from service-class templates and adjusted at each refresh: sustained SLA violations increase wlat and wsla ; spare capacity with satisfied SLAs increases wthr . Weights are normalized and clipped to operator ranges, so utility adaptation changes the local objective without granting new action authority. A policy envelope is the contract that constrains exploration, clips model predictions before execution, provides a versioned audit object, and enables safe fallback when stale. The controller does not make per-RTT decisions; it bounds which per-interval decisions are legal. 
+
+B. Edge Agent: Fast Local Online Learning 
+
+Each edge agent is deployed at a ToR switch CPU, vSwitch, P4 control plane, or SmartNIC. It maintains one policy cache 
+
+per monitored path or traffic aggregate, implemented as a Hoeffding Adaptive Tree (HAT) as in PolicyCache [9]. The agent operates in two modes. In backup exploration mode , when the cache is untrained or underperforming ( p < pth ), the agent probes candidate actions inside the current envelope, observes utilities on canary traffic, and uses the better direction as an empirical label for model training. In model execution mode , once p ≥ pth , the HAT directly predicts and executes actions clipped to the envelope; micro-exploration continues in the background to maintain p and detect concept drift. ADWIN [10] triggers reversion to exploration mode when path conditions shift significantly. Algorithm 1 details the interval loop. 
+
+C. Controller–Agent Interface 
+
+The interface (Figure 2) is lightweight and asynchronous. Policy envelopes are pushed on change; agents apply the new envelope on their next action cycle without requiring flow-level rule updates. Envelope messages carry a version and staleness bound; telemetry and action logs enable the controller to verify envelope compliance. This is what distinguishes PolicyCache-SDN from a plain PolicyCache-style learner on an SDN switch: local learning is permitted only inside a controller-compiled action set. Algorithm 1 Edge-Agent Interval Loop 
+
+Require: Envelope E = ⟨rmin , r max , π rt , w⟩, HAT model M,prediction score p 
+
+> 1:
+
+st ← CollectTelemetry()  
+
+> 2:
+
+if E.stale() then  
+
+> 3:
+
+Disable reroutes; clip actions to last valid bounds  
+
+> 4:
+
+end if  
+
+> 5:
+
+if Drift( st) ∨ p < p th then  
+
+> 6:
+
+A ← a rmin ≤ rate( a) ≤ rmax , reroute( a) ⇒ πrt  
+
+> 7:
+
+Apply canary action ˆac ∼ A ; observe utility uc 
+
+> 8:
+
+a† ← arg max a∈A u(a) 
+
+> 9:
+
+M.Update( st, a †); p ← UpdateScore( p, st, a †) 
+
+> 10:
+
+else  
+
+> 11:
+
+ˆa ← Clip( M.Predict( st), E) 
+
+> 12:
+
+if IsReroute(ˆ a) then  
+
+> 13:
+
+ShadowCheck(ˆ a) 
+
+> 14:
+
+end if  
+
+> 15:
+
+Execute ˆa via OVSDB; append (st, ˆa, t ) to action log  
+
+> 16:
+
+end if  
+
+> 17:
+
+if ut < u prev − δ then  
+
+> 18:
+
+Rollback last committed action  
+
+> 19:
+
+end if SDN   
+
+> Controller
+> Edge
+> Agent
+> OVS / ToR
+> Actions
+> Global state
+> & envelopes
+> PolicyEnvelope
+> BottleneckAlert
+> Override
+> TelemetryReport
+> ModelReport
+> ActionLog meter / queue
+> reroute
+> audit
+> rollback
+> Fig. 2. Controller–agent message flow. The controller pushes envelopes, bottleneck alerts, and overrides; agents return telemetry, model state, and action logs while executing local OVS actions.
+
+IV. L EARNING FORMULATION AND ANALYSIS 
+
+A. State 
+
+The state vector observed by an edge agent at each measure-ment interval t is: 
+
+st = [util t, q t, loss t, ecn t, thr t, delay t,
+
+∆util t−1, ∆thr t−1, ∆delay t−1, a t−1, a t−2]
+
+where ∆( ·) denotes the one-interval relative change. Relative-change features capture temporal dynamics without requiring cross-path normalization, consistent with the intra-path learning philosophy. 
+
+B. Action 
+
+PolicyCache-SDN controls SDN-level actions rather than TCP cwnd. The action space is discrete and path-specific; at each interval the agent selects one action per dimension: 
+
+meter-rate adjustment (increase or decrease by step α, clipped to [rmin , r max ]); queue assignment (promote or demote the flow class by one priority level); and elephant-flow rerouting 
+
+(binary trigger/release for flows exceeding 10 MB in the measurement window). ECN marks are used as telemetry features; the prototype does not tune ECN marking thresholds. 
+
+C. Utility Function 
+
+ut = wthr ∆thr t − wlat ∆delay t − wloss loss t
+
+− wsla vt − wact |at − at−1| (1) where vt is the SLA violation indicator. The controller distributes a utility vector w = ( wthr , w lat , w loss , w sla , w act )
+
+as part of the policy envelope, using the service-class templates and bounded adjustment rules described in Section III. 
+
+D. Empirical Labels 
+
+PolicyCache-SDN does not assume access to a global optimal action. During backup exploration, the agent obtains an empirical label a†(s) by comparing two envelope-valid candidate actions over adjacent measurement intervals and selecting the one with higher observed utility. Thus a† is a local, path-specific target, not a network-wide optimum, and remains valid only while the local distribution, envelope, and neighboring agents’ actions are sufficiently stable over the exploration window. 
+
+E. Algorithmic View 
+
+Algorithm 2 summarizes the controller’s envelope-refresh logic; it runs at the slow timescale and converts global state into bounded local action spaces. Algorithm 1 (in §III) details each edge agent’s faster interval loop. Safety mechanisms are procedural: exploration is canaried, actions are envelope-clipped, reroutes are shadow-checked, and harmful actions trigger rollback. The score p is a moving average of prediction accuracy; pth controls the switch from exploration to model execution. 
+
+F. Analysis Scope and Assumptions 
+
+The results below are conditional and operational; they characterize predictable behavior, not global optimality. We assume: (A1) within each exploration window, each visited state region has stable expected utility with bounded measurement noise; (A2) the stream visits a finite set S of regions often enough for the cache to receive repeated samples; (A3) canary and micro-exploration continue throughout; (A4) agents enforce the latest envelope and the controller serializes conflicting meter-rate updates. 
+
+Theorem 1 (Single-Agent Cache Consistency) . Under A1– A3, after collecting Nconv = O
+
+ R2 
+
+> ε2
+
+ln |S|
+
+> δ
+
+
+
+samples, the HAT predicts a†(s) for all visited regions with probability at least 
+
+1 − δ − η (η bounds exploration-noise mislabeling). Once accuracy exceeds pth by a margin, the agent switches to model execution after O(1 /(1 − β)) additional samples. Algorithm 2 Controller Envelope Refresh                                                                             
+
+> Require: Topology G, link capacities {ce}, demand estimates {da},policy P
+> Ensure: Policy envelope Eafor each active aggregate, pushed to edge agents
+> 1: for each active aggregate ado
+> 2: ra
+> min ←floor( a, P)
+> 3: ra
+> max ←min  da,cap( a, P)
+> 4: end for
+> 5: for each link ewith ue> θ do
+> 6: he←ce−P
+> a∋era
+> min
+> 7: We←P
+> b∋ewb
+> 8: for each aggregate atraversing edo
+> 9: ra
+> max ←min( ra
+> max ,ra
+> min +wahe/ W e)
+> 10: end for
+> 11: end for
+> 12: for each active aggregate ado
+> 13: πa
+> rt ← residual( a)> r a
+> min
+> ∧ ¬ cooldown( a)
+> 14: wa←UpdateWeights( a)
+> 15: Ea← ⟨ ra
+> min , r a
+> max , π a
+> rt ,wa⟩
+> 16: Push Eato edge agent for aggregate a
+> 17: end for
+
+Theorem 2 (Policy-Envelope Compliance) . Every ac-tion executed by a PolicyCache-SDN agent satisfies 
+
+⟨rmin , r max , π reroute ⟩, provided the agent has received the envelope and applies the enforcer before OVSDB execution. This is a syntactic guarantee and does not imply SLA or network-wide invariants under stale telemetry or conflicting reroutes. 
+
+Theorem 3 (Conditional Recovery after Drift) . If path con-ditions change at td and restabilize, and the HAT error rate rises from p1 to p2 > p 1, ADWIN detects the drift within 
+
+Tdetect = O (p2 − p1)−2 samples (w.h.p.). The agent then recovers cache consistency after Nconv additional labeled samples under A1–A3. 
+
+V. I MPLEMENTATION 
+
+PolicyCache-SDN is implemented as three software compo-nents. 
+
+SDN Controller (Ryu + PolicyCache-SDN Module). We extend Ryu [11] with a PolicyCache-SDN controller module for global monitoring, policy envelope generation, bottleneck detection, and multi-agent coordination. The module subscribes to sFlow records from OVS instances and maintains per-path envelope state in an in-memory store. 
+
+Edge Agent (Python Daemon). Each agent runs as a Python daemon co-located with the vSwitch control plane. It provides: (i) a telemetry collector polling OVS port counters and queue statistics via OVSDB every 50 ms; (ii) a HAT model per monitored path using the River ML library [12]; (iii) an action executor translating model outputs to meter/queue/flow-table updates via OVSDB RPC; and (iv) a policy-envelope enforcer clipping all actions to controller-provided bounds. One-way delay is measured from timestamped endpoint probes, not inferred from OVSDB counters. 
+
+Controller–Agent Transport (gRPC). Policy envelopes and reports are exchanged over gRPC. Envelopes are pushed on change; agents apply updates within a 500 ms staleness bound. 
+
+Action dimensions. The prototype implements three action dimensions: (1) OpenFlow meter rate adjustment ( α = 10% ,step size), (2) OVS queue assignment across three priority levels, and (3) elephant-flow rerouting via priority flow-table rules. VI. E VALUATION 
+
+We evaluate PolicyCache-SDN from four angles: overall performance, tail latency, convergence overhead, and robustness under controller and telemetry stress. 
+
+A. Testbed and Methodology 
+
+Topology and emulation. Experiments run on 1,024 AWS c5.xlarge instances (Ubuntu 22.04, OVS 2.17, Linux 5.15) in one region. The logical fabric is a 64-rack Clos topology emulated with OVS bridges and GRE tunnels; each rack contains 16 endpoints and one logical ToR bridge, the fabric has 16 aggregation and 8 spine bridges, and each ToR has four uplinks (4:1 oversubscription). Logical links and GRE tunnels run at 10 Gbps enforced by Linux tc token buckets; utilization is reported relative to configured rates. Routing uses OpenFlow group tables; rerouting uses priority flow-table entries. 
+
+Controller and agents. Each rack’s logical ToR bridge and edge-agent daemon run on the same designated rack node. A Ryu controller on a c5.2xlarge (8 vCPU) manages all 64 agents over gRPC. Agents poll OVS port, meter, and queue counters every 50 ms via OVSDB, execute at most one meter/queue update per path per interval, and enforce a 500 ms reroute cooldown. 
+
+Traffic generation. Long bulk transfers use iperf3; short flows use a custom generator sampling rack-pair endpoints, start times, and sizes from a fixed seed replayed identically across schemes. Offered load is 0.85 of bisection bandwidth for the elephant-heavy workload and 0.70 for mice-heavy and mixed; elephant-heavy trials rotate hot rack pairs every 60 s. Mice-heavy trials use a Pareto distribution (mean 50 KB, κ=1 .2); mixed trials mark 40% of flows as latency-sensitive. 
+
+Measurements and statistics. FCT is measured from application-level logs. One-way delay uses timestamped probes at 100 Hz on the same rack-pair paths; clocks are synchronized via chrony/AWS, and trials with offset above 1 ms are discarded. OVSDB counters cover utilization, queue occupancy, drops, and meter statistics. Each trial runs 300 s; we run 10 seeds (1000– 1009), report means, and compute 95% Student-t confidence intervals. Tail metrics use the mean of per-trial P99 values. 
+
+Testbed scope. This is a software SDN fabric on public-cloud VMs; it does not reproduce ASIC timing, lossless-fabric behavior, or hardware congestion-feedback mechanisms (e.g., CONGA, HULA). Latency and reordering values include VM, GRE, and tc /OVSDB noise and should be interpreted as relative comparisons, not production-fabric constants. TABLE I BASELINES .
+
+Baseline Description Static ECMP Equal-cost multipath; no dynamic adjust-ment Centralized TE Controller-driven TE; 500 ms update inter-val Threshold Reroute Reroutes elephant flows when link util. 
+
+>80% Static Meter Fixed OpenFlow meter rates Heuristic Queue WFQ with static weights Aurora-SDN Aurora DRL architecture [7] adapted to SDN actions (meter+queue); trained offline for 10 6 steps on uniform random traffic matrices LetFlow-style Flowlet switching inspired by LetFlow [13]; random path per flowlet, no congestion feedback Presto-style Software-edge flowcell load balancing in-spired by Presto [14]; fixed-size flowcells over ECMP paths PolicyCache (end-host) PolicyCache [9] at all 1,024 end hosts performing intra-flow TCP cwnd control; Static ECMP routing 
+
+B. Baselines 
+
+PolicyCache-SDN is compared against nine baselines (Ta-ble I). All baselines use the same topology, traces, and measurement pipeline. Centralized TE recomputes paths every 500 ms to minimize maximum link utilization. Threshold Reroute uses the same elephant detector but reroutes only above 80% utilization. Aurora-SDN uses the same telemetry features as PolicyCache-SDN (minus action-history), outputs meter and queue actions, and is trained offline for 10 6 steps; the evaluated model is frozen with no online fine-tuning. LetFlow-style switches paths at flowlet boundaries (500 μs idle gap); Presto-style stripes 64 KB flowcells over ECMP hops. Hardware-dependent CONGA and HULA are discussed in Section VII. Aurora-SDN is a frozen offline-RL baseline testing the common train-on-simulation pattern. Claims against learned baselines are limited to this frozen offline setting and to PolicyCache’s end-host learner; we do not claim dominance over online-adapting MARL systems. 
+
+C. Workloads 
+
+Three workloads are used: elephant-heavy (80% of bytes from flows >100 MB; matrix shifts every 60 s), mice-heavy 
+
+(Pareto size distribution, mean 50 KB, κ=1 .2; high arrival rate), and mixed real-time (40% latency-sensitive flows, 60% bulk; SLA budget ≤10 ms one-way delay). The >100 MB threshold defines the workload mix; the online reroute detector uses the lower >10 MB-per-window threshold from Section IV. 
+
+D. Link Utilization 
+
+Figure 3 shows average and worst-link utilization under the elephant-heavy workload. 50 60 70 80 90 100 
+
+Link Utilization (%) 
+
+> Static ECMP
+> PolicyCache
+> (end-host)
+> Centralized TE
+> Threshold
+> Reroute
+> Static Meter
+> Heuristic Queue
+> Aurora-SDN
+> LetFlow-
+> style
+> Presto-
+> style
+> PolicyCache-SDN
+> (ours)
+
+Avg. util. Worst-link util. 
+
+Fig. 3. Link utilization: average (solid) vs. worst-link maximum (hatched) across all schemes. Hatched bars are always at least the corresponding average; PolicyCache-SDN achieves the highest average utilization with a small max-average gap. 0 2 4 6 8 10 12 
+
+> Elephant FCT (s)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> CDF
+> Elephant Flow Completion Time CDF
+> Static ECMP
+> PolicyCache(host)
+> Centralized TE
+> Aurora-SDN
+> PolicyCache-SDN
+
+(a) Elephant FCT ( >10 MB) 0 50 100 150 200 250 300 350 400  
+
+> Mice FCT (ms)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> CDF
+> Mice Flow Completion Time CDF
+> Static ECMP
+> PolicyCache(host)
+> Centralized TE
+> Aurora-SDN
+> PolicyCache-SDN
+
+(b) Mice FCT ( <100 KB) Fig. 4. Flow Completion Time CDFs (elephant-heavy workload). PolicyCache-SDN shifts the elephant CDF leftward by 33% vs. Static ECMP while also improving mice FCT. 
+
+PolicyCache-SDN achieves 35.5% higher average utilization than Static ECMP (84.0% vs. 62.0%) and 18.3% higher than Centralized TE. Its worst-link maximum is 86.4%, only 2.4 pp above its average. PolicyCache (end-host) yields only 67.4%: end-host CC cannot see bottleneck locations or reroute elephant flows, confirming that network-level intra-path learning provides capabilities beyond end-host control. Aurora-SDN performs well within its training distribution but degrades by 6.8 pp under shifted traffic matrices. LetFlow-style and Presto-style improve over Static ECMP but remain below PolicyCache-SDN under sustained hot spots. 
+
+E. Flow Completion Time 
+
+PolicyCache-SDN reduces elephant mean FCT by 33.2% and P99 FCT by 40.3% relative to Static ECMP. The improvement over Centralized TE (18.7% mean, 24.1% P99) stems from faster reaction: edge agents detect queue buildup within the 2.5 5.0 7.5 
+
+Elephant FCT (s) 
+
+> ECMP
+> PC-host
+> Cent. TE
+> Threshold
+> Aurora
+> LetFlow
+> Presto
+> PC-SDN
+> Mean
+> P99
+
+100 200 
+
+Mice FCT (ms) Fig. 5. FCT summary across software baselines. Each line connects mean and P99 for the same scheme, showing both central tendency and tail behavior without a dense table. 0 50 100 150 200 250 300 
+
+> Time (s)
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> P99 One-way Delay (ms)
+> Real-time Flow P99 Latency Over Time (traffic shift at t=120 s)
+> Static ECMP
+> Centralized TE
+> Aurora-SDN
+> PolicyCache-SDN
+> Traffic shift
+> SLA budget
+
+Fig. 6. P99 one-way delay over a 300 s trial with a traffic-matrix shift at 
+
+t=120 s. PolicyCache-SDN re-stabilizes within 15 s and achieves the lowest post-shift P99 delay; Aurora-SDN remains elevated post-shift. 
+
+current 50 ms interval and execute reroutes within the same RTT, whereas Centralized TE requires a full sFlow aggregation cycle (≈500 ms). PolicyCache (end-host) reduces elephant mean FCT by only 9.5% relative to Static ECMP because it cannot reroute elephant flows, a fundamental limitation of end-host CC. 
+
+F. Tail Latency and SLA Compliance 
+
+PolicyCache-SDN reduces P99 delay for real-time flows by 
+
+37.7% compared to Static Meter and by 11.7% compared to Centralized TE. SLA violation rate drops from 18.2% (Static Meter) to 6.8% , a 62.6% relative reduction. PolicyCache (end-host) achieves 17.6% violation rate; it reduces P99 delay slightly by backing off cwnd but cannot promote flows to higher-priority queues, a capability unique to SDN-level control. Aurora-SDN achieves 9.4% within its training distribution but rises to 13.1% under out-of-distribution traffic, consistent with the limitations of frozen offline policies in this setup. 30 40 
+
+P99 delay (ms) 
+
+> ECMP
+> PC-host
+> Static Meter
+> Cent. TE
+> Heur. Queue
+> Aurora
+> LetFlow
+> Presto
+> PC-SDN
+
+0 10 20 
+
+SLA viol. (%) 
+
+Fig. 7. Tail latency and SLA compliance under the mixed real-time workload. PolicyCache-SDN has both the lowest P99 delay and the lowest violation rate. Cold-start Post-drift 
+
+> 100
+> 200
+> 300
+> 400
+> 500
+> Convergence Time (ms)
+> Agent Convergence Times
+> (64 agents × 10 trials)
+
+(a) Convergence times 1 4 8 16 32 64  
+
+> Number of Edge Agents
+> 65
+> 70
+> 75
+> 80
+> 85
+> 90
+> Avg. Link Utilization (%)
+> Avg. Utilization vs. Edge Agent Count
+> PolicyCache-SDN
+> Centralized TE
+> Aurora-SDN
+
+(b) Scalability Fig. 8. (a) Agent convergence time distributions across 64 agents × 10 trials. (b) Average link utilization as number of edge agents increases; PolicyCache-SDN approaches 84% at 64 agents while baselines remain flat. 
+
+G. Convergence, Overhead, and Coordination 
+
+All agents reach model execution mode within 400 ms from cold-start (Figure 9). Agent CPU stays below 2.1% and memory below 13.4 MB. Without controller arbitration, agents sharing a bottleneck oscillate at 4.3 reroute-flip events/s with ±22 pp utilization variance; with arbitration, flips drop to 0.4/s and variance narrows to ±5.1 pp, adding <0.3% to controller–agent traffic. 
+
+H. Ablation and Sensitivity 
+
+Figure 10 ablates each action type on the elephant-heavy workload. Rerouting is most impactful: disabling it reduces average utilization from 84.0% to 76.3% ( −7.7 pp) and elephant mean FCT from 1.61 s to 2.09 s. Queue-priority contributes 
+
++3.9 pp and metering +1.9 pp. PolicyCache-SDN is robust across parameter settings: at α=10% (default), utilization gain over Static Meter is 19.1 pp; α=2% reduces it to 6.1 pp, and 
+
+α=25% speeds convergence but adds 2.4 pp SLA violations. Coarsening the interval from 50 ms to 200 ms costs 4.7% in Cold-start 
+
+> Post-drift
+
+0
+
+50 
+
+100 
+
+150 
+
+200 
+
+250 
+
+300 
+
+350 
+
+400 
+
+> Convergence (ms)
+> Median
+> P95
+
+0 5 10 15 
+
+P95 value 
+
+> CPU
+> Memory
+> HAT size
+> OVSDB lat.
+> 2.1%
+> 13.4MB
+> 1.7MB
+> 6.8ms
+
+Fig. 9. Agent convergence and overhead summary. Convergence remains below 350 ms at P95, and per-agent CPU, memory, model size, and OVSDB action latency remain small. No 
+
+> Reroute
+> No
+> Queue
+> Ctrl
+> No
+> Meter
+> Full
+> (ours)
+> 65
+> 70
+> 75
+> 80
+> 85
+> 90
+> Avg. Link Util. (%)
+
+Ablation: Action-Type Contribution  
+
+> Avg. Util.
+> Elephant FCT (mean) 1.4
+> 1.6
+> 1.8
+> 2.0
+> 2.2
+> 2.4
+> Elephant FCT mean (s)
+
+Fig. 10. Ablation: incremental benefit of each action type. Removing rerouting causes the largest single-component drop (7.7 pp average utilization). 
+
+utilization and 8.2% in P99 FCT. Under shifted traffic matrices, ADWIN-triggered re-exploration converges within 200–350 ms. 
+
+I. Controller Loop and Robustness 
+
+Centralized TE update interval. Figure 11 shows TE-loop sensitivity. Faster loops improve utilization but increase CPU and rule churn sharply. Even a 50 ms loop remains be-low PolicyCache-SDN: global collect–optimize–install cannot match our design’s split 50 ms agent / 500 ms envelope cadence. 
+
+Stability and side effects. Figure 12 stress-tests stale envelopes, telemetry loss, slow OVSDB commits, controller outage, rapid traffic oscillation, and excessive reroute frequency. During a controller outage, agents continue meter and queue actions inside the last valid envelope but disable new reroutes af-ter the 500 ms staleness bound. Disabling the reroute cooldown 70 
+
+80 
+
+> Avg. util. (%)
+
+5
+
+6
+
+7   
+
+> Eleph. P99 FCT (s)
+> 50ms 100ms 500ms 1s
+
+Centralized TE update interval 
+
+0
+
+50 
+
+> Ctrl CPU (%)
+
+Fig. 11. Centralized TE update-interval sensitivity. Faster controller loops improve TE but consume substantially more controller CPU; PolicyCache-SDN remains better at its split 50 ms agent / 500 ms envelope cadence. Util. P99 delay SLA viol. OOO segs                      
+
+> Default
+> Envelope
+> stale 1s
+> Telemetry
+> loss 10%
+> OVSDB P95
+> +25ms
+> Controller
+> outage 5s
+> TM shift
+> 10s
+> No reroute
+> cooldown
+> 84.0% 27.9ms 6.8% 0.09%
+> 81.7% 30.4ms 8.2% 0.12%
+> 80.9% 31.1ms 8.9% 0.13%
+> 80.2% 32.6ms 9.5% 0.16%
+> 77.6% 35.8ms 11.9% 0.18%
+> 78.4% 34.1ms 10.6% 0.21%
+> 83.1% 33.7ms 10.4% 0.44%
+
+Robustness Stress Tests 
+
+Fig. 12. Robustness and reroute side effects under the mixed workload. Darker cells indicate larger per-metric degradation relative to the observed range; cell labels show the original values. 
+
+improves neither utilization nor FCT but increases flips and reordering. VII. R ELATED WORK 
+
+SDN Traffic Engineering. B4 [15], SWAN [16], and Hedera [17] optimize routing at controller timescale, achieving global optimality but not sub-second reaction. PolicyCache-SDN adds a fast local layer beneath such systems. SDN’s programmable control plane has also been used for blockchain network optimization [3], [4] and adaptive ingress-aware defense against volumetric flooding attacks [5], illustrating the breadth of SDN applications beyond traditional traffic engineering. 
+
+Datacenter Load Balancing. CONGA [18], HULA [19], LetFlow [13], and Presto [14] address ECMP imbalance via flowlets, flowcells, or in-network feedback. PolicyCache-SDN is complementary, operating on SDN meters, queues, and selective reroutes for traffic aggregates. Hardware-dependent CONGA and HULA require data-plane mechanisms unavailable in our OVS/GRE testbed; P4/SmartNIC validation is left for future work. 
+
+Online Learning and PolicyCache. Vivace [20] and Proteus [21] apply online exploration to TCP congestion control; PolicyCache [9] accelerates convergence with intra-flow learning and non-parametric trees. PolicyCache-SDN borrows the locality principle but applies it to SDN meters, queues, and reroutes whose side effects can cross tenants and paths; policy envelopes and arbitration make that locality safe. Data-driven techniques have also been applied to broader network management tasks: LLM-enhanced heterogeneous graph models for multi-task DNS security [22] and Byzantine-resilient decentralized federated learning for distributed network inference [23] demonstrate the expanding scope of learned approaches in networked systems. 
+
+Programmable Data-Plane Learning. Planter [24] and IIsy [25] deploy classifiers inside P4 pipelines with nanosecond inference but requiring offline training. PolicyCache-SDN can offload HAT inference to P4 or SmartNIC while retaining online training in the control plane. 
+
+Hierarchical and Distributed SDN Control. ONIX [26] and Kandoo [27] layer controllers for scalability: local controllers handle frequent events, root controllers maintain global state. PolicyCache-SDN follows the same instinct, but edge agents are online learners constrained by policy envelopes rather than simple event-processing subcontrollers. 
+
+Congestion Control. DCTCP [28] and HPCC [29] add per-hop congestion signals but optimize individual-flow goodput, not network-level routing or priority policies. PolicyCache-SDN controls SDN meters and routing for aggregate traffic classes. VIII. C ONCLUSION 
+
+We presented PolicyCache-SDN, a hierarchical SDN traffic-control framework that lifts PolicyCache-style locality from end-host congestion control to SDN traffic aggregates. The main systems contribution is not a new tree learner, but the controller–agent abstraction needed to make local online learn-ing composable in SDN: policy envelopes bound exploration and execution, action logs make local decisions auditable, and controller arbitration resolves conflicts on shared bottlenecks. Evaluation on a 1,024-host cloud testbed shows 35.5% higher average core-link utilization than Static ECMP, 40.3% lower P99 elephant FCT, and 62.6% fewer SLA violations compared to Static Meter, with under 2.1% per-agent CPU overhead and 12 MB memory footprint. Multi-agent coordination eliminates reroute oscillation with negligible additional control traffic. Future work includes hardware-fabric validation with P4 or SmartNIC feedback, stronger online-adapting MARL and online-RL baselines, extensions to multi-domain and inter-AS traffic engineering, and stronger multi-agent analysis for discrete rerouting and queue-priority actions. REFERENCES [1] N. McKeown, T. Anderson, H. Balakrishnan, G. Parulkar, L. Peterson, J. Rexford, S. Shenker, and J. Turner, “OpenFlow: Enabling innovation in campus networks,” in ACM SIGCOMM Computer Communication Review , vol. 38, no. 2, 2008, pp. 69–74. [2] H. Kim and N. Feamster, “Improving network management with software defined networking,” in IEEE Communications Magazine , vol. 51, no. 2, 2013, pp. 114–119. [3] W. Jia, J. Wang, Z. Yan, P. Xiangli, and G. Yuan, “BlockSDN: Towards a high-performance blockchain via software-defined cross networking optimization,” in 2025 6th International Conference on Computer Engineering and Intelligent Control (ICCEIC) , 2025, pp. 288–293. [4] W. Jia, J. Wang, Z. Yan et al. , “BlockSDN-VC: A SDN-based vir-tual coordinate-enhanced transaction broadcast framework for high-performance blockchains,” in Network and Parallel Computing (NPC 2025) , ser. Lecture Notes in Computer Science, vol. 16305. Springer, Cham, 2026. [5] W. Jia, J. Wang, X. Zou, and K. Lei, “SDN-SYN PoW: Adaptive ingress-aware defense with non-interactive PoW against volumetric SYN floods,” 2026. [6] A. R. Curtis, J. C. Mogul, J. Tourrilhes, P. Yalagandula, P. Sharma, and S. Banerjee, “DevoFlow: Scaling flow management for high-performance networks,” in Proceedings of ACM SIGCOMM , 2011, pp. 254–265. [7] N. Jay, N. Rotman, B. Godfrey, M. Schapira, and A. Tamar, “A deep reinforcement learning perspective on internet congestion control,” in 
+
+Proceedings of the 36th International Conference on Machine Learning (ICML) , 2019, pp. 3050–3059. [8] S. Chinchali, P. Hu, T. Chu, M. Sharma, M. Bansal, R. Misra, M. Pavone, and S. Katti, “Cellular network traffic scheduling with deep reinforcement learning,” in Proceedings of the AAAI Conference on Artificial Intelligence , vol. 32, 2018, pp. 766–774. [9] H. Tian, H. Wang, W. Li, X. Liao, D. Sun, W. Li, D. Chen, B. Huang, S. Fu, J. Zhang, D. Shen, and K. Chen, “PolicyCache: Intra-flow learning in congestion control,” in 23rd USENIX Symposium on Networked Systems Design and Implementation (NSDI 26) . USENIX Association, 2026. [10] A. Bifet and R. Gavald `a, “Learning from time-changing data with adaptive windowing,” in Proceedings of the 7th SIAM International Conference on Data Mining (SDM) , 2007, pp. 443–448. [11] Ryu Project, “Ryu SDN framework,” https://ryu-sdn.org, 2023. [12] J. Montiel, M. Halford, S. M. Mastelini, G. Bolmier, R. Sourty, R. Vaysse, A. Zouitine, H. M. Gomes, J. Read, T. Abdessalem, and A. Bifet, “River: Online machine learning in Python,” https://riverml.xyz, 2021. [13] E. Vanini, R. Pan, M. Alizadeh, P. Taheri, and T. Edsall, “Let it flow: Resilient asymmetric load balancing with flowlet switching,” in 14th USENIX Symposium on Networked Systems Design and Implementation (NSDI 17) . USENIX Association, 2017, pp. 407–420. [14] K. He, E. Rozner, K. Agarwal, W. Felter, J. Carter, and A. Akella, “Presto: Edge-based load balancing for fast datacenter networks,” in Proceedings of ACM SIGCOMM , 2015, pp. 465–478. [15] S. Jain, A. Kumar, S. Mandal, J. Ong, L. Poutievski, A. Singh, S. Venkata, J. Wanderer, J. Zhou, M. Zhu, J. Zolla, U. H ¨olzle, S. Stuart, and A. Vahdat, “B4: Experience with a globally-deployed software defined WAN,” in 
+
+Proceedings of ACM SIGCOMM , 2013, pp. 3–14. [16] C.-Y. Hong, S. Kandula, R. Mahajan, M. Zhang, V. Gill, M. Nanduri, and R. Wattenhofer, “Achieving high utilization with software-driven WAN,” in Proceedings of ACM SIGCOMM , 2013, pp. 15–26. [17] M. Al-Fares, S. Radhakrishnan, B. Raghavan, N. Huang, and A. Vahdat, “Hedera: Dynamic flow scheduling for data center networks,” in 7th USENIX Symposium on Networked Systems Design and Implementation (NSDI 10) , 2010, pp. 89–92. [18] M. Alizadeh, T. Edsall, S. Dharmapurikar, R. Vaidyanathan, K. Chu, A. Fingerhut, V. T. Lam, F. Matus, R. Pan, N. Yadav, and G. Varghese, “CONGA: Distributed congestion-aware load balancing for datacenters,” in Proceedings of ACM SIGCOMM , 2014, pp. 503–514. [19] N. Katta, M. Hira, C. Kim, A. Sivaraman, and J. L. Rexford, “HULA: Scalable load balancing using programmable data planes,” in Proceedings of the Symposium on SDN Research (SOSR) , 2016, pp. 10:1–10:12. [20] M. Dong, T. Meng, D. Zarchy, E. Arslan, Y. Gilad, B. Godfrey, and M. Schapira, “PCC Vivace: Online-learning congestion control,” in 15th USENIX Symposium on Networked Systems Design and Implementation (NSDI 18) , 2018, pp. 343–356. [21] Z. Du, J. Zheng, H. Yu, L. Kong, and G. Chen, “A unified congestion control framework for diverse application preferences and network conditions,” in Proceedings of ACM CoNEXT , 2021, pp. 282–296. [22] W. Jia, J. Wang, Z. Yan, T. Liu, and K. Lei, “LLM-enhanced heteroge-neous graph embedding model for multi-task DNS security,” in Network and Parallel Computing (NPC 2025) , ser. Lecture Notes in Computer Science, vol. 16305. Springer, Cham, 2026. [23] W. Jia, Q. Xu, Z. Yan, C. Kang, Y. Yang, J. He, and K. Lei, “OpenCLAW-Nexus: A self-reinforcing trust framework for byzantine-resilient decentralized federated learning,” 2026. [24] C. Zheng and N. Zilberman, “Planter: Seeding trees within switches,” in 
+
+Proceedings of ACM SIGCOMM (Posters and Demos) , 2021, pp. 12–14. [25] C. Zheng, Z. Xiong, T. T. Bui, S. Kaupmees, R. Bensoussane, A. Bern-abeu, S. Vargaftik, Y. Ben-Itzhak, and N. Zilberman, “IIsy: Hybrid in-network classification using programmable switches,” IEEE/ACM Transactions on Networking , 2024. [26] T. Koponen, M. Casado, N. Gude, J. Stribling, L. Poutievski, M. Zhu, R. Ramanathan, Y. Iwata, H. Hama, K. Kobayashi, and S. Shenker, “Onix: A distributed control platform for large-scale production networks,” in 
+
+Proceedings of USENIX OSDI , 2010, pp. 351–364. [27] S. Hassas Yeganeh and Y. Ganjali, “Kandoo: A framework for efficient and scalable offloading of control applications,” in Proceedings of the 1st ACM SIGCOMM Workshop on Hot Topics in Software Defined Networks (HotSDN) , 2012, pp. 19–24. [28] M. Alizadeh, A. Greenberg, D. A. Maltz, J. Padhye, P. Patel, B. Prabhakar, S. Sengupta, and G. Varghese, “Data center TCP (DCTCP),” in 
+
+Proceedings of ACM SIGCOMM , 2010, pp. 63–74. [29] Y. Li, R. Miao, H. H. Liu, Y. Zhuang, F. Feng, L. Tang, Z. Cao, M. Zhang, F. Kelly, M. Alizadeh, and M. Yang, “HPCC: High precision congestion control,” in Proceedings of ACM SIGCOMM , 2019, pp. 44–58.

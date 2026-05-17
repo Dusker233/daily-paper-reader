@@ -1,0 +1,633 @@
+Title: Operationalizing Cybersecurity Governance for Mitigation Planning with Attack-Path Modeling and Reinforcement Learning
+
+URL Source: https://arxiv.org/pdf/2605.09792v1
+
+Published Time: Tue, 12 May 2026 02:23:56 GMT
+
+Number of Pages: 24
+
+Markdown Content:
+# OPERATIONALIZING CYBERSECURITY GOVERNANCE FOR 
+
+# MITIGATION PLANNING WITH ATTACK -P ATH MODELING AND 
+
+# REINFORCEMENT LEARNING 
+
+Philip Huff 
+
+University of Arkansas at Little Rock 
+
+pdhuff@ualr.edu 
+
+Dakota Dale 
+
+Bastazo, Inc. 
+
+dakota@bastazo.com 
+
+Harshith Guduru 
+
+Bastazo, Inc. 
+
+harshith@bastazo.com 
+
+Rohan Singh 
+
+Bastazo, Inc. 
+
+rohan@bastazo.com 
+
+Qinghua Li 
+
+University of Arkansas 
+
+qinghual@uark.edu 
+
+# ABSTRACT 
+
+We address a fundamental challenge in cybersecurity operations of translating governance frameworks into actionable mitigation decisions under realistic resource constraints. Frameworks such as the NIST Cybersecurity Framework (CSF) provide widely adopted measures of organizational maturity, but do not directly support the selection and prioritization of defensive strategies against adversarial behavior. We present a system that operationalizes governance frameworks by mapping CSF maturity assessments into MITRE ATT&CK mitigation capabilities, which enables direct integration of organizational security posture with adversary-informed defensive planning. To manage adversary complexity, we employ a Variable-Order Markov Model (VOMM) trained on observed ATT&CK technique sequences to enable scalable adversary simulation within a Deep Reinforcement Learning (DRL) environment. We reconstruct likely attack paths and defensive responses using beam search, and then jointly optimize mitigation selection under explicit budget constraints. Our environment supports concurrent adversaries and realistic mitigation costs. Across multiple reward formulations and configurations, we show that the approach produces stable policies, mean-ingful cost–risk trade-offs, and interpretable mitigation plans aligned with organizational maturity. These results demonstrate that adversary-aware DRL can generate practical, resource-constrained defense strategies grounded in real-world frameworks and threat behavior. 
+
+Keywords Cyber Defense · Deep Reinforcement Learning · Attack-Path Modeling · Automated Mitigation Planning ·
+
+Markov Decision Processes 
+
+# 1 Introduction 
+
+Cyber defenders must continuously allocate scarce people, time, and budget to withstand a changing landscape of adversarial tactics, techniques, and procedures (TTPs). Control catalogs such as the NIST Cybersecurity Framework (CSF) and NIST SP 800-53 offer comprehensive guidance, yet organizations routinely struggle to translate these abstractions into actionable mitigation work on specific systems [ 1 ]. In practice, the obstacles are threefold: (i) bridging the gap between high-level controls and system-level actions, (ii) planning defensive countermeasures at scale under real operational constraints, and (iii) keeping pace with adversaries who adapt their TTPs faster than defenses can be reconfigured. Because defenders cannot protect everything at all times, the problem is one of prioritization and optimization. Similarly, as observed in recent industry analysis, adversaries tend to reuse a relatively small set of techniques rather than introducing fundamentally novel tradecraft [ 2 ], suggesting that decision support systems tuned to likely adversarial behavior can yield materially better defensive outcomes. 
+
+> arXiv:2605.09792v1 [cs.CR] 10 May 2026
+
+DRL-Based Cyber Mitigation Planning Recent research has demonstrated the value of reinforcement learning (RL) for cyber defense through interactive game environments such as CybORG and its CAGE variants, which emphasize autonomous real-time defensive actions against adaptive adversaries [ 3 , 4 ]. These benchmarks have been critical in advancing cyber defense agents and standardizing evaluation under adversarial uncertainty. However, this line of work is optimized for reactive, short-horizon operational actions (e.g., isolating a host, restoring a service) and does not explicitly model portfolio-style mitigation planning under organizational maturity and budget constraints. In practice, security teams must translate threat intelligence and control frameworks into feasible mitigation plans that align with available resources and that can be executed over normal planning cadences such as over a monthly sprint. This gap motivates a complementary RL formulation centered on strategic mitigation planning, where defender actions correspond to realistic mitigation decisions grounded in an organization’s capability and threat profile. We present a learning environment that couples observed adversary behavior with organizational mitigation planning. Our objective is not autonomous deployment of countermeasures on production systems, but rather the generation of cost-effective mitigation portfolios that human defenders can validate and implement. To bridge organizational security practices with operational mitigations, we use LLMs to infer supportive relationships between NIST CSF practices and MITRE ATT&CK mitigations to enable commonly collected CSF practice assessments to be translated into mitigation maturity levels. Then, to preserve realism while avoiding the collection of private organizational data, we synthesize heterogeneous organizational maturity profiles into plausible distributions of defender capability. Finally, to ground adversary behavior in observed tradecraft without enumerating the full ATT&CK technique space, we use an empirical prior for adversary technique sequencing during simulation. Our environment models cyber defense on specific systems within an organization against its most relevant adversaries across discrete planning periods aligned with normal operational cadence. At the start of each episode, the defender observes its mitigation maturity profile and a set of likely adversaries, then selects a budget-feasible portfolio of mitigations. The portfolio remains fixed while one or more adversaries attempt to progress along sampled ATT&CK technique sequences, with success probabilities shaped by adversary capability and reduced by the selected mitigations as a function of organizational mitigation maturity. The reward structure captures mission-centric outcomes (preventing adversary impact) and operational efficiency (risk reduction per unit cost). After training, we reconstruct high-likelihood attack and defense paths to provide traceability linking recommended mitigations to the specific adversary techniques they are intended to disrupt. Finally, we select a budget-feasible subset of these candidate work items for a given planning period using explicit organizational budget constraints. Figure 1 illustrates the overall architecture of our approach and the separation between offline learning and online mitigation planning. We make four contributions. (1) We formulate strategic mitigation planning as a constrained Markov decision process (MDP) in which actions correspond to portfolios of mitigations that must satisfy explicit cost constraints, rather than to atomic defensive responses. Unlike prior cybersecurity MDP and reinforcement learning formulations that emphasize reactive containment or single adversaries, our environment supports concurrent adversary campaigns and long-term planning over organizational mitigation investments. (2) We introduce an LLM-assisted semantic translation layer that converts NIST CSF practice assessments into mitigation maturity levels, bridging a long-standing abstraction gap between governance-oriented frameworks and operational defense actions. We pair this translation with an ordered logit population generator that produces statistically diverse and realistic organizational maturity profiles, enabling scalable training and controlled evaluation across heterogeneous defenders. (3) We incorporate an empirical adversary behavior prior learned from ATT&CK technique sequences to constrain adversary progression, improving both simulation realism and sample efficiency during training. Building on this structure, we reconstruct likely attack and defense paths to produce interpretable mitigation recommendations that explicitly account for budget constraints and are suitable for operational planning rather than generic policy outputs. (4) We identify a budget-constrained 0-1 knapsack optimization that converts reconstructed attack-path insights into an actionable mitigation plan. The remainder of the paper proceeds as follows. Section 4 defines our environment, including organizational maturity and mitigation feasibility, synthetic population generation, attack dynamics and sequencing, and adversary modeling from threat intelligence. Section 5 formalizes the induced MDP, including observation and action spaces, transition dynamics, and reward and cost modeling. We then describe attack-path reconstruction and analysis for interpretability in Section 5.4, followed by Section 6 with our experimental evaluation and results, real-world validation, and a discussion of limitations and future work. 
+
+# 2 Background 
+
+2.1 MITRE ATT&CK Concepts 
+
+The MITRE ATT&CK framework was introduced to systematically enumerate the tactics and techniques observed in real-world cyber adversary behavior and to support the operationalization of threat intelligence for defenders [5]. 2DRL-Based Cyber Mitigation Planning 
+
+Figure 1: System overview of our strategic mitigation planning framework. During training (top), organizational knowledge and threat intelligence are used to generate synthetic defender populations and probabilistic adversary behavior models, which are integrated into a reinforcement learning environment to learn mitigation selection policies under explicit cost constraints. During inference (bottom), organizational maturity assessments and a selected set of relevant adversaries are combined with learned policies to reconstruct likely attack paths and identify budget-constrained mitigation portfolios. The architecture separates offline learning from online planning and produces interpretable mitigation recommendations used for operational decision support. The current ATT&CK Enterprise matrix organizes adversary behavior into thirteen high-level tactics representing a typical progression of an attack, from reconnaissance through impact. Each tactic comprises a set of techniques that describe specific adversarial actions observed in the wild or anticipated based on known capabilities [6]. ATT&CK techniques are further mapped to mitigations that represent defensive actions organizations can implement to reduce the likelihood or impact of adversary activity. While these mappings provide valuable conceptual guidance, the overall ATT&CK model space remains large with approximately 900 adversarial techniques and over one hundred mitigation categories. This scale makes direct incorporation of the full ATT&CK action space in RL environments computationally impractical and misaligned with how defenders plan and execute mitigation work. To address this challenge, we leverage ATT&CK attack flows as a means of constraining adversary behavior to realistic paths [ 7]. Attack flows are structured representations of empirically observed sequences of adversary techniques. Prior analyses have shown that real-world intrusion sets exhibit substantial overlap in the tactics and techniques they employ [2]. By using existing attack flows, we retain empirical fidelity while substantially reducing the effective action space of the RL environment. These attack flows also highlight an important modeling challenge that adversary behavior in the ATT&CK framework is inherently sequential and path-dependent. However, empirical data on complete attack sequences remains sparse and unevenly distributed across techniques. Learning a full adversary policy directly within a reinforcement learning environment would therefore require extensive exploration and large training corpora. Instead, we employ a Variable-Order Markov Model (VOMM) as a lightweight, non-parametric probabilistic reasoning model that captures recurring mid-range dependencies in adversary technique sequences. The VOMM provides a probabilistic bias toward empirically 3DRL-Based Cyber Mitigation Planning observed transitions that shapes exploration while allowing the learning agent to deviate when rewards favor novel paths. 
+
+2.2 NIST CSF 2.0 Practices and Maturity Tiers 
+
+The NIST Cybersecurity Framework (CSF) was developed in response to Executive Order 13636, Improving Critical Infrastructure Cybersecurity, to provide a flexible, risk-based approach for managing cybersecurity risk across het-erogeneous organizations and sectors [ 8, 9]. Rather than prescribing specific security controls, the CSF defines a set of outcome-oriented cybersecurity practices that better aid organizations in adapting implementation strategies based on mission, risk tolerance, and available resources. This design distinguishes the CSF from control frameworks such as NIST SP 800-53. In this work, we use CSF practice maturity as a proxy for the feasibility and cost of applying mitigation recommendations. Cybersecurity mitigations are executed within organizational and system constraints that are largely determined by the availability of tools, automation, and skilled personnel. Prior work has shown that insufficient capital investment in foundational cybersecurity assets forces organizations to rely disproportionately on recurring operational effort to compensate for missing preventative controls [ 10 ]. Within the context of the CSF, limited capital investment constrains achievable practice maturity. By grounding our cost model in CSF practice maturity, we estimate the operational costs for organizations to apply mitigation. This abstraction allows cost–benefit optimization that is tailored to an organization’s existing capabilities. 
+
+# 3 Related Work 
+
+Early work on cyber defense optimization has framed mitigation as a sequential decision-making problem under uncer-tainty using a Markov Decision Processes (MDPs) and Partially Observable Markov Decision Processes (POMDPs). In these formulations, the defender selects countermeasures in response to partially observed attacker behavior, explicitly modeling noisy alerts and hidden attacker state [ 11 , 12 , 13 , 14 ]. Defender actions in these models typically include a small set of operational responses such as isolating hosts, deploying honeypots, or restricting access. Purves et al. integrate Structural Causal Models into PPO by explicitly modeling reward dynamics to improve both interpretability and performance in cyber defense environments [15]. Recent survey work highlights that, while these approaches provide strong theoretical foundations, they face scalability challenges in realistic environments, where multi-stage attacks, heterogeneous assets, and expanding mitigation options cause the state and action spaces to grow rapidly [ 16 ]. This leaves open challenges in scaling to realistic environments and supporting strategic, resource-constrained planning. 
+
+3.1 RL Cyber Defense Environments and Benchmarks 
+
+A growing body of work focuses on building RL testbeds and examining how to make DRL-based cyber defense agents more interpretable and operationally grounded. Castro et al. use an LLM agent to interpret signals from the CybORG CAGE environment and issue responses, which demonstrates that LLMs can help explain and contextualize agent behavior, in contrast to DRL agents that act quickly but are difficult to interpret [ 17 ]. Loevenich et al. similarly address interpretability limitations, but instead augment an autonomous DRL agent with a hierarchy of cybersecurity knowledge graphs and an LLM analytic layer that synthesizes logs, threat intelligence, and system context to explain alerts and defensive decisions [18]. Mukherjee et al. introduce an LLM-assisted reward design framework in which a commercial LLM generates reward structures for both attacker and defender personas in the Cyberwheel simulation environment [ 19 ]. These LLM-derived rewards are then used to train DRL defenders, showing that LLM-based reward engineering can shape defender behavior and yield more effective strategies across varied adversarial profiles. Oesch et al. take a broader systems-level perspective, arguing that progress toward autonomous cyber defense requires specialized multi-agent architectures aligned with the NIST Cybersecurity Framework (CSF) functions, and emphasizing two central challenges for DRL in this setting, which includes defining the right game (observation spaces, action spaces, detectors, and rewards that match operational reality) and enabling agents to adapt to changing networks, missions, and attacker strategies [20]. Complementary work demonstrates the potential of DRL itself in more realistic environments. Thompson et al. show that entity-based reinforcement learning with transformer policies substantially improves the generalization of autonomous cyber defense agents across variable network topologies [ 21 ]. Yu et al. demonstrate that DRL can learn robust and adaptive defense policies under partial observability and noisy telemetry, which points to establishing the feasibility of autonomous defense agents in realistic cyber environments [22]. 4DRL-Based Cyber Mitigation Planning Recent work has also begun to systematically evaluate multiple DRL algorithms within unified cyber defense environ-ments. Hammad and Jasim present a comparative study of five DRL approaches: DQN, PPO, TD3, A3C, and SAC, and evaluate in a realistic network simulation with live-streaming traffic [ 23 ]. Their results show that entropy-regularized actor-critic methods, particularly SAC, consistently outperform value-based approaches in detection accuracy, adapt-ability, and operational efficiency. Wilson et al. extend this line of work to operational technology (OT) environments, introducing a multi-agent RL testbed (IPMSRL) for industrial control systems and demonstrating that coordinated MARL policies (e.g., MAPPO) outperform independent learners while remaining robust under partial observability and imperfect alerting [24]. Despite these advances, most existing environments remain focused on real-time operational response, where agents execute defensive actions during ongoing attacks. This includes CybORG, CyberBattleSim, and related frameworks, which typically model simplified state representations and constrained action spaces. In contrast, our work targets a different phase of the cybersecurity lifecycle with strategic mitigation planning. Rather than assuming autonomous deployment of countermeasures in live systems, we use DRL to derive optimized mitigation strategies under budget constraints, with human defenders remaining in the loop for execution. Our work differs from prior approaches in several important respects. First, whereas benchmark environments often provide abstracted representations with limited action spaces, we construct an environment grounded in operationally realistic data and expose a richer mitigation decision space that captures cost, maturity, and effectiveness trade-offs. Second, our objective is fundamentally distinct. Existing DRL cyber defense systems primarily optimize short-horizon, reactive decisions, while we focus on long-horizon planning under resource constraints. Finally, in alignment with the research gaps identified by [ 20 ], our work contributes to defining a more generalized and operationally grounded decision framework for defender agents. Our environment, observation space, and attack-path reconstruction jointly anchor the DRL agent’s learning in realistic defensive contexts. Although we do not claim to solve the broader challenge of adaptability, we incorporate dynamic features such as variable adversarial attributes and mitigation maturity levels, enabling the learned policy to generalize more effectively across protection scenarios. 
+
+3.2 Modeling Adversary Technique Sequences 
+
+A small but growing literature explicitly models sequences of adversary techniques using MITRE ATT&CK. Choi et al. propose a probabilistic framework based on a hidden Markov model to infer attack sequences from observed telemetry [ 25 ]. Ahmed et al. use the MITRE ATT&CK database to construct probabilistic attack graphs that feed into quantitative risk assessments [ 26 ]. Kuwano et al. propose a recommendation-based approach for forecasting adversary behavior over the MITRE ATT&CK framework by treating attacker groups as users and techniques as items, applying collaborative filtering to predict likely next techniques from partially observed attack activity [ 27 ]. Inspired by this line of work, we construct a Variable Order Markov Model (VOMM) over observed cyber attacks derived from ATT&CK techniques, which allows us to reduce the effective training space for RL while preserving realistic multi-step adversary behavior. 
+
+3.3 LLMs for Cyber Defense 
+
+Recent advances show that LLMs can reliably extract cyber threat intelligence into structured formats, including representations aligned with MITRE ATT&CK and STIX-like schemas [ 28 , 29 , 30 ]. We build on this capability to automatically map and score large portions of the ATT&CK framework and to profile adversaries in terms of capability, cost, and impact. These structured representations serve as inputs to our environment design and risk modeling, enabling our DRL agents to plan mitigations against empirically grounded adversary behaviors. 
+
+# 4 Environment Setup 
+
+We now introduce our environment for strategic mitigation planning, which formalizes organizational defensive state, adversary behavior, and their interaction. 
+
+4.1 Defender Organizational State and Mitigation Maturity 
+
+For the purpose of preparing our defender environment, we focus only on NIST CSF practices that serve as direct countermeasures to an adversary’s attack techniques. We select CSF practices because they are already associated with well-defined maturity levels and established assessment methods, which organizations often maintain as part of routine cybersecurity evaluations or can reasonably assess with limited additional effort. We exclude practices primarily reflecting governance and incident response processes, and focus instead on practices that translate into 5DRL-Based Cyber Mitigation Planning direct, actionable mitigations. This filtering results in a set of 42 practices that we use to characterize an organization’s mitigation maturity. To model organizational maturity in the environment, we represent each organization by a maturity level that determines the resources available to implement mitigations. However, the MITRE ATT&CK framework, which defines 95 enterprise and ICS mitigation techniques, is not designed to assess maturity directly. To bridge this gap, we construct a set-wise mapping between NIST CSF practices and ATT&CK mitigations, where each CSF practice may support multiple mitigations and each mitigation may be supported by multiple practices. For example, the CSF practice PR.AA-01 (“identities and credentials are managed”) maps to ATT&CK mitigations such as M1035 (Limit Access to Resource Over Network) and M1026 (Privileged Account Management), since the practice supports implementation of constraining remote reachability and privileged access paths. Each practice–mitigation pair is assigned an ordinal strength score from 1 (very low) to 5 (very high) based on a fixed rubric that considers the directness with which the practice supports the mitigation’s mechanism. A score of 5 indicates that the mitigation cannot realistically be implemented without the practice, whereas a score of 3 indicates the practice enhances the effectiveness, consistency, or scalability of the mitigation, and a score of 1 means no meaningful relationship exists between the practice and the mitigation. We use a large language model (OpenAI o4-mini-2025-04-16) to apply this rubric at scale, as strength assignment is primarily a semantic alignment problem between two frameworks with differing abstractions and terminology. The model is provided with the official textual definitions of both CSF practices and ATT&CK mitigations and instructed to produce rubric-consistent scores with brief rationales. Rather than using a simple weighted average, we compute mitigation maturity using a nonlinear weighted power mean to attenuate weak relationships and emphasize strong ones. Relation strengths are first normalized to [0 , 1] . We then apply the weighted power mean aggregation: Mitigation_Maturity =
+
+ P  
+
+> i
+
+wi · (practice i · wi)q
+
+P 
+
+> i
+
+wi
+
+ 1
+
+> q
+
+(1) where wi is the normalized relation strength and practice i is the practice maturity level. The constant q > 1 emphasizes stronger contributors over weaker ones. By incorporating wi both as a weight and within the nonlinear term, weakly related practices are sharply down-weighted while strongly supported relationships dominate the resulting score. This formulation increases dispersion in mitigation maturity scores and prevents convergence toward uniform averages across mitigations. The resulting mitigation maturity scores are then normalized to the interval [0 , 1] to provide a realistic input signal for the DRL environment. 
+
+4.2 Synthetic Data Generation Framework 
+
+Training a DLR agent to reason over organizational cybersecurity requires a large collection of maturity profiles that are both realistic and representative of the lower maturity levels where most organizations reside. Because real-world datasets are constrained by privacy, legal, and regulatory considerations, we generate synthetic NIST CSF maturity profiles that preserve plausible cross-practice dependencies while biasing prevalence toward lower maturity. Each organization is assigned a latent maturity level drawn from a categorical prior that favors lower maturity, with a small stochastic perturbation to induce variability. Practice-level maturity tiers are then sampled using an ordered logit model with practice-specific difficulty adjustments derived from cost and complexity, ensuring that higher latent maturity increases the likelihood of higher tiers while preserving variation across practices. The resulting CSF practice maturity tiers are mapped to ATT&CK mitigation maturity signals using the weighted scheme described in Section 4.1. The full sampling procedure and parameterization are provided in Appendix C and reproducible in our open science repository. 
+
+4.3 Attack dynamics and sequencing 
+
+With hundreds of ATT&CK techniques and highly variable implementations, mapping techniques directly into a reinforcement learning action space leads to an exploration problem that is sparse and inefficient, often resulting in excessive training time. Rather than forcing the agent to learn attack-sequence structure from scratch or limiting the action space, we provide a behavioral prior learned from documented adversary operations. Specifically, we train a Variable-Order Markov Model (VOMM) on ATT&CK Flow data so the agent begins with a distribution over what attackers are likely to do next, which guides exploration toward sequences that align with real-world adversary behaviors. 6DRL-Based Cyber Mitigation Planning The VOMM conditions on the most recent attacker techniques and predicts a distribution over the next technique token. For example, given the partial path TA0001:T1190 (exploit public-facing application) → TA0006:T1136.001 (create local account), the model should assign higher probability to TA0003:T1059 (command and scripting interpreter) than to an unrelated step such as TA0040:T1490 (inhibit system recovery). The model is variable-order : it uses the longest 
+
+available context up to length K that is sufficiently supported by data; otherwise it backs off to shorter contexts. We estimate transition probabilities using weighted counts with add-α smoothing and back-off: 
+
+p(a | c) = C(c, a ) + αC(c) + α|V | (2) Full corpus construction, weighting, and back-off procedures are provided in Appendix C. 
+
+4.4 Adversary modeling from threat intelligence 
+
+To construct realistic adversary models, we derive adversary-specific behaviors and cost characteristics from open-source threat intelligence reports using a multi-stage LLM extraction pipeline with human analyst validation. This process converts heterogeneous, unstructured reports into structured adversary profiles suitable for reinforcement learning. This is critical since effective defense requires not only identifying relevant mitigations, but instantiating them in a manner that directly corresponds to how adversaries operate in practice. The corpus consists of approximately 1,900 publicly available threat intelligence reports published by government agencies and commercial security vendors, including CISA, Microsoft Security, Google Threat Analysis Group, Palo Alto Networks Unit 42, Dark Reading, and similar sources. Reports are ingested through a structured review workflow in a university cybersecurity clinic, where each report is independently reviewed by two trained analysts prior to final feature publication. Across approximately 1,900 open source reports, we identify and model roughly 180 distinct adversaries. Each adversary is represented as a set of profiling characeristics and observed ATT&CK techniques. Rather than treating techniques as abstract identifiers, we model them as concrete actions grounded in reported attacker behavior, which enable the derivation of mitigation strategies directly tied to how adversaries execute attacks in practice. In the first stage, the LLM extracts all explicitly observed ATT&CK techniques from each report along with textual descriptions of how the adversary executes them. For each technique instance, we assign a five-level Likert score capturing the cost and complexity incurred by the adversary. All extracted techniques and effort estimates are reviewed and validated by human analysts before inclusion. In the second stage, each validated technique instance is mapped to candidate ATT&CK mitigations using the of-ficial MITRE ATT&CK technique–mitigation mappings as a baseline. The LLM is not used to invent new tech-nique–mitigation relationships. Instead, it refines mitigation instances by conditioning on the adversary’s observed execution details and provides contextual instantiations of existing mitigations (e.g., tailoring network controls to proto-col, tooling, or infrastructure described in the report). For each mitigation instance, the LLM assigns five-level Likert scores for defender implementation difficulty, expected effectiveness, and cost. These are also subject to human analyst validation. This produces a direct linkage between concrete adversary actions and actionable defensive responses, and ensures that mitigation recommendations are not generic controls but are instead grounded in the specific techniques and execution patterns observed in real attacks. To align adversary techniques with a given defender organization, we identify each organization’s most likely adversaries using profile similarity methods from [ 28 , 31 ]. This allows attack paths and mitigation decisions to be evaluated against adversaries that are relevant to the organization, rather than against a generic global threat model. 
+
+Example. The ATT&CK technique T1041 (Exfiltration Over C2 Channel) and corresponding M1031 (Network Intru-sion Prevention) are highly abstract and unusable in isolation for defender modeling. However, in a representative report, the pipeline extracts a concrete behavior of custom PowerShell scripts lootsubmit.ps1 and trackerjacker.ps1 
+
+exfiltrating system and location data via HTTPS POST requests to a netlify.app endpoint. From this description, the system derives a contextualized mitigation instance that specifies the class of defensive actions required (e.g., outbound HTTPS inspection, signature-based detection of script behavior, and filtering of known destination infrastructure). The pipeline does not generate specific organizational rules, such as IP addresses or firewall policies. Instead, it produces structured mitigation templates and candidate detection artifacts (e.g., YARA, Sigma, or Elastic rule patterns) that parameterize defender effort and expected effectiveness without assuming deployment details. The final output of this pipeline is a set of adversary profiles comprising (i) technique sequences used during attack simulation, (ii) adversary effort parameters influencing attack dynamics, and (iii) mitigation instances with defender-7DRL-Based Cyber Mitigation Planning specific cost and effectiveness attributes. These profiles parameterize both attack-path reconstruction and reward–cost trade-offs in the DRL environment to ensure that learned mitigation strategies are optimized against realistic threats and grounded in the specific adversary behaviors they are intended to disrupt. 
+
+# 5 Decision Formulation 
+
+We cast mitigation planning as a sequential decision problem in which a defender allocates limited effort to reduce the feasibility of likely adversarial TTPs. This section specifies the observation space, action space, transition dynamics, and reward function used to learn mitigation policies. The defender observes (i) an estimated distribution over likely adversaries and (ii) its current mitigation maturity state, derived from CSF assessments and mapped to ATT&CK mitigations as described in §4.1. Actions correspond to planned mitigations that harden systems and reduce future attack feasibility. Real-time detection, containment, and incident response are outside the scope of this environment. 
+
+5.1 Markov decision process definition 
+
+Using the environment defined in Section 4, we induce an MDP in which the defender selects a mitigation portfolio subject to maturity and budget-constrained feasibility. 
+
+Episode definition Each training episode simulates adversarial campaigns against a single defender. At the beginning of an episode, the defender observes its current organizational maturity and the set of likely adversaries, then selects a mitigation technique set a subject to budget constraints. This action remains fixed for the duration of the episode. The population of adversaries independently executes their attack flows. Adversary technique proposals are sampled from the sequencing model in Section 4.3. The episode proceeds over multiple time steps as adversaries consume their resources while attempting successive techniques. The defender wins if all adversaries exhaust their resources before causing an impact, and loses if any adversary reaches an impact technique state. 
+
+Observation definition The observation (i.e., what a defender sees) at time t is a tuple 
+
+ot =   m, Z  (3) where: • m ∈ [0 , 1] M is the defender’s mitigation maturity vector over the M ATT&CK mitigations (component mi
+
+encodes readiness/effectiveness for mitigation i). • Z is a stacking binary indicator of adversary TTPs: for each of the N adversaries in the episode, we include a binary vector indicating which techniques are observed in the profile of that adversary. This design captures what the defender can plausibly know about who is likely to target the organization (i.e., top-N
+
+adversaries, Section 4.4) and which techniques those adversaries tend to employ in addition to the organization’s own CSF maturity levels. 
+
+Action definition The action is a multi-hot vector a ∈ { 0, 1}M selecting a set of MITRE ATT&CK mitigations to apply at the start of the episode. Defender actions are constrained by a budget mechanism described below. The model may determine to allocate effort to a few high-impact mitigations or several smaller ones. Each mitigation has a (cost, complexity) pair. We map these ordinal ratings to a fractional share of the episode budget via a lookup table PctCost( ·) ∈ (0 , 1] . For interpretability, we express costs in percentage units: 
+
+Cost i = 100 · PctCost( cost i, complexity i) · μ(mi) (4) The episode budget is normalized to 100 percentage units, and a mitigation set is feasible if the total cost does not exceed this budget. X 
+
+> i:ai=1
+
+Cost i ≤ 100 (5) At the start of each episode, the defender has the full budget available, and each selected mitigation deducts a fraction of the budget proportional to its cost. The maturity scaling function μ(·) is defined by linear interpolation between anchor points chosen so that a benchmark mitigation consumes the full episode budget at a given maturity level. 8DRL-Based Cyber Mitigation Planning As an example, for Maturity 4 we define the anchor as a mitigation with Very High cost and Very High complexity, reflecting the largest action a highly mature organization could reasonably complete within a single planning episode. The corresponding value of μ(4) is then chosen so that this anchor mitigation exactly exhausts the episode budget. Analogous anchors are defined for lower maturity levels, yielding a piecewise-linear scaling function that governs how mitigation costs vary with maturity. Ordinal cost and complexity ratings are mapped to base budget fractions using a fixed lookup table (Figure 4 in Appendix D). In our experiments, the full-budget anchors are: • Maturity 1: Medium/Medium mitigation, resulting in μ(1) = 5 .0,• Maturity 2: Medium/High mitigation, resulting in μ(2) = 3 .6,• Maturity 3: High/High mitigation, resulting in μ(3) = 2 .8,• Maturity 4: Very High/Very High mitigation, resulting in μ(4) = 2 .0.Thus, lower-maturity defenders can still combine several smaller actions as long as their sum stays ≤ 100% , while actions larger than the benchmark at a given maturity are effectively out of scope for that episode. As an example, a control at Very Low cost and Low complexity consumes 8% of the budget. If the organization’s maturity is a continuous score m ∈ [0 , 1] , the effective multiplier is 
+
+μ(m) = y0 + m − x0
+
+x1 − x0
+
+ y1 − y0
+
+ (6) where (x0, y 0) and (x1, y 1) are the two adjacent anchor points that bracket m. Thus, the budget consumption rate is 
+
+8% × μ(m).
+
+If m = 0 .65 lies between anchors (0 .6, μ 0.6) and (0 .7, μ 0.7), then 
+
+μ(0 .65) = μ0.6 + 0.65 − 0.60.7 − 0.6
+
+ μ0.7 − μ0.6
+
+ = 12 (μ0.6 + μ0.7),
+
+so the scaled cost is 8% × μ(0 .65) .In the step function, we also calculate the adversary per-target budget. Each adversary is characterized by a type , a 
+
+resource level (e.g., approximate staffing), and a sophistication level. We estimate the adversary’s expected per-target resource availability usin a resource-spread factor Spread( type , resource ), which captures how the adversary’s resources are distributed across concurrent targets (Appendix E). For example, an adversary with roughly 10 operators targeting roughly 1000 organizations per month results in an average of 0.01 operator-equivalents per target per month. Technique costs to the adversary are computed using an attacker lookup table PctCost adv (tech ), distinct from the defender’s mitigation costs. We scale attacker costs by a sophistication multiplier σ that models operational efficiency such that low-sophistication actors incur higher effective costs, whereas high-sophistication actors incur lower costs. We use the same anchor values as the defender’s budget scaling for interpretability, with σ ∈ { 5.0, 3.6, 2.0} for {Low, Medium, High} sophistication. The resulting effective per-technique budget consumption is 
+
+Cost adv (tech ) = 100 · PctCost adv (tech ) · σ (7) 
+
+Budget adv = 100 · Spread( type , resource ) (8) An adversary advances on a technique only if it has sufficient residual per-target budget. Otherwise, it stalls for that step. At each environment step, given the defender’s selected mitigation set a (chosen at episode start), each adversary attempts to execute its next technique. We model attack flows as sequential and independent, with no coordination among adversaries. A probabilistic effectiveness model reduces technique success probability when the technique is covered by any selected mitigation. Mitigations of higher effectiveness reduce the probability of attack success. If the technique succeeds, the adversary’s residual per-target budget is decremented by Cost adv (tech ) and it advances. Otherwise, the adversary is blocked for that step. 9DRL-Based Cyber Mitigation Planning 
+
+Step function Adversary technique proposals follow the sequencing model in Section 4.3, while success probabilities are modulated by the defender’s selected mitigations and their maturities. At each step t:1. For each adversary j, sample the next technique x(j) 
+
+> t
+
+from its VOMM prior pVOMM (x(j) 
+
+> t
+
+| h(j)
+
+> t−1
+
+), where h(j)
+
+> t−1
+
+is its recent technique history. 2. Compute the success probability for x(j) 
+
+> t
+
+as 
+
+P (j) 
+
+> succ
+
+= 1 − EffCov 
+
+
+
+x(j) 
+
+> t
+
+, a
+
+
+
+,
+
+where EffCov( ·) measures mitigation coverage and effectiveness. 3. If the attack succeeds, decrement the adversary’s budget by its technique cost and advance to the next state. If it fails, mark the technique as blocked. 4. The environment emits a reward rt reflecting blocking success and mitigation relevance (Section 5.2). The episode terminates if any adversary causes impact ( loss ) or all adversaries deplete their budgets ( win ). 
+
+5.2 Reward and cost modeling 
+
+The reward function encourages (i) blocking adversary progress, (ii) selecting mitigations that are relevant and effective against techniques actually attempted during the episode, and (iii) successfully exhausting all adversaries’ budgets. Let 
+
+St denote the vector of per-adversary success indicators at time t (1 if the adversary is blocked at that step, 0 otherwise), and let ∥a∥1 be the number of selected mitigations. The environment returns 
+
+rt = 100 · X St
+
++ CoverEff( a, active techniques )
+
+∥a∥1 + 1 + 1000 · I{win at t}
+
+(9) The terminal bonus incentivizes depleting all adversaries’ budgets without impact, while the first term rewards per-step blocking across all adversaries. The second term rewards mitigation relevance and effectiveness while regularizing against indiscriminate selection of many mitigations via the denominator ∥a∥1 + 1 .The coverage effectiveness score CoverEff( ·) rewards selecting mitigations that both cover adversary techniques and are effective against the specific threats observed during the episode. For each attack technique covered by at least one selected mitigation, the score is computed as follows. If the technique was not attempted by any adversary during the episode, a small baseline reward of 1 is added. If the technique was attempted, we instead add 
+
+(max Eff + 1) × 5,
+
+where max Eff is the highest effectiveness value among all selected mitigations that cover the technique. Mitigation effectiveness is computed using a deterministic matching hierarchy that prioritizes specificity. We first use effectiveness scores for exact adversary–technique matches when available. If no exact match exists, we fall back to matches based on adversary type and sophistication. If neither is available, we use the global average effectiveness for that technique across all adversaries in our threat intelligence database. When multiple mitigations cover the same technique, only the most effective mitigation contributes to the score. The defender’s policy therefore learns to allocate a finite mitigation budget to actions that (i) most effectively reduce the probability of adversary technique success, given the observed adversary TTP profiles, and (ii) drain adversary budgets before impact. The number of adversaries per episode is treated as an input derived from upstream threat intelligence and reflect the most likely concurrent threats targeting the organization. This design is consistent with empirical evidence that adversary groups exhibit persistent targeting patterns and that a small number of probable threats dominate organizational risk. In this work, we fix the adversary set per episode to ten. 
+
+5.3 Deep reinforcement learning agent 
+
+We instantiate the defender policy using a Deep Q-Network (DQN), which is a value-based reinforcement learning method that estimates the expected utility of selecting each mitigation given the current organizational state. While the 10 DRL-Based Cyber Mitigation Planning nominal action space corresponds to the power set of mitigations, our formulation significantly reduces this complexity. First, actions are selected once per episode as a constrained portfolio rather than sequential combinatorial decisions. Second, budget constraints and costs prune infeasible actions, which restricts the effective decision space to a small subset of high-value mitigations. Third, the Q-network outputs each mitigation values to provide an efficient greedy selection without enumerating all possible subsets. This structure aligns well with DQN, which scales effectively when actions can be decomposed into independent value estimates. Compared to policy-gradient methods designed for large continuous or unconstrained combinatorial spaces, DQN provides stable training, sample efficiency, and direct interpretability of mitigation selection. With DQN, we approximate Q(ot, a ), where the observation ot = ( m, Z) consists of the defender’s mitigation maturity vector m and the stacked binary technique indicators Z. These components are concatenated into a single feature vector, passed through fully connected layers, and mapped to a linear output of size M , corresponding to the Q-value of selecting each mitigation. The agent greedily selects mitigations in descending Q subject to the defender budget, with ϵ-greedy exploration. The agent uses experience replay to stabilize training, with a discount factor of γ = 0 .90 (favoring near-term rewards), a learning rate of 10 −3, and an exploration rate ϵ that gradually decreases from 1.0 (fully exploratory) to 0.05 (mostly exploitative) over time. At each simulation step, each adversary advances its attack by proposing a next technique according to a VOMM learned from real-world attack flows. Concretely, given its recent history h (last k ≤ K techniques), the adversary samples the next technique x from pVOMM (x | h), which produces realistic sequences without enumerating the full ATT&CK action space at every step. We consider two standard policy formulations that combine the learned preferences Q(s, a ) with the prior pVOMM (a | h)
+
+derived from recent history h (last k ≤ K moves). The first form is an additive mixture: 
+
+π(a | s, h) = (1 − λ)exp 
+
+ Q(s,a )
+
+> τ
+
+P 
+
+> a′
+
+exp 
+
+ Q(s,a ′)
+
+> τ
+
+ + λ p VOMM (a | h) (10) where λ ∈ [0 , 1] controls the weight between learned and prior components and τ is the softmax temperature. Alternatively, we use a multiplicative (product-of-experts) formulation: 
+
+π(a | s, h) ∝ exp 
+
+ Q(s,a )
+
+> τ
+
+
+
+pVOMM (a | h)β (11) where β controls the relative sharpness of the VOMM prior. During early training, we set a high mixing weight ( λ or β) so that the policy leans heavily on the VOMM prior, which encourages realistic adversary behavior and structured exploration. As experience accumulates, this weight gradually decreases to allow the learned Q-values to increasingly dominate and drive performance toward optimal rather than imitative behavior. 
+
+5.4 Attack Path Reconstruction 
+
+Once trained, the DQN can recommend a mitigation portfolio for a defender given an observation that combines (i) the top adversaries targeting that defender and their observed ATT&CK techniques and (ii) the defender’s assessed NIST CSF practice maturity levels. However, this mapping from state to a generic multi-label mitigation action is not, by itself, sufficient to support operational decision-making. First, ATT&CK mitigations such as M1017: User Training are abstract and can be implemented in many ways with very different costs and effects. Second, the defender must understand why a particular mitigation is recommended, i.e., which likely attack paths it is intended to disrupt. Thus, our goal at this stage is to ground each mitigation in concrete adversary behavior by tying it to specific techniques previously observed for that adversary. Moreover, we reconstruct likely attack and defense paths that make the defender’s mitigation effect more interpretable. In this phase, reconstruction is conditioned on an up-front defender mitigation selection and then uses beam search to simulate likely adversary progressions against that selected defense posture. The reconstruction process integrates (i) defender utility estimates from the trained DQN, (ii) probabilistic adversary transition modeling through the VOMM and prior observed attack behavior, and (iii) the stateful cyber defense simulation environment that evaluates candidate actions. 11 DRL-Based Cyber Mitigation Planning Unlike traditional graph expansion approaches, reconstruction operates directly over the simulation environment to enable consistent handling of adversary progression, defender actions, and resource constraints. Each node represents a complete snapshot of the environment state, including adversary histories, remaining budgets, and mitigation maturity. 
+
+Up-front Mitigation Selection. For a given root observation comprising the organization’s mitigation maturity levels, as described in Section 4.1, and the set of likely adversaries with their observed techniques, as described in Section 4.4, we first query the trained DQN once to obtain mitigation Q-values Q(o0, ·). These Q-values are sorted to construct a fixed root mitigation portfolio. This portfolio represents the initial set of mitigations that the defender can realistically commit to under the available budget. During reconstruction, the beam search does not enumerate arbitrary new mitigation portfolios at every node. Instead, for each candidate adversary technique, it selects from this fixed portfolio the mitigation that is most applicable to the technique. Preference is given to mitigations associated with observed adversary techniques. If no such exact match exists, the search falls back to other mitigations in the root portfolio that cover the technique. This design preserves tractability while ensuring that reconstructed defenses remain tied to the DQN’s learned priorities and to specific observed adversary behavior. 
+
+State Representation. Each beam node stores a full environment state obtained via a snapshot mechanism. The state includes: (i) mitigation maturity levels, (ii) adversary technique histories, (iii) adversary resource budgets and phase progression, and (iv) latent variables governing adversary behavior (e.g., next technique selection). This design allows exact restoration of prior states and ensures that candidate expansions are evaluated without side effects. 
+
+Candidate Expansion via Simulation. From each beam node, candidate actions are evaluated by simulating a single step of the environment. For a given node state s, the algorithm: 1. Restores the environment to state s,2. Constructs a candidate defender action a using DQN-guided selection under budget constraints, 3. Advances the adversary by one step using its probabilistic policy, 4. Observes the resulting state s′, reward r, selected adversary technique, and termination condition. This simulation is performed using a side-effect-free mechanism that restores the original state after each candidate evaluation. As a result, multiple candidate expansions can be explored from the same parent node without interference. 
+
+Adversary Modeling with Observed Technique Bias. Adversary behavior is governed by a probabilistic policy derived from the VOMM described in Appendix 4.3. This distribution is augmented to favor techniques previously observed for the adversary. Candidate techniques are ranked with priority given to higher transition probability and the technique’s membership in the set of attack techniques previously observed by the given adversary. 
+
+Mitigation Selection with Technique-Specific Effectiveness. Defender actions are evaluated at each step by selecting mitigations that directly apply to the adversary’s chosen technique. For a given technique, the reconstruction evaluates all selected mitigations and identifies the mitigation with the highest effectiveness against the specific adversary–technique pair. Effectiveness is derived from a hierarchical mapping that prioritizes: (i) exact adversary–technique mitigation rela-tionships, (ii) adversary-type and sophistication matches, (iii) aggregated effectiveness when specific mappings are unavailable. A mitigation is considered successful if its effectiveness exceeds a reconstruction threshold, ensuring that reconstruction emphasizes concrete, high-confidence defensive effects rather than abstract coverage. 
+
+Defender Scoring via DQN. For each candidate node, defender utility is estimated using a trained Deep Q-Network. The DQN produces Q-values over mitigation actions given the current observation (mitigation maturity and adversary technique profile). These Q-values are used to construct feasible mitigation sets (e.g., via greedy or knapsack-style selection) and serve as a scoring signal that biases the beam search toward states with higher expected defensive value. 
+
+Beam Search Algorithm. Attack-path reconstruction is performed using a beam search of width k over depth d,where each node represents a full environment state capturing both adversary dynamics and defender effects over time. The procedure initializes a root mitigation portfolio from the DQN Q-values and iteratively expands candidate states by 12 DRL-Based Cyber Mitigation Planning sampling likely adversary techniques using the VOMM with observed-technique bias. For each candidate technique, the best corresponding mitigation from the root portfolio is selected and applied via simulation to produce successor states. Each state is scored using a combination of cumulative reward, likelihood, uncertainty, and impact terms with a diversity penalty, and the top-k states are retained at each depth. A state is terminal if the adversary reaches an impact objective, exhausts its resource budget, or the maximum search depth is reached. Running this procedure independently for each prioritized adversary yields a set of high-scoring attack paths that are both consistent with historical technique usage and aligned with the learned mitigation policy. Aggregating across these paths produces a finite set of candidate mitigations annotated with the adversaries and techniques they counter, their estimated impact, and their contribution to cumulative reward (see Appendix F). 
+
+5.5 Mitigation Plan Optimization. 
+
+In practice, defenders are constrained by a finite budget and cannot deploy every candidate mitigation surfaced by the beam search. We therefore treat the union of mitigations appearing on the top k paths as a candidate pool for downstream optimization. The resulting candidate mitigation set defines the feasible action space for optimization. Mitigations selected along individual attack paths are conditioned on a specific adversary and evaluated under a relatively permissive defender budget during reconstruction. The union of these mitigations across paths, however, does not directly translate into an actionable defense plan. In practice, organizations execute mitigation work in discrete planning cycles under stricter resource constraints, which require a prioritization across all candidate mitigations induced by the reconstructed attack paths. We therefore formulate mitigation planning as a combinatorial optimization problem with budget constraints. Let 
+
+M = {1, . . . , N } denote the set of candidate mitigations extracted from beam search across all adversaries. Each candidate i ∈ M is associated with a cost ci ∈ R+, representing implementation effort given organizational maturity, and a value vi ∈ R+, representing its expected contribution to reducing adversary success. The value vi aggregates signals from attack-path reconstruction and captures three factors: (i) the likelihood that the mitigation remediates the associated technique, (ii) the degree of support from high-scoring reconstructed paths, and (iii) the frequency with which the mitigation appears across these paths. Concretely, we compute vi as a weighted combination of remediation likelihood, normalized path score contribution, and a logarithmic occurrence term to favor mitigations that are both effective and broadly applicable to multiple adversarial techniques across the attack paths. The optimization objective selects a subset of mitigations that maximizes total defensive value subject to a finite budget 
+
+B:
+
+max 
+
+> xi∈{ 0,1}
+
+X
+
+> i∈M
+
+vixi s.t. X
+
+> i∈M
+
+cixi ≤ B. (12) We solve this as a 0–1 knapsack problem to produce a deterministic mitigation portfolio within a given budget. The resulting mitigation portfolio maximizes expected defensive impact within a fixed work-cycle budget. Each selected mitigation remains traceable to specific reconstructed attack paths and adversary behaviors that provide both prioritization and explainability for deployment. 
+
+5.6 Analysis 
+
+To evaluate the decision quality of our DRL defender, we compare it against a strong optimization baseline, referred to as an oracle policy. The oracle is not intended to represent a globally optimal defender, but rather, it provides a non-learning reference policy that selects mitigations using explicit domain knowledge and constrained optimization. This baseline enables objective comparison between learned and non-learned mitigation strategies under identical environmental conditions. 
+
+Oracle Policy. For a given evaluation episode, the oracle operates with respect to a fixed set of adversaries. It begins by extracting each adversary’s observed set of attack techniques and identifying all mitigations associated with those techniques via MITRE ATT&CK mappings. Candidate mitigations are filtered based on organizational feasibility, including maturity constraints and budget availability. Given the resulting candidate set, the oracle selects mitigations by solving a budget-constrained optimization problem that maximizes a deterministic proxy objective capturing expected mitigation effectiveness. Specifically, each candidate mitigation m is assigned a proxy benefit defined as benefit (m) = X
+
+> a∈A
+
+X
+
+> t∈Ta
+
+w(a, t ) · p(a, t, m ) (13) 13 DRL-Based Cyber Mitigation Planning where A denotes the set of adversaries considered in the episode, Ta is the set of techniques observed for adversary a,
+
+w(a, t ) is an importance weight reflecting the expected relevance of technique t for adversary a, and p(a, t, m ) is the deterministic likelihood that mitigation m remediates technique t when employed against adversary a.The importance weight w(a, t ) is derived from the adversary behavior model and incorporates the VOMM-likelihood of technique usage that is reweighted by an adversary-specific prior P (t | a) computed from historical technique observations. The term mitigation effectiveness p(a, t, m ) corresponds to the likelihood of deterministic remediation used by the simulation environment, which is derived from the adversary technique and mitigation relationships and the sophistication of the adversary. The oracle then selects a subset of mitigations that maximizes the aggregate proxy benefit subject to budget and feasibility constraints. This optimization is performed using an integer linear program (ILP), producing a single mitigation set for the episode. 
+
+Evaluation Methodology. The oracle policy and the learned DRL policy are both evaluated using the same expected return function J(π). Evaluation is performed by executing each policy over multiple independent simulation episodes spanning synthetically generated organizational profiles and real-world adversary configurations. Adversary behavior within the simulator is generated by a VOMM-based adversary policy, and we additionally evaluate robustness under adversary model shift by varying adversary behavior distributions at test time. Although the oracle selects mitigations deterministically using a non-stochastic proxy objective, all policies interact with the same stochastic environment dynamics during evaluation, including the probabilistic mitigation success. The evaluation function is defined as 
+
+J(π) = E [−α · Loss − β · Cost ] (14) where Loss captures realized attack impact (e.g., attacker success or critical asset compromise), Cost represents the total mitigation expenditure incurred during the episode, and α, β are weighting coefficients. We estimate the expected return via repeated simulation. In practice, we estimate the expected return using Monte Carlo simulation, 
+
+ˆJ(π) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+
+
+−α · Loss (i) − β · Cost (i)
+
+(15) where N denotes the number of independent simulation episodes. All reported results use identical simulation conditions across policies, which enable direct comparison of mitigation decision quality and cost-effectiveness. 
+
+# 6 Experimental Evaluation 
+
+6.1 Experimental setup and base configuration 
+
+All results are reported relative to a fixed base configuration that anchors all comparisons. Each episode simulates a single defender facing ten adversaries, with defender and adversary budgets set to 100 units. Episodes terminate when the adversary reaches an impact state (defender loss) or exhausts its per-episode budget (defender win). Consistent with our decision formulation, the defender selects a single mitigation portfolio at episode start (shields up), and that action is held constant for the remainder of the episode. We evaluate the DQN and oracle using identical episode instances by resetting the environment once, snapshotting the initial state, and running both policies from that same state. This ensures that both policies face the same adversary and organizational maturity profile, and the differences in evaluation are due solely to policy decisions. Training uses the DQN described in Section 5 with replay buffer capacity 10 ,000 , learning rate 10 −4, batch size 64 ,warm-up of 500 steps, and ϵ-greedy exploration initialized at 0.99 with linear decay over 500 steps. During evaluation, exploration is disabled ( ϵ = 0 ). Defender maturity profiles are sampled from the synthetic organization generator (Section 4.2), and adversary sequencing is governed by the VOMM (Section 4.3). Performance is reported as the empirical mean return over 1,000 independently sampled episodes, with α = 1 .0 and 
+
+β = 0 .01 .14 DRL-Based Cyber Mitigation Planning 
+
+6.2 Base policy performance 
+
+The base policy corresponds to the default evaluation configuration (defender and adversary budgets of 100, greedy action selection, warm-up of 500, decay steps of 1,000 , batch size of 64, and the reward defined in Section 5.2). On the 1,000 paired evaluation episodes, the base DQN achieves a win rate of 37 .5% (oracle: 33 .9% ) with comparable episode lengths, while selecting a similar number of mitigations on average. In terms of the evaluation objective, the base DQN attains J(π) = −0.6309 versus J(π) = −0.6677 for the oracle, yielding regret J(oracle )−J(DQN ) = −0.0369 .
+
+6.3 Ablation study 
+
+We perform single ablations with all non-ablated settings fixed to the base configuration. To ensure fair comparisons across model variants, we evaluate each policy on the same static episode set by restoring the simulator state from a pre-generated episode corpus. We report the expected return J(π) and regret relative to the oracle, along with win/loss rates, mitigation cost, and episode length. The full results are shown in Table 1. Overall, the ablation results reveal a markedly different operating regime compared to the base configuration. Across all variants, win rates are substantially lower and episode lengths are longer, indicating that the evaluation setting induces more persistent adversary progression and places greater emphasis on sustained defensive effectiveness rather than early disruption. In this regime, differences between configurations are primarily reflected in cost versus performance trade-offs captured by J(π).
+
+Budget sensitivity. Adversary budget remains the dominant factor influencing performance. Reducing the adversary budget (Adv. Budget 50) yields the best-performing policy with J(π) = −0.9613 , outperforming the oracle by 0.0285 .This improvement is accompanied by longer episodes and higher mitigation costs, suggesting that the learned policy allocates resources to sustain defensive pressure over extended attack sequences. In contrast, increasing adversary budget (Adv. Budget 150) significantly degrades performance, as higher-capability adversaries are more likely to achieve impact. The defender budget exhibits a similar but less pronounced effect. Increasing defender budget (Def. Budget 150) improves return relative to the base model, while reducing it (Def. Budget 50) leads to degraded performance. However, the magnitude of these changes is smaller than those observed under adversary budget variation, reinforcing that adversary capability is the primary driver of task difficulty. 
+
+Learning dynamics. Training-related parameters show consistent but moderate effects. The base model outperforms both smaller and larger batch sizes, with Batch Size 32 and 128 yielding lower returns. Similarly, simplified reward shaping reduces performance, indicating that the full reward formulation provides a more informative signal for distinguishing effective mitigation strategies. 
+
+Environment scale. Varying the number of organizations used during training (Org. Count 50 vs. 100) results in only minor differences in performance. This suggests that the learned policy generalizes across moderate variations in training diversity, and that the base configuration provides sufficient coverage of organizational variability. Overall, the ablation study demonstrates that policy performance is most sensitive to adversary capability, with secondary effects from defender budget and learning dynamics. The learned policy consistently outperforms the oracle in terms of expected return, indicating that sequential decision-making under uncertainty provides a measurable advantage over static mitigation selection strategies in complex adversarial environments. To further examine learning dynamics under increased adversarial pressure, we conducted an extended training run with a larger number of concurrent adversaries and an additional ablation on the number of decay steps. Figure 2 shows that, although absolute reward levels decrease in this more challenging setting, the relative ordering of configurations remains largely consistent with the primary ablation results. In particular, a clear late separation of training emerges, which indicates that longer exploration schedules improve policy quality over time. In particular, increasing the decay steps to 1,000 shows the best performance, suggesting that sustained exploration is critical for learning effective mitigation strategies in more complex multi-adversary environments. These results indicate that the observed performance trends are robust to the increased complexity of the environment. 
+
+6.4 Case Study 
+
+We evaluated the proposed framework on two representative U.S. school districts with comparable size and threat profile but differing cybersecurity practice maturity distributions. Each organization was assessed using NIST CSF 2.0 15 DRL-Based Cyber Mitigation Planning Table 1: Ablation study results over N = 7000 evaluation episodes per policy variant.                                                                                                 
+
+> Model Win Loss Cost Cost % Avg. Mit. Path Len. J(π)Regret
+> Adv. Budget 50 4.7 95.3 85.91 85.9 1.6 21.6 -0.9613 -0.0285 Def. Budget 150 4.8 95.2 121.99 122.0 2.6 21.2 -0.9645 -0.0253 Base Model 2.6 97.4 75.47 75.5 1.8 18.5 -0.9811 -0.0086 Batch Size 32 1.8 98.2 73.58 73.6 2.0 17.0 -0.9889 -0.0008 Oracle 1.8 98.2 79.08 79.1 1.1 15.9 -0.9898 0.0000 Simple Reward Shaping 1.1 98.9 64.14 64.1 2.1 15.4 -0.9950 0.0052 Adv. Budget 150 0.7 99.3 39.90 39.9 0.7 14.3 -0.9973 0.0075 Batch Size 128 0.6 99.4 39.90 39.9 0.7 14.2 -0.9977 0.0079 Def. Budget 50 0.4 99.6 25.34 25.3 1.3 14.1 -0.9984 0.0086 Org. Count 50 0.6 99.4 51.15 51.1 1.5 14.1 -0.9993 0.0095 Org. Count 100 0.7 99.3 71.81 71.8 1.6 15.0 -0.9998 0.0100
+
+Figure 2: Ablation study results showing learning dynamics across configuration settings, measured by the mean reward in the replay buffer over training episodes. practices, which were translated into mitigation capability profiles and used to drive adversary simulation and mitigation planning. Despite similar organizational attributes, the resulting mitigation portfolios differed slightly. School 1 received a mitigation plan with four techniques (M1030: Network Segmentation, M1040: Endpoint Behavior Prevention, M1017: User Training, and M1024: Restrict Registry Permissions), while School 2 received an additional mitigation (M1036: Account Use Policies). This difference is attributable to variations in practice maturity, particularly in detection and response capabilities, which reduced baseline effectiveness against certain adversary techniques in School 2. Attack path reconstruction reveals that both organizations face similar dominant adversary behaviors, including credential abuse and process injection following initial reconnaissance. For example, a high-likelihood path includes network sniffing (T1040), process injection (T1055), and abuse of valid accounts (T1078), with mitigations such as network segmentation (M1030), endpoint behavior prevention (M1040), and user training (M1017) directly reducing attack success probabilities along this sequence. 16 DRL-Based Cyber Mitigation Planning 
+
+Figure 3: Attack-path reconstruction for School 1 with multiple paths output from the beam search, and the correspond-ing mitigation portfolio for a school district. The system identifies high-likelihood adversary paths and recommends a budget-constrained set of mitigations that disrupt key techniques. Moreover, the mitigation recommendations are tied to specific adversary techniques and provide actionable guidance to counter the threat. For instance, process injection (T1055) is mitigated through endpoint behavior prevention (M1040), which detects anomalous memory access patterns and blocks unauthorized code execution within legitimate processes. Similarly, abuse of valid accounts (T1078) is mitigated through user training (M1017), reducing susceptibility to credential compromise and social engineering. A representative beam search path with associated attributes and mitigation selections for School 1 is shown in Figure 3. Overall, the case study demonstrates that the framework produces consistent core mitigation strategies across similar environments while adapting to subtle differences in organizational maturity. This supports the claim that operationaliz-ing governance assessments enables targeted, budget-aware mitigation planning grounded in adversary behavior and system-specific risk. 
+
+# 7 Conclusion and Future Work 
+
+This work addresses a practical gap between cybersecurity governance frameworks and daily defensive planning. Defenders must translate high-level assessments and threat intelligence into a budget-feasible set of concrete mitigation work items for a planning period. We introduced a strategic mitigation planning formulation in which defender actions are mitigation portfolios selected under explicit cost constraints, and we coupled this formulation to a simulation environment that reflects (i) heterogeneous organizational capability derived from NIST CSF practice maturity, (ii) empirically grounded adversary behavior using ATT&CK technique sequences, and (iii) mitigation effectiveness signals linked to adversary tradecraft. Our approach makes three core contributions. First, we define a constrained MDP for mitigation planning in which actions correspond to mitigation selections subject to an explicit budget model, and align the learning problem with how organizations plan defensive work in sprints or cycles. Second, we introduced an LLM semantic translation layer that maps assessable NIST CSF practices to ATT&CK mitigations, allowing commonly collected CSF maturity data to parameterize mitigation feasibility and cost in the learning environment. Third, we incorporated a technique-sequencing prior learned from ATT&CK Flow data via a variable-order Markov model, which constrains simulated adversary progression to realistic paths and improves sample efficiency while preserving exploration. After training, we further improve operational usability by reconstructing high-likelihood attack/defense paths and surfacing traceable mitigation recommendations that connect suggested work items to the specific adversary techniques they are intended to disrupt. 17 DRL-Based Cyber Mitigation Planning Our experimental results evaluated against an oracle baseline suggest that a learned DQN policy can match or exceed a strong optimization reference under identical episodic conditions, while also producing actionable mitigation sets that respect budget constraints. Overall, the framework supports a workflow in which RL is used to learn cost-effective mitigation preferences offline, and human defenders validate and implement a transparent and highly contextual mitigation portfolio online. Future work includes extending the framework to more dynamic mitigation deployment over time, training adversarial behavior on more robust system models, and exploring alternative policy representations for larger or more continuous action spaces. 
+
+# Acknowledgments 
+
+This material is based upon work supported by the U.S. Department of Energy under Award Number DE-CR0000031. We thank the following research analysts for their substantial assistance with data collection and preliminary analysis for this study: Patrick Roberts, Nathan Thomason, Johnathan Reese, and Carter Wallace. 
+
+# A Ethical Considerations 
+
+This work focuses on defensive cybersecurity techniques, including mitigation planning and attack-path modeling. While the methodologies could be adapted for adversarial purposes, safeguards are taken to ensure responsible use. No human subjects or sensitive personal data were involved. The work aligns with responsible disclosure principles and aims to improve defensive capabilities for critical infrastructure. 
+
+# B Open Science 
+
+We provide an anonymous, self-contained repository containing all artifacts necessary to evaluate the core contributions of this work. The repository includes the full implementation of the mitigation planning pipeline, comprising the DRL environment and agent, adversary modeling via a VOMM, attack-path reconstruction using beam search, and budget-constrained mitigation optimization. It also includes pretrained models (DQN and VOMM), synthetic organizational datasets, configuration files, and scripts for executing each stage of the pipeline. All artifacts are accessible through the repository at: 
+
+https://github.com/UALR-CORE-Center/strategic-mitigation-drl 
+
+Reviewers can reproduce the full pipeline by installing dependencies and running a single entry-point script, which executes the end-to-end workflow and generates all outputs used in the paper, including reconstructed attack paths, mitigation plans, and figures. The demo executes in seconds on a standard laptop and does not require external services, credentials, or network access. To support reproducibility, all randomness is seeded, required data is included locally, and pretrained models are provided to avoid the need for expensive retraining. The environment also supports deterministic simulation through explicit state capture and restoration to enable consistent evaluation of attack-path reconstruction and mitigation decisions. Certain upstream artifacts used in constructing the adversary models, specifically the full corpus of threat intelligence reports, cannot be redistributed due to licensing and aggregation constraints. To address this, we provide derived adversary profiles, representative ATT&CK datasets, and pretrained VOMM models that preserve the statistical properties required to evaluate the methodology. These artifacts are sufficient to reproduce and assess all primary contributions of the paper, including the constrained MDP formulation, integration of adversary modeling with reinforcement learning, attack-path reconstruction, and budget-aware mitigation planning. 18 DRL-Based Cyber Mitigation Planning 
+
+# C Synthetic Data Generation Framework 
+
+C.1 Synthetic Data Model Organization latent maturity. Each organization i is assigned a continuous latent maturity variable 
+
+ℓi = ˜ℓi + ϵi, ˜ℓi ∈ { 1, 2, 3, 4}, ϵi ∼ N (0 , σ 2) (16) where ˜ℓi denotes a discrete organizational governance maturity class and ϵi is a small stochastic perturbation. The base maturity level class ˜ℓi is drawn from a categorical prior, 
+
+P(˜ℓi = k) = πk, (π1, π 2, π 3, π 4) = (0 .40 , 0.30 , 0.20 , 0.10) (17) reflecting the empirical scarcity of highly mature organizations. We use σ = 0 .25 and clip perturbations to the valid maturity range, inducing correlation across practices while allowing local variability. 
+
+Modeling CSF practice difficulty. For each NIST CSF practice indexed by p ∈ { 1, . . . , P } (with P = 42 ), we define three ordered cut points bp = ( bp1, b p2, b p3) that encode the relative operational cost and complexity of achieving higher maturity tiers. We initialize all practices with baseline cut points (1 .5, 2.5, 3.5) and apply a practice-specific difficulty shift 
+
+∆p = 0 .3 ×
+
+ Cost p + Complexity p
+
+2 − 2.5
+
+
+
+(18) providing adjusted cut points bpk = b(0)  
+
+> k
+
++ ∆ p. Easier practices shift downward, while more demanding practices shift upward. 
+
+Sampling practice maturity tiers. Using the organization-level latent maturity ℓi, the maturity tier for practice p in organization i, denoted tip ∈ { 1, 2, 3, 4}, is sampled using an ordered logit model with logistic cumulative distribution function σ(z) = 1 /(1 + e−z ). We define the cumulative probabilities 
+
+Fpk (ℓi) = σ bpk − ℓi
+
+, k = 1 , 2, 3 (19) from which the tier probabilities follow as 
+
+πp1(ℓi) = Fp1(ℓi),πp2(ℓi) = Fp2(ℓi) − Fp1(ℓi),πp3(ℓi) = Fp3(ℓi) − Fp2(ℓi),πp4(ℓi) = 1 − Fp3(ℓi).
+
+(20) We draw tip by inverse CDF sampling. This formulation ensures that organizations with higher latent maturity are more likely to achieve higher tiers across all practices, preserving coherence while allowing variation in specific practices. This construction yields three desirable properties: higher latent maturity increases the likelihood of higher tiers, the maturity prior biases populations toward lower tiers, and higher tiers remain rare for more complex practices. 
+
+C.2 Synthetic Data Generation Procedure 
+
+Algorithmically, given a table of CSF practice cut points and a selected set of practices: 1. For each organization i = 1 , . . . , N , draw a base organizational maturity class ˜ℓi ∼ Categorical( π1, . . . , π 4)
+
+and set ℓi = ˜ℓi + ϵi, where ϵi ∼ N (0 , σ 2) and ℓi is clipped to the valid maturity range. 2. For each organization i and practice p, compute the tier probabilities (πp1(ℓi), π p2(ℓi), π p3(ℓi), π p4(ℓi)) .3. Sample the practice maturity tier tip ∈ { 1, 2, 3, 4} by inverse CDF sampling. 4. Emit a record {org_id = i, p 1:ti1, . . . , p P :tiP }.The organizational maturity prior (π1, . . . , π 4) governs the relative frequency of maturity classes, while σ controls heterogeneity within each class. The resulting CSF practice maturity tiers are mapped to ATT&CK mitigation maturity signals using the weighted scheme described in Section 4.1. We generate synthetic datasets of configurable size, where each record contains an 
+
+org_id and assigned maturity tiers for each practice. 19 DRL-Based Cyber Mitigation Planning 
+
+C.3 ATT&CK Flow Corpus and Sequence Extraction 
+
+We parse ATT&CK Flow JSON bundles from the Center for Threat Informed Defense (CTID) corpus 1 and additional flows that we derived from open-source threat reports. Each attack flow encodes a documented cyber operation as a structured graph containing attack-technique nodes and relationship edges that represent causal links between steps in the operation. We convert each bundle into a directed multigraph, start from start edges, and follow effect , asset ,and object links to enumerate root-to-leaf traversals. We drop any non-move leaves (e.g., tool , attack-asset ). When a flow branches, each branch is treated as a distinct continuation, yielding multiple sequences from a single bundle. Each attack action node is represented as a token consisting of tactic and technique: 
+
+token = TAxxxx : Tyyyy[.zzz] ,
+
+e.g., TA0001:T1190 . If a node includes a certainty field, we compute an unnormalized path score by multiplying certainty values along a depth-first traversal. For example, a path with certainties 0.9, 0.8, and 0.7 yields an unnormalized score of 0.504 . This score reflects the relative confidence of the path within the flow but is not yet used directly for sampling. To prevent highly branched flows from dominating the corpus, we normalize path scores within each bundle so that the total weight across all extracted paths sums to one. After normalization, a bundle that fans out into four terminal paths assigns each path a sampling weight of 0.25 , regardless of its raw certainty product. These normalized weights are used when aggregating sequences for training to ensure that each documented operation contributes equally while preserving relative structure within the flow. 
+
+C.4 Weighted VOMM Estimation 
+
+We estimate weighted context counts: 
+
+C(c, a ) = 
+
+> N
+
+X
+
+> n=1
+
+w(n)
+
+> Ln
+
+X
+
+> i=1
+
+I[( xi−k, . . . , x i−1) = c ∧ xi = a] (21) and apply smoothing with back-off: 
+
+p(a | c) = 
+
+
+
+C(c, a ) + αC(c) + α|V | , C(c) ≥ m, p(a | backoff (c)) , C(c) < m, 
+
+|V |−1, c = ∅.
+
+(22) 
+
+C.5 Example Transition 
+
+Suppose the context (TA0001:T1190 , TA0006:T1136.001 ) is followed by: • TA0003:T1059 with count 4
+
+• TA0005:T1047 with count 1
+
+• all others 0
+
+With α = 1 and |V | = 200 , the smoothed probability for T1059 is 
+
+p(T1059 | c) = 4 + 1 (4 + 1) + 200 = 5205 ≈ 0.024 ,
+
+while an unseen technique receives 1/205 ≈ 0.0049 . This concentration encourages plausible next-step exploration without collapsing to a single deterministic continuation. The VOMM encodes behavioral regularities (what attackers typically do next), and not success rates or exploit effectiveness. Its reliability therefore depends on coverage of the underlying flow corpus. Smoothing, back-off, and per-bundle normalization improve robustness under sparse and uneven reporting. Used as a prior alongside RL, it reduces unnecessary exploration and accelerates convergence while still allowing the learned policy to deviate when the environment reward indicates novel sequences. 
+
+> 1https://center-for-threat-informed-defense.github.io/attack-flow/
+
+20 DRL-Based Cyber Mitigation Planning 
+
+Figure 4: Base percent-of-budget lookup map ( PctCost ) for ordinal cost and complexity ratings. Color intensity indicates the fraction of the episode budget consumed by a mitigation prior to maturity scaling. 
+
+# D Base Budget Lookup Map 
+
+Figure 4 visualizes the base fraction of the episode budget associated with each combination of ordinal cost and complexity ratings. This lookup map is used by the PctCost( ·) function described in Section 5.2 to translate qualitative mitigation characteristics into quantitative budget shares. The map is monotone in both cost and complexity and has an upper bound of 0.5, which ensures that even the most expensive mitigation consumes at most half of the episode budget prior to maturity scaling. This bound permits meaningful composition of mitigations within an episode while preserving clear tradeoffs for higher cost and complexity actions. For a mitigation with cost level c and complexity level k, the corresponding base budget fraction PctCost( c, k ) is read directly from the map. This value is multiplied by the maturity scaling factor μ(m) to determine the final episode cost of the mitigation. The scaling function is constructed so that higher mitigation maturity reduces the budget less than lower mitigation maturity. Thus, differences in maturity drive the organizational capacity to execute mitigations. 
+
+# E Adversary Resource Spread Model 
+
+Figure 5 summarizes the resource-spread model used to estimate how adversary resources are distributed across concurrent targets. The function Spread( type , resource ) returns the expected per-target resource availability (in operator-equivalents per target per planning period) for adversary type and resource level. Intuitively, adversaries with limited staffing and broad targeting must spread effort thinly across targets, yielding smaller per-target budgets, whereas adversaries with greater staffing and narrower targeting can allocate more effort per target. 21 DRL-Based Cyber Mitigation Planning 
+
+Figure 5: Resource-spread map Spread( type , resource ) used to estimate per-target resource availability for adversaries. Values represent expected operator-equivalents allocated per target per planning period. We compute Spread from analyst-provided ranges for (i) approximate adversary staffing and (ii) typical monthly targeting volume for that adversary type. The returned value is the ratio of these quantities, expressed per target: 
+
+Spread = operators targets per period .
+
+For example, 10 operators targeting 1000 organizations per month yields Spread = 0 .01 operator-equivalents per target per month. 
+
+# F Attack Path Reconstruction via Beam Search 
+
+Beam Search Algorithm. The reconstruction proceeds using a beam search of width k over depth d. Let Bt denote the beam at depth t. The algorithm is defined as: A state s is terminal if the adversary reaches an impact objective, exhausts its resource budget, or the maximum search depth is reached. Because each node contains a full environment state, this process captures both adversary dynamics and defender effects over time. Running this procedure independently for each prioritized adversary yields a set of k high-scoring attack paths that are both (i) consistent with historical technique usage (via the VOMM) and (ii) aligned with a learned mitigation policy (via the DQN). Along these paths we observe which specific mitigations the defender repeatedly activates to disrupt that adversary’s progress. Aggregating across all adversaries produces a finite set of candidate mitigations, each annotated with (a) the adversaries and techniques it counters, (b) its estimated impact, and (c) its contribution to cumulative reward. 
+
+# References 
+
+[1] Yuning Jiang, Qiaoran Meng, Feiyang Shang, Nay Oo, Le Thi Hong Minh, Hoon Wei Lim, and Biplab Sikdar. Mitre att&ck applications in cybersecurity and the way forward. arXiv preprint arXiv:2502.10825 , 2025. [2] Brian Donohue. The never-evolving threat landscape: Forever techniques and the illusion of change. Presentation at ATT&CKcon 6.0, October 2025. MITRE ATT&CK Conference, slides. [3] Maxwell Standen, Martin Lucas, David Bowman, Toby J Richer, Junae Kim, and Damian Marriott. Cyborg: A gym for the development of autonomous cyber agents. arXiv preprint arXiv:2108.09118 , 2021. [4] Mitchell Kiely, Metin Ahiskali, Etienne Borde, Benjamin Bowman, David Bowman, Dirk Van Bruggen, KC Cowan, Prithviraj Dasgupta, Erich Devendorf, Ben Edwards, et al. Cage challenge 4: A scalable multi-agent reinforcement learning gym for autonomous cyber defence. AI Magazine , 46(3):e70021, 2025. 22 DRL-Based Cyber Mitigation Planning 
+
+Algorithm 1 Attack Path Reconstruction via Beam Search 
+
+Require: Beam width k, maximum depth d, root observation o0, initial state s0
+
+Ensure: Set of highest-scoring attack paths  
+
+> 1:
+
+qroot ← Q(o0, ·) 
+
+> 2:
+
+Aroot ← BUILD ROOT PORTFOLIO (qroot , budget ) 
+
+> 3:
+
+B0 ← { s0} 
+
+> 4:
+
+for t = 0 to d − 1 do  
+
+> 5:
+
+Ct+1 ← ∅  
+
+> 6:
+
+for all s ∈ B t do  
+
+> 7:
+
+if ISTERMINAL (s) then  
+
+> 8:
+
+Ct+1 ← C t+1 ∪ { s} 
+
+> 9:
+
+continue  
+
+> 10:
+
+end if  
+
+> 11:
+
+T ← VOMMC ANDIDATES (s) ▷ with observed-technique bias  
+
+> 12:
+
+for all τ ∈ T do  
+
+> 13:
+
+a ← SELECT BEST MITIGATION (Aroot , τ ) 
+
+> 14:
+
+(s′, r, τ ) ← SIMULATE STEP (s, a, τ ) 
+
+> 15:
+
+Ct+1 ← C t+1 ∪ { s′} 
+
+> 16:
+
+end for  
+
+> 17:
+
+end for  
+
+> 18:
+
+for all s′ ∈ C t+1 do  
+
+> 19:
+
+SCORE (s′) ← R(s′) + P (s′) + U (s′) + I(s′) − λD (s′) 
+
+> 20:
+
+end for  
+
+> 21:
+
+Bt+1 ← Top-k states in Ct+1 by score  
+
+> 22:
+
+end for  
+
+> 23:
+
+return highest-scoring paths across {B 0, . . . , Bd}
+
+[5] Blake Strom, Andy Applebaum, Doug Miller, Kathryn Nickels, Adam Pennington, and Cody Thomas. Mitre att&ck: Design and philosophy. MITRE Technical Report , 2018. [6] MITRE Corporation. Mitre att&ck for industrial control systems, 2024. https://attack.mitre.org/matrices/ics/. [7] The Center for Threat-Informed Defense. Attack flow v3, 2025. https://ctid.mitre.org/projects/attack-flow/. [8] Executive Office of the President. Executive order 13636: Improving critical infrastructure cybersecurity. https://www.federalregister.gov/documents/2013/02/19/2013-03915/ improving-critical-infrastructure-cybersecurity , 2013. [9] National Institute of Standards and Technology. Cybersecurity framework (csf) 2.0. https://www.nist.gov/ cyberframework , 2024. [10] Mazen Brho, Amer Jazairy, and Aaron V Glassburner. The finance of cybersecurity: Quantitative modeling of investment decisions and net present value. International Journal of Production Economics , 279:109448, 2025. [11] Karel Durkota, Viliam Lis `y, Branislav Bosansk `y, and Christopher Kiekintveld. Optimal network security hardening using attack graph games. In IJCAI , pages 526–532, 2015. [12] Andy Applebaum, Doug Miller, Blake Strom, Chris Korban, and Ross Wolf. Intelligent, automated red team emulation. In Proceedings of the 32nd annual conference on computer security applications , pages 363–373, 2016. [13] Karel Horák, Branislav Bošansk `y, and Michal Pˇ echouˇ cek. Heuristic search value iteration for one-sided partially observable stochastic games. In Proceedings of the AAAI conference on artificial intelligence , volume 31, 2017. [14] A Game-Theoretical Approach to Cyber-Security of Critical Infrastructures Based on Multi-Agent Reinforcement Learning , 2018. [15] Tom Purves, Konstantinos G Kyriakopoulos, Sian Jenkins, Iain Phillips, and Tim Dudman. Causally aware reinforcement learning agents for autonomous cyber defence. Knowledge-Based Systems , 304:112521, 2024. [16] Merve Ozkan-Okay, Erdal Akin, Ömer Aslan, Selahattin Kosunalp, Teodor Iliev, Ivaylo Stoyanov, and Ivan Beloev. A comprehensive survey: Evaluating the efficiency of artificial intelligence and machine learning techniques on cyber security solutions. IEEe Access , 12:12229–12256, 2024. [17] Sebastián R Castro, Roberto Campbell, Nancy Lau, Octavio Villalobos, Jiaqi Duan, and Alvaro A Cardenas. Large language models are autonomous cyber defenders. arXiv [cs.AI] , July 2025. 23 DRL-Based Cyber Mitigation Planning [18] Johannes Loevenich, Erik Adler, Tobias Hürten, and Roberto Rigolin F Lopes. Design and evaluation of an autonomous cyber defence agent using DRL and an augmented LLM. Comput. Netw. , 262(111162):111162, May 2025. [19] Sayak Mukherjee, Samrat Chatterjee, Emilie Purvine, Ted Fujimoto, and Tegan Emerson. Large language model-based reward design for deep reinforcement learning-driven autonomous cyber defense. arXiv [cs.LG] ,November 2025. [20] Sean Oesch, Phillipe Austria, Amul Chaulagain, Brian Weber, Cory Watson, Matthew Dixson, and Amir Sadovnik. The path to autonomous cyberdefense. IEEE Secur. Priv. , 23(1):38–46, January 2025. [21] Isaac Symes Thompson, Alberto Caron, Chris Hicks, and Vasilios Mavroudis. Entity-based reinforcement learning for autonomous cyber defence. In Proceedings of the Workshop on Autonomous Cybersecurity , pages 56–67, 2023. [22] Jiahao Yu, Wenbo Guo, Qi Qin, Gang Wang, Ting Wang, and Xinyu Xing. {AIRS }: Explanation for deep reinforcement learning based security applications. In 32nd USENIX Security Symposium (USENIX Security 23) ,pages 7375–7392, 2023. [23] Atheer Alaa Hammad and Firas Tarik Jasim. Adaptive cyber defense using advanced deep reinforcement learning algorithms: a real-time comparative analysis. Journal of Computing Theories and Applications , 2(4):523–535, 2025. [24] Alec Wilson, Ryan Menzies, Neela Morarji, David Foster, Marco Casassa Mont, Esin Turkbeyler, and Lisa Gralewski. Multi-agent reinforcement learning for maritime operational technology cyber security. arXiv preprint arXiv:2401.10149 , 2024. [25] Seungoh Choi, Jeong-Han Yun, and Byung-Gil Min. Probabilistic attack sequence generation and execution based on mitre att&ck for ics datasets. In Proceedings of the 14th Cyber Security Experimentation and Test Workshop ,pages 41–48, 2021. [26] Mohamed Ahmed, Sakshyam Panda, Christos Xenakis, and Emmanouil Panaousis. Mitre att&ck-driven cyber risk assessment. In Proceedings of the 17th International Conference on Availability, Reliability and Security ,pages 1–10, 2022. [27] Masaki Kuwano, Momoka Okuma, Satoshi Okada, and Takuho Mitsunaga. Att&ck behavior forecasting based on collaborative filtering and graph databases. In 2022 IEEE International Conference on Computing (ICOCO) ,pages 191–197. IEEE, 2022. [28] Spencer Massengale and Philip Huff. Linking threat agents to targeted organizations: A pipeline for enhanced cybersecurity risk metrics. In 2024 4th Intelligent Cybersecurity Conference (ICSC) , pages 132–141. IEEE, 2024. [29] Andraž Krašovec, Gary Steri, Georgios Karopoulos, and Mirko Trapani. Large language models for cyber threat intelligence: Extracting mitre with llms. In International Conference on Availability, Reliability and Security ,pages 80–89. Springer, 2025. [30] Microsoft Security and OpenAI. Staying ahead of threat actors in the age of AI. https://www.microsoft. com/en-us/security/blog/2024/02/14/staying-ahead-of-threat-actors-in-the-age-of-ai/ ,February 2024. Industry threat intelligence report. [31] Spencer Massengale and Philip Huff. Assessing and prioritizing ransomware risk based on historical victim data. In International Conference on Security and Privacy in Communication Systems , pages 351–369. Springer, 2024. 24

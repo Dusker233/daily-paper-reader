@@ -1,0 +1,959 @@
+Title: HE-PIM: Demystifying Homomorphic Operations on a Real-world Processing-in-Memory System
+
+URL Source: https://arxiv.org/pdf/2605.12841v1
+
+Published Time: Thu, 14 May 2026 00:31:37 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# HE-PIM: Demystifying Homomorphic Operations on a Real-world Processing-in-Memory System 
+
+## *Harshita Gupta 1 *Mayank Kabra 1 Jaewoo Park 1 Priyam Mehta 2
+
+## Phillip Widdowson 1 Tathagata Barik 2,3 Nisa Bostanci 1 Konstantinos Kanellopoulos 1
+
+## Juan Gómez-Luna 4 Antonio J. Peña 2 Mohammad Sadrosadati 1 Onur Mutlu 1
+
+> 1
+
+ETH Zürich 2Barcelona Supercomputing Center 3Universitat Politècnica de Catalunya 4NVIDIA 
+
+Homomorphic encryption (HE) enables computation over en-crypted data without decryption, offering strong privacy guaran-tees for untrusted computing environments. However, its practi-cal adoption remains limited by high computational complexity, large ciphertext sizes, and substantial data movement. Processor-centric architectures (e.g., CPUs, GPUs, and ASICs) face funda-mental bottlenecks when executing HE workloads because cipher-texts are large, HE operations exhibit low data locality, and prim-itives such as relinearization and bootstrapping require repeated access to large auxiliary metadata. Processing-In-Memory (PIM) is a promising approach to mitigate this data-movement bottle-neck by performing computation near or inside memory. Several prior works propose PIM-based implementation for homomorphic operations; however, they either do not consider real-world PIM systems or focus on a limited subset of homomorphic operations. Our goal is to comprehensively characterize homomorphic operations on a real-world, general-purpose PIM system. To this end, we implement a complete set of HE kernels, which are used to implement emerging applications (e.g., databases and machine learning) on the real-world UPMEM PIM system, rigorously evaluate these kernels in terms of performance and scalability, compare against CPU and GPU baselines, and discuss implications for future PIM hardware. Our results demonstrate four major findings. (1) HE-based applications expose different bottlenecks across different stages of execution: some kernels are compute-bound due to expensive modular arithmetic, while others are constrained by the large memory footprint of ciphertexts and intermediate data. In our baseline PIM system, these bottlenecks are exacerbated by the computational capability of each PIM core and the limited ca-pacity of each PIM bank, leading to frequent data movement. (2) The dominant compute bottleneck in current PIM cores is the lack of native 64-bit modular integer multiplication, which is a key primitive in HE operations and subroutines. (3) The limited mem-ory capacity of each PIM bank is a second major bottleneck, as HE workloads use large ciphertexts and their associated auxiliary metadata that do not fit in the current PIM bank, requiring data movement across PIM cores and banks to accommodate large ciphertexts and intermediate results. (4) Despite these limitations, PIM systems can be a viable alternative to state-of-the-art CPU and GPU systems for HE workloads when equipped with native modular multiplication and efficient inter-PIM data movement. 
+
+> *Harshita Gupta and Mayank Kabra are co-primary authors.
+
+## 1. Introduction 
+
+Homomorphic encryption (HE) [1 – 21] provides a strong cryp-tographic foundation for privacy-preserving computation by enabling computations on encrypted data without exposing the underlying plaintext to untrusted systems. This prop-erty makes HE attractive for secure applications such as machine learning inference [22 – 28] and encrypted database search [29 –37]. Despite significant improvements in HE al-gorithms, HE remains computationally expensive in practice due to two major challenges. First, HE significantly increases data size: a small unencrypted vector (plaintext) (e.g., 0.5MB) can expand to a large encrypted tensor (ciphertext) of more than 30MB [32, 38 –40]. As a result, processor-centric architec-tures (e.g., CPUs, GPUs, and ASICs) frequently move multiple ciphertexts between the processor and off-chip main memory (DRAM) [41 – 77] (§2.1). Second, modern privacy-preserving applications (e.g., secure neural network inference) involve complex homomorphic operations (e.g., multiplication, rota-tion, relinearization, and bootstrapping) that frequently ac-cess large auxiliary data (e.g., relinearization or bootstrap-ping keys) (§2.2). This auxiliary data is often 10-100 MB in size [40, 78], do not fit in local caches, and are transferred repeatedly between memory and compute units, further exac-erbating the data movement bottleneck. Processing-in-memory 
+
+(PIM) [49, 51, 79, 80] is a promising approach to alleviating the data movement bottleneck by placing computational units inside or near memory. Recently, this memory-centric com-puting paradigm has gained traction in both academia and industry (e.g., [47, 48, 53, 81 – 238]); and commercial PIM sys-tems and prototypes have recently been developed by indus-try [141, 142, 144, 239–244] (§2.3). Several prior works (e.g., [38, 39, 245 – 251]) explore the effec-tiveness of using PIM architectures to fundamentally improve the performance and energy efficiency of homomorphic compu-tations. However, none of these prior works provides a compre-hensive evaluation of these homomorphic operations used for building modern applications on real-world general-purpose PIM architectures. To our knowledge, there is only one prior work [247] on evaluating homomorphic operations on a real-world PIM system, and a complementary recent work [252] that studies the performance analysis of long-integer NTT ex-ecution for HE. Unfortunately, these works discuss only basic homomorphic operations [253], i.e., homomorphic addition and multiplication (which only use element-wise operations), 
+
+## 1
+
+> arXiv:2605.12841v1 [cs.CR] 13 May 2026
+
+omitting the complex homomorphic subroutines (e.g., NTT, relinearization, bootstrapping) that are required to construct modern applications (§3). 
+
+Our goal in this work is to understand the capabilities and characteristics of these homomorphic operations used in var-ious modern applications on a real-world PIM system and understand their implications for PIM systems. We focus on one of the most common HE workload, i.e., neural network inference [22, 23], which involves complex convolution layers and non-linear activation functions and requires all HE op-erations/subroutines used in fully homomorphic encryption (FHE) [254 – 258]. Hence, neural network inference serves as a useful application for characterization. We develop an end-to-end implementation of core HE prim-itives/subroutines on a real-world UPMEM PIM architecture to support FHE workflows. We choose the general-purpose UPMEM PIM system for our study [239 – 242, 259 –261]. Fur-thermore, the UPMEM system closely resembles other PIM systems (e.g., [143, 262]) and can provide insights for the de-sign of future PIM systems [263, 264]. First, we map the core homomorphic operations (addition, multiplication, relineariza-tion, bootstrapping) to fit the architectural constraints of the real-world PIM system. These operations rely on a set of un-derlying computational primitives (e.g., modular arithmetic, number-theoretic transforms (NTT and INTT), matrix-vector multiplication, and element-wise arithmetic operations). We implement these primitives by leveraging the parallel execu-tion model of the PIM architecture to maximize parallelism and throughput (§5). Second, we characterize a range of HE parameters used in real-world applications and investigate the impact of different configurations on the performance and scal-ability of homomorphic operations on PIM systems (§4). We compare the UPMEM PIM system implementation to state-of-the-art CPU (AMD EPYC 7742 CPU [265]) and GPU (NVIDIA A100 [266]) baselines (§6). Third, we discuss the implications for future PIM systems and highlight the need to shift to an algorithm-hardware co-design perspective to support large-scale HE applications running on a PIM system. 
+
+Our results demonstrate four key takeaways: (1) The per-formance of HE kernels on existing PIM systems is constrained by both the computational capabilities of each PIM unit and the memory capacity of each memory bank, leading to frequent data movement. This is because homomorphic operations/-subroutines require complex arithmetic and have a substantial memory footprint (§6.2, 6.3, 6.4). (2) The primary computa-tional bottleneck in current PIM cores arises from the lack of native 64-bit modular integer multiplication. We show that augmenting each PIM core with a 64-bit modular multiplier can improve the performance of existing homomorphic op-erations/subroutines by up to 2.3× over the state-of-the-art UPMEM-PIM system. (3) The limited capacity of each PIM bank is another major limiting factor that necessitates frequent data movement between PIM cores. We show that support-ing efficient data movement between PIM cores, along with a 64-bit modular multiplier, dramatically improves performance. Specifically, a 2048-core PIM system shows a potential head-room improvement of improving existing PIM systems by up to 426 .1× for convolution layer and 641 .0× for key switch-ing operations on 32 × 32 image inputs, outperforming both CPU and GPU baselines (§6.5). (4) PIM systems can be a viable alternative over state-of-the-art CPU and GPU systems for im-plementing HE workloads. This is supported by the fact that PIM systems can scale to thousands of cores for computation-dominated kernels and can be extended further. In comparison, GPU systems have a limited memory capacity of up to 80 GB per GPU and remain constrained by effective bandwidth (§7). This paper makes the following key contributions: 
+
+◦ To our knowledge, this is the first end-to-end implementa-tion of widely used homomorphic operations/subroutines on a real-world Processing-In-Memory (PIM) system. 
+
+◦ We perform a comprehensive characterization of various HE parameters and evaluate the performance of key homomor-phic operations/subroutines required by a general HE-based application on a state-of-the-art real-world PIM system, and compare against CPU and GPU baselines. 
+
+◦ We analyze key system-level trade-offs and provide practical design recommendations for future HE software stacks and PIM hardware architectures, highlighting the importance of algorithm-hardware co-design. 
+
+## 2. Background 
+
+2.1. Homomorphic Encryption 
+
+Homomorphic encryption (HE) [4] enables computation di-rectly on encrypted data and consists of four fundamental algo-rithms: (i) KeyGen , which generates a secret key (and optionally a public key and evaluation keys); (ii) Enc , which transforms a plaintext into a ciphertext by embedding it in a structured polynomial ring and adding a small random error (noise), en-suring semantic security; (iii) Eval , which performs algebraic operations (e.g., addition, multiplication) directly on cipher-texts, while also increasing the error (noise) associated with each input; and (iv) Dec , which uses the secret key to recover the plaintext from a ciphertext, as long as the accumulated noise remains below a decryption threshold. For a function f
+
+and message m, HE ensures: Dec (Eval (f, Enc (m))) ≈ f (m).
+
+Fully Homomorphic Encryption (FHE) [254 –258] ex-tends the basic capabilities of HE by supporting unlimited additive and multiplicative operations over ciphertexts. Mul-tiple FHE schemes have been proposed in the literature (e.g., BFV [12], BGV [7], CKKS [267]), each offering different trade-offs between exactness, performance, and noise management. In this work, we focus on the CKKS scheme, which supports approximate arithmetic over real or complex numbers and is well-suited for applications such as encrypted neural network inference. 
+
+2.2. The CKKS Scheme 
+
+CKKS [267] supports efficient linear algebra operations by en-coding real-valued vectors into the polynomial ring: RQ =
+
+ZQ[X]/(XN + 1) , where N is a power-of-two polynomial 2degree and Q is a large ciphertext modulus. Each ciphertext consists of two polynomials in RQ: (c0, c 1), with coefficients represented using the Residue Number System (RNS) [268]. In RNS form, each polynomial coefficient (modulo Q) is de-composed into a set of L + 1 smaller primes, producing L + 1 
+
+polynomials with smaller coefficients (referred to as limbs ) that enable fast modular arithmetic and parallelism across residues. A key feature of CKKS is its support for SIMD-style packing ,where N real (or complex) values can be packed into a single ciphertext, enabling parallel element-wise operations across all slots. CKKS encodes a vector m ∈ Cn into a plaintext polynomial [m] ∈ RQ by applying the inverse of the canoni-cal embedding (structurally analogous to an inverse FFT over roots of the cyclotomic polynomial). This maps the values into the polynomial domain and scales them by a large factor ∆ to preserve precision during integer-based polynomial arithmetic. Homomorphic operations such as addition and multiplication are then performed on polynomials, corresponding to slot-wise operations on the encoded vector. Table 1 summarizes the HE notations used in this work.                      
+
+> Symbol Description
+> mCleartext vector of real or complex values
+> [m]Plaintext polynomial encoding m
+> JmKCiphertext encrypting plaintext [m]
+> NPolynomial degree
+> QCiphertext modulus, product of primes qi
+> |Q|Bit-length of Q
+> qii-th RNS prime modulus composing QLMaximum multiplicative level (modulus chain length)
+> ℓCurrent level of a ciphertext ( 0≤ℓ≤L)
+> ∆Scaling factor used in encoding
+> Lboot Levels consumed during bootstrapping
+> Leff Effective usable depth after bootstrapping
+> Table 1: Relevant CKKS notation.
+
+2.2.1. Homomorphic Operations. We describe the homo-morphic operations supported by CKKS: addition, multiplica-tion, and rotation, as well as primitives such as NTT/INTT. 
+
+Addition. CKKS supports element-wise addition between a ciphertext and a plaintext ( PAdd : [a] + JbK) or between two ciphertexts ( CAdd : JaK + JbK). In both cases, the operands must reside at the same multiplicative level and have identi-cal scaling factors. The result is a ciphertext JcKadd with the same level and scale. Functionally, this represents a SIMD (element-wise) addition of the underlying cleartext vectors: 
+
+decode (decrypt (JcKadd )) ≈ a⊕b. Addition does not consume any multiplicative levels (L). 
+
+Multiplication. CKKS supports multiplication between a ciphertext and a plaintext ( PMul : [a] · JbK) or between two ciphertexts ( CMul : JaK · JbK). CMul increases the ciphertext’s scale from ∆ to ∆2 and produces a three-component ciphertext 
+
+(d0, d 1, d 2). To manage scale growth and maintain correctness, a rescale step is applied: Rescale (JcK) : ∆ 2 → ∆, which drops the last modulus in the RNS chain and reduces the mul-tiplicative level by one. CMul also requires relinearization ,which eliminates the d2 term via key switching (§2.2.2). The re-sulting ciphertext JcKmul is returned at level ℓ − 1 with restored scaling factor ∆.
+
+Rotation/Automorphism. CKKS supports cyclic rotations (HRot ) of cleartext slots by a user-specified offset k: JcK′ =
+
+Rotate (JcK, k ). Rotations are implemented via Galois auto-morphisms followed by key switching using rotation keys. Rotations preserve the level and scale of the ciphertext with-out consuming multiplicative depth. This operation is essential for vector manipulations, such as matrix multiplication, con-volution, and reduction. 
+
+NTT and INTT. Since homomorphic encryption requires fre-quent polynomial multiplication (naively O(n2)), homomor-phic encryption libraries [269 –281] store the ciphertext in a number theoretic transform (NTT) form. For a given poly-nomial a = a0 + a1x + a2x2 + . . . + aN −1xN −1, we repre-sent its coefficients as a vector a = ( a0, a 1, . . . , a N −1). The polynomial multiplication a ∗ b can be computed as follows: 
+
+a ∗ b = N T T −1(N T T (a) ⊙ N T T (b)) where ⊙ represents the element-wise product and N T T −1 is the inverse NTT. Because the NTT shares characteristics with the finite-field equivalent of the DFT, it can be computed using the Cooley-Tukey algorithm [282,283]. An N -point NTT can be computed in log 2 N stages, each of which involves N/ 2 butterfly opera-tions, reducing computational complexity to O(n log n).
+
+2.2.2. Homomorphic Subroutines. Based on these homo-morphic operations and NTT/INTT primitives, we describe two homomorphic subroutines: key switching and bootstrap-ping. 
+
+Key Switching. When a ciphertext is rotated, or its structure is changed (e.g., after CMul generates the d2 term), it cannot be decrypted under the same secret key. Hence, the cipher-text must be transformed back to the original key using the key-switching mechanism. This process requires three steps. (1) ModUp , where the ciphertext modulus Q is increased to an extended modulus P · Q through an inverse NTT (on the ciphertext), basis extension (BConv) (which becomes a matrix multiplication operation after performing INTT on the cipher-text), and a forward NTT (to return to the original slot domain). (2) EvalKey , where a precomputed evaluation key is multiplied with the changed component in the ciphertext using PMul. (3) Finally, ModReduce removes the extended P basis, returning the ciphertext to the original Q domain. 
+
+Bootstrapping. When a ciphertext reaches level zero, further homomorphic operations become infeasible due to excessive noise. CKKS supports bootstrapping [284 –286] to refresh such ciphertexts by homomorphically evaluating an approximate identity function over the encrypted data. The process requires five steps. (1) ModUp , where the ciphertext modulus Q is in-creased to an extended modulus P · Q, as in key switching. (2) The Slots-to-coefficient (S2C) transformation is applied using an inverse discrete Fourier transform (IDFT), which extracts the SIMD-encoded slots (of the plaintext hidden under the ci-phertext) to the coefficient domain. (3) The EvalMod operation is performed in the slot domain, where a low-degree Cheby-shev polynomial is evaluated to approximate the identity func-tion [287]. (4) Coefficient-to-slot (C2S) transformation is applied, 3which performs a discrete Fourier transform (DFT) to bring the result back to the slot domain for the next homomorphic com-putations. (5) Finally, ModDown removes the extended P basis, returning the ciphertext to the original Q domain. Bootstrap-ping consumes a fixed number of multiplicative levels, Lboot ,yielding an effective usable depth Leff = L − Lboot . Bootstrap-ping is essential for supporting arbitrarily deep homomorphic computations; however, it is computationally expensive. 
+
+2.3. Processing-In-Memory 
+
+Processing-in-memory (PIM) [47, 48, 53, 81 – 238] is a comput-ing paradigm that aims to address the data movement bottle-neck that occurs when data must be moved between mem-ory and compute units in traditional processor-centric sys-tems [41 –77]. This bottleneck is caused by a substantial per-formance gap between processors and memory, often referred to as the memory wall. PIM architectures are becoming a reality, with commercialized systems like the UPMEM PIM architecture [242, 259, 260, 263] and prototyped systems like HBM-PIM [143, 288], AxDIMM [144, 145], and HB-PNM [244] showing significant performance benefits for data-intensive applications. 
+
+## 3. Motivation for using PIM 
+
+Prior architectural studies have largely adopted compute-centric paradigms, optimizing arithmetic throughput for core FHE primitives such as NTTs, polynomial multiplication, and bootstrapping. On CPUs, software-level optimizations such as vectorization (e.g., AVX2/AVX-512), multithreading, cache tuning, and RNS-based arithmetic optimizations improve com-putational performance [289, 290]. However, these approaches are fundamentally constrained by limited memory bandwidth, data transfer between deep cache hierarchies, and insufficient parallelism for FHE’s batched SIMD structure (§2.1). As a re-sult, even optimized CPU implementations exhibit high latency in end-to-end FHE workloads (e.g., neural network inference). GPUs offer high arithmetic throughput and wide SIMD paral-lelism, accelerating basic FHE primitives [78, 291, 292]. How-ever, limited on-chip memory (e.g., a 40 MB L2 cache) and reliance on off-chip DRAM ( <2 TB/s) lead to frequent data movement, especially when FHE ciphertexts (e.g., a single ci-phertext of 40 MB [78]) and evaluation keys (e.g., more than 120 MB [78]) exceed available on-chip capacity. FPGAs enable custom datapaths for FHE operations but face challenges in resource reuse and bandwidth efficiency [293 – 296], limiting their scalability. ASICs achieve significant speedups through tightly integrated designs by deploying 512 MB of on-chip cache [40, 297 –299]. However, their designs are rigid, lack adaptability to evolving FHE schemes, and incur high design costs (e.g., 512 MB of on-chip cache with 2048 custom-logic SIMD lanes). Hence, prior compute-centric designs largely focus on im-proving the performance of homomorphic operations by opti-mizing under the assumption that improvements to compute units are the primary path to better performance. To under-stand the performance tradeoffs of HE operations, we employ a roofline model [300] to visualize the extent to which homomor-phic operations are constrained by memory bandwidth and computational limits. Figure 1 shows the roofline model on an AMD EPYC 7742 CPU (§4). We evaluate four key primitives at two different limb counts, 25 and 30 1: (1) element-wise addi-tion, (2) element-wise multiplication, (3) NTT/INTT, and (4) automorphism. We observe that all of these kernels are funda-mentally limited by memory bandwidth. 2 This data movement bottleneck is further exacerbated when using more compute power (e.g., GPUs) with a small cache to buffer intermediate data. Hence, performance of homomorphic operations can be improved by reducing data movement bottlenecks, making them well-suited for PIM systems [51, 56, 79, 242, 260, 261, 301]. 0.001             
+
+> 0.01
+> 0.1
+> 1
+> 10
+> 100
+> 0.001 0.01 0.1 110
+> INTT NTT HAdd PMul Automorphism
+> Limb count -25
+> Limb count -30
+> Memory Bound
+> Region
+> Peak Compute
+> Performance
+> Performance (in GOPS)
+> Arithmetic Intensity (in Op/Byte)
+> DRAM Bandwidth
+> L3 Bandwidth
+
+Figure 1: Roofline Model of the homomorphic operations (HAdd, PMul, NTT, INTT, and automorphism). 
+
+Prior HE-PIM designs [39, 248, 302, 303] primarily improve HE performance by adding custom logic near memory. While these designs demonstrate the potential of near-memory ex-ecution, they leave open how much of this opportunity can be realized by existing programmable PIM systems and what targeted hardware improvements are required to close the gap. Rather than assuming a custom PIM substrate, we begin with UPMEM, a commercially available PIM architecture [123], quantify the bottlenecks that limit its effectiveness for HE, and model the architectural enhancements needed to make such programmable PIM a viable substrate for HE acceleration. To our knowledge, only one prior work by Gupta et al. [247] in-vestigates the potential of a real-world UPMEM PIM system to accelerate homomorphic operations. Unfortunately, their work only evaluates two basic homomorphic operations ( HAdd 
+
+and PMul ) (§2.1), which use element-wise multiplication and addition kernels on the UPMEM PIM system (§5.2.1). These primitives are limited and primarily support only simple ap-plications (e.g., linear or logistic regression). A general HE application involves all the homomorphic operations and sub-routines described in §2.1, combined in complex ways. Recent work on long-integer NTT execution on UPMEM-PIM [252] further highlights the relevance of real PIM hardware for FHE kernels, but it does not evaluate the full HE operation pipeline needed by end-to-end applications. Notably, the key HE opera-tions in Figure 1 lie near the memory-bound region, implying that higher bandwidth can shift them toward the compute-bound regime. Hence, an in-depth architectural analysis of a PIM system for all homomorphic operations is required to un-derstand the characteristics of homomorphic operations from           
+
+> 1This means that a large ciphertext modulus ( Q) is broken into an RNS chain ( qi) of 25 and 30 small prime moduli Q=q1∗q2∗. . . ∗q25 /30 (§2.2).
+> 2The shaded area at the intersection of DRAM bandwidth and the peak compute performance roof is the memory-bound region in the roofline plot.
+
+4a memory-centric computing perspective, thereby enabling us to design and implement better PIM systems. 
+
+Our goal is to provide a comprehensive experimental char-acterization of homomorphic operations used in HE applica-tions on a real-world PIM architecture to understand their implications for PIM systems. To do so, we develop an end-to-end implementation of core HE operations and subroutines on a real-world UPMEM PIM system to support FHE workflows. 
+
+## 4. Methodology 
+
+To understand the performance impact on a PIM system, we implement the homomorphic operations and subroutines on a real-world UPMEM PIM system for our evaluation. We com-pare the performance of these implementations used across various parameters in an end-to-end privacy-preserving neu-ral network on the PIM system with state-of-the-art CPU and GPU systems. 
+
+The UPMEM PIM Architecture. Fig. 2 shows the high-level system organization of a UPMEM PIM system and the hard-ware architecture of a UPMEM PIM chip. The system includes a regular host CPU 1 , conventional main memory modules 2 , and UPMEM PIM memory modules 3 . Each UPMEM PIM memory module contains two ranks 4 . Each rank has 8 UP-MEM PIM chips 5 . Inside each chip, there are 8 banks . Each bank contains 1) a 64MB DRAM array called MRAM 6 , and 2) a general-purpose DRAM Processing Unit (DPU) 7 which is our PIM core. Core 𝟏 Core 𝟐 Core 𝒏          
+
+> ...Memory
+> Con troller
+> Memory
+> Con troller
+> ...
+> Host CPU
+> Main Memory
+> Module
+> UPMEM PIM
+> Module
+> DDR4
+> Channel
+> DDR4
+> Channel
+> ...
+> UPMEM PIM Ran k
+> x8
+> x8
+> 1
+> 23
+> 4
+> 5
+> DRAM Array
+> (MRAM) 𝟔𝟒𝑴𝑩
+> Bank
+> High Bandwidth
+> Internal Data Bus
+> Fine -Grained
+> Multi -Threaded Pipeli ne
+> Instruction
+> Memory
+> Working Memory
+> (WRAM) 𝟔𝟒𝑲𝑩
+> DRAM Processing Unit (DPU)
+> 6
+> 7
+> UPMEM PIM Chip
+
+Figure 2: High-level system organization of the UPMEM PIM system and the hardware architecture of a UPMEM PIM chip. 
+
+The MRAM implements a standard JEDEC DDR4 DRAM interface accessible to the host CPU. The DPU has an SRAM Instruction Memory, a 64KB SRAM Working Memory (WRAM), and an in-order, fine-grained, multi-threaded pipeline with 11 stages that supports 24 hardware threads. It implements a 32-bit RISC-based Instruction Set Architecture (ISA) with native support for 32-bit integer addition/subtraction and 8-bit integer multiplication. Other more complex arithmetic operations (e.g., integer divisions and floating-point operations) are emulated through software. The DPU does not have a cache but uses the WRAM as a scratchpad memory [240, 241]. Each PIM core has exclusive access to its MRAM (with respect to other DPUs) through a high-bandwidth (up to 0.7GB/s per DPU) internal data bus [127,260]. There are no direct communication channels among DPUs within the UPMEM PIM chip. All inter-DPU communication is handled by the host CPU (i.e., the host CPU first gathers data from the DPUs’ MRAM into the system’s main memory and then distributes it back to the DPUs’ MRAM). 
+
+PIM Programming and Execution Model. PIM programs are written in the C programming language with the UPMEM SDK [304] and runtime libraries. The execution model of a PIM core is based on the Single-Program Multiple-Data (SPMD) paradigm. Each PIM core runs multiple (up to 24) software threads, called tasklets , which execute the same code but op-erate on different data. Each tasklet has its own control flow, independent from other tasklets. Tasklets are assigned to DPUs 
+
+statically by the programmer during compile-time . Tasklets assigned to the same DPU share MRAM and WRAM [305, 306]. 
+
+4.1. System Configurations. 
+
+Performance Measurements. Table 2 shows the system configurations used in our experiments. 
+
+Table 2: Evaluated System Configurations.                   
+
+> CPU Baseline System Processor AMD EPYC 7742 64-core processor @ 2.25GHz
+> Main Memory 1 TB total capacity 32 ×32 GB DDR4 (RDIMMs)
+> GPU Baseline System Processor Intel Xeon Gold 5118 12-core processor @ 2.30GHz
+> Main Memory 512 GB total capacity 16 ×32 GB DDR4 (RDIMMs)
+> GPU 1×NVIDIA A100 (PCIe, 80 GB )
+> UPMEM PIM System Processor Intel Xeon Silver 4215 8-core processor @ 2.50GHz
+> Main Memory 256 GB total capacity 4×64 GB DDR4 (RDIMMs)
+> PIM-Enabled Memory
+> 160 GB total capacity, 20 ×8 GB UPMEM PIM modules, 2560 DPUs, 2 ranks per module, 8 chips per rank, 8 DPUs per chip
+> 350 MHz DPU clock frequency
+
+Baseline CPU and GPU Implementation: We use the CPU baseline system [265] with AMD EPYC 7742 64-core CPUs, and the GPU baseline system [266] with an NVIDIA A100 GPU, on which we evaluate homomorphic operations. We imple-ment our CPU and GPU baselines using the NEXUS frame-work [307], which extends Microsoft SEAL [290] with GPU support and provides both CPU and GPU implementations of homomorphic operations. We implement all homomorphic op-erations and subroutines (§5.3) and compare them individually against our UPMEM PIM implementation. 3
+
+UPMEM-PIM System Configuration and Implementa-tion: The UPMEM PIM [242, 260, 308] system consists of a host CPU with standard main memory and PIM-enabled mem-ory modules known as UPMEM DPU modules. Each module comprises two ranks, each containing 64 DRAM Processing Units (DPUs). Each DPU has exclusive access to 24 KB instruc-tion memory (IRAM), 64 KB scratchpad memory (WRAM), and a 64 MB DRAM bank (MRAM), as shown in Figure 2. The DPUs are multithreaded, in-order, 32-bit Reduced Instruction Set Computing (RISC) cores that can operate at up to 500 
+
+> 3
+
+For a fair comparison, we do not use a cluster of GPUs for our baseline because the UPMEM PIM system is a single-server node. We leave the multi-GPU system comparison for future work. 
+
+5MHz. Each DPU has 24 hardware threads, each with 24 32-bit general-purpose registers. A DPU can perform single-cycle 8-bit multiplication. However, multiplication operations on 32-bit and 64-bit integers, and on 32-bit and 64-bit floats, are not supported by the current ISA and hardware; hence, they require longer software routines to execute. The Single Pro-gram Multiple Data (SPMD) programming paradigm is used on DPUs, where multiple software threads, called tasklets, execute the same code on different data. CPU–PIM and PIM–CPU data transfers can be performed in parallel across multiple DRAM banks. However, transfer sizes to and from all DRAM banks must be the same. With this architecture and its programming model, we describe our implementation of HE operations and subroutines in §5. 
+
+4.2. Workloads 
+
+We characterize a functionally complete set of HE kernels: any computation over encrypted data is decomposed into three ho-momorphic operations: addition ( HAdd , PAdd ), multiplication (PMul , CMul ), and rotation ( HRot ), together with two essen-tial maintenance subroutines: relinearization (dominated by 
+
+BConv and PMul ) and bootstrapping (dominated by EvalMod )(§2.2.1, §2.2.2). Based on these operations and kernels, we im-plement an end-to-end HE-based neural network as described below. 
+
+4.2.1. HE-based Neural Network. We assume that input im-ages reside in the ciphertext domain, whereas model weights and layer parameters remain in plaintext form. 4 Figure 3(a) illustrates the overall flow of HE-based neural network infer-ence, which is expressed by decomposing each layer into a sequence of primitive HE operations and subroutines. Con-volutional layer ( Conv ) adopts an encoding strategy that maps convolution to a homomorphic matrix–vector product. The input image is flattened and packed into the SIMD slots of a ciphertext, while the convolution kernel is encoded as a Toeplitz matrix of dimension T = ( I − K + 1) × I, where each diagonal corresponds to a shift-and-weight operation ap-plied to the input. Figure 3(b) illustrates the use of primitive homomorphic operations as PMul (HRot ([[ t]] , i · 2k · s), P s,i 
+
+),where HRot rotates the ciphertext 1 by the diagonal’s shift offset and PMul multiplies the rotated ciphertext with the cor-responding plaintext weight vector Ps,i 2 . To reduce the cost of repeated rotations and plaintext multiplications, we employ the Baby-Step Giant-Step (BSGS) algorithm [309], which re-structures the Toeplitz matrix into a two-phase schedule that balances rotation count against multiplicative depth. BSGS de-composes the T diagonals into baby steps of size t1 and giant steps of size t2 (where t1 · t2 = T ), lowering the number of required ciphertext rotations from O(T ) to O(t1 + t2), which is minimized at O(√T ) when t1 = t2 = √T .
+
+Nonlinear activation functions pose a fundamental chal-lenge in HE, as ciphertexts cannot be compared or evalu-ated through non-polynomial functions. HE addresses this 
+
+> 4
+
+This threat model [40, 78, 297, 298] ensures client privacy and preserves server secrecy by keeping model parameters locally on the server. 
+
+limitation by approximating common activations (e.g., ReLU, sigmoid) using low-degree Chebyshev polynomials [22, 310], which can be efficiently evaluated homomorphically. Fig-ure 3(c) shows an approximation of the ReLU function using a Chebyshev approximation. However, even low-degree poly-nomial activations introduce significant multiplicative depth (consuming up to 16 multiplicative levels), particularly when composed across multiple layers. To mitigate this, prior works (e.g., [311 –313]) propose fusing the evaluation of the activa-tion polynomial with the bootstrapping procedure, leveraging the fact that CKKS bootstrapping already involves homomor-phic polynomial evaluation ( EvalMod , §2.2.2). By embedding the activation function within the bootstrapping pipeline, this fusion amortizes the depth and latency cost across multiple operations. Figure 3(d) shows that HE-based NN inference is decom-posed into three dominant kernels: Conv (encrypted linear lay-ers via rotations, ciphertext–plaintext multiplication ( PMul ), and ciphertext–ciphertext multiplication ( CMul )), BConv (ba-sis conversion for modulus/RNS switching), and EvalMod 
+
+(modulus/noise management). Thus, characterizing Conv ,
+
+BConv , and EvalMod suffices to capture both individual op-erations and kernels required for end-to-end NN inference performance. ReLU 
+
+> ReL``U
+> ReLU
+> ReLU
+> ReLU
+> Conv
+> ReLU
+> +
+> Conv
+> x
+> ReLU
+
+×8              
+
+> 𝑅𝑒𝐿𝑈 𝑥 =(0,𝑥 <0
+> 𝑥 ,𝑥 ≥0
+> 𝑅𝑒𝐿𝑈 𝑥 ≈0.04547𝑥
+> +1.09134 𝑥 !
+> −1.21260 𝑥 "+⋯
+
+(c) 
+
+> cba
+> fed
+> ihg
+> 321
+> 654
+> 987
+> 000098065
+> 000987654
+> 000870540
+> 098065032
+> 987654321
+> 870540210
+> 065032000
+> 654321000
+> 540210000
+> a
+> b
+> c
+> d
+> e
+> f
+> g
+> h
+> i
+
+×
+
+> stride = 1, padding = 1
+
+(b) 
+
+⇒
+
+(a) 
+
+×                    
+
+> x
+> R
+> R
+> M
+> M
+> N
+> N
+> Aa
+> R
+> R
+> M
+> M
+> N
+> N
+> Ac
+> R
+> R
+> M
+> M
+> N
+> N
+> AbTfA
+> c
+> gT
+> Conv1(x) Conv2(a) Act(b) Conv3(c) Add(f,c) Act(g)
+> Image
+> encrypted
+> in ciphertext
+> (x) (see (b))
+> Rotate ciphertext (R)
+> (using B Conv)
+> to multiply
+> by diagonals (see (b))
+> Ciphertext
+> (Image)
+> Plaintext
+> (Weights)
+> Perform P Mul and
+> HAdd (M, N, A) to
+> perform convolution
+> (called Conv Layer )
+> Perform activation (T)
+> using bootstrapping
+> STC ->EvalMod -> CTS
+> (see (c))
+> Note: CTS and STC are identical
+> to Conv Layer
+> Repeat again for subsequent layers
+> (d) Example conversion of a neural network to three HE kernels/subroutines
+> (Conv, Bconv ,EvalMod ).
+
+Figure 3: Overview of HE-based Neural Network Inference. 
+
+## 5. Implementation 
+
+In this section, we describe our implementation details in three key steps. First, we analyze the inherent parallelism in CKKS ciphertexts, which informs our strategy for data mapping and workload distribution across PIM compute units. Second, we detail the simple element-wise operations and ciphertext mul-tiplications (using NTT implementation). Third, we detail the key homomorphic primitives and subroutines required for HE-based neural network inference and describe how they are implemented under the resource and execution constraints of a real-world PIM system. The architectural characteristics of PIM guide our algorithmic choices and data layout strategies. Note that we target UPMEM as the only publicly available 6PIM platform [123, 241]; however, our implementation follows architecture-agnostic PIM principles (bank-local memory and massive parallelism) and thus generalizes to other PIM designs (e.g., Aquabolt [143]). 
+
+5.1. Parallelism in HE Ciphertexts 
+
+CKKS-based HE schemes expose three inherent levels of par-allelism that enable efficient execution on architectures with many parallel compute units. First, ciphertext-level parallelism allows independent evaluation across multiple ciphertexts, which is especially beneficial in batched workloads where each ciphertext encodes a distinct portion of the input. Sec-ond, limb-level parallelism arises from the RNS representa-tion of ciphertext coefficients, where arithmetic over indepen-dent residues can proceed in parallel within a single cipher-text. Third, CKKS’s slot-based encoding (canonical embedding) packs multiple values into independently operable SIMD slots, enabling vectorized operations inside each limb. Hence, paral-lelism across ciphertexts, RNS limbs, and SIMD slots forms a hierarchical execution structure well-suited to PIM architec-tures for efficiently scaling HE workloads. 
+
+5.2. Homomorphic Operations on PIM 
+
+5.2.1. Element-wise Operations. Both HAdd and PMul are fundamentally element-wise operations. Since the underlying representation uses multiple-limb arithmetic for each poly-nomial coefficient, they operate independently across both ciphertext components and limbs. On PIM, we distribute each limb of every ciphertext component (i.e., JmK = c0, c 1) across different PIM cores. Each PIM core hosts N · qi bits (e.g., 
+
+65536 × 8 bytes) for one limb of one ciphertext. Given L limbs per polynomial and T total ciphertexts, we require 2 × L × T
+
+PIM cores. The additions are performed in parallel without inter-core communication, and no alignment or synchroniza-tion is required. PMul follows the same element-wise structure as HAdd. 
+
+5.2.2. Ciphertext-Ciphertext Multiplication (CMul). 
+
+CMul involves a more complex operation: a multiplication between two ciphertexts Jm1K = c0, c 1 and Jm2K = c′
+
+> 0
+
+, c ′
+
+> 1
+
+,producing three components d0 = c0 · c′
+
+> 0
+
+, d1 = c0 · c′ 
+
+> 1
+
++ c1 · c′
+
+> 0
+
+,and d2 = c1 · c′
+
+> 1
+
+. Each operand component is represented in multiple limbs, and we assume that all limbs for c0, c1, c′
+
+> 0
+
+, and 
+
+c′ 
+
+> 1
+
+are distributed across distinct PIM cores. The multiplica-tions for d0, d1, and partial d2 terms are performed in parallel: 
+
+c0 · c′
+
+> 0
+
+, c1 · c′
+
+> 0
+
+, c0 · c′
+
+> 1
+
+, and c1 · c′ 
+
+> 1
+
+are each assigned to separate groups of PIM cores. Within each group, limb-level parallelism is exploited using multiple PIM cores. Once intermediate prod-ucts are generated, inter-PIM core data transfer is initiated to collect terms required to construct d2. The partial results are summed locally to finalize the ciphertext multiplication. Each multiplication operation (e.g., c0 · c′
+
+> 0
+
+) is a polynomial multipli-cation and uses NTT, element-wise multiplication (called the Hadamard product), and INTT. 
+
+5.2.3. Parallel NTT on PIM. Figure 4 shows the map-ping of NTT and INTT on a PIM system. To accelerate the Number Theoretic Transform (NTT) on PIM, prior works (e.g., [252, 283, 314, 315]) exploit the parallelism in the but-terfly operation by decomposing the transform into a series of modular butterfly operations, which are parallelized across PIM cores at both the coefficient and limb levels. Given a poly-nomial of degree N , each NTT consists of log 2 N stages, where each stage performs modular arithmetic on pairs of coefficients with twiddle factor multiplication. To map this structure ef-ficiently to PIM, we distribute coefficients across PIM cores such that each PIM core is responsible for a fixed subset of the polynomial’s RNS limbs 1 . Within each PIM core, butterfly operations are performed independently across SIMD slots 2 . At each stage, twiddle factors are either preloaded or streamed to the PIM cores, avoiding data-movement bottlenecks. For large polynomial degrees such as N = 2 16 , we decompose the NTT into multiple blocks of coefficients and span them across additional PIM cores 3 . When coefficients span multiple PIM cores, partial results are exchanged via inter-PIM-core com-munication 4 . Hence, multiple PIM cores form a group for a single NTT, and each limb of the ciphertext spans multiple such PIM groups. …                                                                           
+
+> 1
+> PIM Chip
+> PIM Core
+> Tasklet +
+> -×x16 x256
+> …
+> ⇒
+> 2
+> ⇒
+> PIM Chip
+> Tasklet +
+> -×x16
+> 34
+> x256
+> b1b2b3..bn
+> Input
+> b1b2...b256
+> 𝝎 1𝝎 2...𝝎 256
+> b25 7b25 8... b 51 2bn-255 bn-254 ... b n
+> 𝝎 1𝝎 2...𝝎 256 𝝎 1𝝎 2...𝝎 256
+> 𝝎 1𝝎 2...𝝎 256
+> b1b2...b256
+> 𝝎 ’1𝝎 ’2...𝝎 ’256
+> b’1b’ 257 .. . b’ n-255
+> x256
+> b’1b’ 2.. . b’256
+> b’ 257 b’ 258 .. . b’ 512
+> b’n-255 b’ n-254 .. . b’n
+> PIM Chi pPIM Chi pPIM Chi p
+> PIM Core
+
+Figure 4: Dataflow and mapping of NTT on the PIM system for a single limb of a single ciphertext component. 
+
+5.3. Homomorphic Subroutines on PIM 
+
+5.3.1. Key Switching. Key switching is used to restore the ciphertext to its original key structure (§2.2.2). For example, after homomorphic multiplication, relinearization is applied to reduce the ciphertext size from three components back to two by using relinearization keys to eliminate the d2 component. This requires a key-switching subroutine that transforms the 
+
+d2 term into a two-component ciphertext (d02, d 12) under the original secret key. Specifically, the d2 component is multiplied with the relinearization keys (a type of evaluation key), yielding 
+
+(d02, d 12) = ( d2 ·evk 0, d 2 ·evk 1), which themselves are encoded in the extended modulus ( P · Q-domain), and the resulting terms are aggregated and homomorphically added to the d0
+
+and d1 components to produce the relinearized ciphertext. To enable this, we perform a ModUp operation, which re-quires a basis conversion (BConv) operation that expands the modulus of the ciphertext from Q to P ·Q, where P is a special prime basis used to facilitate key switching under the Residue 7Number System (RNS). This conversion is necessary because the evaluation keys are defined over the extended P · Q basis, while d2 exists only in the original Q basis. The ModUp proce-dure consists of three steps. First, we apply the inverse Number Theoretic Transform (INTT) to bring the polynomial coeffi-cients from the NTT domain back into the coefficient (or time) domain (§5.2.3). NTT enables efficient polynomial multiplica-tion by transforming polynomial operands into a pointwise representation, where multiplication reduces to element-wise products. Second, we perform a basis extension using a pre-computed BConv matrix that maps each coefficient from the 
+
+Q-basis to the extended P · Q-basis. This procedure increases the number of RNS limbs, allowing compatibility with the modulus size used in the relinearization. Each coefficient is lifted from Q to P · Q independently, enabling fine-grained parallelism. On PIM, each limb of the d2 ciphertext component and each segment of the relinearization key are distributed across PIM cores. Figure 5 shows the data mapping of matrix multiplica-tion on the PIM system. For the BConv matrix multiplication, which maps coefficients from the Q-basis to the P ·Q-basis, we avoid storing the full transformation matrix on any single PIM core. Instead, each PIM core holds a single ciphertext limb and a single column of the BConv matrix to perform scalar-vector multiplication 1 against all relevant coefficients of a given limb. This approach maximizes data reuse, reduces redundant matrix storage in PIM cores, and enables multiple partial out-puts to be generated in parallel across PIM cores. After the scalar-vector multiplications are completed, the intermediate results are transferred across PIM cores 2 and aggregated 3 to produce complete RNS limbs under the P · Q-basis. Each limb is present in a PIM core, and each PIM core receives multiple scale factors (as shown in Figure 5) extracted from the BConv matrix. This design allows us to fully utilize available paral-lelism while ensuring that intermediate buffers within each PIM core do not exceed the local buffer size. Finally, we apply the forward NTT to return the polynomial to the transform domain. r1 r2 r3 . . rn                          
+
+> s1s2s3..sn
+> .
+> .
+> u1u2u3..un
+> v1v2v3..vn
+> PIM Chip
+> PIM Chip
+> o1o2o3..on
+> .
+> .
+> p1p2p3..pn
+> 1
+> 23
+
+Figure 5: Data mapping of matrix multiplication on the PIM system. 
+
+5.3.2. Bootstrapping. Bootstrapping is the most complex primitive in CKKS and is required to refresh ciphertexts once the available noise budget is exhausted. The full bootstrap-ping procedure consists of the following stages executed in se-quence: (1) modulus raising ( ModUp) , (2) slot-to-coefficient con-version ( S2C ), (3) function evaluation ( EvalMod ), (4) coefficient-to-slot conversion ( C2S ), and (5) modulus reduction ( ModDown ). Steps 1 and 5 are the same as those discussed above (§5.3.1). Once the ciphertext modulus is changed from Q to P · Q, we perform S2C (step 2), which extracts encoded values from the polynomial domain into the SIMD slot representation using an inverse Discrete Fourier Transform (IDFT). The IDFT matrix is precomputed and is part of this operation. This operation requires multiplying the ciphertext by the IDFT matrix (in the plaintext domain), which is the same as performing plaintext matrix-ciphertext multiplication in the Conv layer. Step 4 (C2S ) performs the inverse transformation using a DFT matrix and is structurally identical. Hence, both steps 2 and 4 use the same Conv kernel as §4.2. After ModUp and S2C , polynomial function evaluation  
+
+> EvalMod
+
+is performed over the slots. In standard CKKS boot-strapping, EvalMod approximates the modular reduction func-tion using a low-degree Chebyshev polynomial to refresh the ciphertext’s noise budget. When activation-bootstrapping fusion is employed [312, 313], the activation function (e.g., square, ReLU, or GELU) can be composed with the modular reduction polynomial and evaluated jointly within this step. We represent the polynomial as a product of linear factors, 
+
+f (x) = ( x − a1)( x − a2) . . . (x − an), and evaluate it ho-momorphically using a divide-and-conquer strategy. Figure 5 shows the data layout for EvalMod on multiple PIM cores. Each PIM core contains one limb of the ciphertext, so we divide the PIM cores into multiple groups, each containing the same ci-phertext. Within a group, plaintext subtraction generates pairs of partial values, such as x − a1, x − a2 on one PIM core and 
+
+x−ai−1, x −ai on another, where i is the maximum number of pairs that can be generated in parallel. These pairs are then ho-momorphically multiplied using CMul (§5.2.2) and relinearized (§5.3.1). This structure allows balanced multiplication trees, minimizing multiplicative depth and enabling efficient parallel evaluation across PIM cores. 
+
+## 6. Evaluation 
+
+6.1. Experimental Evaluation Details 
+
+We explain our evaluation in four stages. First, we decompose NN inference into three components: (i) the Conv layer, im-plemented via PMul between a Toeplitz matrix and rotated ciphertexts HRot ;5 (ii) BConv , the basis conversion step used in key switching when rotating ciphertexts for the Conv layer or in CMul ; and (iii) EvalMod , the evaluation of a Chebyshev poly-nomial that approximates the modular reduction function (and, when fused, the activation function) using interleaved CMul 
+
+and BConv subroutines (§6.2). Second, we compare the UP-MEM PIM implementation with a GPU baseline (§6.3). Third, we compare two end-to-end neural networks implemented on the UPMEM PIM system with the CPU baseline (§6.4). Fourth, we quantitatively discuss the implications for current and fu-ture PIM designs (§6.5).       
+
+> 5Note that S2C and C2S are structurally analogous to the Conv layer be-cause both are linear transforms implemented via plaintext matrix–ciphertext multiplication. Characterizing these kernels, therefore, captures end-to-end performance for general HE workloads.
+
+8Parameter Selection. We evaluate several CKKS parameter configurations that represent different trade-offs across polyno-mial degree, modulus size, and multiplicative depth [276, 316]. Table 3 summarizes the evaluated parameter sets. These pa-rameter sets reflect realistic deployment settings under stan-dard security assumptions ( ≥128-bit classical security, vali-dated against the Homomorphic Encryption Security Stan-dard [317] using the parameter recommendations from the Lattigo library [276]). We use the polynomial modulus de-gree N = 2 16 , which is the most common degree in prac-tical CKKS deployments for applications such as neural net-work inference. For N = 2 16 , we construct a modulus chain 
+
+Q = {q0, q 1, . . . , q k} composed of prime moduli. The modulus chains include segments allocated for homomorphic multiplica-tion, rescaling, and transformations such as slot-to-coefficient (S2C), coefficient-to-slot (C2S), and EvalMod, which are re-quired for CKKS bootstrapping (see §2.2 for more details). 
+
+Table 3: CKKS parameter sets used in evaluation.                                                                              
+
+> N|Q|Q:{q1, q 2, . . . , q n}
+> 26 limbs: 216 1547 {60 ,45 ×4,42 ×3,60 ×11 ,58 ×4}
+> 27 limbs: 216 1553 {55 ,60 ×6,30 ×2,55 ×8,53 ×3}
+> 28 limbs: 216 1767 {60 ,40 ×3,39 ×3,60 ×9,56 ×4}
+> 29 limbs: 216 1788 {60 ,45 ,42 ×3,60 ×11 ,58 ×4}
+> 30 limbs: 216 1793 {55 ,60 ×1,30 ×3,55 ×8,53 ×3}
+
+Dataset Sizes. To evaluate the scalability and performance characteristics of homomorphic operations across varying workload intensities, we consider input datasets comprising im-ages with spatial resolutions ranging from 32 ×32 to 512 ×512 .By systematically increasing the input dimension, we capture how different HE operations scale with respect to ciphertext packing density, number of ciphertexts required, and the over-all computational latency and memory footprint. 
+
+Functional Verification. We verify the functional correct-ness of all PIM-based homomorphic operations by decrypting the output ciphertexts and comparing against plaintext com-putation results. All operations produce outputs within the expected CKKS approximation-error bounds, confirming that our PIM implementation preserves the numerical-correctness guarantees of the CKKS scheme. 
+
+6.2. Performance Analysis Against CPU Baselines. 
+
+6.2.1. Evaluation of Convolution Layers ( Conv ). Fig-ure 6(a) shows the execution time of the Conv layer on our PIM system as a function of two parameters: the number of DPUs and the HE parameter choices (expressed as ciphertext limb count). The input image size is fixed to 32 × 32 . We make four observations (#1-#4). 
+
+Obs #1. For a fixed number of PIM cores, the execution time of the Conv layer remains similar across different ciphertext limb counts. For example, the execution times of the Conv operation with limb counts of 26 and 30 are similar. Although increasing the limb count increases the number of plaintext–ciphertext operations from 1600 to 1920, this difference does not affect end-to-end latency. For a fixed PIM configuration, the number 0         
+
+> 10
+> 20
+> 30
+> Limb Count
+> Computation Time Inter-PIM unit transfers
+> 26 27 28 29 30
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> 32x32 64x64 128 x1 28 256 x2 56 512 x5 12
+> Image Size (in pixels)
+> 10 0
+> 10 1
+> 10 2
+> 10 3
+> 10 4
+> Execution Time (in s)  (a)
+> (b)
+
+Figure 6: Total execution time (in s) for the Conv layer on the UPMEM PIM system for (a) varying limb count and (b) varying image sizes compared with the CPU system. 
+
+of execution rounds remains constant (four rounds for 512 PIM cores and a single round for 2048 PIM cores) regardless of the chosen limb count. 
+
+Obs #2. Increasing the number of PIM cores significantly reduces execution time across all ciphertext limb counts. For example, the execution time of the Conv operation on 2048 PIM cores is 2.8× lower than on 512 cores. As HE exposes substantial limb-level parallelism, it maps efficiently to the increased parallel compute capacity of PIM configurations. 
+
+Obs #3. The execution time of the Conv operation on the PIM system is dominated by the cost of the aggregation step. For example, our breakdown of total execution time shows that ∼78% of the time is spent on aggregating rotated cipher-texts. In comparison, plaintext-ciphertext multiplication ac-counts for only 9% of the total time, and data transfers between PIM cores and the host CPU for data layout management ac-count for 12%. This is because all computations are performed in modular arithmetic, where the modulo operation (performed using Barrett reduction [318]) dominates the arithmetic cost and accounts for 96–99% of the total computation time. As the aggregation phase repeatedly invokes Barrett reduction, it becomes the primary contributor to overall execution time. 
+
+Obs #4. The data-transfer time between the PIM cores and the host CPU increases with both the number of PIM cores and the size of the ciphertext limb count. For example, the fraction of total execution time spent on data transfer increases from 12% to 35% as the number of PIM cores increases from 512 to 2048 at 26 limbs. Similarly, for a fixed configuration of 2048 PIM cores, increasing the limb count from 26 to 30 increases the transfer overhead from 35% to 39%. 
+
+Figure 6(b) shows the execution time of the Conv operation on our PIM system as a function of two factors: the number of DPUs and the input image size. The limb count is fixed to 30. We make three observations (#5-#7). 
+
+Obs #5. For a fixed number of PIM cores, doubling the image size doubles the execution time of the Conv operation. 9However, once the image size exceeds the ciphertext size, performance degrades significantly. 
+
+For example, on a 512-core PIM system, the execution time for a 32 × 32 image is 27 .33 s, whereas increasing the image size to 64 × 64 increases the execution time to 58 .7 s. This scaling occurs because increasing the image size increases the number of required ciphertext rotations in proportion to √I (§4.2), resulting in more rotated ciphertexts that must be evaluated and, hence, more PIM-core work. However, when the image size grows beyond the ciphertext capacity, for instance, to 512 × 512 (requiring 262 ,144 slots), performance degrades sharply. The total execution time for a 
+
+512 × 512 image is 1967 .8 s, which is 71 .9× higher than for a 32 × 32 image. This slowdown stems from two factors: (1) the larger image requires multiple ciphertexts to represent the input, increasing the total number of ciphertexts that must be processed, and (2) the number of ciphertext rotations grows with √I, further increasing the overall computational time. 
+
+Obs #6. Increasing the number of PIM cores reduces the execution time of the Conv kernel. For example, the execution time decreases from 27 .3 s to 
+
+15 .6 s and 9.7 s as the number of PIM cores increases from 512 to 1024 and 2048, respectively. This is because the ho-momorphic operations in the Conv layer exhibit substantial parallelism that additional PIM cores can directly exploit. As a result, doubling or quadrupling the number of PIM cores yields a corresponding 2-4× reduction in computation time. 
+
+Obs #7. For smaller data sizes, the execution time on large PIM-core configurations is limited by both data-transfer over-heads and computation. In contrast, for larger data sizes, execution time is dominated solely by the computation phase. For instance, (1) on smaller PIM configurations (512 PIM cores), data-transfer overhead accounts for 12-14% of the to-tal execution time for image sizes ranging from 32 × 32 to 
+
+256 × 256 , but this fraction drops to only 3% for a 512 × 512 
+
+image. (2) For larger PIM configurations (2048 PIM cores), transfer time constitutes 34-40% of the total execution time for 
+
+32 × 32 to 256 × 256 images, while for a 512 × 512 image it de-creases to 11%. This trend arises because the Conv operations on larger images are dominated by computation, particularly the Barrett-reduction [318] operation. Hence, the aggrega-tion phase (which is computation-heavy) becomes the primary contributor to end-to-end latency for large image sizes. 
+
+6.2.2. Evaluation of Basis Conversion ( BConv ). Figure 7(a) 
+
+shows the execution time of the BConv operation on our PIM system as a function of two parameters: the number of DPUs and the HE parameter setting (expressed as ciphertext limb count). The input image size is fixed to 32 × 32 . We make the following observation (#8). 
+
+Obs #8. As the limb count increases, the execution time of the BConv subroutine increases due to the increased latency of NTT and INTT operations. 0         
+
+> 20
+> 40
+> 60
+> 80
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> 32x32 64x64 128 x1 28 256 x2 56 512 x5 12
+> Image Size (in pixels)
+> 0
+> 5
+> 10
+> 15
+> 20
+> Limb Count
+> Computation Time Inter-PIM core transfers
+> 26 27 28 29 30
+> Execution Time (in s)  (a)
+> (b)
+
+Figure 7: Total execution time (in s) for the BConv subroutine on the UPMEM PIM system for (a) varying limb count and (b) varying image sizes compared with the CPU system. 
+
+The execution time of matrix multiplication in the BConv 
+
+subroutine is constant because the twiddle-factor matrix size depends only on the polynomial degree ( N ) and not on the limb count. Hence, the number of PIM execution rounds remains the same. However, the total time spent in the NTT operations (required in the BConv kernel) increases from 64 .1 s to 76 .8 sas the limb count grows. This increase arises because each limb utilizes 256 PIM cores to maximize parallelism for the butterfly computation. Hence, a higher limb count directly increases both the number of execution rounds and the associated data-transfer overhead. 
+
+Figure 7(b) shows the execution time of the BConv oper-ation on our PIM system as a function of two factors: the number of DPUs and the input image size. The limb count is fixed to 30. We make three observations (#9-#11). 
+
+Obs #9. For a fixed number of PIM cores, increasing the image size does not change the total execution time of the 
+
+BConv subroutine. However, once the image size exceeds the ciphertext size, the execution time significantly increases. For example, the latency of each kernel (matrix multiplica-tion, NTT , and INTT ) is independent of the image size. This is because the BConv routine depends only on the number of ciphertexts for a fixed limb count. As a result, the total latency remains nearly constant across image sizes (e.g., 18 .1 s for 512 PIM cores). However, when the image size exceeds the cipher-text size (e.g., 512 × 512 ), a single ciphertext cannot hold the entire input, the number of ciphertexts increases, and the total execution time rises from 18 .1 s to 73 .0 s. 
+
+Obs #10. Data transfer between PIM cores and the host CPU is a major bottleneck in the BConv routine. For example, the total execution time decreases significantly as the number of PIM cores increases from 512 to 1024, but the improvement from 1024 to 2048 cores is comparatively modest. This is because data transfers between the PIM cores and the host CPU dominate the matrix-multiplication phase. For a 512 × 512 image, the computation and transfer times are 52 .6 s and 20 .3 s, respectively, on a 512-core configuration, whereas they are 13 .1 s and 48 .5 s on a 2048-core configuration. Thus, the data movement required across multiple PIM rounds becomes the primary bottleneck, limiting scalability beyond a certain core count. 10 Obs #11. Increasing the number of PIM cores does not al-low the PIM system to outperform the CPU system for the 
+
+BConv subroutine because of the data-transfer bottleneck. 
+
+This is because, for the BConv subroutine, increasing the num-ber of PIM cores also increases data movement. This overhead arises from data layout management and the need to perform data transposition during matrix-matrix multiplication (§5.3.1). 
+
+6.2.3. Evaluation of Polynomial Approximation (EvalMod ). Figure 8(a) shows the execution time of the 
+
+EvalMod operation on our PIM system as a function of two fac-tors: the number of DPUs and the HE parameter choices. The input image size is fixed to 32 ×32. We make two observations (#12-#13). 0         
+
+> 40
+> 80
+> 120
+> 160
+> Limb Count
+> Computation Time Inter-PIM core transfers
+> 26 27 28 29 30
+> 0
+> 200
+> 400
+> 600
+> 800
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> PIM-5 12
+> PIM-1 024
+> PIM-2 048
+> CPU
+> 32x32 64x64 128 x1 28 256 x2 56 512 x5 12
+> Image Size (in pixels)
+> Execution Time (in s)  (a)
+> (b)
+
+Figure 8: Total execution time (in s) for the EvalMod operation on the UPMEM PIM system for (a) varying limb count and (b) varying image sizes compared with the CPU system. 
+
+Obs #12. For a fixed number of PIM cores, increasing the number of limbs increases the execution time of EvalMod .
+
+For example, on a 512-core PIM system, the total execution time for the EvalMod operation increases from 100 .7 s at a limb count of 25 to 144 .8 s at a limb count of 30. A similar trend holds for the 2048-core PIM configuration, where execu-tion time increases from 115 .9 s to 152 .8 s as the limb count increases from 25 to 30. This increase occurs because a higher limb count requires more PIM execution rounds, thereby in-creasing the overall latency. 
+
+Obs #13. The execution time of the PIM system varies sub-stantially with the number of PIM cores used. For example, for a limb count of 25, the total execution time of the EvalMod routine is 100 .7 s on a 512-core PIM system and 
+
+115 .9 s on a 2048-core system. For a limb count of 30, the exe-cution time is 144 .8 s on 512 PIM cores, 129 .7 s on 1024 cores, and increases to 152 .8 s on 2048 PIM cores. This is because increasing the number of PIM cores does not substantially re-duce the computation time of EvalMod , while the associated data-transfer overhead grows with core count. The combined effect of limited computational speedup and increasing transfer overhead determines the performance tradeoff, indicating that 
+
+EvalMod is largely compute-bound and does not benefit sig-nificantly from additional parallel units; synchronization and communication costs instead degrade performance at higher PIM-core counts. 
+
+Figure 8(b) shows the execution time of the EvalMod op-eration on our PIM system as a function of two factors: the number of DPUs and the input image size. The limb count is fixed to 30. Similar to the BConv routine, increasing the image size does not affect the execution time for a fixed number of PIM cores until the image size exceeds the ciphertext capacity. We make two observations (#14-#15). 
+
+Obs #14. Computation time is a significant bottleneck in the EvalMod operation. For example, on a 512-core PIM system, computation ac-counts for approximately 93% of the total execution time across all image sizes when a single ciphertext is sufficient, and this fraction increases to 97% when multiple ciphertexts are re-quired. On a 2048-core system, computation constitutes about 76% of the total execution time with a single ciphertext and up to 85% when multiple ciphertexts are involved. This is because the EvalMod routine is dominated by extensive element-wise operations, which impose substantial computational cost re-gardless of the image size. 
+
+Obs #15. The CPU outperforms PIM for the EvalMod op-eration. This is because the EvalMod operation uses the same cipher-text to perform the polynomial approximation. As a result, the CPU exploits very high data reuse, whereas our PIM system lacks computational power due to the absence of a 64-bit mod-ular hardware multiplier unit. 
+
+6.3. Performance Analysis Against GPU Baselines. 
+
+Figure 9 shows the execution time (in s) of element-wise op-erations ( CAdd , ScalarMul ) on two vectors of 1024 ciphertexts, and three homomorphic operations/subroutines ( Conv , BConv ,
+
+EvalMod ) for a 32 ×32 image. We make three observations (#16-#18). 0.001          
+
+> 0.01
+> 0.1
+> 1
+> 10
+> 100
+> 1000
+> 12345
+> GPU PIM-2048
+> 10 3
+> 10 2
+> 10 1
+> 10 0
+> 10 -1
+> 10 -2
+> 10 -3
+> 1024 Ciphertexts
+> CAdd Scalar Mul Conv BConv EvalMod
+> Image Size (in pixels): 32x32
+> Execution Time  (in s)
+
+Figure 9: Total execution time (in s) for all operations/subrou-tines on the UPMEM PIM system compared with a GPU system. 
+
+Obs #16. The PIM system outperforms the GPU system for 
+
+element -wise operations (CAdd, Scalar Mul). 
+
+This is because the element -wise operations (CAdd, ScalarMul) can be highly parallelized and require no data transfer between the PIM cores. In contrast, GPUs move data from the host’s main memory to GPU memory and then to the compute units. Gupta et al. [247] report a similar observation, and our results are consistent with theirs. 
+
+Obs #17. The GPU significantly outperforms the PIM sys-tem for Conv , BConv , and EvalMod .11 (1) For the Conv layer on a 32 × 32 input with a limb count of 30, the GPU achieves an execution time of 0.2 s, whereas the PIM system (2048 cores) requires 9.3 s. (2) For the BConv sub-routine, the GPU executes the computation in 0.06 s compared to 15 .4 s on the PIM system. (3) For the EvalMod operation, the GPU execution time is 1.2 s, while the PIM system requires 
+
+152 .8 s. This is due to two key factors. First, GPUs provide native 64-bit integer multipliers. In contrast, UPMEM PIM cores ex-pose only 8-bit multipliers and emulate 64-bit arithmetic via a sequence of shift-and-multiply micro-operations, resulting in significantly higher latency per multiplication. Second, mod-ern GPUs incorporate specialized multiply-and-accumulate (MAC) units, which directly accelerate homomorphic opera-tions such as HMul , HRot , and the matrix-multiplication steps in BConv .
+
+Obs #18. The GPU system cannot process large image sizes because of out-of-memory constraints when using a single-GPU configuration. Although GPUs offer high throughput, their HBM capacity (typically 40–80 GB) can limit large FHE workloads. On a single A100, inputs beyond 256 ×256 exceed memory because Conv 
+
+requires a Toeplitz matrix and many rotated ciphertexts whose footprint scales rapidly with image size; deeper networks (e.g., AlexNet/ResNet) further amplify this via intermediate cipher-text accumulation. We note that this out-of-memory limitation may also be partially attributable to the memory management of the specific library used (NEXUS [307]); other implemen-tations with more memory-efficient strategies may support somewhat larger inputs on the same hardware. Consequently, prior GPU-based FHE studies typically evaluate only small inputs (e.g., 32 ×32) [292]. While multi-GPU execution could mitigate capacity limits, it requires partitioning ciphertexts and computations across devices and introduces inter-GPU communication via PCIe [319] or NVLINK [320]. Since current FHE libraries do not support multi-GPU execution, we leave this to future work. 
+
+6.4. Evaluation of End-to-End Neural Networks. 
+
+We compare the performance of two end-to-end neural net-works (LoLA-x2 [23], LeNet-ReLU [321]) for a single MNIST im-age of size 32 ×32 ×3. For LoLA, we use 5 limbs with N = 2 16 ,and for LeNet, we use 30 limbs with N = 2 16 . Figure 10 shows the execution time (in s) for the two networks. We observe that the CPU system is 16.6 ×/64.0 × faster than the HE-based NN implementation (LoLA-x2/LeNet-ReLU) on existing UPMEM-PIM systems, due to slower individual kernels/subroutines. LoLA-x2 is a simple network that does not require bootstrap-ping and spends 7% and 93% of the total execution time in Conv 
+
+and BConv , respectively. LeNet-ReLU involves a complex acti-vation function, which requires bootstrapping and spends 6%, 63%, and 31% of the total time in Conv , BConv , and EvalMod .6     
+
+> 6Note that we consider the latency of S2C and C2S in Conv .0
+> 20
+> 40
+> 60
+> 80
+
+Conv Bconv EvalMod      
+
+> 2.4s 7% 93%
+> CPU CPU PIM PIM
+> LoLA -x2LeNet -ReLU
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> x10 3
+> 0
+> 1
+> 2
+> 3
+> 4
+> 63%
+> 31%
+> Execution Time
+> (in s)
+> 0
+> 20
+> 40
+> 60
+> 80
+> Figure 10: Execution time (in s) for end-to-end neural networks.
+
+6.5. Discussion on Future PIM Systems for HE 
+
+We identify key limitations of current PIM platforms and moti-vate an HE-optimized future PIM system, which we model and compare against CPU/GPU baselines. Overall, existing PIM sys-tems underperform CPUs and GPUs due to two limitations: (i) the absence of wide (e.g., 64-bit) hardware modular arithmetic such as Barrett multiplication [318, 322], and (ii) the lack of di-rect communication links between PIM cores [259,260,263,264]. These constraints are also common in other PIM designs (e.g., Samsung Aquabolt [143], SK Hynix AiM [262]), which similarly lack modular units and hardware interconnect support. 
+
+1) Improving Arithmetic Throughput in PIM Cores. 
+
+The computational throughput of current PIM cores is fun-damentally limited by the absence of a native 64-bit integer modular multiplier. We observe that each PIM core spends 99% of its time performing modulo operations (i.e., Barrett reduc-tion) for modular addition (used in HAdd ) and 96% for modular multiplication (used in PMul , CMul , and other subroutines). Adopting a hardware-based Barrett multiplier can eliminate the need for costly software emulation of modular operations. 
+
+2) Support for Interconnects. Our analysis (§6.2.2) shows that the BConv kernel is bottlenecked by data movement be-tween PIM cores. This is because existing PIM systems have very limited memory capacity per PIM core and therefore re-quire frequent communication between PIM cores [259, 260, 264]. In contrast, state-of-the-art GPU systems treat GPU mem-ory as a unified address space (e.g., a single 40 GB or 80 GB memory in A100 GPUs), where all compute units can access the full memory capacity. This limitation worsens when each PIM core is augmented with a modular multiplier, which improves arithmetic throughput but exacerbates the data-movement bot-tleneck. 
+
+Methodology and Baselines. We evaluate the perfor-mance potential of an HE-optimized PIM architecture using the UPMEM PIM simulator, modeling three designs: 
+
+◦ PIM-Barrett : We augment each PIM core with a multi-stage 64-bit Barrett multiplier, which is pipelined to produce output every cycle. This configuration quantifies the benefit of only accelerating modular arithmetic. 
+
+◦ PIM-Barrett-Ideal-Net : Building on PIM-Barrett, we as-sume an ideal, zero-latency, all-to-all interconnect among PIM cores. Under this model, any core can transfer data to another bank without communication delay, effectively treating the PIM system as a single unified memory. This configuration provides a best-case bound on performance when inter-core data movement is not a limiting factor. 
+
+◦ PIM-Barrett-Net : We use a realistic interconnect model 12 proposed in prior work, PIMnet [323]. The simulator ac-counts for finite bandwidth and data-transfer latency, con-sistent with the PIMnet design. This configuration serves as a state-of-the-art baseline for inter-DPU communication. We evaluate three configurations in the UPMEM PIM simu-lator with 2048 cores by extending in two dimensions: (i) we add a multi-stage 64-bit Barrett modular multiplier with one modular multiplication per cycle, replacing software-emulated modulo operations, and (ii) we model inter-DPU communi-cation as a byte-parameterized cost with zero latency (Ideal) or fixed latency/bandwidth (PIMnet). The baseline UPMEM platform has 64 DPUs per rank and a bandwidth limit of 4.74 GB/s (CPU →DPU) and 6.68 GB/s (DPU →CPU) [259]. PIMnet enables direct bank-to-bank transfers with 179.2 GB/s aggre-gated per-rank send+receive bandwidth [323]. We execute the same HE kernels/subroutines across all configurations, record total simulated cycles, convert to latency using the modeled frequency, and compare against CPU, GPU, and the unmodified UPMEM baseline. 
+
+Figure 11 shows the execution time (in s) of three homo-morphic operations/subroutines ( Conv , BConv , EvalMod ) for a 32 ×32 image size. We make four observations. 0.01       
+
+> 0.1
+> 1
+> 10
+> 100
+> Conv Bconv EvalMod
+> CPU GPU PIM-Baseline
+> PIM-Barrett PIM-Barrett-Ideal-Net PIM-Barrett-Net
+> 10 -2
+> 10 -1
+> 10 0
+> 10 1
+> 10 2
+> Execution Time ( in s )
+> 426.1x
+> 641.0x
+> 214.1x
+> Figure 11: Total execution time on three PIM designs compared with the existing PIM system, CPU, and GPU systems.
+
+◦ First, PIM-Barrett improves modular addition/multiplication by 158.5 × on average, and yields up to 2.3 × speedup for 
+
+Conv , 1.26 × for BConv , and 3.6 × for EvalMod on 32 ×32 inputs compared to PIM-Baseline. We observe that PIM-Barrett outperforms PIM-Baseline only for the Conv layer because it is bottlenecked by computations. Similarly, for 
+
+EvalMod , PIM-Barrett achieves performance comparable to the CPU; however, increasing computational capability exacerbates data-movement overheads, preventing further gains over CPU execution. Moreover, PIM-Barrett underper-forms the CPU for BConv and the GPU across all kernels, as inter-core data movement remains the dominant bottleneck. 
+
+◦ Second, PIM-Barrett-Ideal-Net provides 426.1 ×/641.0 ×/214.1 × speedups over PIM-Baseline for Conv /BConv /
+
+EvalMod , respectively. It outperforms the CPU by 163.8 ×/23.5 ×/42.3 × and the GPU by 5.3 ×/1.4 ×/1.06 × across 
+
+Conv /BConv /EvalMod .
+
+◦ Third, for EvalMod , PIM-Barrett-Ideal-Net is only 1.06 ×
+
+faster than the GPU because EvalMod repeatedly evaluates a polynomial on the same ciphertext via a divide-and-conquer scheme (§5.3.2), yielding high data reuse but limited inter-ciphertext parallelism. Further performance improvement, therefore, requires scaling out with more PIM cores/chips to better exploit parallelism within EvalMod .
+
+◦ Fourth, PIM-Barrett-Net executes Conv /BConv /EvalMod 
+
+in 0.29/0.85/3.45 s, corresponding to 20.4 ×/1.14 ×/8.75 ×
+
+speedups over the CPU. BConv improves only marginally because it incurs frequent transfers across INTT → mat-mul → NTT; higher bandwidth helps, but communication frequency dominates, whereas CPUs/GPUs benefit from a unified memory space. Overall, PIM-Barrett-Net still lags the GPU due to (i) frequent inter-bank data movement driven by small bank-local memory and (ii) lower operating frequency than the GPU. 
+
+Hardware Overhead of PIM-Barrett-Net. PIM-Barrett-Net adds two hardware units to the existing PIM-Baseline: (i) a PIMnet-based interconnect [323] and (ii) a 64-bit modular Barrett multiplier. Prior work (PIMNet [323]) reports area and power overheads from synthesizing the Verilog implementa-tion with OpenRoad 45nm technology (NANDgate45) [324] and restricts the design to three metal layers (similar to DRAM technology). The overhead of the interconnect unit is 0.013 mm 2 in area and 17 mW in power consumption per rank. We use the same methodology to calculate the area and power overhead of a 64-bit Barrett multiplier. We design a 26-stage 64-bit Barrett multiplier [318] that produces output every cycle, occupying 0.083 mm 2 and consuming 17 .3 mW per bank. This overhead is negligible compared to the DRAM die area [325]. 
+
+## 7. Discussion 
+
+Scalability. PIM systems scale effectively for computation-dominated kernels because of their modular design. For exam-ple, 8 PIM modules provide 2560 PIM cores, and scaling to 16 or more modules provides more computational capacity. This increased parallelism can directly accelerate the Conv layer, as it is dominated by computations (§6.2), and more PIM modules can exploit the inherent parallelism of HE (§5.1). However, for communication-heavy kernels such as BConv and EvalMod ,scaling is limited by inter-core data movement and synchro-nization overheads (§6.2.2, §6.2.3), and adding more PIM cores yields diminishing returns without improved interconnects. Scaling a PIM system is efficient in terms of both cost and power consumption compared to GPU systems [79, 259, 261]. 
+
+Optimal Interconnect Design. PIM performance can be substantially improved through a better interconnect co-design. While PIMnet [323] adopts a hierarchical ring–crossbar–bus topology, communication in HE-based kernels is dominated by all-to-all communication and the structured patterns of NTT/INTT. Interconnects that explicitly target these patterns, e.g., by incorporating hardware-based butterfly-style permuta-tions [315] or leveraging rearrangeable networks such as the Beneš network [40, 326], can narrow the gap between practical designs and the PIM-Barrett-Ideal configuration. 
+
+Optimal HE parameters. PIM systems can efficiently scale to large limb counts (e.g., 30 in our evaluation) by leveraging limb-level parallelism across many cores. Increasing the num-ber of limbs reduces the frequency of costly bootstrapping, thereby improving HE performance. In contrast, higher limb counts increase memory footprint and data-movement over-13 heads on CPU/GPU platforms (§6). Hence, future PIM archi-tectures can be tuned to use large limb counts, with different memory-to-compute ratios that help manage noise growth and minimize bootstrapping overhead. 
+
+## 8. Related Work 
+
+To our knowledge, this paper is the first to implement and rig-orously evaluate all homomorphic operations and subroutines on a real-world PIM system used in modern applications. We describe other related works. 
+
+Software-based HE Libraries: State-of-the-art HE libraries (e.g., [269 –281]) implement the BFV, BGV, and CKKS schemes with extensive algorithmic optimization, including optimized RNS pipelines, fused modular arithmetic, and highly tuned NTT kernels that maximize memory locality and minimize noise growth. We leave these intensive algorithm optimiza-tions for future work. 
+
+Hardware Acceleration. Several accelerators and libraries for HE on compute-centric platforms (e.g., GPUs and FPGAs) have been developed. For example, Intel HEXL [289] pro-vides highly optimized polynomial-arithmetic kernels for AVX-equipped CPUs [327]. GPU-based systems (e.g., CuHE [291], CuFHE [292], ARK [78]) accelerate core HE kernels by exploit-ing high-throughput SIMD parallelism. FPGA-based imple-mentations (e.g., [289, 328 –335]) exploit reconfigurable data-paths for efficient polynomial arithmetic, but are limited by programmable-logic resources and memory-bandwidth con-straints. ASIC-based accelerators (e.g., F1 [297], Craterlake [40], BTS [298], SHARP [299], Cheetah [26]) achieve substantially higher throughput by leveraging large on-chip SRAM and cus-tom parallel units. However, GPU, FPGA, and ASIC designs all face data movement bottlenecks as ciphertext sizes grow. 
+
+Processing-in-memory (PIM). Prior PIM-based solutions for HE primarily explore simple arithmetic kernels that can benefit from execution on parallel PIM chips. While basic operations such as ciphertext addition and coefficient-wise multiplication map well to PIM, more complex kernels (e.g., NTT and key switching) require non-local communication that exceeds the limited scratchpad and inter-bank connectivity of existing PIM systems. FheMem [248] attempts to address this challenge by adding horizontal links and inter-bank communication, but doing so requires substantial modifications to commodity HBM chips. Prior works (e.g., [251, 252, 315, 336, 337]) are limited to NTT and do not evaluate large-scale workloads. Existing HE accelerators do not resolve the fundamental trade-off between arithmetic throughput and data movement. GPU- and ASIC-based designs provide high computational ca-pability but are ultimately limited by the ciphertext footprint and the associated memory-transfer overheads. In contrast, prior PIM-based approaches reduce data movement but have not demonstrated how to efficiently support the full execution pipeline of HE schemes. Our work bridges this gap by identi-fying which CKKS kernels most benefit from in-memory exe-cution, determining where hybrid execution (PIM + host/GPU) is necessary, and quantifying the resulting performance and communication trade-offs across the end-to-end HE workflow. 
+
+## 9. Conclusion 
+
+This work presents the first comprehensive characterization of core HE operations on a real-world general-purpose PIM system. We implement and evaluate key HE operations and subroutines on PIM and analyze their performance and scalabil-ity. Our results show that PIM is well-suited for memory-bound HE kernels (e.g., ciphertext addition and convolution) by ex-ploiting large-scale parallelism. However, compute-intensive and communication-heavy kernels (e.g., BConv , EvalMod ) are limited by the lack of wide-precision arithmetic units and inter-DPU communication support. We hope our study provides a foundation for designing future PIM architectures that are bet-ter optimized for homomorphic workloads, and that our design recommendations can guide both hardware architects and HE software developers toward more efficient algorithm-hardware co-design. 
+
+## References                                                    
+
+> [1] R. L. Rivest, L. Adleman, and M. L. Dertouzos, “On Data Banks and Privacy Homo-morphisms,” in FSC , 1978. [2] O. Regev, “On Lattices, Learning with Errors, Random Linear Codes, and Cryptog-raphy,” Journal of the ACM , 2009. [3] V. Lyubashevsky, C. Peikert, and O. Regev, “On Ideal Lattices and Learning with Errors over Rings,” in EUROCRYPT 2010 , 2010. [4] C. Gentry, “Fully Homomorphic Encryption Using Ideal Lattices,” in STOC , 2009. [5] C. Gentry, “A Fully Homomorphic Encryption Scheme,” Ph.D. dissertation, Stanford University, 2009. [6] Z. Brakerski and V. Vaikuntanathan, “Efficient Fully Homomorphic Encryption from (Standard) LWE,” in FOCS , 2011. [7] Z. Brakerski, C. Gentry, and V. Vaikuntanathan, “(Leveled) Fully Homomorphic Encryption without Bootstrapping,” in ITCS , 2012. [8] N. P. Smart and F. Vercauteren, “Fully Homomorphic SIMD Operations,” Designs, Codes and Cryptography , 2014. [9] C. Gentry, A. Sahai, and B. Waters, “Homomorphic Encryption from Learning with Errors: Conceptually-Simpler, Asymptotically-Faster, Attribute-Based,” in
+> CRYPTO 2013, Part I , 2013. [10] S. Halevi and V. Shoup, “Design and Implementation of HElib: a Homomorphic Encryption Library,” Cryptology ePrint Archive, Report 2020/1481, 2020. [11] M. van Dijk, C. Gentry, S. Halevi, and V. Vaikuntanathan, “Fully Homomorphic Encryption over the Integers,” in EUROCRYPT 2010 , 2010. [12] Z. Brakerski, “Fully Homomorphic Encryption without Modulus Switching from Classical GapSVP,” in CRYPTO , 2012. [13] C. Gentry and S. Halevi, “Implementing Gentry’s Fully-Homomorphic Encryption Scheme,” in EUROCRYPT 2011 , 2011. [14] A. Acar, H. Aksu, A. S. Uluagac, and M. Conti, “A Survey on Homomorphic Encryption Schemes: Theory and Implementation,” ACM Computing Surveys , 2018. [15] C. Peikert, “A Decade of Lattice Cryptography,” Foundations and Trends in Theoret-ical Computer Science , 2016. [16] R. L. Rivest, A. Shamir, and L. Adleman, “A Method for Obtaining Digital Signatures and Public-Key Cryptosystems,” Communications of the ACM , 1978. [17] T. ElGamal, “A Public Key Cryptosystem and A Signature Scheme Based on Discrete Logarithms,” IEEE Trans. Inf. Theory , 1985. [18] P. Paillier, “Public-Key Cryptosystems Based on Composite Degree Residuosity Classes,” in Eurocrypt , 1999. [19] M. Ogburn, C. Turner, and P. Dahal, “Homomorphic Encryption,” PROCS , 2013. [20] D. Tourky, M. ElKawkagy, and A. Keshk, “Homomorphic Encryption The “Holy Grail” of Cryptography,” in ICCC 2016 .[21] X. Yi, R. Paulet, E. Bertino, X. Yi, R. Paulet, and E. Bertino, Homomorphic encryption ,2014. [22] R. Gilad-Bachrach, N. Dowlin, K. Laine, K. Lauter, M. Naehrig, and J. Wernsing, “CryptoNets: Applying Neural Networks to Encrypted Data With High Throughput and Accuracy,” in ICML , 2016. [23] A. Brutzkus, R. Gilad-Bachrach, and O. Elisha, “Low Latency Privacy Preserving Inference,” in ICML , 2019. [24] C. Juvekar, V. Vaikuntanathan, and A. Chandrakasan, “GAZELLE: A low latency framework for secure neural network inference,” in USENIX Sec. , 2018. [25] P. Mishra, R. Lehmkuhl, A. Srinivasan, W. Zheng, and R. A. Popa, “Delphi: A cryptographic inference service for neural networks,” in USENIX Sec. , 2020. [26] B. Reagen, W.-S. Choi, Y. Ko, V. T. Lee, H.-H. S. Lee, G.-Y. Wei, and D. Brooks, “Cheetah: Optimizing and Accelerating Homomorphic Encryption for Private Inference,” in HPCA , 2021. [27] E. Lee, J.-W. Lee, J. Lee, Y.-S. Kim, Y. Kim, J.-S. No, and W. Choi, “Low-Complexity Deep Convolutional Neural Networks on Fully Homomorphic Encryption Using Multiplexed Parallel Convolutions,” in ICML , 2022.
+
+14 [28] Zama, “Concrete-ML: Privacy-Preserving Machine Learning Using Fully Homo-morphic Encryption,” https://github.com/zama-ai/concrete-ml, 2022. [29] S. Bian, Z. Zhang, H. Pan, R. Mao, Z. Zhao, Y. Jin, and Z. Guan, “HE 3DB: An Efficient and Elastic Encrypted Database via Arithmetic-and-Logic Fully Homomorphic Encryption,” in CCS , 2023. [30] Z. Zhang, S. Bian, Z. Zhao, R. Mao, H. Zhou, J. Hua, Y. Jin, and Z. Guan, “ArcEDB: An Arbitrary-Precision Encrypted Database via (Amortized) Modular Homomor-phic Encryption,” in CCS , 2024. [31] X. Ren, L. Su, Z. Gu, S. Wang, F. Li, Y. Xie, S. Bian, C. Li, and F. Zhang, “HEDA: Multi-Attribute Unbounded Aggregation over Homomorphically Encrypted Database,” 
+
+PVLDB , 2022. [32] M. Kabra, R. Nadig, H. Gupta, R. Bera, M. Frouzakis, V. Arulchelvan, Y. Liang, H. Mao, M. Sadrosadati, and O. Mutlu, “CIPHERMATCH: Accelerating Homomor-phic Encryption-Based String Matching via Memory-Efficient Data Packing and In-Flash Processing,” in ASPLOS , 2025. [33] S. Angel, H. Chen, K. Laine, and S. T. V. Setty, “PIR with Compressed Queries and Amortized Query Processing,” in S&P , 2018. [34] M. H. Mughees, H. Chen, and L. Ren, “OnionPIR: Response Efficient Single-Server PIR,” in CCS , 2021. [35] S. J. Menon and D. J. Wu, “Spiral: Fast, High-Rate Single-Server PIR via FHE Composition,” in S&P , 2022. [36] A. Henzinger, M. M. Hong, H. Corrigan-Gibbs, S. Meiklejohn, and V. Vaikun-tanathan, “One Server for the Price of Two: Simple and Fast Single-Server Private Information Retrieval,” in USENIX Sec. , 2023. [37] H. Chen, K. Laine, and P. Rindal, “Fast Private Set Intersection from Homomorphic Encryption,” in CCS , 2017. [38] J. Kim, S. Yun, H. Ji, W. Choi, S. Kim, and J. H. Ahn, “Anaheim: Architecture and Algorithms for Processing Fully Homomorphic Encryption in Memory,” in HPCA ,2025. [39] S. Gupta, R. Cammarota, and T. Š. Rosing, “MemFHE: End-to-end Computing with Fully Homomorphic Encryption in Memory,” TECS , 2022. [40] N. Samardzic, A. Feldmann, A. Krastev, N. Manohar, N. Genise, S. Devadas, K. El-defrawy, C. Peikert, and D. Sanchez, “Craterlake: A Hardware Accelerator for Efficient Unbounded Computation on Encrypted Data,” in ISCA 2022 .[41] O. Mutlu, “Memory Scaling: A Systems Architecture Perspective,” IMW , 2013. [42] O. Mutlu and L. Subramanian, “Research Problems and Opportunities in Memory Systems,” SUPERFRI , 2014. [43] J. Dean and L. A. Barroso, “The Tail at Scale,” Communications of the ACM , 2013. [44] S. Kanev, J. P. Darago, K. Hazelwood, P. Ranganathan, T. Moseley, G.-Y. Wei, and D. Brooks, “Profiling a Warehouse-Scale Computer,” in ISCA , 2015. [45] M. Ferdman, A. Adileh, O. Kocberber, S. Volos, M. Alisafaee, D. Jevdjic, C. Kaynak, A. D. Popescu, A. Ailamaki, and B. Falsafi, “Clearing the Clouds: A Study of Emerging Scale-Out Workloads on Modern Hardware,” in ASPLOS , 2012. [46] L. Wang, J. Zhan, C. Luo, Y. Zhu, Q. Yang, Y. He, W. Gao, Z. Jia, Y. Shi, S. Zhang, C. Zheng, G. Lu, K. Zhan, X. Li, and B. Qiu, “BigDataBench: A Big Data Benchmark Suite From Internet Services,” in HPCA , 2014. [47] A. Boroumand, S. Ghose, Y. Kim, R. Ausavarungnirun, E. Shiu, R. Thakur, D. Kim, A. Kuusela, A. Knies, P. Ranganathan, and O. Mutlu, “Google Workloads for Consumer Devices: Mitigating Data Movement Bottlenecks,” in ASPLOS , 2018. [48] A. Boroumand, S. Ghose, B. Akin, R. Narayanaswami, G. F. Oliveira, X. Ma, E. Shiu, and O. Mutlu, “Google Neural Network Models for Edge Devices: Analyzing and Mitigating Machine Learning Inference Bottlenecks,” in PACT , 2021. [49] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, “Enabling Practical Processing in and near Memory for Data-Intensive Computing,” in DAC , 2019. [50] O. Mutlu et al. , “Processing Data Where It Makes Sense: Enabling In-Memory Computation,” MicPro , 2019. [51] S. Ghose, A. Boroumand, J. S. Kim, J. Gómez-Luna, and O. Mutlu, “Processing-in-Memory: A Workload-driven Perspective,” IBM JRD 2019 .[52] M. Alser, Z. Bingöl, D. Senol Cali, J. Kim, S. Ghose, C. Alkan, and O. Mutlu, “Accelerating Genome Analysis: A Primer on an Ongoing Journey,” IEEE Micro ,2020. [53] D. S. Cali, G. S. Kalsi, Z. Bingöl, C. Firtina, L. Subramanian, J. S. Kim, R. Ausavarung-nirun, M. Alser, J. Gomez-Luna, A. Boroumand et al. , “GenASM: A High-Performance, Low-Power Approximate String Matching Acceleration Framework for Genome Sequence Analysis,” in MICRO , 2020. [54] S. Koppula, L. Orosa, A. G. Yağlıkçı, R. Azizi, T. Shahroodi, K. Kanellopoulos, and O. Mutlu, “EDEN: Enabling Energy-Efficient, High-Performance Deep Neural Network Inference using Approximate DRAM,” in MICRO , 2019. [55] K. Kanellopoulos, N. Vijaykumar, C. Giannoula, R. Azizi, S. Koppula, N. Man-souri Ghiasi, T. Shahroodi, J. Gomez-Luna, and O. Mutlu, “SMASH: Co-designing Software Compression and Hardware-Accelerated Indexing for Efficient Sparse Matrix Operations,” in MICRO , 2019. [56] G. F. Oliveira, J. Gómez-Luna, L. Orosa, S. Ghose, N. Vijaykumar, I. Fernandez, M. Sadrosadati, and O. Mutlu, “DAMOV: A New Methodology and Benchmark Suite for Evaluating Data Movement Bottlenecks,” IEEE Access , 2021. [57] G. Narancic, P. Judd, D. Wu, I. Atta, M. Elnacouzi, J. Zebchuk, J. Albericio, N. E. Jerger, A. Moshovos, K. Kutulakos et al. , “Evaluating the Memory System Behavior of Smartphone Workloads,” in SAMOS , 2014. [58] G. Ayers, J. H. Ahn, C. Kozyrakis, and P. Ranganathan, “Memory Hierarchy for Web Search,” in HPCA , 2018. [59] Z. Jia, J. Zhan, L. Wang, C. Luo, W. Gao, Y. Jin, R. Han, and L. Zhang, “Understanding Big Data Analytics Workloads on Modern Processors,” TPDS , 2016. [60] S. Manegold, P. A. Boncz, and M. L. Kersten, “Optimizing Database Architecture for the New Bottleneck: Memory Access,” The VLDB Journal , 2000. [61] A. Gholami, Z. Yao, S. Kim, C. Hooper, M. W. Mahoney, and K. Keutzer, “AI and Memory Wall,” IEEE Micro , 2024. [62] H. Stengel, J. Treibig, G. Hager, and G. Wellein, “Quantifying Performance Bot-tlenecks of Stencil Computations Using the Execution-Cache-Memory Model,” in 
+
+ISC , 2015. [63] Z. Chishti and B. Akin, “Memory System Characterization of Deep Learning Workloads,” in MEMSYS , 2019. [64] D. C. Burger, J. R. Goodman, and A. Kagi, “The Declining Effectiveness of Dynamic Caching for General-Purpose Microprocessors,” University of Wisconsin-Madison, Tech. Rep. 1261, 1995. [65] U. Gupta, C.-J. Wu, X. Wang, M. Naumov, B. Reagen, D. Brooks, B. Cottel, K. Hazel-wood, M. Hempstead, B. Jia et al. , “The Architectural Implications of Facebook’s DNN-based Personalized Recommendation,” in HPCA , 2020. [66] A. Sriraman, A. Dhanotia, and T. F. Wenisch, “SoftSKU: Optimizing Server Archi-tectures for Microservice Diversity @Scale,” in ISCA , 2019. [67] M. Zhao, N. Agarwal, A. Basant, B. Gedik, S. Pan, M. Ozdal, R. Komuravelli, J. Pan, T. Bao, H. Lu et al. , “Understanding Data Storage and Ingestion for Large-Scale Deep Recommendation Model Training: Industrial Product,” in ISCA , 2022. [68] Z. Ruan, T. He, and J. Cong, “INSIDER: Designing In-Storage Computing System for Emerging High-Performance Drive,” in USENIX ATC , 2019. [69] Y. Gan and C. Delimitrou, “The Architectural Implications of Cloud Microservices,” 
+
+CAL , 2018. [70] A. Sriraman and A. Dhanotia, “Accelerometer: Understanding Acceleration Op-portunities for Data Center Overheads at Hyperscale,” in ASPLOS , 2020. [71] Y. Yuan, J. Huang, Y. Sun, T. Wang, J. Nelson, D. R. Ports, Y. Wang, R. Wang, C. Tai, and N. S. Kim, “RAMBDA: RDMA-driven Acceleration Framework for Memory-Intensive μs-Scale Datacenter Applications,” in HPCA , 2023. [72] C. Delimitrou and C. Kozyrakis, “Amdahl’s Law for Tail Latency,” CACM , 2018. [73] S. Hsia, U. Gupta, M. Wilkening, C.-J. Wu, G.-Y. Wei, and D. Brooks, “Cross-Stack Workload Characterization of Deep Recommendation Systems,” in IISWC , 2020. [74] A. Lottarini, A. Ramirez, J. Coburn, M. A. Kim, P. Ranganathan, D. Stodolsky, and M. Wachsler, “vbench: Benchmarking Video Transcoding in the Cloud,” in ASPLOS ,2018. [75] K. Wang, Y. Li, C. Wang, T. Jia, K. Chow, Y. Wen, Y. Dou, G. Xu, C. Hou, J. Yao et al. ,“Characterizing Job Microarchitectural Profiles at Scale: Dataset and Analysis,” in 
+
+ICPP , 2022. [76] D. Richins, D. Doshi, M. Blackmore, A. T. Nair, N. Pathapati, A. Patel, B. Daguman, D. Dobrijalowski, R. Illikkal, K. Long et al. , “Missing the Forest for the Trees: End-to-End AI Application Performance in Edge Data Centers,” in HPCA , 2020. [77] S. A. McKee, “Reflections on the Memory Wall,” in CF , 2004. [78] J. Kim, G. Lee, S. Kim, G. Sohn, M. Rhu, J. Kim, and J. H. Ahn, “ARK: Fully Homomorphic Encryption Accelerator with Runtime Data Generation and Inter-operation Key Reuse,” in IEEE MICRO 2022 .[79] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, “A Modern Primer on Processing In Memory,” in Emerging Computing: From Devices to Systems: Looking Beyond Moore and Von Neumann , 2022. [80] O. Mutlu, “Memory-Centric Computing,” in DAC , 2023. [81] I. Fernandez, R. Quislant, C. Giannoula, M. Alser, J. Gomez-Luna, E. Gutierrez, O. Plata, and O. Mutlu, “NATSA: A Near-Data Processing Accelerator for Time Series Analysis,” in ICCD , 2020. [82] J. S. Kim, D. Senol, H. Xin, D. Lee, S. Ghose, M. Alser, H. Hassan, O. Ergin, C. Alkan, and O. Mutlu, “catalina-Filter: Fast Seed Location Filtering in DNA Read Mapping Using Processing-in-Memory Technologies,” BMC Genomics , 2018. [83] J. Ahn, S. Yoo, O. Mutlu, and K. Choi, “PIM-Enabled Instructions: A Low-Overhead, Locality-Aware Processing-in-Memory Architecture,” in ISCA , 2015. [84] J. Ahn, S. Hong, S. Yoo, O. Mutlu, and K. Choi, “A Scalable Processing-in-Memory Accelerator for Parallel Graph Processing,” in ISCA , 2015. [85] A. Boroumand, S. Ghose, M. Patel, H. Hassan, B. Lucia, R. Ausavarungnirun, K. Hsieh, N. Hajinazar, K. T. Malladi, H. Zheng, and O. Mutlu, “CoNDA: Efficient Cache Coherence Support for near-Data Accelerators,” in ISCA , 2019. [86] A. Boroumand, S. Ghose, M. Patel, H. Hassan, B. Lucia, K. Hsieh, K. T. Malladi, H. Zheng, and O. Mutlu, “LazyPIM: An Efficient Cache Coherence Mechanism for Processing-in-Memory,” CAL , 2016. [87] A. Boroumand, S. Ghose, M. Patel, H. Hassan, B. Lucia, N. Hajinazar, K. Hsieh, K. T. Malladi, H. Zheng, and O. Mutlu, “LazyPIM: Efficient Support for Cache Coherence in Processing-in-Memory Architectures,” arXiv:1706.03162 [cs:AR], 2017. [88] G. Singh, J. Gomez-Luna, G. Mariani, G. F. Oliveira, S. Corda, S. Stujik, O. Mutlu, and H. Corporaal, “NAPEL: Near-memory Computing Application Performance Prediction via Ensemble Learning,” in DAC , 2019. [89] H. Asghari-Moghaddam, Y. H. Son, J. H. Ahn, and N. S. Kim, “Chameleon: Versatile and Practical Near-DRAM Acceleration Architecture for Large Memory Systems,” in MICRO , 2016. [90] S. L. Xi, O. Babarinsa, M. Athanassoulis, and S. Idreos, “Beyond the Wall: Near-Data Processing for Databases,” in DaMoN , 2015. [91] P. Chi, S. Li, C. Xu, T. Zhang, J. Zhao, Y. Liu, Y. Wang, and Y. Xie, “PRIME: A Novel Processing-In-Memory Architecture for Neural Network Computation In ReRAM-Based Main Memory,” in ISCA , 2016. [92] A. Farmahini-Farahani, J. H. Ahn, K. Morrow, and N. S. Kim, “NDA: Near-DRAM acceleration architecture leveraging commodity DRAM devices and standard memory modules,” in HPCA , 2015. [93] M. Gao, G. Ayers, and C. Kozyrakis, “Practical Near-Data Processing for In-Memory Analytics Frameworks,” in PACT , 2015. 
+
+15 [94] M. Gao and C. Kozyrakis, “HRL: Efficient and Flexible Reconfigurable Logic for Near-Data Processing,” in HPCA , 2016. [95] B. Gu, A. S. Yoon, D.-H. Bae, I. Jo, J. Lee, J. Yoon, J.-U. Kang, M. Kwon, C. Yoon, S. Cho, J. Jeong, and D. Chang, “Biscuit: A Framework for Near-Data Processing of Big Data Workloads,” in ISCA , 2016. [96] Q. Guo, N. Alachiotis, B. Akin, F. Sadi, G. Xu, T. M. Low, L. Pileggi, J. C. Hoe, and F. Franchetti, “3D-Stacked Memory-Side Acceleration: Accelerator and System Design,” in WoNDP , 2014. [97] M. Hashemi, Khubaib, E. Ebrahimi, O. Mutlu, and Y. N. Patt, “Accelerating Depen-dent Cache Misses with an Enhanced Memory Controller,” in ISCA , 2016. [98] M. Hashemi, O. Mutlu, and Y. N. Patt, “Continuous Runahead: Transparent Hard-ware Acceleration for Memory Intensive Workloads,” in MICRO , 2016. [99] S. M. Hassan, S. Yalamanchili, and S. Mukhopadhyay, “Near Data Processing: Impact and Optimization of 3D Memory System Architecture on the Uncore,” in 
+
+MEMSYS , 2015. [100] K. Hsieh, E. Ebrahimi, G. Kim, N. Chatterjee, M. O’Conner, N. Vijaykumar, O. Mutlu, and S. Keckler, “Transparent Offloading and Mapping (TOM): Enabling Programmer-Transparent Near-Data Processing in GPU Systems,” in ISCA , 2016. [101] D. Kim, J. Kung, S. Chai, S. Yalamanchili, and S. Mukhopadhyay, “Neurocube: A Programmable Digital Neuromorphic Architecture with High-Density 3D Memory,” in ISCA , 2016. [102] G. Kim, N. Chatterjee, M. O’Connor, and K. Hsieh, “Toward Standardized Near-Data Processing with Unrestricted Data Placement for GPUs,” in SC , 2017. [103] J. H. Lee, J. Sim, and H. Kim, “BSSync: Processing Near Memory for Machine Learning Workloads with Bounded Staleness Consistency Models,” in PACT , 2015. [104] Z. Liu, I. Calciu, M. Herlihy, and O. Mutlu, “Concurrent Data Structures for Near-Memory Computing,” in SPAA , 2017. [105] A. Morad, L. Yavits, and R. Ginosar, “GP-SIMD Processing-in-Memory,” ACM TACO , 2015. [106] L. Nai, R. Hadidi, J. Sim, H. Kim, P. Kumar, and H. Kim, “GraphPIM: Enabling Instruction-level PIM Offloading in Graph Computing Frameworks,” in HPCA ,2017. [107] A. Pattnaik, X. Tang, A. Jog, O. Kayiran, A. K. Mishra, M. T. Kandemir, O. Mutlu, and C. R. Das, “Scheduling Techniques for GPU Architectures with Processing-in-Memory Capabilities,” in PACT , 2016. [108] S. H. Pugsley, J. Jestes, H. Zhang, R. Balasubramonian, V. Srinivasan, A. Buyuk-tosunoglu, A. Davis, and F. Li, “NDC: Analyzing the Impact of 3D-Stacked Mem-ory+Logic Devices on MapReduce Workloads,” in ISPASS , 2014. [109] D. P. Zhang, N. Jayasena, A. Lyashevsky, J. L. Greathouse, L. Xu, and M. Ignatowski, “TOP-PIM: Throughput-Oriented Programmable Processing in Memory,” in HPDC ,2014. [110] Q. Zhu, T. Graf, H. E. Sumbul, L. Pileggi, and F. Franchetti, “Accelerating Sparse Matrix-Matrix Multiplication with 3D-Stacked Logic-in-Memory Hardware,” in 
+
+HPEC , 2013. [111] B. Akin, F. Franchetti, and J. C. Hoe, “Data Reorganization in Memory Using 3D-Stacked DRAM,” in ISCA , 2015. [112] M. Gao, J. Pu, X. Yang, M. Horowitz, and C. Kozyrakis, “Tetris: Scalable and Efficient Neural Network Acceleration with 3D Memory,” in ASPLOS , 2017. [113] M. Drumond, A. Daglis, N. Mirzadeh, D. Ustiugov, J. Picorel Obando, B. Falsafi, B. Grot, and D. Pnevmatikatos, “The Mondrian Data Engine,” in ISCA , 2017. [114] G. Dai, T. Huang, Y. Chi, J. Zhao, G. Sun, Y. Liu, Y. Wang, Y. Xie, and H. Yang, “GraphH: A Processing-in-Memory Architecture for Large-scale Graph Processing,” 
+
+IEEE TCAD , 2018. [115] M. Zhang, Y. Zhuo, C. Wang, M. Gao, Y. Wu, K. Chen, C. Kozyrakis, and X. Qian, “GraphP: Reducing Communication for PIM-based Graph Processing with Efficient Data Partition,” in HPCA , 2018. [116] Y. Huang, L. Zheng, P. Yao, J. Zhao, X. Liao, H. Jin, and J. Xue, “A Heterogeneous PIM Hardware-Software Co-Design for Energy-Efficient Graph Processing,” in 
+
+IPDPS , 2020. [117] Y. Zhuo, C. Wang, M. Zhang, R. Wang, D. Niu, Y. Wang, and X. Qian, “GraphQ: Scalable PIM-based Graph Processing,” in MICRO , 2019. [118] J. M. Herruzo, I. Fernandez, S. González-Navarro, and O. Plata, “Enabling Fast and Energy-Efficient FM-Index Exact Matching Using Processing-Near-Memory,” The Journal of Supercomputing , 2021. [119] A. Boroumand, S. Ghose, G. F. Oliveira, and O. Mutlu, “Polynesia: Enabling High-Performance and Energy-Efficient Hybrid Transactional/Analytical Databases with Hardware/Software Co-Design,” in ICDE , 2022. [120] C. Giannoula, N. Vijaykumar, N. Papadopoulou, V. Karakostas, I. Fernandez, J. Gómez-Luna, L. Orosa, N. Koziris, G. Goumas, and O. Mutlu, “SynCron: Efficient Synchronization Support for Near-Data-Processing Architectures,” in HPCA , 2021. [121] M. Besta, R. Kanakagiri, G. Kwasniewski, R. Ausavarungnirun, J. Beránek, K. Kanel-lopoulos, K. Janda, Z. Vonarburg-Shmaria, L. Gianinazzi, I. Stefan et al. , “SISA: Set-Centric Instruction Set Architecture for Graph Mining on Processing-in-Memory Systems,” in MICRO , 2021. [122] B. Asgari, R. Hadidi, J. Cao, D. E. Shim, S.-K. Lim, and H. Kim, “FAFNIR: Accelerat-ing Sparse Gathering by Using Efficient Near-Memory Intelligent Reduction,” in 
+
+HPCA , 2021. [123] UPMEM, “Introduction to UPMEM PIM. Processing-in-memory (PIM) on DRAM Accelerator (White Paper),” 2018. [124] H. Shin, D. Kim, E. Park, S. Park, Y. Park, and S. Yoo, “McDRAM: Low latency and energy-efficient matrix computations in DRAM,” IEEE TCADICS , 2018. [125] S. Cho, H. Choi, E. Park, H. Shin, and S. Yoo, “McDRAM v2: In-Dynamic Random Access Memory Systolic Array Accelerator to Address the Large Model Problem in Deep Neural Networks on the Edge,” IEEE Access , 2020. [126] A. Denzler, R. Bera, N. Hajinazar, G. Singh, G. F. Oliveira, J. Gómez-Luna, and O. Mutlu, “Casper: Accelerating Stencil Computation Using Near-Cache Process-ing,” IEEE Access , 2023. [127] J. Gómez-Luna, Y. Guo, S. Brocard, J. Legriel, R. Cimadomo, G. F. Oliveira, G. Singh, and O. Mutlu, “Machine Learning Training on a Real Processing-in-Memory Sys-tem,” in ISVLSI 2022 .[128] C. Giannoula, I. Fernandez, J. Gómez-Luna, N. Koziris, G. Goumas, and O. Mutlu, “Towards Efficient Sparse Matrix Vector Multiplication on Real Processing-In-Memory Systems,” arXiv:2204.00900 [cs.AR], 2022. [129] I. Fernandez, R. Quislant, C. Giannoula, M. Alser, J. Gómez-Luna, E. Gutiérrez, O. Plata, and O. Mutlu, “Exploiting Near-Data Processing to Accelerate Time Series Analysis,” arXiv:2206.00938 [cs.AR], 2022. [130] G. F. Oliveira, A. Boroumand, S. Ghose, J. Gómez-Luna, and O. Mutlu, “Heteroge-neous Data-Centric Architectures for Modern Data-Intensive Applications: Case Studies in Machine Learning and Databases,” in ISVLSI , 2022. [131] R. Balasubramonian, J. Chang, T. Manning, J. H. Moreno, R. Murphy, R. Nair, and S. Swanson, “Near-Data Processing: Insights from a MICRO-46 Workshop,” IEEE Micro , 2014. [132] A. C. Jacob, Z. Sura, T. Chen, C. Bertolli, S. Antao, O. Sallenave, K. O’Brien, H. Jacobson, R. Nair, J. R. Brunheroto et al. , “Compiling for the Active Memory Cube,” Tech. rep. RC25644 (WAT1612-008). IBM Research Division, Tech. Rep., 2016. [133] R. Nair, S. F. Antao, C. Bertolli, P. Bose, J. R. Brunheroto, T. Chen, C.-Y. Cher, C. H. Costa, J. Doi, C. Evangelinos et al. , “Active Memory Cube: A Processing-in-Memory Architecture for Exascale Systems,” IBM JRD , 2015. [134] S. Lloyd and M. Gokhale, “Design Space Exploration of Near Memory Accelerators,” in MEMSYS , 2018. [135] M. Gokhale, S. Lloyd, and C. Hajas, “Near Memory Data Structure Rearrangement,” in MEMSYS , 2015. [136] S. Lloyd and M. Gokhale, “In-memory Data Rearrangement for Irregular, Data-intensive Computing,” Computer , 2015. [137] A. Rodrigues, M. Gokhale, and G. Voskuilen, “Towards a Scatter-Gather Architec-ture: Hardware and Software Issues,” in MEMSYS , 2019. [138] S. Lloyd and M. Gokhale, “Near Memory Key/Value Lookup Acceleration,” in 
+
+MEMSYS , 2017. [139] J. Landgraf, S. Lloyd, and M. Gokhale, “Combining Emulation and Simulation to Evaluate a Near Memory Key/Value Lookup Accelerator,” arXiv:2105.06594v1 [cs.AR], 2021. [140] R. Nair, “Evolution of Memory Architecture,” Proceedings of the IEEE , 2015. [141] Y.-C. Kwon, S. H. Lee, J. Lee, S.-H. Kwon, J. M. Ryu, J.-P. Son, O. Seongil, H.-S. Yu, H. Lee, S. Y. Kim et al. , “25.4 A 20nm 6GB Function-In-Memory DRAM, Based on HBM2 with a 1.2 TFLOPS Programmable Computing Unit Using Bank-Level Parallelism, for Machine Learning Applications,” in ISSCC , 2021. [142] S. Lee, S.-h. Kang, J. Lee, H. Kim, E. Lee, S. Seo, H. Yoon, S. Lee, K. Lim, H. Shin 
+
+et al. , “Hardware Architecture and Software Stack for PIM Based on Commercial DRAM Technology: Industrial Product,” in ISCA , 2021. [143] J. H. Kim, S.-h. Kang, S. Lee, H. Kim, W. Song, Y. Ro, S. Lee, D. Wang, H. Shin, B. Phuah et al. , “Aquabolt-XL: Samsung HBM2-PIM with In-memory Processing for ML Accelerators and Beyond,” in HCS 2021 .[144] L. Ke, X. Zhang, J. So, J.-G. Lee, S.-H. Kang, S. Lee, S. Han, Y. Cho, J. H. Kim, Y. Kwon et al. , “Near-Memory Processing in Action: Accelerating Personalized Recommendation with AxDIMM,” IEEE Micro , 2021. [145] D. Lee, J. So, M. AHN, J.-G. Lee, J. Kim, J. Cho, R. Oliver, V. C. Thummala, R. s. JV, S. S. Upadhya et al. , “Improving In-Memory Database Operations with Acceleration DIMM (AxDIMM),” in DaMoN , 2022. [146] F. A. Siddique, D. Guo, Z. Fan, M. Gholamrezaei, M. Baradaran, A. Ahmed, H. Ab-bot, K. Durrer, K. Nandagopal, E. Ermovick et al. , “Architectural Modeling and Benchmarking for Digital DRAM PIM,” in IISWC , 2024. [147] W. Jaiyeoba, N. Elyasi, C. Choi, and K. Skadron, “ACTS: A Near-Memory FPGA Graph Processing Framework,” in FPGA , 2023. [148] M. Lenjani, A. Ahmed, and K. Skadron, “Pulley: An Algorithm/Hardware Co-Optimization for In-Memory Sorting,” CAL , 2022. [149] M. Lenjani and K. Skadron, “Supporting Moderate Data Dependency, Position Dependency, and Divergence in PIM-Based Accelerators,” IEEE Micro , 2021. [150] M. Zhou, L. Wu, M. Li, N. Moshiri, K. Skadron, and T. Rosing, “Ultra Efficient Acceleration for De Novo Genome Assembly via Near-Memory Computing,” in 
+
+PACT , 2021. [151] E. Sadredini, R. Rahimi, M. Imani, and K. Skadron, “Sunder: Enabling Low-Overhead and Scalable Near-Data Pattern Matching Acceleration,” in MICRO ,2021. [152] M. Lenjani, P. Gonzalez, E. Sadredini, S. Li, Y. Xie, A. Akel, S. Eilert, M. R. Stan, and K. Skadron, “Fulcrum: A Simplified Control and Access Mechanism Toward Flexible and Practical In-Situ Accelerators,” in HPCA , 2020. [153] S. Mosanu, M. N. Sakib, T. Tracy, E. Cukurtas, A. Ahmed, P. Ivanov, S. Khan, K. Skadron, and M. Stan, “PiMulator: A Fast and Flexible Processing-in-Memory Emulation Platform,” in DATE , 2022. [154] V. Seshadri and O. Mutlu, “Simple Operations in Memory to Reduce Data Move-ment,” in Advances in Computers, Volume 106 , 2017. [155] V. Seshadri, Y. Kim, C. Fallin, D. Lee, R. Ausavarungnirun, G. Pekhimenko, Y. Luo, O. Mutlu, M. A. Kozuch, P. B. Gibbons, and T. C. Mowry, “RowClone: Fast and Energy-Efficient In-DRAM Bulk Data Copy and Initialization,” in MICRO , 2013. [156] K. K. Chang, P. J. Nair, D. Lee, S. Ghose, M. K. Qureshi, and O. Mutlu, “Low-Cost 
+
+16 Inter-Linked Subarrays (LISA): Enabling Fast Inter-Subarray Data Movement in DRAM,” in HPCA , 2016. [157] K. K. Chang, “Understanding and Improving the Latency of DRAM-Based Memory Systems,” Ph.D. dissertation, 2017. [158] V. Seshadri, “Simple DRAM and Virtual Memory Abstractions to Enable Highly Efficient Memory Systems,” Ph.D. dissertation, 2016. [159] V. Seshadri, K. Hsieh, A. Boroumand, D. Lee, M. A. Kozuch, O. Mutlu, P. B. Gibbons, and T. C. Mowry, “Fast Bulk Bitwise AND and OR in DRAM,” CAL , 2015. [160] V. Seshadri, D. Lee, T. Mullins, H. Hassan, A. Boroumand, J. Kim, M. A. Kozuch, O. Mutlu, P. B. Gibbons, and T. C. Mowry, “Buddy-RAM: Improving the Perfor-mance and Efficiency of Bulk Bitwise Operations Using DRAM,” arXiv:1611.09988 [cs:AR], 2016. [161] V. Seshadri, D. Lee, T. Mullins, H. Hassan, A. Boroumand, J. Kim, M. A. Kozuch, O. Mutlu, P. B. Gibbons, and T. C. Mowry, “Ambit: In-Memory Accelerator for Bulk Bitwise Operations Using Commodity DRAM Technology,” in MICRO , 2017. [162] N. Hajinazar, G. F. Oliveira, S. Gregorio, J. D. Ferreira, N. M. Ghiasi, M. Patel, M. Alser, S. Ghose, J. Gómez-Luna, and O. Mutlu, “SIMDRAM: A Framework for Bit-Serial SIMD Processing Using DRAM,” in ASPLOS , 2021. [163] V. Seshadri and O. Mutlu, “In-DRAM Bulk Bitwise Execution Engine,” Invited Book Chapter in Advances in Computers, 2020. [164] A. Shafiee, A. Nag, N. Muralimanohar, and et al., “ISAAC: A Convolutional Neural Network Accelerator with In-situ Analog Arithmetic in Crossbars,” in ISCA , 2016. [165] S. Li, D. Niu, K. T. Malladi, H. Zheng, B. Brennan, and Y. Xie, “DRISA: A DRAM-Based Reconfigurable In-Situ Accelerator,” in MICRO , 2017. [166] V. Seshadri and O. Mutlu, “The Processing Using Memory Paradigm: In-DRAM Bulk Copy, Initialization, Bitwise AND and OR,” arXiv:1610.09603 [cs:AR], 2016. [167] Q. Deng, L. Jiang, Y. Zhang, M. Zhang, and J. Yang, “DrAcc: A DRAM Based Accelerator for Accurate CNN Inference,” in DAC , 2018. [168] X. Xin, Y. Zhang, and J. Yang, “ELP2IM: Efficient and Low Power Bitwise Operation Processing in DRAM,” in HPCA , 2020. [169] L. Song, Y. Zhuo, X. Qian, H. Li, and Y. Chen, “GraphR: Accelerating Graph Processing using ReRAM,” in HPCA , 2018. [170] L. Song, X. Qian, H. Li, and Y. Chen, “PipeLayer: A Pipelined ReRAM-Based Accelerator for Deep Learning,” in HPCA , 2017. [171] F. Gao, G. Tziantzioulis, and D. Wentzlaff, “ComputeDRAM: In-Memory Compute Using Off-the-Shelf DRAMs,” in MICRO , 2019. [172] C. Eckert, X. Wang, J. Wang, A. Subramaniyan, R. Iyer, D. Sylvester, D. Blaaauw, and R. Das, “Neural Cache: Bit-serial in-cache Acceleration of Deep Neural Networks,” in ISCA , 2018. [173] S. Aga, S. Jeloka, A. Subramaniyan, S. Narayanasamy, D. Blaauw, and R. Das, “Compute Caches,” in HPCA , 2017. [174] D. Fujiki, S. Mahlke, and R. Das, “Duality Cache for Data-Parallel Acceleration,” in 
+
+ISCA , 2019. [175] S. Li, C. Xu, Q. Zou, J. Zhao, Y. Lu, and Y. Xie, “Pinatubo: A Processing-in-Memory Architecture for Bulk Bitwise Operations in Emerging Non-Volatile Memories,” in 
+
+DAC , 2016. [176] J. D. Ferreira, G. Falcao, J. Gómez-Luna, M. Alser, L. Orosa, M. Sadrosadati, J. S. Kim, G. F. Oliveira, T. Shahroodi, A. Nori et al. , “pLUTo: Enabling Massively Parallel Computation in DRAM via Lookup Tables,” in MICRO , 2022. [177] M. Imani, S. Gupta, Y. Kim, and T. Rosing, “FloatPIM: In-Memory Acceleration of Deep Neural Network Training with High Precision,” in ISCA , 2019. [178] Z. He, L. Yang, S. Angizi, A. S. Rakin, and D. Fan, “Sparse BD-Net: A Multiplication-Less DNN with Sparse Binarized Depth-Wise Separable Convolution,” JETC , 2020. [179] J. Park, R. Azizi, G. F. Oliveira, M. Sadrosadati, R. Nadig, D. Novo, J. Gómez-Luna, M. Kim, and O. Mutlu, “Flash-Cosmos: In-Flash Bulk Bitwise Operations Using Inherent Computation Capability of NAND Flash Memory,” in MICRO , 2022. [180] M. S. Truong, L. Shen, A. Glass, A. Hoffmann, L. R. Carley, J. A. Bain, and S. Ghose, “Adapting the RACER Architecture to Integrate Improved In-ReRAM Logic Primi-tives,” IEEE JETCAS , 2022. [181] M. S. Truong, E. Chen, D. Su, L. Shen, A. Glass, L. R. Carley, J. A. Bain, and S. Ghose, “RACER: Bit-Pipelined Processing Using Resistive Memory,” in MICRO , 2021. [182] A. Olgun, M. Patel, A. G. Yağlıkçı, H. Luo, J. S. Kim, F. N. Bostancı, N. Vijaykumar, O. Ergin, and O. Mutlu, “QUAC-TRNG: High-Throughput True Random Number Generation Using Quadruple Row Activation in Commodity DRAMs,” in ISCA ,2021. [183] J. Kim, M. Patel, H. Hassan, L. Orosa, and O. Mutlu, “D-RaNGe: Using Commodity DRAM Devices to Generate True Random Numbers with Low Latency and High Throughput,” in HPCA , 2019. [184] J. Kim, M. Patel, H. Hassan, and O. Mutlu, “The DRAM Latency PUF: Quickly Evaluating Physical Unclonable Functions by Exploiting the Latency–Reliability Tradeoff in Modern DRAM Devices,” in HPCA , 2018. [185] F. N. Bostancı, A. Olgun, L. Orosa, A. G. Yağlıkçı, J. S. Kim, H. Hassan, O. Ergin, and O. Mutlu, “DR-STRaNGe: End-to-End System Design for DRAM-Based True Random Number Generators,” in HPCA , 2022. [186] A. Olgun, J. G. Luna, K. Kanellopoulos, B. Salami, H. Hassan, O. Ergin, and O. Mutlu, “PiDRAM: A Holistic End-to-end FPGA-based Framework for Processing-in-DRAM,” TACO , 2022. [187] M. F. Ali, A. Jaiswal, and K. Roy, “In-Memory Low-Cost Bit-Serial Addition Using Commodity DRAM Technology,” in TCAS-I , 2019. [188] S. Angizi and D. Fan, “Graphide: A Graph Processing Accelerator Leveraging In-DRAM-computing,” in GLSVLSI , 2019. [189] S. Li, A. O. Glova, X. Hu, P. Gu, D. Niu, K. T. Malladi, H. Zheng, B. Brennan, and Y. Xie, “SCOPE: A Stochastic Computing Engine for DRAM-Based In-Situ Accelerator,” in MICRO , 2018. [190] A. Subramaniyan and R. Das, “Parallel Automata Processor,” in ISCA , 2017. [191] Y. Zha and J. Li, “Hyper-AP: Enhancing Associative Processing Through A Full-Stack Optimization,” in ISCA , 2020. [192] D. Fujiki, S. Mahlke, and R. Das, “In-Memory Data Parallel Processor,” in ASPLOS ,2018. [193] L. Orosa, Y. Wang, M. Sadrosadati, J. S. Kim, M. Patel, I. Puddu, H. Luo, K. Razavi, J. Gomez-Luna, H. Hassan, N. Mansouri-Ghiasi, S. Ghose, and O. Mutlu, “CODIC: A Low-Cost Substrate for Enabling Custom In-DRAM Functionalities and Opti-mizations,” in ISCA , 2021. [194] M. Sharad, D. Fan, and K. Roy, “Ultra Low Power Associative Computing with Spin Neurons and Resistive Crossbar Memory,” in DAC , 2013. [195] C. Gao, X. Xin, Y. Lu, Y. Zhang, J. Yang, and J. Shu, “Parabit: Processing Parallel Bitwise Operations in NAND-Flash Memory-based SSDs,” in MICRO , 2021. [196] W. H. Choi, P.-F. Chiu, W. Ma, G. Hemink, T. T. Hoang, M. Lueker-Boden, and Z. Bandic, “An In-Flash Binary Neural Network Accelerator with SLC NAND Flash Array,” in ISCAS , 2020. [197] R. Han, P. Huang, Y. Xiang, C. Liu, Z. Dong, Z. Su, Y. Liu, L. Liu, X. Liu, and J. Kang, “A Novel Convolution Computing Paradigm Based on NOR Flash Array with High Computing Speed and Energy Efficiency,” TCAS-I , 2019. [198] F. Merrikh-Bayat, X. Guo, M. Klachko, M. Prezioso, K. K. Likharev, and D. B. Strukov, “High-Performance Mixed-Signal Neurocomputing with Nanoscale Floating-Gate Memory Cell Arrays,” TNNLS , 2017. [199] P. Wang, F. Xu, B. Wang, B. Gao, H. Wu, H. Qian, and S. Yu, “Three-Dimensional NAND Flash for Vector–Matrix Multiplication,” TVLSI , 2018. [200] H.-T. Lue, P.-K. Hsu, M.-L. Wei, T.-H. Yeh, P.-Y. Du, W.-C. Chen, K.-C. Wang, and C.-Y. Lu, “Optimal Design Methods to Transform 3D NAND Flash into a High-Density, High-Bandwidth and Low-Power Nonvolatile Computing in Memory (nvCIM) Accelerator for Deep-Learning Neural Networks (DNN),” in IEDM , 2019. [201] S. Kim, Y. Jin, G. Sohn, J. Bae, T. J. Ham, and J. W. Lee, “Behemoth: A Flash-Centric Training Accelerator for Extreme-Scale {DNNs },” in FAST , 2021. [202] S. Wang, “MemCore: Computing-in-Flash Design for Deep Neural Network Accel-eration,” in EDTM , 2022. [203] R. Han, Y. Xiang, P. Huang, Y. Shan, X. Liu, and J. Kang, “Flash Memory Array for Efficient Implementation of Deep Neural Networks,” Adv. Intell. Syst. , 2021. [204] M. Kang, H. Kim, H. Shin, J. Sim, K. Kim, and L.-S. Kim, “S-FLASH: A NAND Flash-Based Deep Neural Network Accelerator Exploiting Bit-Level Sparsity,” TC ,2021. [205] S.-T. Lee and J.-H. Lee, “Neuromorphic Computing Using NAND Flash Memory Architecture with Pulse Width Modulation Scheme,” Front. Neurosci. , 2020. [206] H. Lee, M. Kim, D. Min, J. Kim, J. Back, H. Yoo, J.-H. Lee, and J. Kim, “3D-FPIM: An Extreme Energy-Efficient DNN Acceleration System Using 3D NAND Flash-Based In-Situ PIM Unit,” in MICRO , 2022. [207] X. Si, W.-S. Khwa, J.-J. Chen, J.-F. Li, X. Sun, R. Liu, S. Yu, H. Yamauchi, Q. Li, and M.-F. Chang, “A Dual-Split 6T SRAM-Based Computing-in-Memory Unit-Macro with Fully Parallel Product-Sum Operation for Binarized DNN Edge Processors,” 
+
+TCAS-I , 2019. [208] W. A. Simon, Y. M. Qureshi, M. Rios, A. Levisse, M. Zapater, and D. Atienza, “BLADE: An In-Cache Computing Architecture for Edge Devices,” TC , 2020. [209] A. Nag, C. Ramachandra, R. Balasubramonian, R. Stutsman, E. Giacomin, H. Kam-balasubramanyam, and P.-E. Gaillardon, “GenCache: Leveraging In-Cache Opera-tors for Efficient Sequence Alignment,” in MICRO , 2019. [210] X. Wang, J. Yu, C. Augustine, R. Iyer, and R. Das, “Bit Prudent In-Cache Acceleration of Deep Convolutional Neural Networks,” in HPCA , 2019. [211] A. Al Badawi, C. Jin, J. Lin, C. F. Mun, S. J. Jie, B. H. M. Tan, X. Nan, K. M. M. Aung, and V. R. Chandrasekhar, “Towards The Alexnet Moment For Homomorphic Encryption: HCNN, The First Homomorphic CNN on Encrypted Data With GPUs,” 
+
+TETC 2020 .[212] M. Kang, M.-S. Keel, N. R. Shanbhag, S. Eilert, and K. Curewitz, “An Energy-Efficient VLSI Architecture for Pattern Recognition via Deep Embedding of Com-putation in SRAM,” in ICASSP , 2014. [213] H. Kim, T. Yoo, T. T.-H. Kim, and B. Kim, “Colonnade: A Reconfigurable SRAM-Based Digital Bit-Serial Compute-in-Memory Macro for Processing Neural Net-works,” JSSC , 2021. [214] Z. Jiang, S. Yin, J.-S. Seo, and M. Seok, “C3SRAM: An In-Memory-Computing SRAM Macro Based on Robust Capacitive Coupling Computing Mechanism,” JSSC ,2020. [215] S. Jeloka, N. B. Akesh, D. Sylvester, and D. Blaauw, “A 28 nm Configurable Memory (TCAM/BCAM/SRAM) Using Push-Rule 6T Bit Cell Enabling Logic-in-Memory,” 
+
+JSSC , 2016. [216] Z. Wang, C. Liu, A. Arora, L. John, and T. Nowatzki, “Infinity Stream: Portable and Programmer-Friendly In-/Near-Memory Fusion,” in ASPLOS , 2023. [217] M. Kang, E. P. Kim, M.-s. Keel, and N. R. Shanbhag, “Energy-Efficient and High Throughput Sparse Distributed Memory Architecture,” in ISCAS , 2015. [218] M. Imani, S. Pampana, S. Gupta, M. Zhou, Y. Kim, and T. Rosing, “DUAL: Accel-eration of Clustering Algorithms Using Digital-Based Processing in-Memory,” in 
+
+MICRO , 2020. [219] Q. Deng, Y. Zhang, M. Zhang, and J. Yang, “LAcc: Exploiting Lookup Table-based Fast and Accurate Vector Multiplication in DRAM-based CNN Accelerator,” in 
+
+DAC , 2019. [220] P. R. Sutradhar, S. Bavikadi, M. Connolly, S. Prajapati, M. A. Indovina, S. M. P. Dinakarrao, and A. Ganguly, “Look-Up-Table Based Processing-in-Memory Ar-chitecture with Programmable Precision-Scaling for Deep Learning Applications,” 
+
+17 TPDS , 2021. [221] P. R. Sutradhar, M. Connolly, S. Bavikadi, S. M. P. Dinakarrao, M. A. Indovina, and A. Ganguly, “pPIM: A Programmable Processor-in-Memory Architecture with Precision-Scaling for Deep Learning,” CAL , 2020. [222] X. Peng, Y. Wang, and M.-C. Yang, “CHOPPER: A Compiler Infrastructure for Programmable Bit-Serial SIMD Processing Using Memory In DRAM,” in HPCA ,2023. [223] T. Shahroodi, G. Singh, M. Zahedi, H. Mao, J. Lindegger, C. Firtina, S. Wong, O. Mutlu, and S. Hamdioui, “Swordfish: A Framework for Evaluating Deep Neu-ral Network-based Basecalling using Computation-In-Memory with Non-Ideal Memristors,” in MICRO , 2023. [224] G. F. Oliveira, A. Olgun, A. G. G. Yaglikçi, N. Bostanci, J. Gómez-Luna, S. Ghose, and O. Mutlu, “MIMDRAM: An End-to-End Processing-Using-DRAM System for High-Throughput, Energy-Efficient and Programmer-Transparent Multiple-Instruction Multiple-Data Computing,” in HPCA , 2024. [225] I. E. Yuksel, Y. C. Tuğrul, A. Olgun, F. N. Bostanci, A. G. Yaglikçi, G. F. Oliveira, H. Luo, J. Gómez-Luna, M. Sadrosadati, and O. Mutlu, “Functionally-Complete Boolean Logic in Real DRAM Chips: Experimental Characterization and Analysis,” in HPCA , 2024. [226] I. E. Yuksel, Y. C. Tugrul, F. Bostanci, G. F. Oliveira, A. G. Yaglikci, A. Olgun, M. Soysal, H. Luo, J. Gómez-Luna, M. Sadrosadati et al. , “Simultaneous Many-Row Activation in Off-the-Shelf DRAM Chips: Experimental Characterization and Analysis,” in DSN , 2024. [227] L. Yavits, “DRAMA: Commodity DRAM Based Content Addressable Memory,” 
+
+CAL , 2023. [228] Z. Jahshan and L. Yavits, “MajorK: Majority Based kMer Matching in Commodity DRAM,” CAL , 2024. [229] M. Khalifa, B. Hoffer, O. Leitersdorf, R. Hanhan, B. Perach, L. Yavits, and S. Kvatin-sky, “ClaPIM: Scalable Sequence Classification Using Processing-in-Memory,” 
+
+TVLSI , 2023. [230] E. Garzón, A. Teman, M. Lanuzza, and L. Yavits, “AIDA: Associative In-Memory Deep learning Accelerator,” IEEE Micro , 2022. [231] R. Hanhan, E. Garzón, Z. Jahshan, A. Teman, M. Lanuzza, and L. Yavits, “EDAM: Edit Distance Tolerant Approximate Matching Content Addressable Memory,” in 
+
+ISCA , 2022. [232] A. Morad, L. Yavits, S. Kvatinsky, and R. Ginosar, “Resistive GP-SIMD Processing-in-Memory,” TACO , 2016. [233] L. Wu, R. Sharifi, A. Venkat, and K. Skadron, “DRAM-CAM: General-Purpose Bit-Serial Exact Pattern Matching,” in CAL , 2022. [234] E. Sadredini, R. Rahimi, M. Lenjani, M. Stan, and K. Skadron, “FlexAmata: A Universal and Efficient Adaption of Applications to Spatial Automata Processing Accelerators,” in ASPLOS , 2020. [235] E. Sadredini, R. Rahimi, V. Verma, M. Stan, and K. Skadron, “eAP: A Scalable and Efficient In-Memory Accelerator for Automata Processing,” in MICRO , 2019. [236] K. Angstadt, A. Subramaniyan, E. Sadredini, R. Rahimi, K. Skadron, W. Weimer, and R. Das, “ASPEN: A Scalable In-SRAM Architecture for Pushdown Automata,” in MICRO , 2018. [237] K. Wang, E. Sadredini, and K. Skadron, “Sequential Pattern mining with the Micron Automata Processor,” in CF , 2016. [238] K. Wang, Y. Qi, J. J. Fox, M. R. Stan, and K. Skadron, “Association Rule Mining with the Micron Automata Processor,” in IPDPS , 2015. [239] UPMEM, “UPMEM Website,” https://www.upmem.com, 2020. [240] UPMEM, “UPMEM Processing In-Memory (PIM),” UPMEM PIM Tech Paper, 2022. [241] UPMEM, “Product Sheet UPMEM,” 2022. [242] F. Devaux, “The True Processing in Memory Accelerator,” in HCS , 2019. [243] S. Lee, K. Kim, S. Oh, J. Park, G. Hong, D. Ka, K. Hwang, J. Park, K. Kang, J. Kim, J. Jeon, N. Kim, Y. Kwon, K. Vladimir, W. Shin, J. Won, M. Lee, H. Joo, H. Choi, J. Lee, D. Ko, Y. Jun, K. Cho, I. Kim, C. Song, C. Jeong, D. Kwon, J. Jang, I. Park, J. Chun, and J. Cho, “A 1ynm 1.25V 8Gb, 16Gb/s/pin GDDR6-based Accelerator-in-Memory Supporting 1TFLOPS MAC Operation and Various Activation Functions for Deep-Learning Applications,” in ISSCC , 2022. [244] D. Niu, S. Li, Y. Wang, W. Han, Z. Zhang, Y. Guan, T. Guan, F. Sun, F. Xue, L. Duan 
+
+et al. , “184QPS/W 64Mb/mm 2 3D Logic-to-DRAM Hybrid Bonding with Process-Near-Memory Engine for Recommendation System,” in ISSCC , 2022. [245] H. Nejatollahi, S. Gupta, M. Imani, T. S. Rosing, R. Cammarota, and N. Dutt, “CryptoPIM: In-memory acceleration for lattice-based cryptographic hardware,” in 
+
+DAC , 2020. [246] D. Reis, M. T. Niemier, and X. S. Hu, “A Computing-in-Memory Engine for Search-ing on Homomorphically Encrypted Data,” in MEMSYS , 2019. [247] H. Gupta, M. Kabra, J. Gómez-Luna, K. Kanellopoulos, and O. Mutlu, “Evaluating Homomorphic Operations on a Real-World Processing-In-Memory System,” in 
+
+IISWC , 2023. [248] M. Zhou, Y. Nam, P. Gangwar, W. Xu, A. Dutta, C. Wilkerson, R. Cammarota, S. Gupta, and T. Rosing, “FHEmem: A Processing In-Memory Accelerator for Fully Homomorphic Encryption,” TETC , 2025. [249] Z. Chen, Z. Cao, Z. Shen, and L. Ju, “HMC-FHE: A Heterogeneous Near Data Processing Framework for Homomorphic Encryption,” TCAD , 2024. [250] Y. Park, A. Amarnath, S. Pal, K. Swaminathan, A. Buyuktosunoglu, H. Shaul, E. Aharoni, N. Drucker, W. D. Lu, O. Soceanu et al. , “FHENDI: A Near-DRAM Accelerator for Compiler-Generated Fully Homomorphic Encryption Applications,” in HPCA , 2025. [251] M. Mwaisela, J. Hari, P. Yuhala, J. Ménétrey, P. Felber, and V. Schiavoni, “Evaluating the Potential of In-Memory Processing to Accelerate Homomorphic Encryption: Practical Experience Report,” in SRDS , 2024. [252] T. Barik, P. Mehta, Z. Pindado, H. Gupta, M. Kabra, M. Sadrosadati, O. Mutlu, and A. J. Peña, “Long Integer NTT Execution on UPMEM-PIM for 128-bit Secure Fully Homomorphic Encryption,” FGCS , 2026. [253] J. Fan and F. Vercauteren, “Somewhat Practical Fully Homomorphic Encryption,” Cryptology ePrint Archive, Paper 2012/144, 2012. [254] C. Gentry and S. Halevi, “Implementing Gentry’s Fully Homomorphic Encryption Scheme,” in EUROCRYPT 2011 .[255] C. Gentry, S. Halevi, and N. P. Smart, “Fully homomorphic encryption with polylog overhead,” in EUROCRYPT , 2012. [256] C. Gentry, S. Halevi, and N. P. Smart, “Better bootstrapping in fully homomorphic encryption,” in PKC , 2012. [257] F. V. NP Smart, “Fully Homomorphic SIMD Operations,” DCC , 2014. [258] A. Chatterjee and K. M. M. Aung, Fully Homomorphic Encryption in Real-World Applications , 2019. [259] J. Gómez-Luna, I. E. Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, “Benchmarking Memory-centric Computing Systems: Analysis of Real Processing-in-Memory Hardware,” in IGSC , 2021. [260] J. Gómez-Luna, I. El Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, “Benchmarking a New Paradigm: Experimental Analysis and Characterization of a Real Processing-in-memory System,” IEEE Access , 2022. [261] Y. Falevoz and J. Legriel, “Energy Efficiency Impact of Processing in Memory: A Comprehensive Review of Workloads on the UPMEM Architecture,” in Euro-Par ,2023. [262] Y. Kwon, K. Vladimir, N. Kim, W. Shin, J. Won, M. Lee, H. Joo, H. Choi, G. Kim, B. An et al. , “System Architecture and Software Stack for GDDR6-AiM,” in HCS ,2022. [263] B. Hyun, T. Kim, D. Lee, and M. Rhu, “Pathfinding Future PIM Architectures by Demystifying a Commercial PIM Technology,” in HPCA , 2024. [264] G. Jonatan, H. Cho, H. Son, X. Wu, N. Livesay, E. Mora, K. Shivdikar, J. L. Abellán, A. Joshi, D. Kaeli et al. , “Scalability Limitations of Processing-in-Memory using Real System Evaluations,” POMACS , 2024. [265] AMD, “AMD EPYC 7742,” https://www.amd.com/en/support/downloads/drivers. html/processors/epyc/epyc-7002-series/amd-epyc-7742.html, 2019. [266] NVIDIA, “NVIDIA A100 Tensor Core GPU Architecture. White Pa-per,” https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/ nvidia-ampere-architecture-whitepaper.pdf, 2020. [267] J. H. Cheon, A. Kim, M. Kim, and Y. Song, “Homomorphic encryption for arithmetic of approximate numbers,” in ASIACRYPT , 2017. [268] J.-C. Bajard, J. Eynard, M. A. Hasan, and V. Zucca, “A Full RNS variant of FV-like Somewhat Homomorphic Encryption Schemes,” in SAC , 2016. [269] A. Al Badawi, A. Alexandru, J. Bates, F. Bergamaschi, D. B. Cousins, S. Erabelli, N. Genise, S. Halevi, H. Hunt, A. Kim, Y. Lee, Z. Liu, D. Micciancio, C. Pascoe, Y. Polyakov, I. Quah, S. R. V., K. Rohloff, J. Saylor, D. Suponitsky, M. Triplett, V. Vaikuntanathan, and V. Zucca, “OpenFHE: Open-source fully homomorphic encryption library,” Cryptology ePrint Archive, Paper 2022/915, 2022. [270] Microsoft Research, “Microsoft SEAL (release 4.x),” https://github.com/microsoft/ SEAL, 2023. [271] H. Chen, K. Laine, and R. Player, “Simple Encrypted Arithmetic Library – SEAL v2.1,” in FCW , 2017. [272] S. Halevi, V. Shoup, and others, “HElib: A software library for homomorphic encryption,” https://github.com/homenc/HElib, 2014. [273] I. Chillotti, N. Gama, M. Georgieva, and M. Izabachène, “TFHE: Fast fully homo-morphic encryption library over the torus,” https://tfhe.github.io/tfhe/, 2016. [274] I. Chillotti, M. Joye, D. Ligier, J.-B. Orfila, and S. Tap, “CONCRETE: Concrete operates on ciphertexts rapidly by extending TFHE,” in WAHC , 2020. [275] Zama, “TFHE-rs: A pure rust implementation of TFHE,” https://github.com/ zama-ai/tfhe-rs, 2022. [276] Tune Insight SA, “Lattigo: A lattice-based multiparty homomorphic encryption library in Go,” https://github.com/tuneinsight/lattigo, 2020. [277] A. Benaissa, B. Retiat, B. Cebere, and A. E. Belfedhal, “TenSEAL: A library for encrypted tensor operations using homomorphic encryption,” in DPML , 2021. [278] A. Ibarrondo and A. Viand, “Pyfhel: Python for homomorphic encryption libraries,” in WAHC , 2021. [279] H. Yang, S. Shen, W. Dai, L. Zhou, Z. Liu, and Y. Zhao, “Phantom: A CUDA-accelerated word-wise homomorphic encryption library,” Cryptology ePrint Archive, Paper 2023/049, 2023. [280] The PALISADE Project, “PALISADE lattice cryptography library,” https:// palisade-crypto.org, 2017. [281] Google, “HEIR: Homomorphic encryption intermediate representation,” https: //github.com/google/heir, 2023. [282] J. W. Cooley and J. W. Tukey, “An Algorithm for the Machine Calculation of Complex Fourier Series,” Mathematics of Computation , 1965. [283] A. Satriawan, R. Mareta, and H. Lee, “A Complete Beginner Guide to the Number Theoretic Transform (NTT),” Cryptology ePrint Archive , 2024. [284] J. H. Cheon, K. Han, A. Kim, M. Kim, and Y. Song, “Bootstrapping for Approximate Homomorphic Encryption,” in EUROCRYPT 2018 , 2018. [285] K. Han and D. Ki, “Better Bootstrapping for Approximate Homomorphic Encryp-tion,” in CT-RSA , 2020. [286] J.-W. Lee, E. Lee, Y. Lee, Y.-S. Kim, and J.-S. No, “High-Precision Bootstrapping of RNS-CKKS Homomorphic Encryption Using Optimal Minimax Polynomial Approximation and Inverse Sine Function,” in EUROCRYPT , 2021. [287] A. Kim, A. Papadimitriou, and Y. Polyakov, “Approximate Homomorphic Encryp-
+
+18 tion with Reduced Approximation Error,” in CT-RSA , 2022. [288] J. H. Kim, S.-H. Kang, S. Lee, H. Kim, Y. Ro, S. Lee, D. Wang, J. Choi, J. So, Y. Cho 
+
+et al. , “Aquabolt-XL HBM2-PIM, LPDDR5-PIM with In-memory Processing, and AXDIMM with Acceleration Buffer,” IEEE MICRO 2022 .[289] F. Boemer, S. Kim, G. Seifu, F. D.M. de Souza, and V. Gopal, “Intel HEXL: Acceler-ating Homomorphic Encryption with Intel AVX512-IFMA52,” in WAHC , 2021. [290] “Microsoft SEAL,” https://www.microsoft.com/en-us/research/project/ microsoft-seal/. [291] W. Dai and B. Sunar, “cuHE: A Homomorphic Encryption Accelerator Library,” in 
+
+BalkanCryptSec 2016 .[292] V. Lab, “cuFHE,” 2018. [293] X. Cao, C. Moore, M. O’Neill, E. O’Sullivan, and N. Hanley, “Optimised Multi-plication Architectures For Accelerating Fully Homomorphic Encryption,” TC 2015 .[294] X. Cao, C. Moore, M. O’Neill, E. O’Sullivan, and N. Hanley, “Accelerating Fully Homomorphic Encryption Over the Integers with Super-size Hardware Multiplier and Modular Reduction,” IACR 2013 .[295] S. S. Roy, K. Järvinen, J. Vliegen, F. Vercauteren, and I. Verbauwhede, “HEPCloud: An FPGA-based Multicore Processor for FV Somewhat Homomorphic Function Evaluation,” TC 2018 .[296] S. S. Roy, F. Turan, K. Jarvinen, F. Vercauteren, and I. Verbauwhede, “FPGA-based High-performance Parallel Architecture For Homomorphic Computing on Encrypted Data,” in HPCA 2019 .[297] A. Feldmann, N. Samardzic, A. Krastev, S. Devadas, R. Dreslinski, K. Eldefrawy, N. Genise, C. Peikert, and D. Sanchez, “F1: A Fast and Programmable Accelerator for Fully Homomorphic Encryption,” MICRO 2021 .[298] S. Kim, J. Kim, M. J. Kim, W. Jung, J. Kim, M. Rhu, and J. H. Ahn, “BTS: An Accelerator for Bootstrappable Fully Homomorphic Encryption,” in ISCA 2022 .[299] J. Kim, S. Kim, J. Choi, J. Park, D. Kim, and J. H. Ahn, “SHARP: A Short-word Hierarchical Accelerator for Robust and Practical Fully Homomorphic Encryption,” in ISCA , 2023. [300] S. Williams, A. Waterman, and D. Patterson, “Roofline: An Insightful Visual Performance Model for Multicore Architectures,” Commun. ACM , 2009. [301] J. Draper, J. Chame, M. Hall, C. Steele, T. Barrett, J. LaCoss, J. Granacki, J. Shin, C. Chen, C. W. Kang et al. , “The Architecture of the DIVA Processing-in-Memory Chip,” in ICS , 2002. [302] D. Reis, J. Takeshita, T. Jung, M. Niemier, and X. S. Hu, “Computing-In-Memory for Performance and Energy-Efficient Homomorphic Encryption,” TVLSI , 2020. [303] S. Gupta and T. Š. Rosing, “Accelerating Fully Homomorphic Encryption With Processing In Memory,” in DAC , 2021. [304] UPMEM, “UPMEM SDK, Version 2023.2.0,” https://sdk.upmem.com/2023.2.0/, 2023. [305] J. Gómez-Luna, I. E. Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, “Benchmarking a New Paradigm: An Experimental Analysis of a Real Processing-in-Memory Architecture,” arXiv:2105.03814 , 2021. [306] J. Gómez-Luna, Y. Guo, S. Brocard, J. Legriel, R. Cimadomo, G. F. Oliveira, G. Singh, and O. Mutlu, “An Experimental Evaluation of Machine Learning Training on a Real Processing-in-Memory System,” arXiv preprint arXiv:2207.07886 , 2022. [307] J. Zhang, X. Yang, L. He, K. Chen, W.-j. Lu, Y. Wang, X. Hou, J. Liu, K. Ren, and X. Yang, “Secure Transformer Inference Made Non-Interactive,” Cryptology ePrint Archive , 2024. [308] J. Nider, C. Mustard, A. Zoltan, J. Ramsden, L. Liu, J. Grossbard, M. Dashti, R. Jodin, A. Ghiti, J. Chauzi et al. , “A Case Study of Processing-in-Memory in Off-the-shelf Systems,” in USENIX 2021 .[309] S. Halevi and V. Shoup, “Algorithms in HElib,” in Crypto , 2014. [310] J. H. Cheon, A. Kim, M. Kim, and Y. Song, “Polynomial Approximation of Activa-tion Functions and Its Application to Deep Neural Networks with Homomorphic Encryption,” IEEE Access , 2019. [311] W.-j. Lu, Z. Huang, C. Hong, Y. Ma, and H. Qu, “PEGASUS: Bridging Polynomial and Non-Polynomial Evaluations in Homomorphic Encryption,” in IEEE S&P , 2021. [312] H. Li, W. Mo, C. Shen, and L. Pang, “EvalComp: Bootstrapping based on Homo-morphic Comparison Function for CKKS,” TIFS , 2024. [313] A. Alexandru, A. Kim, and Y. Polyakov, “General Functional Bootstrapping using CKKS,” in Crypto , 2025. [314] A. Satriawan, I. Syafalni, R. Mareta, I. Anshori, W. Shalannanda, and A. Barra, “Conceptual Review on Number Theoretic Transform and Comprehensive Review on its Implementations,” IEEE Access , 2023. [315] J. Park, S. Lee, and J. Lee, “NTT-PIM: Row-Centric Architecture and Mapping for Efficient Number-Theoretic Transform on PIM,” in DAC , 2023. [316] J.-P. Bossuat, C. Mouchet, J. Troncoso-Pastoriza, and J.-P. Hubaux, “Efficient Boot-strapping for Approximate Homomorphic Encryption with Non-Sparse Keys,” 2020. [317] M. Albrecht, M. Chase, H. Chen, J. Ding, S. Goldwasser, S. Gorbunov, S. Halevi, J. Hoffstein, K. Laine, K. Lauter, S. Lokam, D. Micciancio, D. Moody, T. Morrison, A. Sahai, and V. Vaikuntanathan, “Homomorphic Encryption Security Standard,” Tech. Report, HomomorphicEncryption.org, 2018. [318] P. D. Barrett, “Implementing the Rivest Shamir and Adleman Public Key Encryption Algorithm on a Standard Digital Signal Processor,” in CRYPTO , 1986. [319] PCISIG, “PCIe Specification,” 2017. [320] A. Li, S. L. Song, J. Chen, J. Li, X. Liu, N. R. Tallent, and K. J. Barker, “Evaluating Modern GPU Interconnect: PCIe, NVLink, NV-SLI, NVSwitch and GPUDirect,” 
+
+TPDS , 2019. [321] Y. LeCun, L. Bottou, Y. Bengio, and P. Haffner, “Gradient-Based Learning Applied to Document Recognition,” Proceedings of the IEEE , 1998. [322] K. Chmielewski, J. Ławnicki, U. Lukyanau, T. Kobus, and M. Maciejewski, “UPMEM Unleashed: Software Secrets for Speed,” 2025. [323] H. Son, G. Jonatan, X. Wu, H. Cho, K. Shivdikar, J. L. Abellán, A. Joshi, D. Kaeli, and J. Kim, “PIMnet: A Domain-Specific Network for Efficient Collective Commu-nication in Scalable PIM,” in HPCA , 2025. [324] T. Ajayi and D. Blaauw, “OpenROAD: Toward a Self-Driving, Open-Source Digital Layout Implementation Tool Chain,” in GOMACTech , 2019. [325] S. Shim, S. Kim, J. Bae, K. Ko, E. Lee, K. Kim, K. Kim, S. Lee, J. Hyun, I. Koh et al. ,“A 16Gb 1.2 V 3.2 Gb/s/pin DDR4 SDRAM with Improved Power Distribution and Repair Strategy,” in ISSCC , 2018. [326] P. D. Manuel, M. I. Abd-El-Barr, I. Rajasingh, and B. Rajan, “An Efficient Represen-tation of Benes Networks and its Applications,” J. Discrete Algorithms , 2008. [327] Intel, “Intel Advanced Vector Extensions Programming Reference,” 2011. [328] S. S. Roy, F. Turan, K. Jarvinen, F. Vercauteren, and I. Verbauwhede, “FPGA-based high-performance parallel architecture for homomorphic computing on encrypted data,” in HPCA , 2019. [329] M. S. Riazi, K. Laine, B. Pelton, and W. Dai, “HEAX: An architecture for computing on encrypted data,” in ASPLOS , 2020. [330] F. Turan, S. S. Roy, and I. Verbauwhede, “HEAWS: An accelerator for homomorphic encryption on the Amazon AWS FPGA,” IEEE Transactions on Computers , 2020. [331] R. Agrawal, L. de Castro, G. Yang, C. Juvekar, R. T. Yazicigil, A. Chandrakasan, V. Vaikuntanathan, and A. Joshi, “FAB: An FPGA-based accelerator for bootstrap-pable fully homomorphic encryption,” in HPCA , 2023. [332] Y. Yang, H. Zhang, S. Fan, H. Lu, M. Zhang, and X. Li, “Poseidon: Practical homo-morphic encryption accelerator,” in HPCA , 2023. [333] Y. Zhu, X. Wang, L. Ju, and S. Guo, “FxHENN: FPGA-based acceleration framework for homomorphic encrypted CNN inference,” in HPCA , 2023. [334] R. Agrawal, L. de Castro, G. Yang, C. Juvekar, R. T. Yazicigil, A. Chandrakasan, V. Vaikuntanathan, and A. Joshi, “FAST: FPGA acceleration of fully homomorphic encryption with efficient bootstrapping,” in FPGA , 2025. [335] R. Agrawal, L. de Castro, C. Juvekar, A. Chandrakasan, V. Vaikuntanathan, and A. Joshi, “MAD: Memory-aware design techniques for accelerating fully homo-morphic encryption,” in MICRO , 2023. [336] J. Zhang, M. Imani, and E. Sadredini, “BP-NTT: Fast and Compact in-SRAM Number Theoretic Transform with Bit-Parallel Modular Multiplication,” in DAC , 2023. [337] Y. Park, S. Pal, A. Amarnath, K. Swaminathan, W. D. Lu, A. Buyuktosunoglu, and P. Bose, “Dramaton: A Near-DRAM Accelerator for Large Number Theoretic Transforms,” CAL , 2024. 
+
+19

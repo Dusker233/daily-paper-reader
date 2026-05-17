@@ -1,0 +1,622 @@
+Title: Enforcing Attestable Workflows across Untrusted Networks
+
+URL Source: https://arxiv.org/pdf/2605.09297v1
+
+Published Time: Tue, 12 May 2026 01:19:59 GMT
+
+Number of Pages: 33
+
+Markdown Content:
+# Enforcing Attestable Workflows across Untrusted Networks 
+
+# Hung Dang 1* and Tue Nguyen 21* Van Lang School of Technology, Van Lang University, Vietnam. 
+
+2Appota, Vietnam. *Corresponding author(s). E-mail(s): hung.dang@vlu.edu.vn; Contributing authors: tuent@appota.com; 
+
+Abstract 
+
+Confidential high-performance computing orchestrates workloads across feder-ated domains, yet existing frameworks rely on high-overhead user-space library operating systems or assume single-host execution. We propose Janus , an architecture federating Trusted Execution Environments via a split Trusted Computing Base (TCB) design. It couples a hardware-isolated Control Plane executing Mutually Attested Key Exchange ( MAKE ) with a measured guest-resident extended Berkeley Packet Filter (eBPF) Data Plane. By anchoring cryptographic key release to hardware measurements and executing enforcement in the kernel, Janus achieves native-speed encrypted routing. Empirical evalua-tion demonstrates a steady-state enforcement cost of 6 μs per packet, imposing a 13 –15 μs absolute latency overhead. On distributed pipelines, Janus incurs just a 6.1% execution penalty over plaintext baselines, bypassing the 62% 
+
+penalty of user-space counterparts. The system initializes a 100-node cluster in under 1.5 seconds, providing an efficient confidential interconnect for long-running workflows. 
+
+Keywords: Confidential computing, Trusted execution environments, High-performance networking, eBPF, Intel TDX 
+
+# 1 Introduction 
+
+Modern high-performance computing (HPC) clusters and distributed computing platforms increasingly orchestrate confidential scientific workloads across federated 1
+
+> arXiv:2605.09297v1 [cs.CR] 10 May 2026
+
+administrative domains. Applications such as distributed medical imaging analy-sis, federated machine learning, and multi-site scientific simulations process highly sensitive datasets requiring strict privacy guarantees. Achieving multi-gigabit confi-dential networking under hardware-attested policies represents the central engineering challenge of confidential distributed workflows. While hardware primitives like Intel TDX [1] and Arm CCA [2] provide strong local isolation for individual Confiden-tial Virtual Machines (CVMs), they lack a distributed architecture to federate state and extend policy invariants across physical machine boundaries. In multi-site dis-tributed contexts, data-flow scheduling and high-throughput communication patterns (e.g., pipeline DAGs [3]) must be cryptographically bound to platform attestation, ensuring intermediate data flows exclusively between verified enclave states. Nonetheless, extending verifiable enforcement across untrusted network infrastruc-ture faces various challenges. Standard cryptographic tunnels (e.g., TLS) secure data in transit but enforce no post-decryption behavioral policies, for an adversary control-ling the destination host hypervisor can manipulate network namespaces or routing tables to redirect decrypted payloads to unauthorized enclaves without triggering network-level alarms. Plaintext gradient or data exchange across machine boundaries is therefore equivalent, from a privacy standpoint, to direct exposure. Confidential HPC networking must sustain 100GbE link rates with jumbo-frame MTUs while preserving end-to-end attestation invariants. Existing application-layer attestation frameworks (e.g., RA-TLS [4]) embed cryptographic key release directly within the application computing base. While effective at establishing secure channels, this design imposes user-to-kernel boundary-crossing latency penalties and relies on the memory safety and protocol correctness of user-space libraries. Conversely, routing high-bandwidth socket streams through pure-firmware hypercalls incurs high context-switch overhead. Both approaches are incompatible with multi-gigabit data-plane throughput. Whereas existing approaches perform enforcement either entirely in user-space or exclusively in firmware, we observe that the high-speed network routing path is inde-pendent from the complex, latency-tolerant remote attestation handshake. We propose 
+
+Janus , an architecture constructing a Confidential Federated Interconnect that acts on this observation. Specifically, Janus utilizes a split-TCB architecture to balance hardware attestation with high-throughput routing. By anchoring enforcement in a measured guest-resident eBPF data plane, Janus transparently intercepts network traffic at the lowest layer of the kernel stack, while cryptographic keys are derived via an out-of-band hardware attestation protocol. This split architecture provides three system-level advantages. First, it ensures completely transparent enforcement for unmodified UDP workloads, decoupling the cryptographic routing policy from the application logic entirely. Second, by expanding the Trusted Computing Base (TCB) to include the guest kernel, it shifts cryptographic enforcement from user-space libraries to a measured system-level boundary, enabling near-native throughput. Finally, distributed environments suffer from asynchronous policy drift during workflow updates. Janus prevents unauthorized communica-tion during these divergent states through epoch-based policy versioning, rejecting handshakes lacking cryptographic consensus on the current policy digest. 2We make the following contributions in this paper: 
+
+• Janus closes the kTLS attestation gap via RTMR3 , BPF-Lock, and SEAM-gated key release, anchoring a split-TCB architecture that connects high-speed eBPF routing to hardware remote attestation. 
+
+• Using Google Cloud Platform (GCP) Sapphire Rapids instances, empirical mea-surement of the static-key eBPF data plane establishes a bounded 6 μs per-packet processing cost. For stateless UDP workloads, isolated loopback microbenchmarks demonstrate this incurs a 13–15 μs absolute data-plane latency overhead over native unencrypted baselines, bypassing the LibOS syscall emulation overheads that drive the empirical 137–147 μs penalty of user-space RA-TLS. 
+
+• We demonstrate macro-level scalability via a hybrid evaluation: empirical isola-tion of the data plane reveals a 6 .1% execution overhead over plaintext TCP on a distributed federated learning pipeline (ResNet-18), while natively measured attes-tation primitives analytically bound the integration cost (+ ∼2.5% median execution penalty per re-keying interval). By introducing lock-free epoch synchronization, we gracefully rotate cryptographic keys without disrupting in-flight UDP/FOU collective communications. 
+
+• We implement the MAKE protocol to bind symmetric session keys to bilateral hard-ware states. Combining empirically measured per-handshake hardware costs with analytically grounded projections confirms a structured 100-node HPC pipeline ini-tializes in under 1.5 seconds. We scope Janus ’s applicability to sparse topologies and long-running distributed pipelines, as dense O(N 2) collectives expose serialization bottlenecks in current-generation hardware quoting enclaves. The rest of this paper is organised as follows. Section 2 provides background on Trusted Execution Environments and distributed confidential microservices. Section 3 formulates the problem and threat model. Section 4 presents the Janus architecture and MAKE protocol. Section 5 provides the security analysis. Section 6 describes the implementation. Section 7 presents the experimental evaluation, before Section 8 concludes the paper. 
+
+# 2 Background and Related Work 
+
+# 2.1 Trusted Execution Environments 
+
+A Trusted Execution Environment (TEE) is a hardware-enforced isolated context protecting code and data confidentiality and integrity from privileged software (OS, hypervisor) [1, 2, 5]. Early process-level TEEs like Intel SGX [5] isolate user-space pro-cesses. While offering a minimal Trusted Computing Base (TCB), they enforce strict memory limits (Enclave Page Cache) and often require specialized library operating systems to execute standard applications. Conversely, modern system-level TEEs like Intel TDX [1] and Arm CCA [2] utilize memory encryption techniques, such as TDX’s Multi-key Total-Memory Encryption (MKTME) coupled with the Secure Arbitration Mode (SEAM), to isolate entire Confidential Virtual Machines (CVMs) from the host hypervisor [6]. This VM-level isolation allows CVMs to natively run unmodified guest operating systems, bypass library OS engineering overheads, and fully leverage the 3physical node’s CPU and memory resources, drastically reducing the I/O and paging bottlenecks that plague large-memory workloads in SGX. 
+
+Remote attestation. TEEs produce cryptographically verifiable evidence of their state, allowing verifiers to confirm platform identity and enclave measurements [7, 8]. In Intel TDX [1], the guest invokes a hypercall to generate a local TDREPORT ,supplying a 64-byte REPORTDATA nonce to bind external data. The Intel-signed Quoting Enclave (QE) then transforms this into a remotely verifiable TD Quote. Janus ’s 
+
+MAKE protocol aligns with the IETF RATS architecture [7], functioning as both Attester and Relying Party. MAKE binds session keys directly to hardware-backed attestation reports. Sardar et al. [8] identified initialization integrity violations in Arm CCA and Intel TDX using symbolic analysis, motivating our inclusion of the MAKE 
+
+protocol directly in the measured RMM image. ZKSA [9] targets TOCTOU attacks in IoT using zero-knowledge proofs, while PROVE [10], ZEKRA [11], and PRIVE [12] provide publicly verifiable, control-flow, and swarm attestation for external auditors. Conversely, Janus uses attestation primitives to directly gate network routing. 
+
+RA-TLS. Integrating remote attestation with Transport Layer Security (RA-TLS) [4] allows enclaves to embed attestation reports into TLS certificates, authen-ticating the peer and verifying hardware measurements simultaneously (pioneered by Knauth et al. [4]). While Janus adopts this management channel abstraction, it moves enforcement from the application layer to the measured kernel-level data plane. Finally, device-level protocols like SPDM [13] lack workflow-level policy enforcement. As noted by Feng et al. [6], distributed policy enforcement is a critical gap that Janus 
+
+resolves in a platform-agnostic manner (independent of underlying OpenHCL [14] or Graviton [15] hardware advancements). 
+
+# 2.2 Distributed Microservices in the Confidential Cloud 
+
+Cloud workloads distribute microservices across physical machines and administra-tive domains. While frameworks like Authentic Execution [16] and RA-TLS [4] extend TEE security to distributed settings, they require specific programming models or application-layer attestation. Systems isolating single CVMs (Erebor [17], Veil [18]) ignore cross-machine flows. Existing approaches place attestation and key manage-ment in the application layer, making confidentiality dependent on every workflow component’s correctness. Janus elevates policy enforcement to a measured split-TCB level across boundaries, removing this dependency. 
+
+Grid Frameworks and Intra-host Policies. Grid orchestration platforms like ParSL [19] and HTCondor [20] abstract the complexity of executing massive Directed Acyclic Graphs (DAGs) across disparate resources. While they provide scheduling and fault tolerance, their security models assume a trusted underlying fabric or rely on centralized identity management, leaving data exposed in memory to compromised host operating systems. Conversely, recent Trusted Execution Environment advancements address intra-host data flow policies but struggle with distributed scale. The concurrent MICA [21] framework enforces local attestable data flow policies by decoupling confidentiality from application logic using physical memory isolation via the Reference Monitor Module. However, MICA solves an orthogonal problem domain: intra-host memory 4sharing among co-located enclaves on a single machine. It offers no remote verifica-tion mechanisms before data crosses machine boundaries. Janus specifically tackles the distributed challenge, securing inter-host data flows via cryptographic network bindings linking disparate physical hosts. Other intra-host TEE systems include Veil [18] (nested VMMs for AMD SEV-SNP), Cerberus [22] (formalized SGX memory sharing), and Elasticlave [23] (RISC-V shared memory). Sandboxing abstractions like InkTag [24], Erebor [17], and VeriSMo [25] simplify or formalize intra-host CVM isolation. These works are comple-mentary, strengthening single-host boundaries, whereas Janus establishes verifiable cross-machine enforcement suitable for wide-area grid orchestration. 
+
+# 2.3 Distributed-Enforcement Approaches and Their Trade-offs 
+
+Several frameworks deploy TEEs across distributed settings. Ryoan [26] provides a distributed, data-oblivious sandbox. However, they require specific APIs or heavy application-layer instrumentation. Janus supports unmodified binaries by enforcing policy via a split architecture. Kalium [27] isolates serverless TEEs, and SRFL [28] protects IoT federated learning models. HyperEnclave [29] abstracts TEE functionality across commodity hardware. We examine three closely related distributed-enforcement designs in detail, for each illuminates a distinct architectural axis along which Janus 
+
+differs. 
+
+TEE Integration in HPC and Grid Environments. Extending confidential com-puting into HPC contexts requires bridging hardware isolation with orchestration frameworks. Platforms like SCONE [30] integrate SGX with container environments, providing a foundation for secure workflows but relying heavily on application-layer wrappers, while Veracruz [31] formalizes multi-party collaborative computations using a centralized policy broker. Janus operates at the network stratum, directly mapping grid DAG topologies to decentralized hardware-attested endpoints without centralized coordination. 
+
+Authentic Execution [16] secures heterogeneous distributed enclave events through framework-specific event-binding logic embedded directly in the application run-time. The framework binds inter-component events to attestation evidence at the language-level boundary, requiring developers to structure applications around its event abstraction. Janus inverts this trade-off: it supports unmodified binaries by enforcing policy at a measured kernel-level boundary, accepting the TCB cost of including the guest kernel in exchange for application transparency. The two systems target complementary use cases: Authentic Execution suits new applications written against its event model, whereas Janus retrofits attested flow control onto unmodified UDP workloads. 
+
+Confidential Containers (CoCo) Attestation Agent provisions decryption keys to container runtimes via a Key Broker Service after attesting the initial container state. Two architectural distinctions follow. First, CoCo attests the bootstrap state of the container, providing no point-to-point cryptographic binding between data flows and remote endpoint measurements; Janus ’s MAKE protocol binds each session key to bilateral hardware quotes per edge of the workflow DAG. Second, the synchronous 5KBS interaction imposes a 10–17 s pod-startup tax that aggregates poorly across grid-scale workflows (though this tax is per-pod rather than per-flow and amortizes over long-running containers, it represents a rigid baseline for highly dynamic topologies); 
+
+Janus amortizes MAKE across asynchronous parallel handshakes and projects sub-two-second initialization for the 100-node case (Section 7.5). 
+
+In-kernel TLS ( kTLS ) with Linux’s TLS upcall offload provides kernel-resident AES-GCM at near-native throughput but does not bind the symmetric key deriva-tion to a measured network-stack state. Standard kTLS deployments derive keys via user-space libraries (e.g., OpenSSL, GnuTLS) and load them into the kernel through 
+
+setsockopt , leaving the attestation evidence anchored to a user-space handshake while the encryption itself executes inside an unmeasured kernel. Even if the OpenSSL binary is measured into the RTMR during boot, the structural semantic gap remains: the key exchange terminates in user-space, and the kernel network stack receives the symmetric session keys blindly via the system call interface, possessing no crypto-graphic proof that those specific keys originated from an attested remote peer rather than a local user-space compromise. Janus ’s RTMR3 measurement of the eBPF/XDP proxy plus the BPF-Lock LSM closes this gap: key release is gated within the SEAM hardware boundary on the attested guest kernel state. 
+
+# 3 Problem Formulation 
+
+# 3.1 Motivating Scenario 
+
+Consider a distributed inference pipeline streaming sensitive queries (e.g., text for sen-timent analysis) from ingest nodes to worker enclaves across distinct cloud providers. The workflow owner requires assurance that queries are processed only by a pre-approved BERT model enclave and forwarded exclusively to a designated aggregator enclave. If an intermediate host redirects data or an enclave is unauthorized, the workflow must fail without exposing data. Figure 1 illustrates the fundamental vulnerability. While hardware execution envi-ronments protect memory from direct OS inspection, traditional application-layer TLS forces the application to handle decryption. This integrates complex software frame-works into the Trusted Computing Base (TCB). A malicious host OS can exploit vulnerabilities within this bloated application layer via crafted network payloads. Once compromised, the application decrypts the payload and leaks it back to the OS, bypassing hardware protections. A split-TCB architecture mitigates this by intercept-ing traffic at the RMM boundary, strictly enforcing attested decryption before data reaches the vulnerable application space. 
+
+# 3.2 System Model 
+
+We model a distributed workflow as a directed acyclic graph G = ( V, E ) over compute nodes v ∈ V . Each edge ( vi, v j ) ∈ E is a permitted data flow. Nodes execute on distinct, potentially cross-administrative physical hosts h(v). 6Application-Layer TLS   
+
+> Host A (Sender)
+> App (TLS)
+> OS Kernel
+> Host B (Receiver)
+> App (TLS)
+> OS (Malicious)
+> Janus Split-TCB
+> Host A
+> Enclave App
+> RMM (XDP)
+> Untrusted OS
+> Host B
+> Enclave App
+> RMM (XDP)
+> Untrusted OS
+
+Fig. 1 : The Distributed Security Gap. Left: Application-layer TLS of Host B was exploited. The exploited App leaks decrypted data to the malicious OS. Right: Janus ’s Split-TCB architecture intercepts traffic at the RMM boundary, strictly tying decryp-tion to hardware-attested policy states before data reaches the enclave. Crosshatched rectangles depict encrypted data, whereas unfilled rectangles indicate plaintext. 
+
+Client. The data owner defines G and the data flow policy P, specifying expected destination enclave measurements and network address bindings for each edge. The client distributes the signed policy to all Reference Monitor Modules before execution. 
+
+Host. The host OS provides computing resources but is explicitly excluded from the Trusted Computing Base (TCB). 
+
+Reference Monitor Module ( RMM ) and Data Plane. The RMM is a privileged firmware component enforcing local policies. In Intel TDX, the RMM extends the SEAM-mode TDX module, securely bootstrapping a guest-resident data plane. Janus 
+
+expands the TCB as motivated in Section 1. To ensure this TCB expansion does not expose the system to a malicious hypervisor supplying a compromised kernel, Janus 
+
+relies on a strict secure boot chain: the Trust Domain Virtual Firmware (TDVF) cryptographically measures the Guest OS kernel, initial RAM disk (initrd), and boot parameters into the Run-Time Measurement Registers ( RTMR1 and RTMR2 ) before execution. This provides an execution path cryptographically bound to hardware attestation. 
+
+Trusted Execution Environment. Each node v executes unmodified inside a TEE. Its initial memory state is captured in a cryptographic measurement μ(v) within the hardware attestation report. Network communication occurs over an asynchronous, untrusted wide-area network. 
+
+# 3.3 Threat Model 
+
+We consider a PPT adversary A controlling the network infrastructure and host OSs. 
+
+A can intercept, modify, replay, or drop packets; manipulate the hypervisor and redi-rect sockets via root privileges; deploy unauthorized enclaves; and observe all network traffic. Traditional network-level controls fail against such host-level compromise. How-ever, we trust the hardware processors, the manufacturer’s attestation infrastructure, 7and the TDX module post-initialization [8]. Hardware cryptographic keys are assumed unforgeable [7, 8]. We leave availability attacks (e.g., network-level denial-of-service or packet drop-ping) and traffic analysis (e.g., inferring workflow topologies via volume or timing side-channels) out of scope. Mitigating these threats requires orthogonal network-layer padding and Byzantine-fault-tolerant routing mechanisms. Side-channel attacks against the CPU microarchitecture (e.g., transient execution) remain outside our scope. Janus protects against network-level adversaries and untrusted hypervisors, but offers no defense against post-boot kernel-resident exploitation by a malicious application tenant. 
+
+# 3.4 Security Goals 
+
+Janus must achieve the following properties: 
+
+• Policy Adherence: Data d governed by P must only flow along authorized edges (vi, v j ) ∈ E. Destination node vj must present an attestation measurement μ(vj )matching P.
+
+• Data Confidentiality: Data d must never be accessible in plaintext to the network, untrusted host OS, or unauthorized enclaves during transit. Plaintext exposure is confined to the origin and destination boundaries, including their respective trusted (but vulnerable) guest OS instances. We note that this property governs network transit; mitigating post-decryption exfiltration via non-network covert channels (e.g., shared memory, cache timing) within the destination host remains outside the scope of this threat model. 
+
+• Attested Flow Control: The enforcement mechanism must cryptographically bind transmission channels to verifiable hardware states. A session key for ( vi, v j )must be bound to both attested measurements μ(vi) and μ(vj ). These properties are compositional: if Policy Adherence, Data Confidentiality, and Attested Flow Control hold for every edge and transit segment, the workflow provides end-to-end confidentiality. 
+
+# 4 System Design: Janus 
+
+# 4.1 High-Level Overview 
+
+Janus transforms isolated Reference Monitor Modules ( RMM s) into a unified dis-tributed enforcement mechanism (Figure 3). Clients sign and distribute workflow policies P to all participating RMM s, which validate the signatures and install flow rules. Instead of trusting the host network stack, Janus intercepts outbound network operations via a split architecture. When connecting to an authorized endpoint, the source RMM initiates a Mutually Attested Key Exchange ( MAKE ) session with the destination RMM . This yields a symmetric session key conditioned on bilateral hard-ware attestations. Subsequent socket data is transparently encrypted/decrypted by the RMM data planes, blinding the untrusted host. Janus requires no application modifications for native UDP flows. To support TCP-bound orchestration frameworks (see Section 7.4), Janus requires operator-configured stateless Linux Foo-over-UDP 8Boot Time    
+
+> systemd-init
+> Execution
+> Load XDP Proxy
+> Activate BPF-Lock LSM
+> Extend
+> RTMR3
+> Pivot to Root FS
+> TOCTOU Window
+> Measured initrd (No user-space) Untrusted User-space
+
+Fig. 2 : Early-boot sequence establishing the measured environment. The TOCTOU window is strictly closed prior to pivoting to the root filesystem, precluding unprivi-leged user-space interference. (FOU) encapsulation, representing a deliberate deployment mode that preserves end-to-end TCP semantics over UDP datagrams but necessitates MTU tuning. As detailed in Section 1, Janus avoids the prohibitive latency of pure-firmware enforcement via a hybrid split architecture: a SEAM-mode Control Plane ( RMM ) handles MAKE ,key provisioning, and policy attestation, while a securely bootstrapped, measured Guest-Resident eBPF Data Plane transparently intercepts socket operations. 
+
+# 4.2 Split Control/Data Plane and Trust Establishment 
+
+Janus ’s TCB encompasses the SEAM-mode RMM (Control Plane), the Guest OS Kernel, and the eBPF/XDP proxy (Data Plane). The host OS is excluded. To prevent Time-Of-Check to Time-Of-Use (TOCTOU) attacks, the Data Plane is cryptograph-ically bound to the TDX hardware state. During initialization, the Guest OS Kernel extends the eBPF/XDP proxy measurement into the TDX Run-Time Measurement Register 3 ( RTMR3 ). When the Data Plane requests session keys via a TDCALL , the RMM verifies the guest’s RTMR3 against the expected measurement in P. Keys and routing rules are pro-visioned only on a match. Providing defense-in-depth against post-boot guest-kernel exploitation, Janus requires the Guest OS to use a custom BPF Linux Security Module (LSM) program that globally disables the bpf(BPF PROG LOAD) syscall after loading the authorized XDP proxy. This “BPF-Lock” state is also extended into RTMR3 .This prevents the loading of new BPF programs after boot, closing one TOCTOU vector. We note that the expected RTMR3 sequence is computed dynamically prior to deployment via a trusted CI/CD pipeline, intrinsically binding it to exact kernel and LSM versions. As illustrated in Figure 2, the small TOCTOU window between proxy load and BPF-Lock activation necessitates atomic execution during early-boot to prevent rogue program injection. Specifically, the measured initrd executes an early-boot systemd unit that loads the eBPF proxy and immediately activates the LSM lock before pivoting to the root filesystem; this guarantees no unprivileged user-space processes exist to invoke bpf() during this window. However, comprehensive runtime kernel integrity against direct memory corruption or ROP payloads remains an open challenge inherited from the Linux kernel hardening state of the art. While an attacker with root privileges can trigger a panic to cause a denial-of-service, Janus 
+
+9Guest Userspace    
+
+> Guest Kernel
+> SEAM Mode
+> Untrusted Host
+> Network
+> Application (Ring-3)
+> eBPF Data Plane
+> RMM Control Plane
+> Host OS
+> Application (Ring-3)
+> eBPF Data Plane
+> RMM Control Plane
+> Host OS
+> MAKE Handshake
+> Encrypted Bulk Traffic
+> Internet/WAN
+
+Fig. 3 : Janus architecture. The RMM operates as a SEAM-mode Control Plane negotiating an attested session with the remote RMM . The measured Guest-Resident Data Plane transparently enforces encrypted flows before network release. prioritizes safety over liveness; any detected policy violation or TCB compromise trig-gers a kernel panic, effectively halting the data flow to prevent leakage at the cost of service availability. 
+
+# 4.3 Component A: Extended Policy Language and Versioning 
+
+Janus utilizes a declarative JSON policy model featuring an Epoch version counter and a RemotePeers section. Each remote peer entry specifies the expected IP address, the SHA-384 measurement μ(vj ), and the expected policy digest π (SHA-384 hash of the policy rules and Epoch ID). To handle distributed policy drift, each policy bundle includes a monotonically increasing Epoch ID. Handshakes proceed only if both endpoints enforce the same epoch; mismatches trigger asynchronous client updates, ensuring synchronized enforcement. 
+
+# 4.4 Component B: Mutually Attested Key Exchange 
+
+The MAKE protocol establishes a symmetric session key between RMM s Rs and Rd,conditioned on valid mutual attestation (Figure 4). 
+
+Cryptographic Binding and the SIGMA-I Pattern. MAKE follows the SIGMA-I pattern (Sign-and-MAC, Initiator privacy) [32]. The responder ( Rd) binds its attes-tation to the initiator’s parameters by including the initiator’s public key pk s in its attested data (Step 6), preventing man-in-the-middle attacks. This requirement forces the responder to generate a fresh TD Quote per handshake. Since the TDX 
+
+ReportData requires 64 bytes, the binding right-pads the big-endian SHA-384 digest of handshake parameters ( pk d, π d, n d, pk s, n s) with 16 zero bytes. The initiator ( Rs)symmetrically binds the responder’s public key pk d by transmitting an authenticated MAC back to Rd in a final third flight (Step 9), ensuring cryptographically bound sessions for both endpoints. Fresh 256-bit hardware-sampled nonces ( ns, n d) prevent replay attacks. 10 Source RMM s Dest RMM d
+
+1. Gen ( sk s, pk s), nonce ns
+
+2. ReportData ← H(pk s, π s, n s)
+
+3. Get TD Quote Qs
+
+4. Flight 1: ( pk s, Q s, n s)
+
+5. Verify Qs, check μs, π s ∈ P 
+
+6. Gen ( sk d, pk d), nonce nd
+
+ReportData ← H(pk d, π d, n d, pk s, ns)
+
+Get TD Quote Qd
+
+7. Flight 2: ( pk d, π d, Q d, n d)
+
+8. Verify Qd, confirm pk s, ns reflected 
+
+9. Flight 3: MAC K (Qd ∥ Qs)
+
+10. Verify MAC K
+
+Shared Session Key Derivation (HKDF-ECDH) 
+
+Rs: K ← HKDF(ECDH( sk s, pk d), Q s ∥ Qd)
+
+Rd: K ← HKDF(ECDH( sk d, pk s), Q s ∥ Qd)
+
+Fig. 4 : The MAKE protocol sequence. Rd’s ReportData (Step 6) securely binds the handshake to pk s.               
+
+> Epoch E
+> Active
+> Epoch E+ 1
+> Provisioned
+> Epoch E
+> Grace Period
+> Epoch E
+> Stale-Flushed
+> Policy E+ 1
+> provisioned
+> Mark Estale
+> MAKE requires E+ 1
+> Queue drains RCU expires
+> Keys destroyed (E←E+ 1 )
+
+(a) Per-node key lifecycle. Cryptographic invariants bind each edge, ensuring seamless rotation without data leaks. 
+
+Client (Policy Owner) 
+
+RMM A  
+
+> Epoch N+ 1
+
+RMM B       
+
+> Epoch N
+> 1. Push Policy VN+1
+> (Delayed update)
+> 2. MAKE Handshake (Offers Epoch N+ 1)
+
+Epoch Mismatch   
+
+> 3. Async Sync Request VN+1
+
+(b) Cross-node epoch reconciliation. MAKE 
+
+prevents communication under divergent policy states. 
+
+Fig. 5 : Distributed policy consistency. (a) The lock-free state machine governs intra-node key rotation across an RCU grace period; (b) the cross-node MAKE handshake detects epoch mismatches and triggers asynchronous client-driven synchronization. 
+
+# 4.5 Component C: Distributed Policy Consistency 
+
+Janus employs a two-phase invalidation strategy to enforce strict distributed pol-icy consistency across untrusted boundaries (Figure 5). When a workflow provisions version N + 1, the RMM immediately marks version N keys as stale. To facilitate graceful key rotation without disrupting in-flight multi-gigabyte MPI transfers or forc-ing TCP connection resets, epoch rollover updates a lock-free per-CPU map. This 11 mechanism deterministically isolates race conditions by tracking explicit RCU (Read-Copy-Update) grace periods; bytes already buffered in the network stack process under the stale key until the queue drains and the grace period expires, after which the eBPF filter invalidates the session and zeroes the stale keys from memory. New connections strictly mandate version N + 1 MAKE handshakes. Epoch mismatches immediately trigger synchronization (Step 5 of Figure 4), preventing nodes from executing diver-gent security assumptions. An adversary cannot replay an Epoch N − 1 handshake to a node running Epoch N + 1; the expected policy digest π embedded in the hard-ware quote differs, and the inherent monotonicity of the epoch counter rejects policy downgrades. 
+
+Node Churn and Fault Tolerance. Because Janus operates statelessly at the data plane, node churn and pipeline failures are handled automatically. The system inherits the fail-stop semantics of TDX; compromised or failed nodes disconnect deter-ministically, and mid-workflow crashes result in transport-layer timeouts. Recovery requires instantiating a replacement CVM and completing a fresh MAKE handshake (103 .2 ms). This mechanism imposes negligible recovery latency relative to typical scientific pipeline checkpoint-restart overheads. Replacing a physical TDX node gen-erates a new cryptographic measurement, requiring the client to explicitly authorize recovery by distributing a new policy epoch. 
+
+# 4.6 Hardware-Agnostic Architecture 
+
+While our prototype implementation strictly targets Intel TDX utilizing TDCALL and 
+
+SEAMCALL interfaces, the split-TCB enforcement and attestation-bound key exchange principles remain hardware-agnostic. Porting Janus to Arm CCA requires mapping the Control Plane to the EL2 Realm Management Monitor (RMM), utilizing Realm Extensible Measurements (REM) instead of RTMR3 , and binding to the Realm Ser-vice Interface (RSI) via Entity Attestation Tokens (EAT). Similarly, extending the architecture to AMD SEV-SNP entails mapping the Control Plane to the Secure VM Service Module (SVSM) operating at VMPL0, utilizing the MEASURE interface for guest extensions, and invoking SNP GUEST REQUEST for hardware attestation. Published AMD SEV-SNP attestation latencies ( ∼2–6 ms [33]) suggest cross-platform deploy-ments would eliminate the Intel Quoting Enclave serialization bottleneck entirely, demonstrating the broad applicability of the split-TCB design. 
+
+# 5 Security Analysis 
+
+We analyze Janus ’s architectural resilience against the infrastructure-level adver-saries defined in Section 3.3, systematically decomposing the systems mechanisms that satisfy our specified security goals. 
+
+# 5.1 Trusted Computing Base and Residual Assumptions 
+
+The Janus Trusted Computing Base encapsulates the physical TDX processor, the manufacturer attestation infrastructure, the SEAM-mode RMM , the securely boot-strapped Guest OS kernel, and the eBPF data plane. The host operating system, 12 Table 1: Guest OS hardening mitigations mapping to mitigated attack classes. This explicit configuration dictates the security baseline required to validate the measured Guest OS runtime integrity assumption. Note that pro-tecting the eBPF data plane’s session-key map state relies on this assumption of guest kernel runtime integrity, representing a residual risk distinct from generic kernel hardening.               
+
+> Mitigation Strategy Mitigated Attack Class
+> lockdown=confidentiality Combined with the Janus BPF-Lock LSM, prevents root user-space from extracting eBPF session keys. Strict KASLR / CET Mitigates generic memory corruption, ROP/JOP gadget chaining, and kernel address leakage. SMEP / SMAP Prevents kernel-mode execution of or access to user-space memory pages, neutralizing ret2usr attacks. Mandatory Module Sign-ing Ensures only statically measured and signed kernel modules are loadable at runtime. Disabled kexec Prevents loading unmeasured kernels post-boot.
+
+hypervisor, and network fabric remain untrusted. Because the architecture mandates kernel-resident cryptographic routing to sustain multi-gigabit throughput, steady-state data confidentiality relies on guest kernel runtime integrity. To defend this assumption practically, deployments must enforce a stringent kernel-hardening config-uration (Table 1) to mitigate generic memory corruption and restrict administrative interfaces. Post-boot kernel-resident exploitation by a malicious tenant remains an accepted residual risk, for the threat model scopes protection exclusively against infrastructure-level adversaries. 
+
+# 5.2 Attested Flow Control and MITM Prevention 
+
+Janus establishes Attested Flow Control by binding ephemeral session material to immutable hardware states, neutralizing hypervisor socket redirection and Man-in-the-Middle attacks. During the MAKE protocol, the responder hashes the initiator’s public key, local policy digest, and hardware nonces into the 64-byte ReportData field of the TDX TDREPORT . This standard right-padding convention preserves the digest unchanged. The physical processor subsequently signs this structure to generate the TD Quote. The initiator derives the symmetric session key upon verifying the hardware quote against the authorized measurements specified in the policy P, guaranteeing Policy Adherence without relying on application-layer logic. 
+
+# 5.3 Data Confidentiality and Host Isolation 
+
+To achieve Data Confidentiality against network eavesdropping and hypervisor memory scraping, Janus physically confines plaintext execution exclusively within TDX-encrypted memory. The architecture delegates encryption to the eBPF data plane residing at the lowest layer of the guest network stack. As outbound pay-loads descend through the networking subsystem, the XDP/TC proxy encrypts the 13 data via AES-256-GCM utilizing the hardware-attested session key. Consequently, the data crosses the semantic boundary into the untrusted host network ring buffer as a computationally secure ciphertext. A compromised hypervisor inspecting the virtual machine’s egress queues or DMA buffers observes only encrypted payloads, preventing plaintext exfiltration across the distributed topology. Because the eBPF data plane is mutable via bpf map update elem , maintaining this physical confine-ment requires that the Guest OS kernel preserves runtime integrity over the BPF map state post-attestation. 
+
+# 5.4 Lifecycle Defenses: TOCTOU, Replay, and Downgrades 
+
+The architecture enforces lifecycle defenses against temporal manipulation and state-desynchronization attacks. To prevent Time-Of-Check to Time-Of-Use (TOCTOU) vulnerabilities, the early-boot initrd sequence loads the authorized eBPF proxy and immediately activates a custom BPF-Lock Linux Security Module, extending both measurements into RTMR3 . This seals the data plane configuration before pivoting to the root filesystem, preventing unprivileged user-space processes from injecting rogue routing programs post-attestation. The AES-GCM implementation utilizes a 96-bit monotonic nonce statically embedding a per-vCPU identifier and a boot-session prefix, defeating network-level packet replay attacks. Finally, the RMM state machine prevents policy downgrade attacks via strict epoch monotonicity. Handshakes between nodes enforcing divergent policy epochs terminate immediately, forcing asynchronous synchronization and preventing adversaries from exploiting stale policy rules across the distributed graph. 
+
+# 6 Implementation 
+
+We implemented Janus on fourth-generation Intel Xeon Scalable servers (Sapphire Rapids) with TDX support [1]. The prototype extends the TDX Module, adds a policy engine, and implements the MAKE protocol stack. Table 2 summarizes the lines of code (LOC). 
+
+# 6.1 TDX Module Extension 
+
+The RMM extends the Intel TDX Module Reference Code (v1.5, commit 887ef77 )in SEAM mode (3,847 LOC, +13%). Because production TDX hardware strictly enforces module signatures, we verified functional correctness via QEMU-TDX emu-lation ( intel-staging/qemu-tdx upstream-v8 branch) and projected steady-state performance using Sapphire Rapids host-to-module transition microbenchmarks. We also modified the QEMU VMM (231 LOC) to expose the interception interface to the host kernel. To bridge this interface, we implemented a 187-LOC host kernel driver. This driver solely exposes the SEAMCALL interface to QEMU and operates entirely within the untrusted host. The driver exposes a single ioctl(SEAMCALL SUBMIT) entry point to user-space, strictly limiting the hypervisor attack surface. Its compromise cannot bypass security guarantees, as the SEAM module independently validates all incoming requests. 14 Table 2 : Lines of code added to each component in Janus . Percent-ages reflect the increase relative to the unmodified base. To facilitate reproducibility, the table delineates the full target architecture from the components evaluated in our experimental artifact.                    
+
+> Component Added LoC Relative increase
+> Infrastructure (Restricted Hardware Deployment)
+> TDX module ( RMM extension) 3,847 13% QEMU VMM 231 <1% Host kernel driver 187 <1%
+> Public Artifact: Native Execution
+> Guest Data Plane (eBPF) 518 –
+> Public Artifact: Emulated / Unprivileged TD
+> MAKE protocol stack 600 –Policy engine 272 –Unprivileged Agent & DCAP ∼500 –
+> Total 6,155
+
+The extension hooks TDCALL and SEAMCALL transitions to support the split architec-ture. Rather than intercepting raw TDG.VP.VMCALL I/O hypercalls, the RMM Control Plane exposes a secure interface to the securely bootstrapped Guest Data Plane. The Data Plane intercepts socket operations, invoking the Control Plane via TDCALL s only for cryptographic key derivation ( MAKE ) or policy decisions. This is completely transparent to guest applications for UDP workloads. 
+
+# 6.2 eBPF XDP/TC Ring-0 Proxy 
+
+Table 3 : Single-packet timeline isolating the critical path compo-nents of the 6 .0 μs steady-state cryptographic enforcement latency.           
+
+> Component Latency ( μs) Percentage
+> eBPF XDP Ingress Overhead 0.5 8.3% Policy Hash Lookup ( O(1)) 1.0 16.7% AES-GCM Authenticated Decryption 4.5 75.0%
+> Total Enforcement Latency 6.0 100.0%
+
+To accurately evaluate computational overhead on real hardware, we ported the Data Plane into companion eBPF XDP (ingress) and TC (egress) filters running in Ring-0 of the TD Guest OS. They execute the exact O(1) policy lookup and AES-NI AES-GCM routines at the earliest network stack layer, providing an identical baseline for instruction-bound execution costs. To prevent cryptographic catastrophic failures, the AES-GCM implementation utilizes a strict 96-bit monotonic nonce structured to 15 prevent reuse across vCPU partitioning and reboots: it statically embeds a 16-bit per-vCPU identifier, a 48-bit boot-session prefix, and a 32-bit monotonic packet counter, forcing automatic MAKE key rotation before the counter reaches its 2 32 limit. 
+
+# 6.3 Policy Engine 
+
+The RMM ’s internal policy engine parses signed JSON policies, verifies Ed25519 sig-natures, and compiles authorized rules into an O(1) memory hash table indexed by destination IP and port. Policies failing semantic validation (e.g., missing measure-ments, invalid IPs) are rejected. A 50-peer policy occupies under 2 MB, well within the module’s constrained runtime heap, utilizing host-level peer deduplication. 
+
+# 6.4 MAKE Protocol Stack 
+
+Implemented in 600 LOC, the MAKE protocol uses hardware RNGs for P-384 ECDH keys. The RMM control plane directly utilizes SEAMREPORT to generate the hardware quote, binding the guest’s RTMR measurements. The RMM populates ReportData with 
+
+MAKE parameters and retrieves this report to produce an attestation-key signed TD Quote via the Quoting Enclave. Quote verification uses a statically linked, highly stripped Intel DCAP library embedded in the RMM . To eliminate dynamic allocations, it integrates a constrained 
+
+mbedTLS X.509 parser and a lightweight big-integer math library tailored specifi-cally for NIST P-384 and RSA-3072 signatures, minimizing the binary footprint. The untrusted host delivers DCAP collateral (PCK certs, TCB Info, CRLs) via a SEAMCALL 
+
+interface into a staging buffer, parsed in-place. The RMM validates collateral against a compile-time embedded Intel Root CA. To bound replay attacks using stale collat-eral, the RMM aggressively polls the PCCS for fresh TCB Info and CRL collateral every 60 seconds (costing ∼1.5 KB/s), establishing a constrained 60–90 second vulner-ability window. This revocation latency serves as a configurable bandwidth/security tradeoff: administrators can tune the interval (e.g., 10 s, 30 s, 60 s) to balance out-of-band PCCS polling costs against the risk of executing a MAKE handshake with a newly revoked key. We acknowledge a residual risk: while forward secrecy ensures an adversary cannot decrypt past traffic, any new session negotiated within this window using stale collateral remains temporarily vulnerable. In our threat model, this risk is an accepted trade-off to prevent severe PCCS rate-limiting during large-scale cluster initialization. Session keys (AES-256-GCM) are cached by ( μs, μ d, π ) with 64-bit creation times-tamps. The 96-bit GCM nonce increments per packet, forcing renegotiation before the 232 limit. 
+
+# 6.5 RMM Concurrency Architecture 
+
+Lock-free policy synchronization. The RMM Control Plane handles concurrent 
+
+TDCALL and SEAMCALL requests across all physical cores. The O(1) policy hash table uses lock-free read-copy-update (RCU). Since SEAM lacks a scheduler, quiescent states are tracked via per-vCPU sequence counters incremented on TDCALL and 16 SEAMCALL transitions. To prevent host-induced OOM panics from stalled grace peri-ods under adversarial hypervisor scheduling, deferred reclamation queue depth is strictly bounded to 1024 objects, forcing a hard reset of stale sessions if exceeded. We explicitly note this 1024-object threshold constitutes a host-controllable Denial-of-Service vector; consistent with Janus ’s design philosophy, the system prioritizes safe termination over risking memory exhaustion or liveness lockups. 
+
+Fine-grained state machine locks. Session key caching and MAKE state machines use fine-grained, 50 μs timeout-bounded spinlocks. This parallelizes independent hand-shakes and defends against Lock-Holder Preemption (LHP) liveness attacks. If the timeout expires due to hypervisor noise or starvation, the RMM aborts safely, returning ECONNREFUSED to the guest application. While the Quoting Enclave serial-izes hardware quote generation, the software concurrency model scales independent network traffic linearly with active vCPUs. 
+
+# 6.6 TCB Footprint and Complexity 
+
+Janus ’s TCB (Table 2) includes the hardware attestation infrastructure, Quoting Enclave, RMM Control Plane, Guest OS Kernel, eBPF Data Plane, and DCAP library. Janus deliberately trades a larger TCB footprint to enable kernel-speed cryptographic enforcement. By pushing the data plane down to Ring-0, the archi-tecture bypasses the performance penalties inherent to LibOS-based user-space isolation (e.g., Gramine RA-TLS). This design eliminates application-layer compo-nents from the cryptographic boundary, removing heavy orchestration runtimes, Python interpreters, and ML frameworks. However, explicitly trusting the Linux net-work subsystem ( net/core and kernel/bpf ) introduces a non-trivial attack surface. The engineering mitigations implemented via BPF-Lock and RTMR3 measurements eliminate runtime TOCTOU tampering by immutably pinning the proxy state. While the system’s security depends on the logical correctness of the upstream eBPF veri-fier, the strict Guest OS hardening configuration (Section 5.1; Table 1) substantially mitigates exploitability, rendering the practical exposure footprint acceptable for high-performance deployments. Developing the 6,155 LOC prototype required heavily modifying the DCAP library for the constrained SEAM environment, replacing dynamic allocations with static arenas and embedding a constrained mbedTLS X.509 parser (contributing ∼145 KB to the module footprint). Securely bridging the semantic gap between raw hypercalls and application network semantics across the split-TCB boundary remains an engineering challenge inherent to the split-TCB design. 
+
+# 7 Evaluation 
+
+We evaluated Janus by combining hardware microbenchmarks with an empirically grounded performance model. Because production Intel TDX hardware prohibits exe-cuting modified modules on public cloud instances, we measured the guest-resident components on Sapphire Rapids hardware and projected end-to-end impacts through established hardware limits. 17 Our evaluation investigates several key performance goals. First, we determine the steady-state per-packet enforcement cost on real hardware (Section 7.2). Next, we assess whether the eBPF data plane preserves macrobenchmark throughput (Section 7.4). We then evaluate how MAKE initialization scales with topology den-sity (Section 7.5), verify the robustness of our hybrid methodology (Section 7.1), and compare Janus against existing baselines (Section 7.3). Finally, we assess the system’s resilience to adversarial deployment conditions (Section 7.6). Table 4 summarizes the evaluation objectives and corresponding outcomes. 
+
+Table 4 : Summary of evaluation objectives, methods, and key findings.                          
+
+> Goal Method Section Result
+> Per-packet cost HW measurement, eBPF/XDP
+> §7.2 6μs100GbE projection Analytical, AES-NI bound
+> §7.2 ∼10 vCPUs (jumbo) Macrobenchmark over-head FL ResNet-18, 32-host §7.4 6.1% Init scalability Hybrid measured + pro-jection
+> §7.5 <1.5 s @ 100 nodes Methodology validation Sensitivity analysis §7.1 Valid bounds Baseline comparison Empirical §7.3 Bypass LibOS tax Adversarial resilience LHP/Starvation emula-tion
+> §7.6 Stable recovery
+
+# 7.1 Evaluation Methodology and Validity 
+
+We adopt a hybrid methodology combining physical hardware measurements with functional emulation. Functional emulation of the RMM modifications was performed using QEMU-TDX (v7.2.0-tdx) on Ubuntu 22.04. End-to-end performance projections derive directly from steady-state data plane measurements collected on a 32-node cluster of Google Cloud Platform (GCP) c3-standard-22 instances (Intel Sapphire Rapids, 23 Gbps instance limits scaling to 100GbE family limits, 1500 B MTU, run-ning a custom Linux 6.10+ guest kernel to provide bpf crypto * kfuncs). We selected the 22-vCPU configuration to provide sufficient vCPU headroom for the 8 TDs/host density evaluated in Section 7.5. The 32 instances were provisioned using a strict GCP Spread Placement Policy distributed evenly across four availability zones. We verified this physical separation via a pairwise network RTT matrix; collocated VMs typically exhibit ∼0.1 ms RTTs, whereas our deployment bounded intra-zone RTTs to 0 .3–0 .8 ms and cross-zone RTTs to 0 .8–2 .0 ms, confirming genuine regional data-center traversal. For the hardware experiments, we utilize a static-key control-plane emulation that securely provisions pre-shared keys to the eBPF data plane at startup, isolating the steady-state Ring-0 cryptographic routing performance from the SEAM-mode initialization constraint. To validate the extrapolation fidelity, we compared 18 our analytical initialization model against physical measurements on a 32-host base-line; the modeled projections track the physical measurements with a Mean Absolute Percentage Error (MAPE) of 4.2%. This tight correlation licenses our projections for larger supercomputing-scale topologies. Unless otherwise specified, physical mea-surements report the median ( p50) of N = 1000 iterations following a 100-iteration cache-stabilization warmup. 
+
+Table 5 : Transition Cost Calibration on stock GCP C3 Sapphire Rapids. Primitives are derived from physical measurements on unmodified silicon ( N iterations). Hard-ware transition primitives ( TDCALL , SEAMCALL ) are synthesized from established TDX microbenchmarking literature [3], while cryptographic operations are natively mea-sured. These grounded constants construct the analytical projections, fully decoupling emulated control-plane logic from physical execution costs.                                                           
+
+> Primitive Function Measured ( p50 )Iters.
+> TDCALL[VMCALL] Guest →VMM hypercall 1.5±0.3μs10 4
+> SEAMCALL round-trip Host →Module entry/exit 3.5±0.4μs10 4
+> TDG.MR.REPORT Request local report 8.5±1.2μs10 3
+> TD Quote Generation Quote generation (via QE) 75 .6±1.2 ms 10 3
+> DCAP Quote Verification X.509 + ECDSA check 24 .1±0.8 ms 10 3
+> TDG.MR.RTMR.EXTEND RTMR digest update 1.8±0.2μs10 4
+> Intel AES-NI 256-GCM Encrypt 1500 B record 4.5±0.2μs10 5
+> ECDH P-384 keygen + DH MAKE handshake crypto 750 ±45 μs10 4
+> Ed25519 Verify Policy engine validation 50 ±5μs10 4
+
+Remark: While executing the modified SEAM-mode RMM natively on commer-cial cloud silicon is restricted, the residual sources of error not quantified in Table 6 are bounded. SEAM memory pressure is constrained by our policy engine consuming only 1 .7 MB for a 50-peer workflow, safely below the TDX module’s allocated runtime heap limits. While the MAKE policy engine execution must be emulated, the domi-nant underlying primitives (75 .6 ms quote generation, 24 .1 ms DCAP verification) are natively measured, rendering any unmodeled TDCALL /SEAMCALL transition latencies mathematically insignificant to the multi-millisecond initialization projection. 
+
+# 7.2 Data Plane Processing Overhead 
+
+The data plane logic defines the maximum achievable throughput. We modeled these architectural limits using empirical measurements of the steady-state enforcement overhead. 
+
+Per-Packet Cryptographic Cost. Using an eBPF/XDP proxy running in Guest Ring-0 as a data plane surrogate, we measured the steady-state processing time. This encompasses the O(1) policy lookup and AES-GCM encryption/decryption. The cryp-tographic routine invokes the Linux kernel crypto API via bpf crypto * helpers, which in turn utilize hardware AES-NI instructions. GCP C3 Sapphire Rapids instances exhibit a bounded cryptographic cost of 6 μs per packet, decomposing into 0 .5 μs19 Table 6 : Provenance and uncertainty of evaluation claims. Sources: Measured on GCP C3 Sapphire Rapids; Emulated under QEMU-TDX; Modeled from measured primitives. Uncertainty is ±1σ for measurements and the P5–P95 Monte Carlo envelope for projections.                                                    
+
+> Claim Source Method Uncertainty
+> 6μs/pkt enforcement (1500 B) Measured eBPF/XDP, N=1000 ±1.5μs13–15 μsMemcached GET/SET Measured Static-key data plane, N=1000 ±3.5μs103 .2 ms MAKE handshake Measured Unprivileged TD daemon, N=1000 ±20 ms +137–147 μsRA-TLS penalty Measured Gramine-TDX v1.5, N=1000 ±15 μs35 Mpps single-core
+> XDP REDIRECT
+> Measured Sapphire Rapids + E810 ±3.5 Mpps 2.40 s for 100-node init Modeled (N×e/H )×103 .2 ms 1.69–3 .12 s 77 .8 ms unauthorized-binary reject Hybrid QEMU-TDX logic + measured QE ±13 ms LHP 50 μs timeout abort Emulated QEMU-TDX, N=1000 p99 stable
+
+XDP overhead, 1 .0 μs hash lookup, and 4 .5 μs AES-GCM processing. Verified via BPF kernel-stack profiles, the 4 .5 μs latency is heavily dominated by bpf crypto * 
+
+helper-call boundary crossings and per-packet eBPF context setup, masking the raw 0.6 cycles per byte AES-NI hardware throughput. For a two-packet RPC round-trip (e.g., a Memcached get operation), this imposes a 12 μs absolute latency penalty. At steady state, the GCM nonce rollover (2 32 packets) triggers asynchronous MAKE 
+
+handshakes, amortizing the 103 .2 ms re-keying cost to near zero. The 750 μs ECDH P-384 key generation cost within the MAKE handshake represents a 3–4 × inflation relative to native OpenSSL userspace execution, an expected penalty stemming from the use of constrained, fallback cryptographic software ports required to execute within SEAM’s strict, zero-dynamic-allocation memory environment. 
+
+Throughput, Multi-Core Scalability, and MTU Sensitivity. Secure networking strictly depends on packets-per-second (PPS) limits. Sapphire Rapids cores uti-lize AVX-512 and DDIO to accelerate XDP performance; a single core processes 35 .0 ± 0.8 Mpps for XDP REDIRECT and filtering on Intel E810 (100GbE) NICs. To prevent the 6 μs cryptographic overhead from forming a CPU bottleneck, Janus ’s data plane employs Receive Side Scaling (RSS) to distribute workloads across guest vCPUs. However, the 6 μs cryptographic enforcement caps single-core throughput at 166 ± 4 kpps. A 10 Gbps workflow at 1500 B MTU ( ∼833k pps) requires 5 vCPUs. Sat-urating a 100 Gbps link with standard 1500 B MTU requires approximately 50 vCPUs. Enabling Jumbo frames (e.g., the 8896 B VPC limit on GCP) reduces the PPS require-ment drastically; our projected per-core ceiling indicates that saturating a 100 Gbps link with Jumbo frames would require only ∼10 vCPUs. Table 7 details single-core throughput sensitivity across MTU sizes. While bare 
+
+XDP REDIRECT achieves 35 .0 ± 0.8 Mpps (I/O-bound), the cryptographic enforcement path is compute-bound by AES-NI, capping single-core throughput at 166 ± 4 kpps. 20 Table 7 : Single-core throughput scaling across Maximum Transmission Units (MTU), analytically modeled from the measured 6 .0 ± 0.2 μs base cost and AES-NI’s 0.6 cycles/byte bound.                
+
+> MTU (Bytes) Rate (PPS) Tput. (Gbps) vCPUs @ 100 Gbps
+> 64 (Small RPC) 173,582 0.09 >1000 1500 (Standard) 166,468 2.00 50 4000 155,383 4.97 20 9000 (Jumbo) 137,120 9.87 10
+
+Table 8 : Policy engine overhead as a function of the num-ber of authorized remote peer entries. Both lookup latency and memory footprint were measured directly on real hard-ware within the Ring-0 XDP proxy.               
+
+> Peer entries Lookup latency ( μs) Memory (MB)
+> 50.61 0.18 10 0.64 0.36 25 0.73 0.88 50 0.81 1.73 100 0.89 3.44 200 0.95 6.87
+
+We recover aggregate throughput via Receive Side Scaling (RSS). Utilizing 9000 B jumbo frames efficiently amortizes fixed XDP and O(1) lookup costs, yielding nearly 10 Gbps per core and saturating a 100 Gbps link with ∼10 vCPUs. 
+
+Distributed Workload Impact. Our empirical model defines exact infrastructure penalties (+12 μs per round-trip and a parallelizable CPU tax) rather than conflating unobservable microarchitectural penalties into an overarching percentage overhead. 
+
+Janus supports high-speed scientific workloads with minimal interference. Policy engine lookup latency scales minimally (Table 8), taking 0 .61 μs for 5 peers and 0 .95 μsfor 200 peers, dominated by L1/L2 cache misses rather than algorithmic complexity. 
+
+Single-Host Microbenchmark (Memcached). To isolate steady-state per-packet enforcement cost, we deployed a Memcached key-value workload on a GCP C3 instance. We compared an unencrypted native baseline against Janus and Gramine RA-TLS. We caveat the scope of this experiment explicitly: because public cloud infrastructure prohibits executing the modified SEAM module, Janus runs here with a stubbed MAKE control plane that provisions pre-shared static keys to the eBPF data plane at startup. The harness pre-warms and pre-initializes all required MAKE 
+
+socket connections before the execution timer begins, isolating the steady-state routing performance from the MAKE initialization penalty. Furthermore, to strictly isolate the processing stack and eBPF data-plane overhead from the high-variance 0 .3–0 .8 ms inter-VM network RTT, the Memcached client and server were co-located on a sin-gle physical instance. For this loopback evaluation, the Janus proxy was attached to 21 the loopback interface via generic XDP (SKB mode). The reported numbers therefore quantify the steady-state eBPF data-plane overhead in isolation, not an end-to-end 
+
+Janus deployment, which would additionally include the one-time MAKE initial-ization cost characterized separately in Section 7.5. Within this scope, the Janus 
+
+eBPF data plane incurs a 13 μs (GET) and 15 μs (SET) latency overhead over the 45–48 μs native loopback baseline, bounded by kernel-level AES-GCM encryption and XDP routing. In contrast, Gramine RA-TLS imposes a 137 μs (GET) to 147 μs (SET) penalty due to expensive user-space context switches and TLS framing overheads (Figure 6a). The Gramine RA-TLS baseline runs unmodified, so this comparison iso-lates the steady-state architectural advantage of moving cryptographic enforcement from user-space libraries into a measured Ring-0 eBPF data plane, independent of the 
+
+MAKE control plane. While this highlights the architectural advantage of avoiding user-space bound-ary transitions, we acknowledge that an in-kernel TLS implementation ( kTLS ) would present a closer, albeit currently unattestable, performance baseline. While Janus ’s 60-second epoch expiration briefly stalls the transmission queue to negotiate fresh keys, the lock-free epoch transition (Section 6.5) ensures that the 103 .2 ms handshake cost amortizes to less than 1 μs per megabyte for long-lived, multi-gigabyte transfers. 
+
+# 7.3 Baseline Comparison 
+
+We benchmarked Janus against distinct attestation and secure channel baselines, mapping to in-kernel offload, application-level, user-space proxy, and cloud-native integration paradigms (Table 9). 
+
+Head-to-head with In-Kernel TLS (kTLS ). A natural counterfactual baseline replaces Janus ’s eBPF data plane with the Linux kTLS offload while retaining an attestation-binding channel for key release. kTLS executes AES-GCM symmetrically inside the kernel, yielding a tight performance ceiling. As demonstrated in our mac-robenchmarks, Janus ’s steady-state throughput matches the kTLS ceiling, confirming that Janus ’s eBPF data plane introduces no additional overhead beyond necessary kernel-resident cryptography. However, kTLS presents a fundamental architectural vul-nerability: it provides no native mechanism to bind the symmetric key derivation to bilateral hardware measurements. Standard kTLS deployments rely on user-space key provisioning, leaving the symmetric key exposed to user-space compromise (detailed in Section 2.3). The architectural delta is therefore the cryptographic binding of the key-release decision to a measured network-stack boundary. 
+
+RA-TLS (Application-Level Upper Bound). The upper-bound latency penalty is defined by RA-TLS. While generic literature estimates RA-TLS overhead at +45– 60 μs per-round-trip [4], our empirical Gramine-TDX measurements on the GCP C3 cluster exhibit a significantly higher +137–147 μs penalty for Memcached workloads. This divergence stems from Gramine LibOS syscall emulation traps and the strict requirement to process TLS records entirely in user-space, compounding heavy I/O and boundary transition costs. RA-TLS places the application binary directly within the TCB. 22 Table 9 : Feature comparison of Janus against baselines. ✓ indicates the property is provided; ✗ indicates it is not; – indicates not applicable. Overheads for Janus reflect measured per-round-trip absolute latency additions.                                               
+
+> System Dist. Policy App Mod. App in TCB Steady/RT Init Tax
+> Plaintext TCP ✓✗✗✗0μsNone RA-TLS [4] ✓partial ✓✓+137–147 μs∼150 ms
+> kTLS ✓✗✗✗+13–15 μs1–3 ms (unattested) CoCo AA ✓partial ✗✗N/A 10–17 s MICA [21] ✗✓✗✗N/A (1-host) N/A
+> Janus ✓✓✗✗+13–15 μs103 .2 ms/peer
+
+Confidential Containers (CoCo) Attestation Agent. In cloud-native environments, the CoCo Attestation Agent (AA) uses a Key Broker Service (KBS) to release decryp-tion keys. Measured directly via a minimal CoCo-AA reference deployment on our GCP C3 cluster, the AA enforces a 10 to 17 second startup tax per pod due to the syn-chronous remote attestation process. The AA attests only the initial container state, providing no point-to-point cryptographic binding for data flows. 
+
+Intra-Host Policy Enforcement (Single-Node). The concurrent MICA [21] frame-work focuses on enforcing policies using TDCALL interception between localized containers on a single host. MICA addresses an entirely orthogonal operational domain (intra-host memory sharing). Janus introduces its specific 12 μs per-round-trip data-plane architecture and 103 .2 ms initialization precisely to solve the distinct challenge of inter-host networking and cryptographic data flow bindings across a distributed cluster. 
+
+Janus ’s data plane strictly outperforms these baselines by shifting enforcement to a Ring-0 eBPF filter. By executing the O(1) lookup and hardware-accelerated AES-GCM encryption at the lowest level of the network stack, Janus achieves its projected steady-state data plane throughput cost of 6 μs per packet without sacrificing appli-cation transparency. The unmeasured SEAM-mode TDCALL control-plane transition bounds initialization latency but does not impact this steady-state proxy cost. When contextualized against a native plaintext TCP round-trip baseline (e.g., ∼ 15 μs on 10GbE), Janus ’s minimal overhead preserves HPC viability. 
+
+# 7.4 Distributed Macrobenchmarks 
+
+7.4.1 Federated Learning Macrobenchmark 
+
+We deployed a Flower-based federated learning pipeline (ResNet-18 on CIFAR-10) across 32 clients to evaluate macrobenchmark throughput. The workload explicitly proxies the bursty, bandwidth-bound data exchanges of scientific pipelines, transfer-ring 1.4 GB per aggregation round. We routed Flower’s TCP gRPC traffic through a Linux Foo-over-UDP (FOU) tunnel (reducing effective TCP payload to 1432 B per frame) to subject it to Janus ’s stateless UDP cryptography. Figure 6b plots the per-round completion time across five configurations. The unencrypted plaintext baseline establishes a throughput ceiling of 5 .42 ± 0.15 s per round. Janus incurs a completion time of 5 .75 ± 0.13 s, representing a 6 .1% overhead. 23 SET GET 
+
+0
+
+50 
+
+100 
+
+150 
+
+15 13 
+
+147 
+
+137 
+
+> Latency Overhead ( μs)
+
+(a) Single-RPC Overhead 
+
+Janus Gramine 
+
+Plain 
+
+Janus 
+
+kTLS 
+
+OpenSSL 
+
+Gramine 
+
+0
+
+5
+
+10 
+
+5.42 5.75 5.7
+
+7.31 
+
+8.78 
+
+> Time (s)
+
+(b) FL Macrobenchmark 
+
+Fig. 6 : Latency Hierarchy: Micro to Macro. (a) Single-host steady-state cryptographic enforcement microbenchmark (Memcached, displaying GET latency overheads; SET overheads are proportional at 15 μs and 147 μs, respectively). (b) Federated Learning macrobenchmark (ResNet-18) demonstrating that Janus imposes minimal steady-state execution penalty over plaintext TCP, matching in-kernel TLS while bypassing severe Gramine RA-TLS transitions. This tracks closely with the unencapsulated kTLS baseline (5 .70 ± 0.14 s), confirm-ing Janus preserves theoretical kernel-resident cryptographic throughput. In contrast, OpenSSL TLS degrades to 7 .31 ±0.22 s (35% penalty), and Gramine RA-TLS balloons to 8 .78 ± 0.35 s (62% penalty) due to LibOS boundary transitions during serialization. A Monte Carlo simulation (10 , 000 trials) of mid-run key rotations over a 5 .75 s epoch yielded a median throughput penalty of 2 .56% for a single rotation (as cited in our abstract’s bounds), scaling to an 8 .31% P95 penalty for three rotations per epoch. At scale, data-plane cryptography costs less than $0 .005 per TB based on GCP spot pricing. All baselines converged to 92 .5 ± 0.3% test accuracy at round 100, verifying the enforcement mechanism preserves application correctness and statistical utility. 
+
+7.4.2 Non-IID Federated Learning Scalability 
+
+We additionally evaluated a non-IID configuration (Dirichlet α = 0 .5) across 8 to 64 clients to verify that the 6.1% overhead persists under heterogeneity and at scale. Utilizing the static-key eBPF data plane to isolate steady-state network overhead, we trained the ResNet-18 model on CIFAR-10, partitioning the dataset using a Dirichlet distribution ( α = 0 .5) to simulate extreme label skew. We scaled the deployment across 8, 16, 32, and 64 concurrent clients. Because non-IID data distributions exacerbate client-model divergence, the aggregation phase becomes computationally intensive, yet the network payload sizes per communication round remain structurally identical to the IID setting. 24 As client count scales from 8 to 64, the total aggregation payload increases lin-early (from 352 MB to 2.8 GB per round). As established in Section 7.4.1, the IID baseline overhead is 6.1%; under non-IID skew, the overhead remains bounded at 6.1%–6.8% over plaintext TCP. For the 32-client deployment (1.4 GB payload), plain-text execution requires 7 .42 ± 0.28 s per round, while Janus requires 7 .91 ± 0.31 s. At the maximum 64-client scale (2.8 GB payload), the plaintext baseline requires 14 .23 ± 0.42 s, with Janus tracking closely at 15 .08 ± 0.45 s. Statistical convergence required 145 rounds to achieve the target accuracy under the non-IID skew, dur-ing which Janus enforced data confidentiality without degrading the aggregation throughput trajectory relative to native network execution. The 64-client run forces the network burst to exceed the 2.0 Gbps single-core cryptographic ceiling (established in Table 7), providing a discriminating test for Receive Side Scaling (RSS). To validate the RSS load distribution claim, we recorded the per-core %soft (softIRQ) utilization via mpstat on the aggregator node during the 64-client network-burst phase. If RSS failed to hash the incoming FOU/UDP flows, a single vCPU would process all 2.8 GB, saturating at 100% utilization and bottlenecking throughput. Instead, the mpstat profiles demonstrate that all 16 aggre-gator vCPUs maintained a balanced 12% to 18% %soft utilization. This empirical CPU-utilization breakdown confirms that the E810 NIC’s hardware Toeplitz hash suc-cessfully distributes the concurrent XDP AES-GCM decryption load across the vCPU pool, preventing serialization bottlenecks. 
+
+7.4.3 DAG-shape network replay derived from the Montage trace 
+
+Beyond ML-style training, we replay a canonical scientific-pipeline DAG to validate 
+
+Janus ’s performance on irregular HPC communication patterns. We synthesized a network replay of the standard Pegasus Montage 0.5-degree workflow trace. The 0.5-degree DAG is a widely utilized benchmark from WorkflowHub (WfCommons) [34, 35], comprising over 100 interdependent tasks and transferring approximately 600 MB of total intermediate data. We developed a Python-based harness deployed across our 32-node GCP C3 setup. The harness reads the exact DAG dependencies and byte-sizes from the published trace and replays the communication pattern by opening UDP/FOU sockets through the 
+
+Janus eBPF data plane to transfer matching payload sizes between designated host nodes. To rigorously isolate the steady-state data-plane routing performance from the 
+
+MAKE initialization penalty (which is characterized separately using the measured 103 .2 ms constant in Section 7.5), the harness is structured to explicitly pre-warm and pre-initialize all required MAKE socket connections before the execution timer begins. Recording the end-to-end wall-clock makespan of this replay, we observed a 6 .5% execution overhead when routed through the Janus eBPF proxy compared to a baseline unencrypted plaintext UDP replay. This synthetic replay directly answers the HPC-applicability requirement, demonstrating that the Janus eBPF data plane efficiently absorbs the complex, asymmetric fan-out/fan-in communication patterns of real-world scientific DAGs while maintaining single-digit percentage overheads comparable to the FL macrobenchmark. 25 0 25 50 75 100  
+
+> 0
+> 0.5
+> 1
+> 1.5
+> 2
+> Number of Nodes ( N)
+> Initialization Time (s)
+
+(a) MAKE Initialization Scaling (Degree 3-4)               
+
+> Analytical Model ±4.2% MAPE Empirical Data
+> 010 20 30 40 50 60 70 80 90 100 110
+> MAKE 3.5 ms 24.1 ms 75.6 ms
+> Latency (ms)
+
+(b) 103.2 ms Latency Breakdown   
+
+> TD Quote Gen DCAP Verification Net + Crypto
+
+Fig. 7 : Protocol scalability. Left: Measured total initialization time scales linearly across distributed nodes. Right: A granular latency breakdown reveals hardware TD Quote Generation as the dominant bottleneck. 
+
+# 7.5 Protocol Scalability 
+
+We deployed Janus across a 32-host multi-zone regional GCP C3 cluster to evalu-ate MAKE scalability. Strict physical isolation via GCP spread placement policies eliminated single-rack microarchitectural biases. For a single intra-region peer-to-peer connection, the MAKE handshake requires 103 .2 ± 4.2 ms. To directly ground this figure, we replaced our initial analytical model with end-to-end hardware measurements. We deployed an unprivileged daemon inside a TD on the GCP C3 cluster that natively executes the complete MAKE cryp-tographic path: ECDH P-384 keygen, TDG.MR.REPORT generation, Quoting Enclave invocation via real Intel DCAP, remote DCAP verification against the regional PCCS, and HKDF derivation. This natively measures all components of the handshake except the SEAM-mode key release decision. Consequently, the only emulated component in this timing is the policy-digest check inside the modified RMM , which is strictly bounded above by the measured Ed25519 verify cost of 50 μs. Figure 7 details this mea-sured latency. Hardware attestation services dominate the critical path: TDX quote generation requires 75 .6 ms, and DCAP verification against the regional Provision-ing Certificate Caching Service (PCCS) requires 24 .1 ms. Cryptographic operations consume less than 1 .5 ms. The singleton Quoting Enclave forces initialization time to scale linearly with the intra-host node density ( N/H ). A sparse 100-node workflow (degree 3–4) across 32 hosts initializes analytically in under 1 .5 s. We validated this analytical model against our 32-host physical baseline for N/H ≤ 8. Measured latencies track the model 26 0 5 10 15 20 
+
+0
+
+7
+
+14 
+
+21 
+
+28 
+
+35 
+
+Empirical Projected 
+
+Nodes per Host ( N/H )
+
+> Init. Time (s)
+
+e = 1 (Sparse) e = 4 (Typical) 
+
+e = 8 (High Fan-out) e = 16 (Dense Mesh) 
+
+Fig. 8 : Empirically grounded MAKE initialization time as a function of intra-host node density ( N/H ) and network out-degree ( e). The singleton Quoting Enclave forces strict serialization for dense topologies. with a Mean Absolute Percentage Error (MAPE) of 4 .2%, substantiating the projec-tion fidelity before extending into larger unmeasured regimes. However, dense service meshes or large-scale MPI collectives severely bottleneck the QE. Figure 8 plots this projected limitation. Because each handshake must serialize through the singleton hardware Quoting Enclave (QE), the per-host concurrent demand is proportional to the total number of nodes N multiplied by the out-degree e, divided evenly across the H physical hosts. The total projected initialization latency Tinit therefore scales according to this serialization: 
+
+Tinit ≈
+
+
+
+N × eH
+
+
+
+× 103 .2 ms (1) Using Equation 1, a 200-node deployment where each node connects to e = 16 peers requires approximately 10 .3 s (200 × 16 /32 × 103 .2 ms) for initialization, demanding peer-grouping or asynchronous initialization strategies. 
+
+Sensitivity to model constants. To bound projection error and capture realistic pro-duction variance, we executed an expanded 100,000-sample Monte Carlo simulation perturbing the underlying constants across representative HPC topologies. With our 32 physical hosts, the concurrent signature requests distributed across the regional DCAP PCCS are halved relative to a dense 16-host deployment. To capture potential rate-limiting, we increased the Monte Carlo DCAP verification variance ( σ = 12 .0 ms, 50% CV) alongside the standard triangular quote generation distribution (70–105 ms, mode 75.6 ms). Despite this heavier tail, the scaled hardware pool ( H = 32) drastically improves the scaling constants: a 200-node Montage mosaic ( e = 4) initializes with 27 P50 = 2 .73 s ( P95 = 3 .33 s); a 100-node LIGO topology ( e = 3) finishes in P50 = 1 .02 s (P95 = 1.25 s); and a 64-node FL all-reduce ( e = 2) converges at P50 = 0 .44 s (P95 = 0 .53 s). These rigorous distributional bounds prove that typical sparse HPC DAGs initialize reliably within tight, single-digit second envelopes. We explicitly con-strain our validated projection envelope to intra-host node densities of N/H ≤ 8. The Monte Carlo simulation perturbs variance constants but inherently assumes linear serialization; it does not capture unmodeled regime-change risks at extreme density, such as regional PCCS rate limits or DCAP collateral cache thrashing. 
+
+Dense Topologies and Serialization Error Compounding. A dense 128-node MPI all-toall topology ( e = 127) forcefully exposes the singleton Quoting Enclave serialization bottleneck, yielding an extended initialization time of P50 = 55 .41 s ( P95 = 67 .51 s). The P95 tail demonstrates how microarchitectural quote-generation jitter compounds under massive serialization. Due to this fundamental hardware limitation, a one-minute setup tax is entirely unsuitable for interactive HPC or short-batch dense collectives. Consequently, we explicitly restrict Janus ’s optimal operating regime to sparse DAGs or long-running federated learning trees, where initialization completely amortizes. Dense collectives require unreleased hardware features, such as replicated QEs, for viability. For typical scientific pipelines with bounded per-node out-degrees, Janus par-allelizes initialization across the physical infrastructure, yielding a scalable secure interconnect. 
+
+Topology depth and network impairments. We modeled initialization on a 20-node DAG representing a federated learning pipeline at finer granularity. 
+
+Table 10 : Initialization latency for varying DAG depths under quote serialization hardware limits.             
+
+> Topology Depth Max Out-Degree Latency (s)
+> 1-Level 120.21 2-Level 240.45 20-Node Mixed 580.85
+
+As detailed in Table 10, a 20-node mixed topology with a maximum per-host out-degree of 8 initializes in just 0 .85 s, demonstrating that initialization scales lin-early bounded by the maximum single-host out-degree, completely avoiding O(N )total-cluster dependencies. To validate protocol robustness against real-world HPC network volatility, we simulated impairments via Linux tc netem . Injecting a 100 μsnormal-distribution jitter yielded negligible deviation ( < 0.2%), as the 76 ms hardware quote generation completely absorbed minor arrival variations. Simulating a harsh 0.1% packet loss across the multi-flight handshake confirmed deterministic recovery without protocol deadlocks. Because MAKE operates over TCP, lost flights incur the Retransmission Timeout (RTO) penalty. In an HPC environment tuned with a 200 ms ‘minRTO’, a dropped handshake flight extends the connection time determin-istically by exactly 200 ms. The P99 tail latency for the 20-node topology under 0.1% 28 loss expanded from 0 .85 s to 1 .05 s, proving Janus safely delegates retransmission to the transport layer without cascading failures. Janus parallelizes initialization across independent hosts; the singleton QE caps only intra-host topology density. 
+
+# 7.6 Adversarial Resilience 
+
+Transient Network Partitions and Node Failures. Because Janus ’s eBPF data plane enforces cryptography statelessly over datagrams, transient network partitions do not trigger cryptographic protocol collapse. During a partition, in-flight packets are simply dropped, delegating retransmission natively to the application’s transport layer (e.g., TCP-over-FOU). If a node crashes mid-handshake or during an epoch rotation, the 
+
+MAKE daemon safely times out the specific socket without halting the data plane for existing active sessions. Upon recovery, the daemon independently negotiates the new session key for the specific peer, absorbing the node churn seamlessly. 
+
+Unauthorized binary. A source enclave attempting to connect to an unauthorized destination binary fails the MAKE attestation phase. The 77 .8 ± 2.1 ms rejection latency and its corresponding p99 tail of 83 .0 ms ( N = 1000 iterations) are both com-posed analytically from QEMU-TDX-emulated rejection logic and measured Sapphire Rapids quote-generation constants (Table 6; see Table 5 for the underlying primi-tive measurements); the dominant contributor is source TD Quote generation, with verification adding sub-millisecond cost. 
+
+Policy digest mismatch. Handshakes between nodes with mismatched policy epochs terminate deterministically at Step 4. 
+
+Firmware Liveness Defense. We simulated Lock-Holder Preemption (LHP) attacks to verify concurrency defenses (Section 6.5). The 50 μs timeout aborted firmware transitions on blocked vCPUs, preventing deadlocks. RCU queue depth limits deter-ministically triggered during stalled grace periods, dropping epoch updates to prevent OOM panics and preserve active sessions. active sessions. 
+
+# 8 Conclusion 
+
+The transition toward large-scale scientific pipelines in confidential HPC and cloud clusters demands security frameworks capable of enforcing strict data flow policies across untrusted network boundaries. Concurrent intra-host policy enforcement sys-tems, such as MICA [21], provide strong guarantees within a single machine but focus away from verifying remote cluster nodes. We presented Janus , a distributed framework addressing this gap by construct-ing a Confidential Federated Interconnect that federates the enforcement boundary of hardware-backed Reference Monitor Modules across multiple hosts. Janus intro-duces an extended policy language that incorporates remote endpoint identifiers and enclave measurements into local data flow rules, enforced by a Mutually Attested Key Exchange protocol that derives symmetric session keys conditioned on bilat-eral hardware states. Our security analysis demonstrates that Janus achieves Policy Adherence, Data Confidentiality, and Attested Flow Control under standard unforge-ability assumptions, provided the measured Guest OS kernel maintains runtime integrity post-boot. 29 Our empirical evaluation on a 32-host multi-zone Sapphire Rapids deployment demonstrates practical deployability for high-performance workloads. These results confirm that developers can construct complex, verifiable distributed pipelines from mutually distrustful components without modifying application code. By combining a SEAM-mode key broker with a measured eBPF data plane, Janus achieves a prag-matic balance between split-TCB attestation security and high-throughput network performance, ensuring efficient and attestable execution across federated infrastruc-ture. Future work will explore extending the MAKE protocol to natively support in-kernel TLS ( kTLS ) offload, alongside developing multi-party group key agree-ment primitives to alleviate hardware quoting bottlenecks in dense, highly-connected topologies. 
+
+# Declarations 
+
+• Funding: The authors did not receive support from any organization for the submitted work. 
+
+• Conflict of interest/Competing interests: The authors declare that they have no competing interests. 
+
+• Availability of data and materials: The datasets generated during and/or ana-lyzed during the current study are available from the corresponding author on reasonable request. 
+
+• Code availability: The source code underlying this research is not publicly avail-able at this time but can be obtained from the corresponding author on reasonable request. 
+
+• Authors’ contributions: H.D. conceived the architecture, implemented the con-trol plane, and wrote the manuscript. T.N. implemented the eBPF data plane, conducted the evaluation, and revised the manuscript. Both authors read and approved the final manuscript. 
+
+# References 
+
+[1] Intel Corporation: Intel trust domain extensions (Intel TDX) module architecture specification. Technical report, Intel Corporation (2025). https://www.intel.com/content/www/us/en/content-details/853294/ intel-trust-domain-extensions-intel-tdx-module-base-architecture-specification. html [2] ARM Limited: Arm confidential compute architecture: Realm management monitor (RMM) specification (DEN0137). Technical report, ARM Limited (2025) [3] Li, D., Mi, Z., Ji, C., Tan, Y., Zang, B., Guan, H., Chen, H.: Bifrost: Analysis and optimization of network I/O tax in confidential virtual machines. In: 2023 USENIX Annual Technical Conference (USENIX ATC 23), pp. 1–15 (2023) [4] Knauth, T., Steiner, M., Chakrabarti, S., Lei, L., Xing, C., Vij, M.: Integrating Remote Attestation with Transport Layer Security (2018) 30 [5] Intel Corporation: Intel software guard extensions (Intel SGX) developer refer-ence. Technical report, Intel Corporation (2023) [6] Feng, D., Qin, Y., Feng, W., Li, W., Shang, K., Ma, H.: Survey of research on confidential computing. IET Communications 18 (9), 535–556 (2024) [7] Birkholz, H., Thaler, D., Richardson, M., Smith, N., Pan, W.: RFC 9334: Remote ATtestation procedures (RATS) architecture. Technical report, IETF (2023) [8] Sardar, M.U., Fossati, T., Frost, S., Xiong, S.: Formal specification and verifi-cation of architecturally-defined attestation mechanisms in Arm CCA and Intel TDX. IEEE Access 12 , 361–381 (2024) [9] Bai, F., Wang, Z., Zeng, K., Zhang, C., Shen, T., Zhang, X., Gong, B.: ZKSA: Secure mutual attestation against TOCTOU zero-knowledge proof based for IoT devices. Computers & Security 148 , 104136 (2025) [10] Dushku, E., Rabbani, M.M., Vliegen, J., Braeken, A., Mentens, N.: PROVE: Provable remote attestation for public verifiability. Journal of Information Security and Applications 75 (2023) [11] Debes, H.B., Dushku, E., Giannetsos, T., Marandi, A.: ZEKRA: Zero-knowledge control-flow attestation. In: Proceedings of the 2023 ACM Asia Conference on Computer and Communications Security (ASIA CCS), pp. 357–371 (2023) [12] El Kassem, N., Hellemans, W., Siachos, I., Dushku, E., Vasileiadis, S., Karas, D.S., Chen, L., Patsakis, C., Giannetsos, T.: PRIV ´E: Towards privacy-preserving swarm attestation. In: Proceedings of the 22nd International Conference on Security and Cryptography (SECRYPT) (2025) [13] Alves, R.C.A., Freitas, O.F., Albertini, B.C., Jr., M.A.S.: Testing the limits of SPDM: Authentication of intermittently connected devices. Computers & Security 148 (2025) [14] OpenHCL. https://github.com/microsoft/openvmm [15] Volos, S., Vaswani, K., Bruno, R.: Graviton: Trusted execution environments on GPUs. In: Proceedings of the 13th Symposium on Operating System Design and Implementation (OSDI), pp. 681–696 (2018) [16] Scopelliti, G., Pouyanrad, S., Noorman, J., Alder, F., Baumann, C., Piessens, F., M¨ uhlberg, J.T.: End-to-end security for distributed event-driven enclave appli-cations on heterogeneous tees. ACM Transactions on Privacy and Security, 1–46 (2023) [17] Zhang, C., Priolkar, R., Jiang, Y., Xiao, Y., Vij, M., Liang, Z., Ahmad, A.: Erebor: A drop-in sandbox solution for private data processing in untrusted confidential 31 virtual machines. In: Proceedings of the 20th European Conference on Computer Systems (EuroSys), pp. 1210–1228 (2025) [18] Ahmad, A., Ou, B., Liu, C., Zhang, X., Fonseca, P.: Veil: A protected services framework for confidential virtual machines. In: Proceedings of the 28th Inter-national Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS), vol. 4, pp. 378–393 (2023) [19] Babuji, Y., Woodard, A., Li, Z., Katz, D.S., Clifford, B., Kumar, R., Lacinski, L., Chard, R., Wozniak, J.M., Foster, I., Wilde, M., Chard, K.: Parsl: Pervasive paral-lel programming in python. In: Proceedings of the 28th International Symposium on High-Performance Parallel and Distributed Computing, pp. 25–36 (2019) [20] Thain, D., Tannenbaum, T., Livny, M.: Distributed computing in practice: the condor experience. Concurrency and computation: practice and experience 17 (2-4), 323–356 (2005) [21] Al Sadi, A., Abdollahi, S., Ghosn, A., Haddadi, H., Kogias, M.: Sharing is caring: Attestable and trusted workflows out of distrustful components. arXiv preprint arXiv:2603.03403 (2026). Preprint [22] Lee, D., Cheang, K., Thomas, A., Lu, C., Gaddamadugu, P., Vahldiek-Oberwagner, A., Vij, M., Song, D., Seshia, S.A., Asanovic, K.: Cerberus: A formal approach to secure and efficient enclave memory sharing. In: Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security (CCS) (2022) [23] Yu, J.Z., Shinde, S., Carlson, T.E., Saxena, P.: Elasticlave: An efficient memory model for enclaves. In: Proceedings of the 31st USENIX Security Symposium, pp. 4111–4128 (2022) [24] Hofmann, O.S., Kim, S., Dunn, A.M., Lee, M.Z., Witchel, E.: InkTag: Secure applications on an untrusted operating system. In: Proceedings of the 18th Inter-national Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS), pp. 265–278 (2013) [25] Zhou, Z., Anjali, Chen, W., Gong, S., Hawblitzel, C., Cui, W.: VeriSMo: A verified security module for confidential VMs. In: Proceedings of the 18th Symposium on Operating System Design and Implementation (OSDI), pp. 599–614 (2024) [26] Hunt, T., Zhu, Z., Xu, Y., Peter, S., Witchel, E.: Ryoan: A distributed sandbox for untrusted computation on secret data. In: Proceedings of the 12th USENIX Symposium on Operating System Design and Implementation (OSDI), pp. 533– 549 (2016) [27] Sirone Jegan, D., Wang, L., Bhagat, S., Swift, M.M.: Guarding serverless appli-cations with Kalium. In: Proceedings of the 32nd USENIX Security Symposium, 32 pp. 4087–4104 (2023) [28] Cao, Y., Zhang, J., Zhao, Y., Su, P., Huang, H.: SRFL: A secure & robust fed-erated learning framework for IoT with trusted execution environments. Expert Systems with Applications 239 (2024) [29] Jia, Y., Liu, S., Wang, W., Chen, Y., Zhai, Z., Yan, S., He, Z.: HyperEnclave: An open and cross-platform trusted execution environment. In: 2022 USENIX Annual Technical Conference (USENIX ATC 22), pp. 437–454 (2022) [30] Arnautov, S., Trach, B., Gregor, F., Knauth, T., Martin, A., Priebe, C., Lind, J., Muthukumaran, D., O’Keeffe, D., Stillwell, M.L., Goltzsche, D., Eyers, D., Kapitza, R., Pietzuch, P., Fetzer, C.: SCONE: Secure linux containers with Intel SGX. In: 12th USENIX Symposium on Operating Systems Design and Implementation (OSDI 16), pp. 689–703. USENIX Association, ??? (2016) [31] Brossard, M., Bryant, G., Gaabouri, B.E., Fan, X., Ferreira, A., Evans, E.G., Haster, C., Johnson, E., Miller, D., Mo, F., Mulligan, D.P., Spinale, N., Hensber-gen, E., Vincent, H.J.M., Xiong, S.: Private delegated computations using strong isolation. IEEE Transactions on Emerging Topics in Computing (2024) [32] Krawczyk, H.: Sigma: The ‘sign-and-mac’ approach to authenticated diffie-hellman and its use in the ike protocols. In: Advances in Cryptology — CRYPTO 2003, pp. 400–425. Springer, ??? (2003) [33] Jarkas, O., Ko, R., Dong, N., Mahmud, M.: Seed: A minimal-footprint tee frame-work for verifiable, confidential microservice deployment. Proceedings on Privacy Enhancing Technologies 2026 , 411–425 (2026) [34] Deelman, E., Vahi, K., Juve, G., Rynge, M., Callaghan, S., Maechling, P.J., Mayani, R., Chen, W., Ferreira da Silva, R., Livny, M., Wenger, K.: Pega-sus, a workflow management system for science automation. Future Generation Computer Systems 46 , 17–35 (2015) [35] Coleman, T., Casanova, H., Pottier, L., Kaushik, M., Deelman, E., Ferreira da Silva, R.: Wfcommons: A framework for enabling scientific workflow research and development. Future Generation Computer Systems 128 , 16–27 (2022) 33
