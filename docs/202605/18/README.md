@@ -1,101 +1,52 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-18
 
-## 每次日报
-- 最新运行日期：2026-05-18
-- 运行时间：2026-05-18 21:08:55 UTC
-- 运行状态：成功
-- 本次总论文数：17
+- 生成时间：2026-05-18 21:08:55 UTC
+- 当次推荐总数：17
 - 精读区：6
 - 速读区：11
 
-### 今日简报（AI）
-今日共浏览 17 篇科研文章，深入研读了网络安全治理与字节级网络流量分类最新研究。  
-重点关注：强化学习在攻击路径建模与网络流量直接分类的实用方法，展示了可操作性与效率提升潜力。  
-建议关注网络安全和流量分析工具的应用场景，尝试理解强化学习在实际部署中的优势与限制。
-- 详情：[/202605/18/README](/202605/18/README)
+## 今日简报（AI）
+今天精读了 6 篇、速读 11 篇论文，聚焦网络安全治理和网络流量分析前沿研究。  
+最值得关注的是利用攻击路径建模结合强化学习优化安全防护，以及无需预训练的字节级网络流量分类方法。  
+建议普通读者关注网络安全策略和流量分析新工具的实际应用与潜力，保持技术敏感度。
 
-### 精读区论文标签
-1. [Operationalizing Cybersecurity Governance for Mitigation Planning with Attack\-Path Modeling and Reinforcement Learning](/202605/18/2605.09792v1-operationalizing-cybersecurity-governance-for-mitigation-planning-with-attack-path-modeling-and-reinforcement-learning)  
-   标签：评分：8.2/10、query:profile-1
+## 精读区
+1. [通过攻击路径建模与强化学习实现网络安全治理的可操作化以支持缓解规划](/202605/18/2605.09792v1-operationalizing-cybersecurity-governance-for-mitigation-planning-with-attack-path-modeling-and-reinforcement-learning)（8.2/10）
    摘要：本文提出了一种将网络安全治理框架（如NIST CSF）与实用防御决策相结合的方法，通过将CSF成熟度映射到MITRE ATT&CK缓解措施，并利用变阶马尔可夫模型和深度强化学习重构攻击路径，实现预算约束下的可执行防御规划。实验显示，该方法能生成稳定、可解释的防御策略，兼顾成本与风险，为组织提供可操作的安全规划参考，值得继续精读。
-   evidence：结合强化学习与攻击路径建模的网络安全方法
-2. [MambaNetBurst: Direct Byte\-level Network Traffic Classification without Tokenization or Pretraining](/202605/18/2605.11034v1-mambanetburst-direct-byte-level-network-traffic-classification-without-tokenization-or-pretraining)  
-   标签：评分：8.1/10、query:q5
+2. [MambaNetBurst：无需分词或预训练的字节级网络流量分类](/202605/18/2605.11034v1-mambanetburst-direct-byte-level-network-traffic-classification-without-tokenization-or-pretraining)（8.1/10）
    摘要：本文提出MambaNetBurst，一种无需分词和预训练的字节级网络流量分类方法，基于Mamba\-2状态空间模型直接处理原始数据包字节序列。通过固定长度的流量burst输入模型，并使用残差预归一化的Mamba\-2模块进行端到端监督分类，在六个公开基准数据集上表现出与大型预训练模型相当甚至更优的性能。结果表明保留字节级时间信息和适中状态规模是关键，整体方案轻量高效，值得对流量分析和NIDS研究者进一步关注。
-   evidence：直接字节级加密流量分类
-3. [MCPShield: Content\-Aware Attack Detection for LLM Agent Tool\-Call Traffic](/202605/18/2605.11053v2-mcpshield-content-aware-attack-detection-for-llm-agent-tool-call-traffic)  
-   标签：评分：8.0/10、query:q9
+3. [MCPShield：面向大型语言模型代理工具调用流量的内容感知攻击检测](/202605/18/2605.11053v2-mcpshield-content-aware-attack-detection-for-llm-agent-tool-call-traffic)（8.0/10）
    摘要：本文提出了MCPShield，一种针对LLM代理通过Model Context Protocol调用外部工具的攻击检测框架。研究通过将每个代理会话编码为图结构（节点为工具调用，边为顺序和数据流依赖），结合句子嵌入特征进行分类，实现了内容感知的攻击检测。实验显示，内容级特征是性能提升的关键，树模型在嵌入特征上优于GNN和MLP。论文对于安全研究和实际部署具有参考价值，值得进一步精读。
-   evidence：LLM工具调用流量监测
-4. [U\-STS\-LLM A Unified Spatio\-Temporal Steered Large Language Model for Traffic Prediction and Imputation](/202605/18/2605.11735v1-u-sts-llm-a-unified-spatio-temporal-steered-large-language-model-for-traffic-prediction-and-imputation)  
-   标签：评分：8.0/10、query:q3
+4. [U\-STS\-LLM：面向交通预测与缺失值填补的统一时空引导大语言模型](/202605/18/2605.11735v1-u-sts-llm-a-unified-spatio-temporal-steered-large-language-model-for-traffic-prediction-and-imputation)（8.0/10）
    摘要：本研究提出U\-STS\-LLM，一种统一的时空引导大语言模型，用于蜂窝网络流量预测与缺失值填补。通过动态时空注意力偏置生成器、部分冻结的LoRA微调以及门控自适应融合机制，模型在多任务训练下实现稳定、高效的参数适应。实验证明在长时间预测和高缺失率数据插补上均优于现有方法，且训练效率高，适合关注大语言模型在结构化非语言数据中的应用者精读。
-   evidence：将大语言模型应用于时空交通分析
-5. [A Multi\-Layer Cloud\-IDS Pipeline with LLM and Adaptive Q\-Learning Calibration](/202605/18/2605.15889v1-a-multi-layer-cloud-ids-pipeline-with-llm-and-adaptive-q-learning-calibration)  
-   标签：评分：8.0/10、query:q9
+5. [基于大语言模型与自适应Q学习校准的多层云入侵检测流水线](/202605/18/2605.15889v1-a-multi-layer-cloud-ids-pipeline-with-llm-and-adaptive-q-learning-calibration)（8.0/10）
    摘要：本文提出了一种多层云入侵检测系统（IDS）管道，结合强化学习与大型语言模型（LLM），通过自适应置信度校准提升跨网络、主机和虚拟化层的攻击检测能力。方法使用多门控流程减少不必要的LLM调用，并将分析结果存入Chroma数据库支持增量学习。实验结果显示整体精度88.68%，网络和虚拟化层精度分别达98.02%和97.08%，显著降低运营成本，值得进一步精读其多层策略与强化学习调优机制。
-   evidence：用于多层网络入侵检测的LLM和强化学习
-6. [PersonaFingerprint: Measuring Persona Inference on Modern Websites with LLM\-Driven Browsing](/202605/18/2605.15962v1-personafingerprint-measuring-persona-inference-on-modern-websites-with-llm-driven-browsing)  
-   标签：评分：8.0/10、query:q7
+6. [PersonaFingerprint：使用大语言模型驱动浏览评估现代网站上的人格推断](/202605/18/2605.15962v1-personafingerprint-measuring-persona-inference-on-modern-websites-with-llm-driven-browsing)（8.0/10）
    摘要：本文提出PersonaFingerprint，研究在现代网站环境下通过加密流量元数据（如包长度和到达时间序列）推断用户行为特征（persona）的隐私风险。作者构建了一个LLM驱动的多代理浏览框架，模拟15种行为类型在10个网站上的交互，收集加密流量数据进行分析。实验显示，即使不访问内容或标识信息，也能以约84%准确率识别用户persona，并通过轻量多任务方法在保持网站分类精度的同时提升persona识别。该研究揭示了现代网站加密流量泄露的潜在隐私威胁，值得继续精读。
-   evidence：使用LLM分析加密流量进行身份推断
 
-### 速读区论文标签
-1. [Chain\-of\-Thought Reasoning Enhances In\-Context Learning for LLM\-Based Mobile Traffic Prediction](/202605/18/2605.09260v1-chain-of-thought-reasoning-enhances-in-context-learning-for-llm-based-mobile-traffic-prediction)  
-   标签：评分：7.8/10、query:q3
+## 速读区
+1. [链式思维推理提升基于大语言模型的移动流量上下文学习能力](/202605/18/2605.09260v1-chain-of-thought-reasoning-enhances-in-context-learning-for-llm-based-mobile-traffic-prediction)（7.8/10）
    摘要：本文针对5G/6G移动网络的短期流量预测问题，提出了一种结合链式推理\(CoT\)的LLM即时学习框架，通过离线构建带推理的示例和在线检索相似历史模式，实现高精度预测。实验显示，该方法在MAE、RMSE和R2\-score上相较传统方法和普通ICL提升明显，尤其在快速变化的流量场景下表现稳健，值得精读以了解方法细节与应用潜力。
-   evidence：基于LLM的移动流量预测
-2. [TSNBench: Benchmarking LLM Proficiency in Time\-Sensitive Networking](/202605/18/2605.09481v1-tsnbench-benchmarking-llm-proficiency-in-time-sensitive-networking)  
-   标签：评分：7.8/10、query:q3
+2. [TSNBench：大语言模型在时间敏感网络中的能力基准测试](/202605/18/2605.09481v1-tsnbench-benchmarking-llm-proficiency-in-time-sensitive-networking)（7.8/10）
    摘要：TSNBench提出了首个针对时间敏感网络（TSN）领域的大语言模型（LLM）能力评测基准，包含939道专家验证的选择题和100道开放式最坏延迟（WCD）计算题。通过对16款LLM测试发现，它们在选择题上表现良好（67\-95%），但在WCD计算上错误显著，可能导致安全关键系统配置失败。论文对安全关键网络场景下LLM可靠性提出警示，值得继续精读其实验设计和错误分析部分。
-   evidence：在时间敏感网络中评估LLM
-3. [HAGE: Harnessing Agentic Memory via RL\-Driven Weighted Graph Evolution](/202605/18/2605.09942v1-hage-harnessing-agentic-memory-via-rl-driven-weighted-graph-evolution)  
-   标签：评分：7.8/10、query:profile-1
+3. [HAGE：通过强化学习驱动的加权图演化利用主体记忆](/202605/18/2605.09942v1-hage-harnessing-agentic-memory-via-rl-driven-weighted-graph-evolution)（7.8/10）
    摘要：本文提出HAGE，一种面向智能体记忆的加权多关系图框架，通过强化学习优化的查询条件遍历方法改进记忆检索。相较传统静态图或简单相似度检索，HAGE能够根据查询动态调整路径选择，提高长程推理准确性。实验显示在多类别认知任务上表现优于现有智能体记忆系统，兼顾精度与效率，值得精读以理解其图结构设计与强化学习优化策略。
-   evidence：LLM中的强化学习驱动记忆遍历
-4. [MCPShield: Content\-Aware Attack Detection for LLM Agent Tool\-Call Traffic](/202605/18/2605.11053v1-mcpshield-content-aware-attack-detection-for-llm-agent-tool-call-traffic)  
-   标签：评分：7.8/10、query:q9
+4. [MCPShield：针对LLM代理工具调用流量的内容感知攻击检测](/202605/18/2605.11053v1-mcpshield-content-aware-attack-detection-for-llm-agent-tool-call-traffic)（7.8/10）
    摘要：本文提出了MCPShield，一种针对LLM代理使用的Model Context Protocol \(MCP\)工具调用流量的内容感知攻击检测框架。通过将每个代理会话编码为图结构（节点为工具调用，边为顺序及数据流依赖），并结合句子嵌入特征，使用GNN、MLP及树模型进行分类，实验显示内容特征是关键，树模型在SBERT嵌入上的表现优于神经网络，任务划分策略显著影响评估结果。论文提供了方法、评估协议及实证分析，值得安全与LLM交互研究者进一步精读。
-   evidence：用于网络安全的LLM流量监控
-5. [Talk is \(Not\) Cheap: A Taxonomy and Benchmark Coverage Audit for LLM Attacks](/202605/18/2605.15118v1-talk-is-not-cheap-a-taxonomy-and-benchmark-coverage-audit-for-llm-attacks)  
-   标签：评分：7.8/10、query:q9
+5. [言语（并非）廉价：大型语言模型攻击的分类与基准覆盖审计](/202605/18/2605.15118v1-talk-is-not-cheap-a-taxonomy-and-benchmark-coverage-audit-for-llm-attacks)（7.8/10）
    摘要：本文构建了一个系统化的LLM攻击分类与基准覆盖审计框架，通过507叶节点的攻击分类和4×6 STRIDE矩阵，分析932篇2023–2026年arXiv安全论文中的2,521个唯一攻击组。研究发现现有六个公开基准覆盖不足，仅覆盖矩阵25%，部分威胁类型完全未评估，并揭示攻击命名碎片化问题。该工作可作为评估LLM安全基准的工具，对防御研究和评测改进有参考价值，值得精读。
-   evidence：框架审计LLM攻击覆盖威胁面
-6. [MATRA: Modeling the Attack Surface of Agentic AI Systems \-\- OpenClaw Case Study](/202605/18/2605.10763v1-matra-modeling-the-attack-surface-of-agentic-ai-systems----openclaw-case-study)  
-   标签：评分：7.6/10、query:q9
+6. [MATRA：代理型人工智能系统攻击面建模——以OpenClaw为例](/202605/18/2605.10763v1-matra-modeling-the-attack-surface-of-agentic-ai-systems----openclaw-case-study)（7.6/10）
    摘要：本文提出了MATRA框架，用于系统化评估自主AI代理系统（如OpenClaw）中的安全威胁，将已知LLM攻击类型映射到具体部署风险。方法基于资产影响评估和攻击树构建，对代理行为、持久内存及工具调用路径进行量化分析，展示网络沙箱与最小权限访问等控制手段能降低风险。论文提供了详细案例与半量化评估，适合对企业级AI安全风险感兴趣的读者快速判断部署安全问题。
-   evidence：LLM用于系统威胁建模，涉及网络安全与流量分析
-7. [Toward Multi\-Database Query Reasoning for Text2Cypher](/202605/18/2605.10373v1-toward-multi-database-query-reasoning-for-text2cypher)  
-   标签：评分：6.9/10、query:q3
+7. [面向多数据库查询推理的 Text2Cypher 方法](/202605/18/2605.10373v1-toward-multi-database-query-reasoning-for-text2cypher)（6.9/10）
    摘要：论文提出将 Text2Cypher 从“单图数据库查询生成”扩展为“多数据库查询推理”问题，面向现实中 HR、财务、影视等相互独立图数据库协同查询场景。作者给出三阶段路线：数据库路由、跨库问题分解、异构查询推理，并通过 toy case 分析 LLM 在跨库场景中的幻觉、错误映射与结果整合失败。论文更偏问题定义与研究议程，而非完整方法或系统实现；若关注多库 Agent、GraphRAG 或数据库智能体方向，值得继续精读。
-   evidence：LLM用于多数据库查询推理
-8. [Detect, Localize, and Explain: Interactive Hierarchical Log Anomaly Analytics with LLM Augmentation](/202605/18/2605.09222v1-detect-localize-and-explain-interactive-hierarchical-log-anomaly-analytics-with-llm-augmentation)  
-   标签：评分：6.8/10、query:q7
+8. [检测、定位与解释：基于大语言模型增强的交互式分层日志异常分析](/202605/18/2605.09222v1-detect-localize-and-explain-interactive-hierarchical-log-anomaly-analytics-with-llm-augmentation)（6.8/10）
    摘要：本文提出Krone及其交互式可视化系统Krone\-viz，用于分层日志异常分析。通过将平面日志序列抽象为实体\-操作\-状态三层语义层次，并采用模块化检测结合选择性大语言模型\(LLM\)推理，实现异常检测、定位和解释。实验证明其在准确性\(F1\-score提升至92.83%\)、数据与LLM资源效率上均优于传统方法，适合对大规模系统日志进行精细分析，值得进一步阅读。
-   evidence：利用LLM进行层次化日志异常检测，涉及流量分析
-9. [The Art of the Jailbreak: Formulating Jailbreak Attacks for LLM Security Beyond Binary Scoring](/202605/18/2605.09225v1-the-art-of-the-jailbreak-formulating-jailbreak-attacks-for-llm-security-beyond-binary-scoring)  
-   标签：评分：6.8/10、query:q9
+9. [越狱的艺术：超越二元评分的面向大语言模型安全的越狱攻击构建](/202605/18/2605.09225v1-the-art-of-the-jailbreak-formulating-jailbreak-attacks-for-llm-security-beyond-binary-scoring)（6.8/10）
    摘要：本论文研究大语言模型（LLM）中的 jailbreak 攻击问题，通过构建大规模组合性数据集、自动化生成器以及 OPTIMUS 连续评估指标，实现对不同攻击策略的系统化生成、分类和评估。实验证明，该方法能精确区分弱、中等和最优攻击，为安全防护提供比传统二元评分更细粒度的决策依据。对于关注 LLM 安全与红队测试的读者，值得进一步精读。
-   evidence：分析LLM越狱攻击，与安全和网络理解相关
-10. [FreeMOCA: Memory\-Free Continual Learning for Malicious Code Analysis](/202605/18/2605.09664v2-freemoca-memory-free-continual-learning-for-malicious-code-analysis)  
-   标签：评分：6.8/10、query:q5
+10. [FreeMOCA：面向恶意代码分析的无记忆持续学习](/202605/18/2605.09664v2-freemoca-memory-free-continual-learning-for-malicious-code-analysis)（6.8/10）
    摘要：本文提出了FreeMOCA，一种无需存储历史样本的记忆\-计算高效持续学习框架，用于恶意代码分析。通过在参数空间中对连续任务的模型进行自适应分层插值，FreeMOCA有效保持了先前知识，减少遗忘，同时显著提升分类和域增量任务的准确率。在Windows和Android大规模恶意软件数据集上，FreeMOCA相较11个基线方法提升最高达42%，展示了其在资源受限环境下的实际应用潜力，值得进一步精读方法与实验设计细节。
-   evidence：恶意代码持续学习
-11. [Skill Description Deception Attack against Task Routing in Internet of Agents](/202605/18/2605.09889v1-skill-description-deception-attack-against-task-routing-in-internet-of-agents)  
-   标签：评分：6.8/10、query:q9
+11. [针对代理互联网任务路由的技能描述欺骗攻击](/202605/18/2605.09889v1-skill-description-deception-attack-against-task-routing-in-internet-of-agents)（6.8/10）
    摘要：本文针对新兴的Internet of Agents \(IoA\) 系统提出了一种安全威胁，即恶意代理通过伪造技能描述操纵任务路由。作者设计了基于大语言模型\(LLM\)的攻击框架，实现自动生成欺骗性技能描述，并在九个代表性领域中测试，攻击成功率最高可达98%。研究揭示了IoA语义路由的安全漏洞，对于想了解代理网络安全和防御机制的读者值得精读。
-   evidence：LLM驱动的代理网络和任务路由攻击
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
