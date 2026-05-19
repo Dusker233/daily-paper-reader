@@ -1,0 +1,840 @@
+Title: PRISM: Pareto-Efficient Retrieval over Intent-Aware Structured Memory for Long-Horizon Agents
+
+URL Source: https://arxiv.org/pdf/2605.12260v1
+
+Published Time: Wed, 13 May 2026 01:31:27 GMT
+
+Number of Pages: 29
+
+Markdown Content:
+# PRISM: Pareto-Efficient Retrieval over Intent-Aware Structured Memory for Long-Horizon Agents 
+
+Jingyi Peng 1 Zhongwei Wan 2 Weiting Liu 3 Qiuzhuang Sun 1* 
+
+> 1
+
+Singapore Management University 2The Ohio State University 3Fudan University 
+
+> *
+
+Corresponding author: qzsun@smu.edu.sg 
+
+## Abstract 
+
+Long-horizon language agents accumulate conversation history far faster than any fixed context window can hold, making memory management critical to both answer accuracy and serving cost. Existing approaches either expand the context window without addressing what is retrieved, perform heavy ingestion-time fact extraction at substantial token cost, or rely on heuristic graph traversal that leaves both accuracy and efficiency on the table. We present PRISM, a training-free retrieval-side framework that treats long-horizon memory as a joint retrieval-and-compression problem over a graph-structured memory. PRISM combines four orthogonal inference-time components: Hierarchical Bundle Search over typed relation paths, Query-Sensitive Edge Costing that aligns traversal with detected query intent, Evidence Compression that compresses the candidate bundle into a compact answer-side context, and Adaptive Intent Routing that routes most queries through zero-LLM tiers. By formulating retrieval as min-cost selection over typed path templates and pairing it with an LLM-side compression step, PRISM surfaces the right evidence under a strict context budget without any fine-tuning or modification to the upstream ingestion pipeline. Experiments on the LoCoMo benchmark show that PRISM delivers substantially higher LLM-judge accuracy than every same-protocol baseline at an order-of-magnitude smaller context budget, occupying a previously empty corner of the accuracy–context-cost frontier and demonstrating a superior balance between answer quality and retrieval efficiency. 
+
+## 1 Introduction 
+
+In long-horizon agentic tasks involving multi-session conversations and lifelong assistants [ 14 ], the effectiveness of large language model (LLM) agents is fundamentally constrained by what information can be surfaced into the answer model’s context at query time. Because the attention window is finite and degrades on long inputs [ 13 ], an external memory system is required to store past experience and to retrieve the relevant pieces when a new query arrives. The quality of such a system is governed by two coupled quantities: the accuracy of the answers it supports, and the 
+
+context cost —the number of tokens that must be packed into the answer model’s prompt for every query. High accuracy at low context cost is the regime that long-horizon deployments care about, and pushing both quantities at once is the central design challenge. However, existing research has largely advanced these two quantities along separate axes. Ingestion-and representation-centric systems such as MemoryBank, A-Mem, Mem0, Zep, and MemoryOS [ 28 , 25 , 3, 17 , 9] focus on what to store, update, and structure at write time, building richer memory units or hierarchies that downstream retrieval can later draw from. Retrieval- and context-management systems such as MemGPT, ReSum, LightMem, and SimpleMem [ 16 , 24 , 5, 12 ] instead reduce the active context through memory tiers, periodic summarization, lightweight filtering, or intent-aware retrieval planning. A third, more recent line introduces explicit relational structure into memory:     
+
+> Preprint.
+> arXiv:2605.12260v1 [cs.CL] 12 May 2026 2K 4K 7K 14K 26K
+> Average context tokens per query (log scale)
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> Long-conversation QA accuracy
+> Long-context LLMs
+> Full-context baseline
+> Ingestion-heavy
+> Mem0, A-Mem
+> Graph-based memory
+> MAGMA, Zep
+> PRISM
+> small context,
+> high accuracy
+
+(a) Accuracy–cost landscape supported not supported partial      
+
+> Long-ctx Mem0 MAGMA M-Flow PRISM
+> (this work)
+> Operates on graph-structured memory
+> Typed relation paths beyond surface similarity
+> Query-conditioned retrieval
+> LLM-side compression / re-ranking
+> Adaptive intent routing (no per-query LLM)
+> Training-free, plug-in retrieval
+
+(b) Design dimensions 
+
+Figure 1: (a) Existing memory designs cluster in three regions of the accuracy–context-cost plane, leaving the high-accuracy / low-cost corner underfilled. (b) PRISM is the only system that combines all six design dimensions we identify as relevant. GraphRAG and MAGMA [ 4, 7] build typed graphs over events, entities, and causal links, and use graph traversal as the retrieval primitive. A complementary direction trains the agent’s memory and retrieval behavior end-to-end with reinforcement learning [ 27 ]. Each line addresses a piece of the long-horizon problem, but each leaves the other pieces unsolved. As a consequence, the accuracy–context-cost plane is populated unevenly. As illustrated in Figure 1(a), long-context baselines pay a very high token cost for moderate accuracy; ingestion-heavy systems can reach high accuracy but tend to retrieve large candidate pools, again inflating context; graph-based memory adds relational structure but, in current designs, sits at moderate accuracy with moderate cost. The high-accuracy / low-cost corner is conspicuously underfilled. We argue this gap is not a coincidence. Reaching this corner requires simultaneously retrieving along the right relation type rather than by surface similarity, and controlling how the retrieved candidates are condensed before they reach the answer model. Existing systems address these two levers separately—graph systems focus on the former but feed candidates to the answer model essentially as-is, while compression-oriented systems focus on the latter but operate over flat or weakly relational memory. Recent improvements along both axes increasingly rely on training a query-time policy or re-ingesting memory under a new representation, which is expensive and tightly couples retrieval logic to a specific backend. The high-accuracy / low-cost corner therefore remains an open challenge. To address this gap, we propose PRISM , a training-free retrieval pipeline that occupies the empty corner by composing typed-path retrieval with answer-side compression over an already-constructed graph memory. PRISM’s memory is built once at write time via schema-guided extraction and consolidation, exposing six typed edge types over a hierarchy of entities, facets, facet points, and episodes. At query time, PRISM routes the query by intent to a small set of relevant edge types, scores candidates along typed relation paths rather than flat similarity, and applies an LLM-side compression pass that re-ranks and condenses the candidate pool before it is handed to the answer model. The retrieval pipeline itself is training-free—no policy is learned and no fine-tuning is required—and plugs into any backend that exposes the same edge schema. Figure 1(b) summarizes the design dimensions that PRISM combines and that prior systems leave individually unaddressed. We evaluate PRISM on LoCoMo [ 14 ], a long-conversation QA benchmark covering single-hop, multi-hop, temporal, and open-domain reasoning, and show that PRISM consistently outperforms strong baselines while using an order of magnitude fewer context tokens per query. Comprehensive ablations confirm that both typed relation paths and answer-side LLM compression are necessary, not substitutable: removing either lever collapses the system back toward the regions that prior designs already occupy. Our main contributions are as follows: • We frame long-conversation memory as an accuracy–context-cost frontier and identify the high-accuracy / low-cost corner that prior designs—across ingestion-heavy, retrieval-management, and graph-structured lines—leave largely empty. • We propose PRISM , a training-free retrieval pipeline that combines intent-routed typed-path retrieval with answer-side LLM compression over a typed graph memory. To our knowledge, PRISM is the first system to combine these two levers without training a query-time policy. 2• On LoCoMo, PRISM reaches 0.831 LLM-judge score with roughly 2K context tokens per query, beating every same-protocol baseline on overall accuracy while using ∼13 × fewer tokens than a full-context answer model. Ablations isolate each module’s contribution and identify answer-side LLM compression as the dominant token-reduction lever. 
+
+## 2 Related Work 
+
+Long-context LLMs and KV-cache compression. One line scales the answer model itself to ingest longer inputs. Frontier models now support windows of hundreds of thousands to millions of tokens [ 19 , 1, 2 ], and a growing literature reduces inference cost through KV-cache eviction and dynamic allocation [ 22 , 23 , 21 ]. However, these methods leave the retrieval question untouched: every query still pays attention cost over the entire history, and large models attend less reliably to evidence buried in long inputs [ 13 ]. In contrast , PRISM operates on the retrieval side and is orthogonal to long-context backbones, which can consume its compact context more cheaply still. 
+
+Memory-augmented agents. A second line builds explicit memory artefacts over the conversation. MemGPT [ 16 ] pages information through a managed context hierarchy under LLM control; A-MEM [ 25 ] stores chunks as Zettelkasten-style notes with semantic links; Zep [ 17 ] maintains a bi-temporal knowledge graph; MAGMA [ 7] traverses four orthogonal edge-graphs with a heuristic intent-aware beam search; and Mem0 and Mem0 g [ 3] extract structured facts at ingestion time and retrieve aggressively at query time. However, these systems either keep memory as a flat node collection and recover relations implicitly through similarity, or impose graph structure but rely on heuristic traversal rules with per-query budgets in the 3–7K-token range. In contrast , PRISM formalises retrieval as a min-cost selection over typed path templates and follows it with an LLM-side compression step that brings per-query context to ∼2K tokens without sacrificing accuracy. 
+
+Retrieval-side optimisation. A third line treats memory as a retrieval problem and optimises the 
+
+selection of evidence sent to the answer model. Dense retrievers [ 10 , 11 ] and lexical baselines [ 18 ]score passages by surface or embedding similarity; cross-encoder rerankers [ 15 ] re-score a shortlist with a query-conditioned model; and prompt-compression methods such as LLMLingua [ 8] prune tokens after retrieval. However, these methods are benchmarked on flat document collections and cannot exploit indirect evidence linked by causal, temporal, or evolution relations. In contrast , PRISM brings retrieval-side discipline to graph-structured memory by combining typed-path candidate generation, intent-conditioned edge costs, and an LLM-based reranker over the candidate bundle. 
+
+## 3 PRISM Design 
+
+3.1 Architectural Overview 
+
+PRISM is a training-free, retrieval-side framework that operates over an existing graph-structured memory G produced by any ingestion pipeline. Given a query q and a context budget B, PRISM aims to return a set of conversation chunks ( Episodes ) of total length at most B that support a correct downstream answer. Figure 2 summarises the architecture: four inference-time modules layer on top of the memory graph and compose sequentially through data dependencies. N4 predicts query intent; N2 uses this intent to re-weight typed edges; N1 searches typed relation paths to form a top-K
+
+candidate bundle; and N3 compresses the bundle to top-M Episodes via a single LLM call. All modules are training-free and apply unchanged to any backend exposing the node and edge schema below. The remainder of this section defines the graph (§3.2), develops each module (§3.3–§3.6), and summarises the end-to-end procedure (§3.7). 
+
+3.2 Memory Graph and Notation 
+
+PRISM retrieves over a multi-relational memory graph G = ( V, E, τ ) in which the node set V is partitioned across four layers and the edge set E across two structural families. The four node layers form a hierarchy of granularity: an Entity is a named anchor (person, place, object) shared across multiple chunks; a FacetPoint is an atomic fact extracted from a single chunk; a Facet groups thematically related FacetPoints within a chunk; and an Episode is the original conversation chunk, 3Budget B 
+
+E
+
+Memory Graph  𝑮 
+
+> Entity
+> FacetPoint
+> Facet
+> Episode
+> belongs_to
+> belongs_to
+> belongs_to
+
+Input Query    
+
+> e.g.,
+> Why did Melanie
+> switch from clarinet to violin?
+> N4. Adaptive Intent Routing
+> keyword/prototype/LLM
+> Intent hints 𝒉 (𝒒 ):
+> temporal, causal, entity -centric, general
+> N2. Query -Sensitive Edge Cost
+> Adjust traversal cost by intent
+> Temporal/causal/evolution edges
+> become cheaper when relevant
+> Compact Evidence
+> Context
+> Top -M episode
+> summaries
+> (<=B)
+> Answer Model
+> Generate final answer
+> From compact context
+
+Inference -time only  No fine -tuning  Retrieval -side 
+
+N3.  Evidence Compression  
+
+> Query + 10 episode
+> summaries Select Top -M=5
+> Compress candidate
+> bundle to compact context
+
+N1. Hierarchical Bundle Search 
+
+> Anchor
+> Discovery
+> Path
+> Enumeration
+> Min -Cost
+> Path Scoring
+> Bundle
+> Assembly
+> Multi -layer
+> FAISS search
+> 5 backbone +
+> 3 bridge templates
+> Compute costs using
+> query -sensitive weights
+> Assemble top -K
+> Candidate episodes
+> 0.7
+> 1.2
+> 0.3
+> 0.2
+> 0.4
+> Top -K
+> semantic
+> temporal
+> causal
+> evolution
+> Involves_entity
+
+Figure 2: Architectural overview of PRISM. PRISM is composed of a four-layer memory graph and four inference-time modules: (1) N4 routes query intent; (2) N2 adjusts traversal costs over typed edges; (3) N1 searches relation paths and assembles candidate bundles; and (4) N3 compresses retrieved evidence into a compact context for the answer model. which is also the unit eventually returned to the answer model. The edge set decomposes into hier-archical edges (belongs_to , encoding containment Entity → FacetPoint → Facet → Episode) and 
+
+relation edges , comprising five typed cross-cutting relations: semantic , temporal , causal , evolution ,and involves_entity . Each node v carries a content embedding ev ∈ Rd obtained at ingestion time, each non-belongs_to edge carries an analogous edge embedding, and we write τ (e) for the type of an edge e throughout. We denote the query embedding by q. All text embeddings are L2-normalised before indexing, so inner-product search with IndexFlatIP is equivalent to cosine-similarity retrieval, which we use as the distance throughout. 
+
+3.3 N1: Hierarchical Bundle Search 
+
+Flat vector retrieval treats memory as a bag of passages and selects the top-k closest to q, which degrades on queries whose evidence is spread across multiple chunks linked by typed relations rather than surface similarity. The Hierarchical Bundle Search module (N1) recovers such evidence by enumerating typed path templates from query anchors to candidate Episodes and scoring each Episode by the minimum-cost path that reaches it. 
+
+Anchor discovery. We retrieve a small pool of anchor nodes by issuing a layer-specific top-k vector search against each of the four node layers and taking the union: 
+
+A = [
+
+ℓ∈{ Ep ,Fc ,FP ,En }
+
+TopK  Fℓ, q, (1) where Fℓ denotes the FAISS index for layer ℓ. Each anchor a ∈ A is annotated with its anchor cost 
+
+d(a) = 1 − cos( q, ea).
+
+Path templates. A path template is a typed sequence of node and edge types ending at an Episode. N1 enumerates eight templates: a backbone family over belongs_to edges and a relation-bridge 
+
+family that crosses one typed relation edge before re-entering the hierarchy. The latter is the structural basis for answering multi-hop and causal questions. Full enumeration is given in Appendix C.2. 
+
+Path costing and bundle assembly. For an instantiated path π = ( a, e 1, v 1, . . . , e h, Ep) with h hops, the path cost is 
+
+Cost( π) = d(a) + 
+
+hX
+
+i=1 
+
+ cedge (ei) + chop 
+
+, (2) 4where cedge (ei) is the per-edge traversal cost from Query-Sensitive Edge Cost (§3.4) and chop is a small penalty preventing arbitrarily long paths. Each Episode is scored by the minimum cost over all paths terminating at it, 
+
+s(Ep) = min    
+
+> π∈Π(Ep)
+
+Cost( π), (3) encoding the inductive bias that a single strong evidence chain suffices to establish relevance. The top-K Episodes by ascending s(Ep) form the candidate bundle passed to Evidence Compression (§3.5), with the minimum-cost path retained as a retrieval trace. For example, the query “Why did Melanie switch from clarinet to violin?” has low surface similarity to the chunk “Melanie attended a violin recital that moved her” , but a causal-bridge path lifts this chunk into the bundle. 
+
+3.4 N2: Query-Sensitive Edge Cost 
+
+Edge types in a multi-relational memory graph are not interchangeable: a when query bene-fits most from temporal and evolution edges, a why query from causal edges. Treating all edges with a uniform cost in Eq. 2 discards this signal. The Query-Sensitive Edge Cost 
+
+module (N2) re-weights the per-edge cost conditional on a detected query intent h(q) ⊆{TEMPORAL , CAUSAL , MULTI _HOP , ENTITY _CENTRIC , GENERAL } supplied by Adaptive Intent Routing (§3.6); among these, only TEMPORAL and CAUSAL trigger edge-cost discounts, while 
+
+> MULTI
+
+_HOP serves a routing-side role described in §3.6: 
+
+cedge (ei) = α τ (ei), h (q) ·
+
+(1 − cos( eei , q) ei ∈ R FAISS ,c0
+
+ τ (ei) otherwise , α ∈ (0 , 1] , (4) where RFAISS is the set of edges incident to any anchor recalled by the FAISS top-k search at any of the four node layers, eei is the edge embedding, c0(·) is a per-type fallback cost applied only when 
+
+ei falls outside the FAISS recall, and the intent-conditioned discount factor α encodes intent–edge match rules: 
+
+α τ, h (q) =
+
+
+
+0.5 τ = TEMPORAL , TEMPORAL ∈ h(q),
+
+0.5 τ = CAUSAL , CAUSAL ∈ h(q),
+
+0.7 τ = EVOLUTION , TEMPORAL ∈ h(q),
+
+1.0 otherwise .
+
+(5) The discount is multiplicative, so the adjustment is monotone in the original cost ordering: a temporal-bridge path becomes roughly half the cost of an otherwise identical backbone path when, and only when, the query carries a temporal intent. For example, the queries “When did Melanie start violin?” 
+
+and “Why did Melanie switch to violin?” traverse the same memory subgraph but, under Eq. 5, select different cheapest paths—one along the temporal chain to a date-anchored chunk, the other along the causal bridge to the recital chunk. 
+
+3.5 N3: Evidence Compression 
+
+Path cost is a structural signal: it identifies which Episodes lie on cheap evidence chains, but is agnostic to their semantic content. An Episode whose minimum-cost path passes through a generic anchor ( e.g. , a popular entity) can therefore rank highly while being topically irrelevant, and the leading context positions may be determined by structural rather than semantic relevance. The 
+
+Evidence Compression module (N3) addresses this gap by issuing a single LLM call that selects top-M Episodes from the top-K bundle B on content alone: 
+
+B∗ = LLMSelect  q, {Summary(Ep) : Ep ∈ B} , M , |B ∗| = M, (6) where Summary(Ep) is the Episode summary prepared at ingestion time. The selection prompt is content-only: it sees Episode summaries but neither path-cost scores nor bundle metadata, so its judgement is independent of the structural signal that produced the candidate set. N3 thus acts both as a precision filter that drops structurally cheap but topically irrelevant Episodes, and as a context compressor that shrinks the answer-side context from K to M Episodes ( M < K ). For example, under “What instruments does Melanie play?” , a chunk about her cousin’s piano recital may share popular anchors with the query and earn a low path cost, but LLMSelect drops it as off-topic. 53.6 N4: Adaptive Intent Routing 
+
+Hierarchical Bundle Search and Query-Sensitive Edge Cost both depend on the intent label h(q).The natural implementation issues one LLM classification call per query, but for a system whose central claim is context efficiency , a per-query classifier-side LLM call is itself a measurable cost. The Adaptive Intent Routing module (N4) routes each query through a three-tier cascade ordered from cheapest to most expensive: 
+
+h(q) = 
+
+
+
+hkw (q) KeywordMatch( q),hproto (q) else if max p cos( q, p) > θ proto ,hLLM (q) otherwise .
+
+(7) The first tier matches high-precision regular expressions on intent triggers ( e.g. , when /before for 
+
+> TEMPORAL
+
+, why /because for CAUSAL ); the second compares q against a bank of intent prototype embeddings precomputed offline; the third invokes an LLM only when both cheap tiers fail. Queries whose cascade produces no confident label are assigned h(q) = ∅, leaving Eq. 4 unchanged. N4 emits five labels: TEMPORAL and CAUSAL trigger edge-cost discounts in Eq. 5; MULTI _HOP suppresses spurious ENTITY _CENTRIC labels on inference-heavy queries but does not itself discount edges; 
+
+> ENTITY
+
+_CENTRIC is a routing label with no edge-cost effect, and GENERAL is the safe-default label when no confident intent is recovered. For instance, “When did Melanie start violin?” is dispatched at the keyword tier, while “What changed for Melanie around the spring?” reaches the LLM fallback—concentrating LLM cost on hard cases. 
+
+3.7 End-to-End Inference 
+
+The four modules compose into a fixed inference sequence: h(q) ← Adaptive Intent Routing, cedge ←
+
+Query-Sensitive Edge Cost, B ← Hierarchical Bundle Search, B∗ ← Evidence Compression. The pipeline issues at most two LLM calls per query in the worst case (the Adaptive Intent Routing fallback and the Evidence Compression selection), and only one call on queries handled by the cheap tiers of Adaptive Intent Routing; all other operations are deterministic vector arithmetic and graph traversal. Full pseudocode is given in Algorithm 1 (Appendix B). 
+
+## 4 Experiments 
+
+4.1 Experimental Setup Benchmark and protocol. We evaluate on LoCoMo [ 14 ], using the standard 10-conversation split and categories 1–4 (single-hop, multi-hop, temporal, and open-domain), for a total of 1,540 QA pairs; category 5 is excluded because it tests adversarial refusal rather than retrieval. Unless otherwise stated, all same-protocol rows use gpt-4o-mini as both answer and judge model with temperature = 0 .0,and share the same answer prompt, judge prompt, tokenizer, and token-counting procedure. 
+
+Baselines and references. We compare PRISM against Full Context, MAGMA [ 7 ], Mem0 and Mem0 g [ 3 ], M-Flow [ 6], and the Mem0 commercial platform [ 3]. Mem0 g is the closest direct competitor, as it also exploits an explicit conversation graph. Full Context, MAGMA, Mem0, Mem0 g ,PRISM, and its ablations are all re-run under our exact protocol. M-Flow, PRISM (gpt-5.5), and the Mem0 platform are reported as different-protocol references: M-Flow and the Mem0 platform are taken from their published configurations, while for PRISM (gpt-5.5) we hold the retrieval pipeline and judge prompt fixed and only swap gpt-5.5 as the answer model on the same ingest checkpoint as PRISM. 
+
+Metrics. We report three metrics in Table 1: (i) the LLM-judge score , defined as CORRECT /(CORRECT +WRONG ) over the 1,540 questions; (ii) context tokens per query , a retrieval-cost proxy measured with a fixed tokenizer and held identical across all same-protocol rows so that budgets are directly comparable; and (iii) per-1K efficiency , defined as the judge score per 1K retrieved context tokens. Component analysis in §4.4 additionally uses Evidence Recall@ K (ER@ K), and paired ablations report McNemar mid-p values and 95% paired-bootstrap confidence intervals ( 2,000 resamples). Full prompts and statistical details are in Appendix D.3 and Appendix E.1. 6Table 1: Results on LoCoMo (categories 1–4, 1,540 QA pairs). Best same-protocol result per column in bold ; the different-protocol group is reported for reference only.                                                                
+
+> Method Multi-Hop Temporal Open-Domain Single-Hop Overall Per-1K Eff. Ctx tokens/query
+> Same-Protocol (gpt-4o-mini Answer Model)
+> Full Context 0.468 0.562 0.486 0.630 0.481 0.018 26,031 MAGMA 0.528 0.650 0.517 0.776 0.688 0.204 3,370 Mem0 0.512 0.555 0.729 0.671 0.669 0.379 1,764
+> Mem0 g0.472 0.581 0.757 0.657 0.684 0.189 3,616
+> PRISM (ours) 0.787 0.788 0.813 0.863 0.831 0.411 2,023
+> Different-Protocol (Stronger Answer LLM / Managed Commercial Pipeline)
+> M-Flow 0.752 0.794 0.583 0.876 0.818 0.316 2,588
+> PRISM (gpt-5.5) 0.890 0.879 0.927 0.892 0.891 0.440 2,023 Mem0 platform ––––0.916 0.131 ∼7,000
+
+4.2 Main Results on LoCoMo 
+
+Table 1 reports LoCoMo cat1–4 results, partitioned by evaluation protocol. 
+
+PRISM Wins All Same-Protocol Comparisons. Within the same-protocol group, PRISM achieves the highest overall LLM-Judge score ( 0.831 ), outperforming Mem0 g by +14 .2 pp, MAGMA by 
+
++14 .0 pp, and Full Context by +35 .2 pp. PRISM also wins every per-category column, making it the sole same-protocol method on the accuracy–efficiency frontier. Notably, the smallest-context baseline (Mem0 at 1,764 tokens) trails PRISM by 16 .2 pp despite a tighter budget: aggressive context compression alone is insufficient—retrieval quality is the binding constraint. PRISM also delivers the best accuracy per token, attaining 0.411 judge points per 1K retrieved tokens versus 0.379 for the next-best Mem0. 
+
+Retrieval Quality Beats Raw Context Size. Feeding all ∼26 K tokens of a LoCoMo dialogue directly to gpt-4o-mini attains only 0.481 judge—below every retrieval-based method, including the simplest one (Mem0 at 0.669 ). For long-conversation QA on this benchmark, what is retrieved matters substantially more than how much , even when the underlying answer model can in principle ingest the whole dialogue. 
+
+Different-Protocol References. The different-protocol group includes three reference points. M-Flow attains 0.818 overall— 1.2 pp below PRISM at 128% of PRISM’s context budget—despite using the stronger gpt-5-mini answer model; per category, M-Flow leads on Temporal and Single-Hop while PRISM leads on Multi-Hop ( +3 .5 pp) and Open-Domain ( +22 .9 pp). Swapping the answer model in PRISM itself from gpt-4o-mini to gpt-5.5 —holding the retrieval pipeline and ingest checkpoint fixed—lifts the overall judge score from 0.831 to 0.891 (+6 .0 pp) at the same 2,023 -token context budget, indicating that the residual errors of PRISM are partly answer-model-bound rather than retrieval-bound. Finally, the Mem0 commercial platform reaches 0.916 overall but at ∼3.4×
+
+PRISM’s context budget and under a managed pipeline we cannot replicate; its per-1K efficiency (0.131 ) is roughly one-third that of PRISM. Together, these three references show that absolute accuracy on LoCoMo can be improved by a stronger answer model or a larger budget, while PRISM occupies a previously empty corner of the accuracy–efficiency frontier within the same-protocol regime. 
+
+4.3 Context-Efficiency Frontier 
+
+Figure 3 places PRISM on the accuracy–context plane against representative baselines and ablations spanning the LoCoMo memory-strategy spectrum, from no-retrieval to a managed commercial pipeline. PRISM sits in the upper-left corner: high judge at low context. 
+
+An Order-of-Magnitude Reduction in Context. Compared with Full Context, PRISM achieves a 
+
+13 × context reduction ( ∼26 K → ∼ 2K tokens) with a +35 pp judge gain ( 0.481 → 0.831 ). The two improvements are aligned rather than traded off: structured candidate generation surfaces compact evidence candidates, and content-only re-ranking (N3) filters the bundle by topical relevance. 72K 4K 7K 14K 26K   
+
+> Average context tokens per query (log scale)
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> LLM-judge score  (1540 LoCoMo QA, cat 1 4)
+> Full Context
+> Mem0 Platform
+> PRISM N3
+> MAGMA
+> PRISM
+> 13× context
+> +35pp judge
+> PRISM compresses context by an order of magnitude while remaining on the high-quality frontier
+> PRISM (this work)
+> PRISM ablation
+> External baseline
+
+Figure 3: Accuracy–context trade-off on LoCoMo. Each point is one system; x-axis is average retrieved context tokens per query, y-axis is LLM-judge score. 
+
+Evidence Compression Sets the Corner. 
+
+The orange diamond (PRISM − N3) isolates Evidence Compression’s contribution. With-out N3, PRISM passes the top-10 candidate bundle directly to the answer model, roughly doubling the per-query context while moving judge by less than one point. N3 is therefore the structural reason PRISM sits at the corner of the frontier rather than along its slope; the detailed ablation is reported in §4.4. 
+
+No Same-Protocol Method Matches PRISM’s Budget. MAGMA is fully dominated on this plane, with lower judge at 1.7× the context. The Mem0 commercial platform reaches higher accuracy, but under a different protocol, at ∼3.4× PRISM’s context and roughly one-third its per-1K efficiency. Within the same-protocol regime, no prior method delivers comparable accuracy at PRISM’s context budget. 
+
+4.4 Ablation Study 
+
+Table 2 evaluates four single-flag variants of PRISM: disabling relation paths (N1), query-sensitive edge costs (N2), or LLM re-ranking (N3); and enabling the optional adaptive intent routing (N4). All variants use the same ingest checkpoint, retrieval pipeline, answer prompt, answer model, and judge prompt; only the indicated flag changes. We report LLM-judge accuracy, Evidence Recall@ 5
+
+(ER@ 5), and average answer-side context tokens. Full paired-bootstrap CIs and McNemar mid-p
+
+values are reported in Appendix E.1. 
+
+N3 Is the Main Driver of Both Precision and Compression. Removing the LLM re-ranker is the only ablation that materially changes retrieval quality. ER@ 5 falls from 0.694 to 0.627 (−6.8 pp), with consistent drops across all four categories (multi-hop −9.3, temporal −4.4, open-domain −6.9,single-hop −6.8). The effect is even larger at top-1, where ER@ 1 improves from 0.342 without re-ranking to 0.551 with re-ranking ( +20 .8 pp). Judge accuracy moves only from 0.831 to 0.825 
+
+(paired-bootstrap CI overlapping zero), so Evidence Compression’s primary effect is on which 
+
+evidence reaches the top of the context rather than on final answer accuracy. Disabling N3 also inflates the answer-side context from 2,023 to 4,108 tokens, confirming Evidence Compression as the dominant context-compression component. 
+
+N1 and N2 Are Null on LoCoMo, but Targeted at Bridge-Style Settings. Disabling relation paths or query-sensitive edge costs leaves ER@ 5, judge accuracy, and context length essentially unchanged. We verified that this is not an artefact of the LLM re-ranker masking earlier differences by recomputing ER@ K at the pre-rerank candidate-pool level for K ∈ { 1, 3, 5, 10 , 20 }: PRISM and the corresponding ablations produced bit-identical candidate sets for 1,536 of 1,540 questions (maximum ER@ K difference 0.0007 ). To diagnose this null result, we manually annotated a random sample of 
+
+50 multi-hop questions (full table in Appendix E.2): 72% are fully anchor-discoverable (each gold turn shares a clear topical or named-entity anchor with the question), and only 6% (Wilson 95% CI 
+
+[2 .1% , 16 .5%] ) require the kind of explicit two-hop entity bridge that N1 and N2 are designed to support. Combined with the fact that 73 .4% of category 1–4 questions cite a single evidence entry, the bridging cases that N1/N2 actively target make up ≲ 3% of the benchmark—too small to produce a measurable judge-score delta. The takeaway is that LoCoMo is mostly anchor-discoverable; we expect N1 and N2 to matter more on benchmarks with lexically mismatched multi-hop evidence such as MuSiQue [20] or bridge-style HotpotQA [26]. 
+
+N4 Reduces Classifier-Side LLM Calls at No Accuracy Cost. Adaptive Intent Routing is an optional efficiency extension whose contribution is on the cost axis rather than the accuracy axis. Table 3 reports the routing breakdown: across the 1,540 questions, 42 .3% are dispatched through no-LLM paths ( keyword_gated , prototype , or none ), with judge scores comparable to the LLM path ( 0.829 vs. 0.838 ). Savings concentrate on temporal queries, where 82 .6% match keyword triggers, while only 8–23% of multi-hop, single-hop, and open-domain queries do; the per-category 8Table 2: Component ablation on LoCoMo. Each row changes one flag relative to PRISM; bold marks large deviations from PRISM. 
+
+Judge ER@5 Ctx. 
+
+Configuration Overall Overall Multi-hop Temporal Open-dom. Single-hop Tokens 
+
+PRISM 0.831 0.694 0.456 0.781 0.464 0.766 2,023 
+
+− N1 (relation paths) 0.831 0.694 0.457 0.780 0.468 0.766 2,024 
+
+− N2 (cost adjustment) 0.831 0.694 0.456 0.783 0.459 0.766 2,020 
+
+− N3 (LLM rerank) 0.825 0.627 ⋆ 0.363 ⋆ 0.737 ⋆ 0.395 ⋆ 0.699 ⋆ 4,108 
+
++ N4 (hybrid intent) 0.833 0.694 0.456 0.778 0.464 0.768 2,023 
+
+Table 3: N4 routing breakdown on LoCoMo.                         
+
+> Path Share nJudge LLM
+> kw-gated 32 .2% 496 0.829 No
+> prototype 8.6% 132 0.811 No
+> llm 57 .7% 889 0.838 Yes
+> none 1.5% 23 0.870 No
+> No-LLM 42.3% 651 0.829 —
+
+Table 4: Paired accuracy comparison between PRISM and PRISM+N4. ∆ is in pp.                                          
+
+> Category nPRISM +N4 ∆McN. 95% CI Overall 1540 0.8305 0.8331 +0 .26 0.71 [−0.91 ,+1 .43]
+> Multi-hop 282 0.7872 0.7801 −0.71 0.75 [−3.90 ,+2 .48]
+> Temporal 321 0.7882 0.7882 0.00 0.92 [−3.12 ,+3 .12]
+> Open-domain 96 0.8125 0.8229 +1 .04 0.86 [−4.17 ,+6 .25]
+> Single-hop 841 0.8633 0.8692 +0 .59 0.45 [−0.83 ,+1 .90]
+
+breakdown is reported in Appendix E.3. Whether this 42 .3% saving is statistically free is the subject of Table 4, which compares PRISM against PRISM+N4 on the same questions: the two configurations disagree on only 88 of 1,540 items, yielding ∆ = +0 .26 pp with McNemar mid-p 0.71 and a 95% 
+
+paired bootstrap CI of [−0.91 , +1 .43] pp; all per-category CIs contain zero and all p-values exceed 
+
+0.45 . We therefore do not claim N4 improves accuracy—its role is to remove classifier-side LLM calls while preserving the same accuracy profile. 
+
+Top-5 Is the Operating Elbow. Reducing the rerank pool from top-5 to top-3 (PRISM-top 3) lowers ER@ 5 by 2.3 pp without a measurable change in judge accuracy, supporting top-5 as the operating elbow for Evidence Compression. The complementary answer-model swap to gpt-5.5 is reported in Table 1 and discussed in §4.2 as a different-protocol reference. 
+
+Takeaway. On LoCoMo, PRISM is primarily anchor- and rerank-dominant: dense anchor retrieval finds most relevant evidence, and Evidence Compression compresses the candidate pool into a small focused context without sacrificing accuracy. The graph components provide the structural machinery needed for harder bridge-style settings, but do not measurably affect this mostly single-evidence benchmark. Adaptive Intent Routing further removes a substantial fraction of classifier-side LLM calls without changing the accuracy profile. 
+
+## 5 Conclusion 
+
+We presented PRISM, a training-free retrieval-side framework for long-horizon agent memory. Built on four orthogonal inference-time modules—hierarchical bundle search over typed relation paths, query-sensitive edge-cost adjustment, evidence compression, and adaptive intent routing—PRISM formulates retrieval as a min-cost selection over a graph-structured memory and pairs it with an LLM-side compression step, enabling effective long-horizon question answering at a small fraction of the context cost incurred by full-history replay. Empirical results on the LoCoMo benchmark demonstrate that PRISM achieves a strong balance between answer accuracy and retrieval efficiency, occupying a previously empty corner of the accuracy–context-cost frontier. These results highlight the value of treating long-horizon memory as a joint retrieval–compression problem, and suggest a promising direction for building cost-efficient agents that scale to ever-longer interaction histories. We discuss PRISM’s limitations and broader impacts in Appendix A. 9References 
+
+[1] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge Akkaya, Florencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt, Sam Altman, Shyamal Anadkat, et al. Gpt-4 technical report. arXiv preprint arXiv:2303.08774 , 2023. [2] AI Anthropic. The claude 3 model family: Opus, sonnet, haiku. Claude-3 Model Card , 1(1):4, 2024. [3] Prateek Chhikara, Dev Khant, Saket Aryan, Taranjeet Singh, and Deshraj Yadav. Mem0: Building production-ready ai agents with scalable long-term memory. arXiv preprint arXiv:2504.19413 , 2025. [4] Darren Edge, Ha Trinh, Newman Cheng, Joshua Bradley, Alex Chao, Apurva Mody, Steven Truitt, Dasha Metropolitansky, Robert Osazuwa Ness, and Jonathan Larson. From local to global: A graph rag approach to query-focused summarization. arXiv preprint arXiv:2404.16130 , 2024. [5] Jizhan Fang, Xinle Deng, Haoming Xu, Ziyan Jiang, Yuqi Tang, Ziwen Xu, Shumin Deng, Yunzhi Yao, Mengru Wang, Shuofei Qiao, et al. Lightmem: Lightweight and efficient memory-augmented generation. arXiv preprint arXiv:2510.18866 , 2025. [6] FlowElement-ai. M-flow. https://github.com/FlowElement-ai/m_flow , 2026. GitHub repository. Accessed: 2026-05-06. [7] Dongming Jiang, Yi Li, Guanpeng Li, and Bingzhe Li. Magma: A multi-graph based agentic memory architecture for ai agents. arXiv preprint arXiv:2601.03236 , 2026. [8] Huiqiang Jiang, Qianhui Wu, Chin-Yew Lin, Yuqing Yang, and Lili Qiu. Llmlingua: Compress-ing prompts for accelerated inference of large language models. In Proceedings of the 2023 conference on empirical methods in natural language processing , pages 13358–13376, 2023. [9] Jiazheng Kang, Mingming Ji, Zhe Zhao, and Ting Bai. Memory os of ai agent. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 25972– 25981, 2025. [10] Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. Dense passage retrieval for open-domain question answering. In EMNLP (1) , pages 6769–6781, 2020. [11] Omar Khattab and Matei Zaharia. Colbert: Efficient and effective passage search via contextual-ized late interaction over bert. In Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval , pages 39–48, 2020. [12] Jiaqi Liu, Yaofeng Su, Peng Xia, Siwei Han, Zeyu Zheng, Cihang Xie, Mingyu Ding, and Huaxiu Yao. Simplemem: Efficient lifelong memory for llm agents. arXiv preprint arXiv:2601.02553 ,2026. [13] Nelson F Liu, Kevin Lin, John Hewitt, Ashwin Paranjape, Michele Bevilacqua, Fabio Petroni, and Percy Liang. Lost in the middle: How language models use long contexts. Transactions of the association for computational linguistics , 12:157–173, 2024. [14] Adyasha Maharana, Dong-Ho Lee, Sergey Tulyakov, Mohit Bansal, Francesco Barbieri, and Yuwei Fang. Evaluating very long-term conversational memory of llm agents. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 13851–13870, 2024. [15] Rodrigo Nogueira and Kyunghyun Cho. Passage re-ranking with bert. arXiv preprint arXiv:1901.04085 , 2019. [16] Charles Packer, Vivian Fang, Shishir_G Patil, Kevin Lin, Sarah Wooders, and Joseph_E Gonza-lez. Memgpt: towards llms as operating systems. arXiv preprint arXiv:2310.08560 , 2023. [17] Preston Rasmussen, Pavlo Paliychuk, Travis Beauvais, Jack Ryan, and Daniel Chalef. Zep: a temporal knowledge graph architecture for agent memory. arXiv preprint arXiv:2501.13956 ,2025. 10 [18] Stephen Robertson and Hugo Zaragoza. The probabilistic relevance framework: BM25 and beyond , volume 4. Now Publishers Inc, 2009. [19] Gemini Team, Petko Georgiev, Ving Ian Lei, Ryan Burnell, Libin Bai, Anmol Gulati, Garrett Tanzer, Damien Vincent, Zhufeng Pan, Shibo Wang, et al. Gemini 1.5: Unlocking multimodal understanding across millions of tokens of context. arXiv preprint arXiv:2403.05530 , 2024. [20] Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. Musique: Multihop questions via single-hop question composition. Transactions of the Association for Computational Linguistics , 10:539–554, 2022. [21] Zhongwei Wan, Hui Shen, Xin Wang, Che Liu, Zheda Mai, and Mi Zhang. Meda: Dynamic kv cache allocation for efficient multimodal long-context inference. In Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 1: Long Papers) , pages 2485–2497, 2025. [22] Zhongwei Wan, Xinjian Wu, Yu Zhang, Yi Xin, Chaofan Tao, Zhihong Zhu, Xin Wang, Siqi Luo, Jing Xiong, Longyue Wang, et al. D2o: Dynamic discriminative operations for efficient long-context inference of large language models. arXiv preprint arXiv:2406.13035 , 2024. [23] Zhongwei Wan, Ziang Wu, Che Liu, Jinfa Huang, Zhihong Zhu, Peng Jin, Longyue Wang, and Li Yuan. Look-m: Look-once optimization in kv cache for efficient multimodal long-context inference. In Findings of the Association for Computational Linguistics: EMNLP 2024 , pages 4065–4078, 2024. [24] Xixi Wu, Kuan Li, Yida Zhao, Liwen Zhang, Litu Ou, Huifeng Yin, Zhongwang Zhang, Xinmiao Yu, Dingchu Zhang, Yong Jiang, et al. Resum: Unlocking long-horizon search intelligence via context summarization. arXiv preprint arXiv:2509.13313 , 2025. [25] Wujiang Xu, Zujie Liang, Kai Mei, Hang Gao, Juntao Tan, and Yongfeng Zhang. A-mem: Agentic memory for llm agents. arXiv preprint arXiv:2502.12110 , 2025. [26] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christopher D Manning. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In Proceedings of the 2018 conference on empirical methods in natural language processing , pages 2369–2380, 2018. [27] Yi Yu, Liuyi Yao, Yuexiang Xie, Qingquan Tan, Jiaqi Feng, Yaliang Li, and Libing Wu. Agentic memory: Learning unified long-term and short-term memory management for large language model agents. arXiv preprint arXiv:2601.01885 , 2026. [28] Wanjun Zhong, Lianghong Guo, Qiqi Gao, He Ye, and Yanlin Wang. Memorybank: Enhancing large language models with long-term memory. In Proceedings of the AAAI conference on artificial intelligence , pages 19724–19731, 2024. 11 A Limitations and Broader Impacts 
+
+Limitations. PRISM currently focuses on retrieval-side compression for LLM-based long-horizon conversational memory. Future work can extend the same principle to long agent trajectories involving actions, tool calls, observations, plans, and feedback. Because PRISM is a training-free retrieval-side plug-in over structured memory, it can naturally adapt to richer trajectory-level memory graphs as agent memory pipelines evolve. 
+
+Broader impacts. PRISM may have positive societal impact by reducing the API and serving cost of memory-augmented agents, making long-horizon memory systems more accessible to research groups and applications that cannot afford full-history replay. The main potential negative impact is that PRISM faithfully retrieves evidence stored by the upstream ingestion pipeline; biases, sensitive content, or privacy-relevant information in the underlying memory graph may therefore be reflected in the retrieved context. Deployments should pair PRISM with ingestion-side filtering, access controls, and application-specific privacy and fairness checks. 
+
+## B PRISM Inference Algorithm 
+
+This section provides the full pseudocode for the PRISM inference pipeline referenced in Section 3.7. Algorithm 1 makes explicit the four inference-time modules—N4 adaptive intent routing, N1 typed-path candidate generation under N2 intent-conditioned edge costs, and N3 LLM-side evidence compression—and the equations governing each step. 12 Algorithm 1 PRISM Inference Pipeline 
+
+Require: Query q with embedding q; memory graph G = ( V, E, τ ); layer-specific FAISS indices 
+
+{Fℓ}; path-template set T (§3.3); bundle size K=10 ; rerank size M =5 .
+
+Ensure: Compact answer-side context C of ≤ M Episode summaries.  
+
+> 1:
+
+// N4: adaptive intent routing  
+
+> 2:
+
+h(q) ← KEYWORD GATE (q) ▷ regex triggers; zero LLM calls  
+
+> 3:
+
+if h(q) = ⊥ then  
+
+> 4:
+
+h(q) ← PROTOTYPE MATCH (q, θ proto ) ▷ embedding cosine; zero LLM calls  
+
+> 5:
+
+end if  
+
+> 6:
+
+if h(q) = ⊥ then  
+
+> 7:
+
+h(q) ← LLM CLASSIFY (q) ▷ single classification call  
+
+> 8:
+
+end if  
+
+> 9:
+
+// N1 Phase 1: anchor discovery  
+
+> 10:
+
+A ← S 
+
+> ℓ∈{ Ep ,Fc ,FP ,En }
+
+FAISS TOP K(Fℓ, q) 
+
+> 11:
+
+for each anchor a ∈ A do  
+
+> 12:
+
+d(a) ← 1 − cos( q, ea) ▷ anchor cost  
+
+> 13:
+
+end for  
+
+> 14:
+
+// N1 Phases 2–3: typed path enumeration and costing (N2 inside)  
+
+> 15:
+
+P ← ∅  
+
+> 16:
+
+for each a ∈ A and each template t ∈ T do  
+
+> 17:
+
+for each instantiation π = ( a, e 1, v 1, . . . , e h, Ep) of t do  
+
+> 18:
+
+Cost( π) ← d(a) + Phi=1 
+
+ c0(τ (ei)) · α(τ (ei), h (q)) + chop 
+
+ ▷ Eqs. 2, 4  
+
+> 19:
+
+P ← P ∪ { π} 
+
+> 20:
+
+end for  
+
+> 21:
+
+end for  
+
+> 22:
+
+// N1 Phase 4: bundle assembly via per-Episode minimum  
+
+> 23:
+
+for each Episode Ep reached by some π ∈ P do  
+
+> 24:
+
+s(Ep) ← min π∈Π(Ep) Cost( π) 
+
+> 25:
+
+end for  
+
+> 26:
+
+B ← TOP K({Ep : s(Ep) }ascending , K ) ▷ candidate bundle, |B| = 10  
+
+> 27:
+
+// N3: evidence compression  
+
+> 28:
+
+(Ep (1) , . . . , Ep (M )) ← LLM RERANK (q, B, M ) ▷ single LLM call; content-only prompt  
+
+> 29:
+
+C ← CONCAT (Summary(Ep (1) ), . . . , Summary(Ep (M )))  
+
+> 30:
+
+return C
+
+## C Implementation Details 
+
+This section provides additional implementation details that complement the description in Section 3. 
+
+C.1 Memory Graph Construction 
+
+This section describes the offline ingestion pipeline that converts a raw LoCoMo conversation into the multi-relational memory graph G = ( V, E, τ ) defined in Section 3.2. Ingestion is performed once per conversation and produces a reusable checkpoint. All same-protocol experiments in Table 1 reuse the same ingested graph, so that ablations differ only in retrieval-side configuration. 
+
+Pipeline overview. A conversation is first split into chunks. Each chunk is then processed by a six-stage pipeline: SHA-256 deduplication → LLM-based structured extraction → graph node and edge construction → embedding and FAISS indexing → asynchronous causal consolidation →
+
+checkpoint write. The pipeline is monotonic: once a node or edge is written to G, it is not deleted during ingestion. Identical chunks are skipped through hash-based deduplication. 13 Structured extraction. For each chunk, we issue a single LLM call using gpt-4o-mini with temperature 0.0. The model returns a strongly typed JSON object with five fields. The first field is an Episode summary that covers the events and facts in the chunk. The second is a list of Entities with type labels, such as person, organization, place, concept, event, or other. The third is a list of FacetPoints, where each FacetPoint represents one atomic fact and may carry a related Entity name and a temporal expression. The fourth is a list of Facets, where each Facet groups thematically related FacetPoints by index. The fifth is a list of temporal annotations, normalised to ISO-8601 when explicit; otherwise, the timestamp is resolved by a best-effort absolute-date estimate from the chunk-header conversation time. The extraction prompt is reproduced in Appendix D.1. The output JSON is validated against a Pydantic schema. If validation fails or the output is empty, a fallback extractor produces only the Episode summary and Entity list, which prevents a single malformed chunk from aborting ingestion. 
+
+Node construction and merging. Nodes are inserted layer by layer. Each Episode is added as one node and inserted into a chronological chain according to the chunk-header timestamp. Each Entity is deduplicated against existing Entity nodes using exact name matching followed by cosine similarity over entity-name embeddings; matches above 0.90 are merged into the existing node. Each FacetPoint is added as a fresh node linked back to its Episode and, when a related Entity is available, connected to that Entity through an involves_entity shortcut edge. Each Facet is merged against existing Facets within the same Episode when their embedding cosine similarity exceeds 0.85 ;otherwise, a new Facet node is created and linked to its constituent FacetPoints. The four-layer hierarchy Entity –FacetPoint –Facet –Episode is therefore populated within each chunk, with greedy cross-chunk deduplication applied to the Entity layer and within-Episode merging applied to the Facet layer. 
+
+Hierarchical and relation edges. Hierarchical belongs_to edges are written eagerly during node construction: Entity → FacetPoint → Facet → Episode. Of the five relation edge types defined in Section 3.2, three are written synchronously during the same-chunk build phase, one is deferred to an asynchronous consolidation pass, and one is disabled in the LoCoMo configuration used in our experiments. Specifically, TEMPORAL edges connect FacetPoints whose extracted temporal annotations admit a definite before /after ordering. involves_entity edges are the FacetPoint– Entity shortcut edges described above. EVOLUTION edges connect FacetPoints across chunks that share a related Entity by linking the temporally latest existing FacetPoint of that Entity to the temporally earliest new FacetPoint introduced by the current chunk. Within a chunk, multiple FacetPoints sharing the same Entity are linked pairwise in temporal order. CAUSAL edges are deferred to the asynchronous consolidation pass described next. SEMANTIC edges are defined in our schema as cosine-similarity-based cross-document links between conceptually related Facets, but are disabled by default in the LoCoMo configuration used for our experiments. In early pilot runs, we observed that on conversational data with LoCoMo’s density, similarity-induced semantic edges produced many weak links that increased candidate noise without measurable retrieval gains. We therefore retain the edge type in the graph schema but do not instantiate it during ingestion. We expect SEMANTIC edges to be more useful on denser corpora with richer cross-document conceptual overlap, and leave their re-activation to future work. 
+
+Asynchronous causal consolidation. Every 5 ingested chunks, the pipeline launches an asyn-chronous causal-consolidation pass. The pass collects the 5 most recent Episodes and issues a second LLM call using gpt-4o-mini with temperature 0.0. The model returns a list of 
+
+⟨cause , effect , description , confidence ⟩ tuples. Pairs with confidence below 0.7 are discarded; pairs whose endpoint IDs are missing from the graph or whose corresponding CAUSAL edge already exists are also dropped. Surviving pairs are written as CAUSAL edges, with the LLM-assigned confidence retained as edge metadata. This deferred design lets the model observe a small window of recent Episodes at once, which improves cross-Episode causal precision compared with a single-chunk extraction call, while the confidence floor controls the false-positive rate of LLM-induced causal links. 
+
+Embedding and FAISS indexing. All non-belongs_to edges are embedded together with their text descriptions and registered in one of two FAISS edge indices. SEMANTIC edges, when en-abled, are written to edge_semantic ; TEMPORAL , CAUSAL , EVOLUTION , and involves_entity 
+
+edges are written to edge_relation . In the LoCoMo configuration used for our experiments, 14 edge_semantic is therefore empty, while edge_relation stores the four active relation edge types. Nodes at each of the four hierarchy layers are indexed in their own per-layer FAISS index. All embeddings use all-MiniLM-L6-v2 with dimension d = 384 and L2 normalisation, after which IndexFlatIP inner-product search is equivalent to cosine retrieval. The ingestion and in-dexing hyperparameters, including merge thresholds and consolidation interval, are summarised in Appendix C.3. 
+
+Checkpoint and reuse. The ingestion pipeline persists three artefacts: the typed graph G stored as graph.json , the FAISS indices stored under faiss/ , and the raw chunk text store stored as 
+
+chunks.json . A small bookkeeping file records the set of ingested chunk hashes for deduplication. All experiments in Section 4 reuse a single ingest checkpoint per LoCoMo conversation, ensuring that differences across ablations come from retrieval-side components rather than from graph construction. 
+
+C.2 Path Templates for Hierarchical Bundle Search 
+
+Hierarchical Bundle Search enumerates eight typed path templates, partitioned into a backbone family and a relation-bridge family. Backbone templates traverse only belongs_to edges; the three relation-bridge templates each cross exactly one typed relation edge before re-entering the hierarchy. 
+
+Backbone (5 templates): Ep Fc -> Ep FP -> Fc -> Ep En -> FP -> Fc -> Ep En -> Fc -> Ep Relation-bridge (3 templates): a --temporal--> v -> Ep a --causal----> v -> Ep a --evolution--> v -> Ep 
+
+Here Ep , Fc , FP , and En denote Episode, Facet, FacetPoint, and Entity nodes respectively, and a is the query anchor. Backbone paths capture evidence whose relevance is established by similarity to the anchor; relation-bridge paths surface indirect evidence whose target chunk shares no surface similarity with the query, making them the structural basis for multi-hop and causal question answering. 
+
+C.3 Hyperparameter Configuration 
+
+Table 5 reports the hyperparameter values used for all PRISM experiments. Values were fixed before any test-set evaluation and held constant across all rows of Table 1 and Table 2.                              
+
+> †Combines 18 TEMPORAL triggers ( e.g. ,when ,before ,how long ) and 14 CAUSAL triggers ( e.g. ,why ,because ). ‡Combines
+> 24 generic prototypes and 22 LoCoMo-specific prototypes, distributed across intent labels as TEMPORAL :10 ,CAUSAL :
+> 10 ,MULTI _HOP :14 ,ENTITY _CENTRIC :12 . The prototype path commits a label only when the top-1prototype similarity exceeds θproto and the top-2margin exceeds 0.10 ; otherwise the query falls through to the LLM classifier.
+
+## D Prompts 
+
+For full reproducibility we list the prompts used in PRISM. All prompts are model-agnostic; in our experiments the answer model, the N3 reranker, the N4 LLM-fallback classifier, and the LLM judge all use gpt-4o-mini at temperature =0.0. The answer and judge prompts follow the answer-then-judge protocol used in the public Mem0 memory-benchmarks LoCoMo evaluation [ 3], adapted with project-specific instructions. All prompts are reproduced verbatim below; {...} denotes runtime template fields. 
+
+D.1 Schema-Guided Extraction Prompts 
+
+The ingestion pipeline (Appendix C.1) applies two LLM-side prompts: one to extract the four-layer hierarchy (Episode, Facet, FacetPoint, Entity) together with temporal annotations from each conversation chunk, and one to infer causal edges from a list of episode summaries. 15 Table 5: Hyperparameter configuration for PRISM. All values are fixed across LoCoMo categories 1– 4 and held identical across the same-protocol rows of Table 1. 
+
+Module Parameter Value 
+
+Ingestion and Indexing 
+
+Embedding model all-MiniLM-L6-v2 
+
+Embedding dimension d 384 
+
+Vector index FAISS ( IndexFlatIP , L2-normalised) Entity merge threshold 0.90 
+
+Facet merge threshold 0.85 
+
+Causal consolidation interval 5 chunks 
+
+N1: Hierarchical Bundle Search 
+
+FAISS top-k (all four layers) 30 
+
+Hop penalty chop 0.05 
+
+Bundle size K 10 
+
+N2: Query-Sensitive Edge Cost (Eq. 4) 
+
+In-recall edge cost 1 − cos( ee, q)
+
+Edge-miss fallback c0(BELONGS _TO ) 0.02 
+
+Edge-miss fallback c0(SEMANTIC ) 0.90 
+
+Edge-miss fallback c0(TEMPORAL ) 0.90 
+
+Edge-miss fallback c0(CAUSAL ) 0.90 
+
+Edge-miss fallback c0(EVOLUTION ) 0.90 
+
+Discount α (matched, τ ∈ { TEMPORAL , CAUSAL }) 0.5
+
+Discount α (EVOLUTION under TEMPORAL intent) 0.7
+
+Discount α (otherwise) 1.0
+
+N3: Evidence Compression 
+
+Rerank model gpt-4o-mini 
+
+Rerank temperature 0.0
+
+Rerank size M 5
+
+Snippet truncation 400 chars 
+
+N4: Adaptive Intent Routing 
+
+Keyword bank size † 32 
+
+Prototype bank size ‡ 46 
+
+Prototype confidence threshold θproto 0.55 
+
+Prototype top-2 margin 0.10 
+
+LLM fallback model gpt-4o-mini 
+
+Answer / Judge 
+
+Answer model (default) gpt-4o-mini 
+
+Answer temperature 0.0
+
+Judge model gpt-4o-mini 
+
+Judge temperature 0.0
+
+Random seed 42 
+
+Hierarchy and Temporal Extraction. This prompt produces the Episode summary, Entity nodes, FacetPoint nodes, Facet groupings, and temporal annotations attached to each chunk. Output is constrained to a strict JSON schema; no markdown or commentary is permitted. 
+
+> You are an information extraction engine. Task: Extract structured memory data from the text chunk below. Text chunk: {chunk} Return a single JSON object with exactly these top-level keys: - episode_summary: string - entities: array of objects - facet_points: array of objects - facets: array of objects - temporal_info: array of objects Schema details:
+
+16 1) episode_summary - A concise but comprehensive summary of ALL events and facts mentioned in the chunk. Include specific details like names, dates, places, objects, and quantities. 2) entities - Each item must be: {"name": string, "entity_type": string} - entity_type should be one of: "person", "organization", "place", "concept", "event", "other". - Keep names as they appear in the text whenever possible. - Include specific items mentioned (books, foods, activities, pets, places visited, etc.) as entities with type "concept" or "other". 3) facet_points - Each item must be: {"content": string, "related_entity_name": string or null, "timestamp_text": string or null} - content should be atomic and factual. - IMPORTANT: Be specific. Include concrete details like exact names, quantities, colors, and descriptions. Good: "Melanie made a cup in her pottery class" Bad : "Melanie does pottery" Good: "Caroline recommended the book Becoming Nicole to Melanie" Bad : "Caroline recommended a book" - Extract every distinct fact as a separate facet_point. Do not merge multiple facts into one. 4) facets - Each item must be: {"theme": string, "facet_point_indices": array of integers} - facet_point_indices refers to zero-based indices in the facet_points array. 5) temporal_info - Each item must be: {"subject": string, "time_expression": string, "normalized_time": string or null, "relation": string} - relation examples: "before", "after", "during", "at". - normalized_time should use ISO-8601 when explicit enough, otherwise null. - For relative time references (e.g., "yesterday", "last week"), use the conversation timestamp shown in the chunk header to compute an absolute date for normalized_time. Rules: - Output valid JSON only. No markdown fences, no explanation text. - If information is missing, use empty arrays or null values as appropriate. - Do not invent unsupported facts. - Prefer extracting MORE facet_points with specific details over fewer generic ones. 
+
+Causal Edge Induction. After Episode-level extraction, a second prompt operates on a list of episode summaries to populate the CAUSAL relation edges of G. Each induced edge carries an LLM-assigned confidence score in [0 , 1] , retained as edge metadata. 
+
+You are a causal reasoning engine. Task: Given a list of episode summaries, identify likely causal relations. Events: {events} Return a single JSON object with exactly one top-level key: - causal_pairs: array of objects Each causal_pairs item must be: {"cause_id": string, "effect_id": string, "description": string, "confidence": number} Rules: - cause_id and effect_id must refer to event IDs provided in the input. 
+
+17 - confidence must be between 0.0 and 1.0. - Keep descriptions concise and evidence-aware. - Only include relations with meaningful support from the provided events. - Output valid JSON only. No markdown fences, no explanation text. - If no reliable causal relation exists, return: {"causal_pairs": []}. 
+
+D.2 N3 Reranker Prompt 
+
+The N3 module (Eq. 6) is implemented as a score-then-select pipeline: the LLM is asked to assign a relevance score in [0 , 10] to each candidate Episode summary, after which the top-M scoring Episodes are selected deterministically. The prompt is content-only—it sees Episode summaries but receives neither path-cost scores nor bundle metadata—so its judgement is independent of the structural signal that produced the candidate bundle. Each Episode summary is truncated to the first 400 characters before being shown to the reranker, keeping the prompt length bounded for typical bundle sizes ( K = 10 ). Output is constrained to a JSON array of (index, score) pairs; the deterministic selection of the top-M Episodes is performed by post-processing in our retrieval layer. 
+
+Rate the relevance of each memory snippet to the question on a scale of 0-10. Question: {question} Snippets: {snippets} Return a JSON array of objects, each with "index" (integer) and "score" (0-10). Example: [{"index": 0, "score": 9}, {"index": 1, "score": 2}] Return ONLY the JSON array, no other text. 
+
+When the bundle size satisfies |B| ≤ M , this stage is skipped and all candidates are forwarded to the answer model unchanged; reranking is only invoked when the candidate bundle exceeds the answer-side budget. 
+
+D.3 Answer and LLM-Judge Prompts 
+
+The answer model receives the top-M Episode summaries selected by N3 (Eq. 6) and produces a free-form answer; the LLM judge then compares this answer to the gold reference and emits a binary CORRECT/WRONG label. Both prompts are project-specific and follow the answer-then-judge style of the public Mem0 memory-benchmarks LoCoMo evaluation. 
+
+Answer Prompt. 
+
+You are a helpful assistant answering questions based on the provided context. Context: {context} Question: {question} Instructions: 1. Answer the question using the provided context. Be specific and cite concrete details from the context. 2. For time-related questions, follow these steps: Step 1: Find the conversation date from the header (e.g., [1:56 pm on 8 May, 2023] means the conversation date is 8 May 2023). Step 2: Identify the relative time expression (e.g., "yesterday", "last week", "last Saturday"). Step 3: Calculate the actual date. "yesterday" = conversation date minus 1 day. "last week" = approximately 7 days before. "last Saturday" = the most recent Saturday before the conversation date. "next month" = the month after the conversation month. Step 4: State the calculated date in your answer. 3. When multiple events of the same type exist (e.g., multiple 
+
+18 camping trips, multiple beach visits), distinguish between them using their dates. 4. Prefer quoting specific details (names, dates, objects, places) from the context over paraphrasing. 5. If the context contains partial but relevant information, provide the best answer you can. 6. Only say you cannot answer if the context truly contains NO relevant information at all. Answer: 
+
+LLM-as-a-Judge Prompt. 
+
+You are an evaluation judge. Compare the generated answer with the gold answer and determine if the generated answer is correct. Be lenient with format differences. For example: - "May 7th" and "7 May" are the same date -> CORRECT - "Caesar salad" and "She ordered a Caesar salad" -> CORRECT (same meaning) - Partial but accurate answers are CORRECT Question: {question} Gold answer: {gold_answer} Generated answer: {generated_answer} First, provide a short (one sentence) explanation of your reasoning, then finish with CORRECT or WRONG. Return your response in JSON format: {"reasoning": "your explanation", "label": "CORRECT or WRONG"} 
+
+D.4 Adaptive Intent Routing LLM Prompt 
+
+This is the prompt used by the third-tier LLM fallback in the Adaptive Intent Routing cascade (Eq. 7), invoked only when both the keyword-gated and prototype-matching tiers return no confident label. The prompt asks the LLM to score each of the four intent types independently in [0 , 1] ;the downstream routing layer then thresholds these scores and applies the MULTI _HOP -suppresses-
+
+ENTITY _CENTRIC rule described in §3.6, with GENERAL assigned when no score exceeds the routing threshold. 
+
+System Prompt. 
+
+You are an intent classifier for a memory retrieval system. Your job is to analyze a user’s query and estimate how strongly it expresses each of four intent types. Output only valid JSON. Do not add commentary. 
+
+User Prompt Template. 
+
+Analyze the intent of the following query. A query may express multiple intents simultaneously. Query: {query} Intent types and what counts as a signal for each: 1. temporal -- The query asks about WHEN something happened, time ordering, duration, or sequence of events. Signals: "when", "before", "after", "during", "how long", "what year", explicit dates, or asking about the timing of events relative to each other. 2. causal -- The query asks WHY something happened, what caused it, or what led to an outcome. Signals: "why", "because", "what caused", "what led to", "as a result of", or asking about reasons, motivations, or consequences. 3. multi_hop -- The query requires combining facts from multiple separate events, interactions, or contexts to answer. A single-fact lookup is NOT multi_hop. Signals: "based on X and Y", "how does X relate to Y", "given that ... what ...", "combining these conversations", "across multiple sessions", asking about trends/patterns/shifts across time, or asking for 
+
+19 inferences that require connecting separate pieces of information. Also includes hypothetical, predictive, or inference-requiring questions where the answer must be derived rather than directly retrieved -- even when the subject is a named person, the inference requirement makes this multi_hop, NOT entity_centric. 4. entity_centric -- The query asks about a specific attribute, description, or property of a person, place, or thing that can be looked up as a stored fact. Signals: "who is", "what does X look like", "where does X live", "what is X’s job", or asking to retrieve a single concrete fact about a named entity. NOTE: if answering requires inference or reasoning across multiple facts rather than a direct lookup, score multi_hop higher than entity_centric. Rules: - Score each intent independently on a scale of 0.0 to 1.0. - Multiple intents can score high at once (e.g., a query can be both temporal and multi_hop). - If the query clearly expresses no recognizable intent, all four scores should be low (< 0.3). - For vague conversational continuations ("Tell me more", "Continue", "Go on"), all scores should be 0.0 -- do not guess at entity or any other intent. - Prefer 0.0 / 0.3 / 0.6 / 0.9 as anchor points when in doubt. Output format (JSON object, no other text): {"temporal": 0.X, "causal": 0.X, "multi_hop": 0.X, "entity_centric": 0.X} 
+
+## E Statistical and Diagnostic Analyses 
+
+This section provides the statistical and diagnostic analyses referenced in Section 4.4: full paired-bootstrap confidence intervals for every ablation row (§E.1); the manual annotation study used to diagnose the null result of the relation paths (N1) and edge costs (N2) on LoCoMo (§E.2); and the per-category routing distribution of the optional adaptive intent routing module (N4) (§E.3). 
+
+E.1 Full Paired-Bootstrap Confidence Intervals 
+
+We report paired-bootstrap 95% confidence intervals and McNemar mid-p values for every ablation row in Table 2, computed against PRISM on the same 1,540 LoCoMo cat 1–4 QA. CIs are obtained with 2,000 paired resamples (seed = 42 ); McNemar is two-sided mid-p. Each row reports the discordant counts (b, c ), where b is the number of QA on which PRISM is correct and the variant is wrong, and c is the converse. As shown in Table 6, all four ablations produce judge-score CIs that include zero, indicating that none reaches statistical significance at α = 0 .05 on the judge metric; −N3 shows the largest absolute judge-score gap ( −0.58 pp) but remains well within bootstrap noise. The component-level effects of −N3 reported in Table 2—a −6.8 pp drop in ER@ 5 and a 
+
++2 ,085 -token increase in answer-side context—therefore correspond to changes in which evidence reaches the top of the context and how much context is forwarded to the answer model, rather than to a measurable shift in the binary judge label. 
+
+Table 6: Full paired-bootstrap 95% CIs and McNemar mid-p values for the four ablations of Table 2, computed against PRISM on 1,540 LoCoMo cat 1–4 QA. ∆ is in percentage points (variant minus PRISM); b and c are the discordant counts. None of the four CIs excludes zero on judge accuracy. 
+
+Variant b c ∆ Judge (pp) McNemar mid-p 95% CI (pp) 
+
+−N1 (no relation paths) 43 43 0.00 0.957 [−1.17 , +1 .23] 
+
+−N2 (no cost adjustment) 49 50 +0 .06 0.960 [−1.23 , +1 .30] 
+
+−N3 (no LLM rerank) 76 67 −0.58 0.479 [−2.08 , +0 .91] +N4 (hybrid intent) 42 46 +0 .26 0.711 [−0.91 , +1 .43] 
+
+20 E.2 Multi-Hop Annotation Study 
+
+To diagnose why the relation-paths and edge-cost components (N1, N2) produce a null result on LoCoMo (§4.4), we manually annotated a random sample of 50 multi-hop questions from the 282 
+
+multi-hop QAs in categories 1–4. 
+
+Sampling. We restrict the population to multi-hop questions because single-hop and open-domain categories are structurally inapplicable to N1 and N2 by design. Of the 282 multi-hop QAs in cat 1–4, we drew a uniform random sample of 50 without replacement, with seed = 42 fixed before any analysis. 
+
+Labelling Criteria. For each sampled question (q, A q , E q ), where Eq is the gold evidence list, two annotators independently labelled it along two axes: • Anchor-discoverable : every gold evidence turn e ∈ Eq shares either a named entity or a topical keyword with the question q.• Bridge-style : at least two gold turns e1, e 2 ∈ Eq are connected only by a shared intermediate 
+
+entity z that does not appear in q—the canonical two-hop bridge that N1’s relation-bridge paths and N2’s causal/temporal discounts target. Disagreements were resolved by discussion. Following the LoCoMo convention, each list entry of 
+
+evidence counts as one citation; semicolon-joined compound dia-IDs ( ≈ 2% of entries) are treated as a single citation per dataset convention. 
+
+Results. 36 of 50 (72% ) questions are fully anchor-discoverable. Only 3 of 50 (6% , Wilson 95% 
+
+CI [2 .1% , 16 .5%] ) require the two-hop bridge structure that N1 and N2 are designed to support. Ex-trapolating to the full 282 -question multi-hop subset, the bridging cases correspond to approximately 
+
+17 of 282 multi-hop QAs ( 95% CI [6 , 47] ), or ≲ 3% of the full 1,540 benchmark. 
+
+Population Context. A separate count over the full 1,540 cat 1–4 questions shows that 73 .4% 
+
+cite a single evidence entry and therefore admit no cross-turn bridge by construction; the 50 -QA bridging analysis above operates within the remaining 26 .6% multi-evidence subset. Together, these counts indicate that LoCoMo cat 1–4 is a mostly anchor-discoverable benchmark and that the null result for N1 and N2 reflects benchmark structure rather than a defect of the modules themselves; we expect both modules to contribute on benchmarks with lexically mismatched multi-hop evidence such as MuSiQue [20] or bridge-style HotpotQA [26]. 
+
+E.3 Per-Category Routing Distribution of N4 
+
+Figure 4 shows the per-category routing distribution of Adaptive Intent Routing (N4) across the four LoCoMo question types, complementing the aggregate breakdown in Table 3. The savings discussed in §4.4 are highly non-uniform: temporal queries route through keyword gating in 82 .6% of cases (the keyword bank includes when , before , how long , and related triggers), while only 8–23% of multi-hop, single-hop, and open-domain queries match a keyword trigger; the latter three categories therefore fall back to the LLM classifier in 62 –77% of queries. The dashed annotation marks the overall no-LLM rate of 42 .3% across the 1,540 QA. This per-category profile is consistent with the no-accuracy-cost claim of Table 4: the categories where N4 saves most LLM calls (temporal) are also the categories whose intent labels are most easily recovered without LLM inference. 21 Multi-hop              
+
+> (n=282)
+> Temporal
+> (n=321)
+> Open-domain
+> (n=96)
+> Single-hop
+> (n=841)
+> 0
+> 25
+> 50
+> 75
+> 100
+> % of queries within category
+> 22.8% free 85.7% free 37.6% free 32.8% free
+> overall free rate = 42.3%
+> 8.2%
+> 82.6%
+> 16.7% 22.8%
+> 13.5%
+> 18.8% 8.1%
+> 77.3%
+> 14.3%
+> 62.5% 67.2%
+> keyword-gated (free) prototype (free) no hint (free) LLM (paid: 1 LLM call)
+
+Figure 4: Per-category routing distribution of Adaptive Intent Routing (N4) on LoCoMo cat 1–4. Each bar shows the share of queries dispatched through each routing path. The keyword_gated ,
+
+prototype , and none paths incur zero LLM calls; only the LLM path incurs one classifier-side LLM call per query. The annotation marks the overall no-LLM rate of 42 .3% .
+
+## NeurIPS Paper Checklist 
+
+1. Claims 
+
+Question: Do the main claims made in the abstract and introduction accurately reflect the paper’s contributions and scope? Answer: [Yes] Justification: The abstract and Section 1 state two scoped claims—that PRISM is a training-free retrieval-side framework, and that it occupies a previously underserved high-accuracy / low-context-cost region of the LoCoMo frontier—both of which are supported by the experiments in Section 4 (Table 1 and Figure 3). Guidelines: • The answer [N/A] means that the abstract and introduction do not include the claims made in the paper. • The abstract and/or introduction should clearly state the claims made, including the contributions made in the paper and important assumptions and limitations. A [No] or [N/A] answer to this question will not be perceived well by the reviewers. • The claims made should match theoretical and experimental results, and reflect how much the results can be expected to generalize to other settings. • It is fine to include aspirational goals as motivation as long as it is clear that these goals are not attained by the paper. 2. Limitations 
+
+Question: Does the paper discuss the limitations of the work performed by the authors? Answer: [Yes] Justification: The limitations are discussed in Appendix A. Guidelines: • The answer [N/A] means that the paper has no limitation while the answer [No] means that the paper has limitations, but those are not discussed in the paper. • The authors are encouraged to create a separate “Limitations” section in their paper. • The paper should point out any strong assumptions and how robust the results are to violations of these assumptions (e.g., independence assumptions, noiseless settings, model well-specification, asymptotic approximations only holding locally). The authors 22 should reflect on how these assumptions might be violated in practice and what the implications would be. • The authors should reflect on the scope of the claims made, e.g., if the approach was only tested on a few datasets or with a few runs. In general, empirical results often depend on implicit assumptions, which should be articulated. • The authors should reflect on the factors that influence the performance of the approach. For example, a facial recognition algorithm may perform poorly when image resolution is low or images are taken in low lighting. Or a speech-to-text system might not be used reliably to provide closed captions for online lectures because it fails to handle technical jargon. • The authors should discuss the computational efficiency of the proposed algorithms and how they scale with dataset size. • If applicable, the authors should discuss possible limitations of their approach to address problems of privacy and fairness. • While the authors might fear that complete honesty about limitations might be used by reviewers as grounds for rejection, a worse outcome might be that reviewers discover limitations that aren’t acknowledged in the paper. The authors should use their best judgment and recognize that individual actions in favor of transparency play an impor-tant role in developing norms that preserve the integrity of the community. Reviewers will be specifically instructed to not penalize honesty concerning limitations. 3. Theory assumptions and proofs 
+
+Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof? Answer: [N/A] Justification: The paper does not include theoretical results requiring proof; the min-cost retrieval formulation in Section 3 is a design choice rather than a theorem, and all of its components (Eqs. 1–7) are stated constructively. Guidelines: • The answer [N/A] means that the paper does not include theoretical results. • All the theorems, formulas, and proofs in the paper should be numbered and cross-referenced. • All assumptions should be clearly stated or referenced in the statement of any theorems. • The proofs can either appear in the main paper or the supplemental material, but if they appear in the supplemental material, the authors are encouraged to provide a short proof sketch to provide intuition. • Inversely, any informal proof provided in the core of the paper should be complemented by formal proofs provided in appendix or supplemental material. • Theorems and Lemmas that the proof relies upon should be properly referenced. 4. Experimental result reproducibility 
+
+Question: Does the paper fully disclose all the information needed to reproduce the main ex-perimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)? Answer: [Yes] Justification: Section 4.1 describes the LoCoMo evaluation protocol; Algorithm 1 gives the full PRISM inference pipeline; Appendix C.1 documents the ingestion-time memory graph construction; Appendix C.3 lists every hyperparameter (with seed); and Appendix D reproduces all four prompts (N3 reranker, N4 fallback classifier, answer model, LLM judge) verbatim. Guidelines: • The answer [N/A] means that the paper does not include experiments. • If the paper includes experiments, a [No] answer to this question will not be perceived well by the reviewers: Making the paper reproducible is important, regardless of whether the code and data are provided or not. 23 • If the contribution is a dataset and/or model, the authors should describe the steps taken to make their results reproducible or verifiable. • Depending on the contribution, reproducibility can be accomplished in various ways. For example, if the contribution is a novel architecture, describing the architecture fully might suffice, or if the contribution is a specific model and empirical evaluation, it may be necessary to either make it possible for others to replicate the model with the same dataset, or provide access to the model. In general. releasing code and data is often one good way to accomplish this, but reproducibility can also be provided via detailed instructions for how to replicate the results, access to a hosted model (e.g., in the case of a large language model), releasing of a model checkpoint, or other means that are appropriate to the research performed. • While NeurIPS does not require releasing code, the conference does require all submis-sions to provide some reasonable avenue for reproducibility, which may depend on the nature of the contribution. For example (a) If the contribution is primarily a new algorithm, the paper should make it clear how to reproduce that algorithm. (b) If the contribution is primarily a new model architecture, the paper should describe the architecture clearly and fully. (c) If the contribution is a new model (e.g., a large language model), then there should either be a way to access this model for reproducing the results or a way to reproduce the model (e.g., with an open-source dataset or instructions for how to construct the dataset). (d) We recognize that reproducibility may be tricky in some cases, in which case authors are welcome to describe the particular way they provide for reproducibility. In the case of closed-source models, it may be that access to the model is limited in some way (e.g., to registered users), but it should be possible for other researchers to have some path to reproducing or verifying the results. 5. Open access to data and code 
+
+Question: Does the paper provide open access to the data and code, with sufficient instruc-tions to faithfully reproduce the main experimental results, as described in supplemental material? Answer: [No] Justification: The LoCoMo benchmark used for evaluation is publicly available [ 14 ]; PRISM’s source code is not released with the submission to preserve double-blind review, but the paper provides full algorithmic specification (Algorithm 1), all hyperparameters (Appendix C.3), and verbatim prompts (Appendix D). We will release the code under an open-source license upon acceptance. Guidelines: • The answer [N/A] means that paper does not include experiments requiring code. • Please see the NeurIPS code and data submission guidelines ( https://neurips.cc/ public/guides/CodeSubmissionPolicy ) for more details. • While we encourage the release of code and data, we understand that this might not be possible, so [No] is an acceptable answer. Papers cannot be rejected simply for not including code, unless this is central to the contribution (e.g., for a new open-source benchmark). • The instructions should contain the exact command and environment needed to run to reproduce the results. See the NeurIPS code and data submission guidelines ( https: //neurips.cc/public/guides/CodeSubmissionPolicy ) for more details. • The authors should provide instructions on data access and preparation, including how to access the raw data, preprocessed data, intermediate data, and generated data, etc. • The authors should provide scripts to reproduce all experimental results for the new proposed method and baselines. If only a subset of experiments are reproducible, they should state which ones are omitted from the script and why. • At submission time, to preserve anonymity, the authors should release anonymized versions (if applicable). 24 • Providing as much information as possible in supplemental material (appended to the paper) is recommended, but including URLs to data and code is permitted. 6. Experimental setting/details 
+
+Question: Does the paper specify all the training and test details (e.g., data splits, hyperpa-rameters, how they were chosen, type of optimizer) necessary to understand the results? Answer: [Yes] Justification: Section 4.1 specifies the dataset (LoCoMo categories 1–4), the evaluation protocol (answer-then-judge with LLM judge), and the answer/judge models. Appendix C.3 (Table 5) reports every hyperparameter, including FAISS top-k, bundle size K=10 , rerank size M =5 , edge-cost discount factors, intent-routing thresholds, and the random seed; values were fixed before any test-set evaluation. PRISM is training-free, so no optimizer or training schedule applies. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The experimental setting should be presented in the core of the paper to a level of detail that is necessary to appreciate the results and make sense of them. • The full details can be provided either with the code, in appendix, or as supplemental material. 7. Experiment statistical significance 
+
+Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments? Answer: [Yes] Justification: Statistical significance for both Table 1 (main results) and Table 2 (ablations) is reported via paired-bootstrap 95% confidence intervals on the per-question judge-score difference, computed against PRISM on the same 1,540 LoCoMo cat 1–4 QA pairs; full intervals and the bootstrap procedure are given in Appendix E.1. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The authors should answer [Yes] if the results are accompanied by error bars, confidence intervals, or statistical significance tests, at least for the experiments that support the main claims of the paper. • The factors of variability that the error bars are capturing should be clearly stated (for example, train/test split, initialization, random drawing of some parameter, or overall run with given experimental conditions). • The method for calculating the error bars should be explained (closed form formula, call to a library function, bootstrap, etc.) • The assumptions made should be given (e.g., Normally distributed errors). • It should be clear whether the error bar is the standard deviation or the standard error of the mean. • It is OK to report 1-sigma error bars, but one should state it. The authors should preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis of Normality of errors is not verified. • For asymmetric distributions, the authors should be careful not to show in tables or figures symmetric error bars that would yield results that are out of range (e.g., negative error rates). • If error bars are reported in tables or plots, the authors should explain in the text how they were calculated and reference the corresponding figures or tables in the text. 8. Experiments compute resources 
+
+Question: For each experiment, does the paper provide sufficient information on the com-puter resources (type of compute workers, memory, time of execution) needed to reproduce the experiments? Answer: [No] 25 Justification: The paper does not include a dedicated compute-budget section, but all reported experiments are CPU-only on a single commodity machine (FAISS IndexFlatIP retrieval and graph traversal; no GPU is required), with all LLM calls served via the OpenAI API. The total OpenAI API cost for a full LoCoMo evaluation pass—answer model, LLM judge, N3 reranker, and N4 fallback classifier combined—falls in the low tens to low hundreds of US dollars at gpt-4o-mini pricing. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The paper should indicate the type of compute workers CPU or GPU, internal cluster, or cloud provider, including relevant memory and storage. • The paper should provide the amount of compute required for each of the individual experimental runs as well as estimate the total compute. • The paper should disclose whether the full research project required more compute than the experiments reported in the paper (e.g., preliminary or failed experiments that didn’t make it into the paper). 9. Code of ethics 
+
+Question: Does the research conducted in the paper conform, in every respect, with the NeurIPS Code of Ethics https://neurips.cc/public/EthicsGuidelines ?Answer: [Yes] Justification: The work uses only a publicly released benchmark (LoCoMo) and proprietary API models, involves no human subjects, releases no new data or models, and does not pose foreseeable misuse risks beyond those of the underlying LLMs; we have reviewed the NeurIPS Code of Ethics and confirm conformance. Guidelines: • The answer [N/A] means that the authors have not reviewed the NeurIPS Code of Ethics. • If the authors answer [No], they should explain the special circumstances that require a deviation from the Code of Ethics. • The authors should make sure to preserve anonymity (e.g., if there is a special consid-eration due to laws or regulations in their jurisdiction). 10. Broader impacts 
+
+Question: Does the paper discuss both potential positive societal impacts and negative societal impacts of the work performed? Answer: [Yes] Justification: The broader impacts are discussed in Appendix A. Guidelines: • The answer [N/A] means that there is no societal impact of the work performed. • If the authors answer [N/A] or [No], they should explain why their work has no societal impact or why the paper does not address societal impact. • Examples of negative societal impacts include potential malicious or unintended uses (e.g., disinformation, generating fake profiles, surveillance), fairness considerations (e.g., deployment of technologies that could make decisions that unfairly impact specific groups), privacy considerations, and security considerations. • The conference expects that many papers will be foundational research and not tied to particular applications, let alone deployments. However, if there is a direct path to any negative applications, the authors should point it out. For example, it is legitimate to point out that an improvement in the quality of generative models could be used to generate Deepfakes for disinformation. On the other hand, it is not needed to point out that a generic algorithm for optimizing neural networks could enable people to train models that generate Deepfakes faster. • The authors should consider possible harms that could arise when the technology is being used as intended and functioning correctly, harms that could arise when the technology is being used as intended but gives incorrect results, and harms following from (intentional or unintentional) misuse of the technology. 26 • If there are negative societal impacts, the authors could also discuss possible mitigation strategies (e.g., gated release of models, providing defenses in addition to attacks, mechanisms for monitoring misuse, mechanisms to monitor how a system learns from feedback over time, improving the efficiency and accessibility of ML). 11. Safeguards 
+
+Question: Does the paper describe safeguards that have been put in place for responsible release of data or models that have a high risk for misuse (e.g., pre-trained language models, image generators, or scraped datasets)? Answer: [N/A] Justification: PRISM is a retrieval-side framework over an existing memory graph; the paper releases neither pre-trained models, generative systems, nor scraped datasets, so no safeguards of this kind apply. Guidelines: • The answer [N/A] means that the paper poses no such risks. • Released models that have a high risk for misuse or dual-use should be released with necessary safeguards to allow for controlled use of the model, for example by requiring that users adhere to usage guidelines or restrictions to access the model or implementing safety filters. • Datasets that have been scraped from the Internet could pose safety risks. The authors should describe how they avoided releasing unsafe images. • We recognize that providing effective safeguards is challenging, and many papers do not require this, but we encourage authors to take this into account and make a best faith effort. 12. Licenses for existing assets 
+
+Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected? Answer: [Yes] Justification: The LoCoMo benchmark [ 14 ] is cited at every use site and is consumed under its publicly released terms; the all-MiniLM-L6-v2 sentence encoder is used unmodified under its original Apache-2.0 license; FAISS is used under MIT; and the gpt-4o-mini 
+
+model is accessed through the OpenAI API in accordance with OpenAI’s terms of service. Guidelines: • The answer [N/A] means that the paper does not use existing assets. • The authors should cite the original paper that produced the code package or dataset. • The authors should state which version of the asset is used and, if possible, include a URL. • The name of the license (e.g., CC-BY 4.0) should be included for each asset. • For scraped data from a particular source (e.g., website), the copyright and terms of service of that source should be provided. • If assets are released, the license, copyright information, and terms of use in the package should be provided. For popular datasets, paperswithcode.com/datasets 
+
+has curated licenses for some datasets. Their licensing guide can help determine the license of a dataset. • For existing datasets that are re-packaged, both the original license and the license of the derived asset (if it has changed) should be provided. • If this information is not available online, the authors are encouraged to reach out to the asset’s creators. 13. New assets 
+
+Question: Are new assets introduced in the paper well documented and is the documentation provided alongside the assets? Answer: [N/A] 27 Justification: The submission does not release any new assets; PRISM is described algo-rithmically in Section 3 and Algorithm 1, and code release is deferred to acceptance (see Q5). Guidelines: • The answer [N/A] means that the paper does not release new assets. • Researchers should communicate the details of the dataset/code/model as part of their submissions via structured templates. This includes details about training, license, limitations, etc. • The paper should discuss whether and how consent was obtained from people whose asset is used. • At submission time, remember to anonymize your assets (if applicable). You can either create an anonymized URL or include an anonymized zip file. 14. Crowdsourcing and research with human subjects 
+
+Question: For crowdsourcing experiments and research with human subjects, does the paper include the full text of instructions given to participants and screenshots, if applicable, as well as details about compensation (if any)? Answer: [N/A] Justification: The paper does not involve crowdsourcing or research with human subjects. The multi-hop annotation study in Appendix E.2 was conducted by the authors themselves on a public benchmark (LoCoMo); the labelling criteria are stated in full in that section, and no external annotators or compensated participants were involved. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Including this information in the supplemental material is fine, but if the main contribu-tion of the paper involves human subjects, then as much detail as possible should be included in the main paper. • According to the NeurIPS Code of Ethics, workers involved in data collection, curation, or other labor should be paid at least the minimum wage in the country of the data collector. 15. Institutional review board (IRB) approvals or equivalent for research with human subjects 
+
+Question: Does the paper describe potential risks incurred by study participants, whether such risks were disclosed to the subjects, and whether Institutional Review Board (IRB) approvals (or an equivalent approval/review based on the requirements of your country or institution) were obtained? Answer: [N/A] Justification: The paper does not involve research with human subjects (see Q14), so IRB approval is not applicable. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Depending on the country in which research is conducted, IRB approval (or equivalent) may be required for any human subjects research. If you obtained IRB approval, you should clearly state this in the paper. • We recognize that the procedures for this may vary significantly between institutions and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the guidelines for their institution. • For initial submissions, do not include any information that would break anonymity (if applicable), such as the institution conducting the review. 16. Declaration of LLM usage 
+
+28 Question: Does the paper describe the usage of LLMs if it is an important, original, or non-standard component of the core methods in this research? Note that if the LLM is used only for writing, editing, or formatting purposes and does not impact the core methodology, scientific rigor, or originality of the research, declaration is not required. Answer: [Yes] Justification: LLMs are an integral component of PRISM’s core method: gpt-4o-mini 
+
+is used in the N3 Evidence Compression module (§3.5), as the LLM-fallback tier of N4 Adaptive Intent Routing (§3.6), as the answer model, and as the LLM judge; the correspond-ing prompts, models, and temperatures are documented in Table 5 and Appendix D. LLM assistance was additionally used during writing for editing, polishing, and drafting checklist responses; this assistance did not affect the core methodology or empirical results. Guidelines: • The answer [N/A] means that the core method development in this research does not involve LLMs as any important, original, or non-standard components. • Please refer to our LLM policy in the NeurIPS handbook for what should or should not be described. 29
