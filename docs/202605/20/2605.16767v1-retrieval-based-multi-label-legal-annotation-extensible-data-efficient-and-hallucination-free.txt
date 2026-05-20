@@ -1,0 +1,461 @@
+Title: Retrieval-Based Multi-Label Legal Annotation: Extensible, Data-Efficient and Hallucination-Free
+
+URL Source: https://arxiv.org/pdf/2605.16767v1
+
+Published Time: Tue, 19 May 2026 00:30:05 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+# Retrieval-Based Multi-Label Legal Annotation: Extensible, Data-Efficient and Hallucination-Free 
+
+Li Zhang 1, Jaromir Savelka 2 and Kevin Ashley 1
+
+> 1
+
+University of Pittsburgh, Pittsburgh, PA, USA 
+
+> 2
+
+Carnegie Mellon University, Pittsburgh, PA, USA 
+
+Abstract 
+
+Multi-label legal annotation requires assigning multiple labels from large, evolving taxonomies to long, fact-intensive documents, often under limited supervision. Parametric encoders typically require task-specific training and retraining when the label set changes, while prompting generative large language models becomes costly and degrades as the label space grows. We cast legal annotation as retrieval: we embed documents and label descriptions with a frozen retrieval model and predict labels via 𝑘 -nearest neighbors in the embedding space, enabling updates by re-embedding and re-indexing rather than gradient-based backpropagation. Across three legal datasets (ECtHR-A, ECtHR-B, and Eurlex with 100 labels), retrieval achieves competitive accuracy and strong data efficiency; on Eurlex, Qwen-8B retrieval improves Macro-F1 from 40.41 (GPT-5.2, zero-shot) to 49.12 while reducing estimated compute by ∼20–30 × compared to fine-tuning. With only 𝑁 = 100 training samples, retrieval nearly doubles Micro-F1 over hierarchical Legal-BERT on ECtHR-A (48.29 vs. 27.87). We also quantify a reliability failure mode of generative inference: GPT-5.2 hallucinates labels outside the provided taxonomy in 0.12–0.9% of test samples under deterministic decoding. In contrast, retrieval strictly respects defined label sets, eliminating hallucination by design. These results suggest retrieval-model-based annotators are a practical, deployable alternative for high-cardinality and rapidly changing legal label spaces. 
+
+Keywords 
+
+Large Language Model, Legal Text Analytics, Multi-Label Annotation, Information Retrieval, Trustworthy AI 
+
+## 1. Introduction 
+
+Real-world legal scenarios often present a dual dilemma: the need to navigate thousands of statutes, regulations, and doctrinal categories, and the challenge of working with scarce labeled data. Multi-label legal annotation sits at the intersection of these challenges, requiring systems that can (i) understand long, fact-intensive documents and (ii) operate under high-cardinality, long-tailed, and evolving label spaces. These requirements arise in practical settings such as case outcome prediction, charge/issue tagging, and topical assignment of legislation, where each document is associated with multiple legal concepts simultaneously [1, 2, 3]. Benchmarks highlight the structural difficulty of the problem. Observations from LexGLUE [ 2]reveal that BERT-based methods consistently underperform on multi-label tasks compared to their single-label counterparts. Unlike single-label annotation, which forces a document into a mutually exclusive category (e.g., binary outcome prediction), multi-label annotation reflects the complexity of legal practice, where a single case or contract often implicates multiple statutes, regulatory domains, and doctrinal issues simultaneously. However, datasets like EURLEX57K [ 4 , 5 ] exacerbate this challenge with thousands of topic labels and severe imbalance. Moreover, legal taxonomies drift over time and across jurisdictions and languages [ 6 ], making “train once, deploy forever” an unrealistic assumption. As a result, an ideal annotator should be accurate under limited supervision, stable under distribution shift, and cheap to adapt when the label set or support corpus changes. Existing paradigms for legal annotation exhibit significant limitations. Parametric models based on pre-trained encoders (e.g., Legal-BERT) achieve strong performance after domain adaptation and 
+
+ASAIL 2026 
+
+$ liz239@pitt.edu (L. Zhang); jsavelka@cs.cmu.edu (J. Savelka); ashley@pitt.edu (K. Ashley) 
+
+ 0000-0002-7734-1644 (L. Zhang); 0000-0002-8997-1799 (J. Savelka); 0000-0003-1899-0973 (K. Ashley)              
+
+> ©2026 Copyright for this paper by its authors. Use permitted under Creative Commons License Attribution 4.0 International (CC BY 4.0). Legal BERT
+> Generative Model
+> Retrieval Model
+> (Proposed)
+> Multi -label
+> Legal
+> Annotation
+> Tasks
+> (Inference Time)
+> Layer 1
+> Layer 2
+> Layer n
+> …
+> Updated Parameters
+> Embedded Query
+> (Parameters Frozen)
+> …
+> Retrieval Database
+> …
+> Finetuned Models (Each Task)
+> Promp t You are a legal expert AI annotator.
+> Given the following facts from …… Which article(s)
+> have been violated, if any, out of the following options
+> …(Label 1) Article 2 -Right to life … (Label n) Article 14
+> -Prohibition of discrimination …
+> K-NN Retrieval
+
+…     
+
+> Text Generation
+> Classification Head
+> Context Overflow & High Cost Hallucination &Cardinality Constrained
+> Fine -tuning Required Retrain for New Labels/Tasks
+> Training -free Plug and Play
+> Data Hungry
+> Data Efficiency
+
+Figure 1: Comparison of Legal Annotation Paradigms (Inference Time). (a) Parametric Fine-tuning (BERT) :Requires updating model weights, data-hungry, rigid. (b) Generative Zero-shot (GPT-5.2) : Context window limited, expensive, slow. (c) Proposed Retrieval Model (Qwen-3 Embedding) : Retrieval-based, plug-and-play, handles a large and evolving set of labels efficiently. 
+
+task-specific fine-tuning [ 7]. However, they are data-hungry and brittle in the long tail: rare labels and few-shot regimes lead to unstable decision boundaries, while adding new labels or updating the training distribution typically requires retraining. 
+
+Generative LLMs offer an alternative via in-context learning [8] and prompting-based annotation [9 , 10 ]. Yet for multi-label classification with hundreds or thousands of labels and long documents, prompting can run into an intrinsic context bottleneck : label definitions and calibration examples must fit within the prompt budget, and performance can degrade when relevant information is buried in long contexts [11, 12]. In this paper, we propose a solution based on Retrieval Models , specifically leveraging modern decoder-based embedding models and non-parametric inference. Our approach utilizes the semantic knowledge of large pre-trained models but projects it into a retrieval space, where annotation is per-formed by similarity search and 𝑘 -Nearest Neighbors (k-NN) voting [ 13 ]. This reframes classification as retrieval: new documents, new labels (with textual descriptions), and new evidence can be incorporated by re-embedding and re-indexing, rather than updating model weights. Our contributions are threefold. First, we reframe legal multi-label classification as a scalable retrieval task. Second, we demonstrate that retrieval models can act as a universal annotator that resolves the trade-off between cardinality and data availability, particularly beyond a “cardinality threshold” where prompting-based approaches degrade and may hallucinate labels. Third, we validate the superior efficiency and deployability of our approach, showing it is a viable on-premise alternative for sensitive legal data. 
+
+## 2. Related Work 
+
+2.1. Legal Text Annotation 
+
+Legal text annotation underpins many AI & Law applications, from charge and article prediction [ 14 ]to contract review [ 15 ]. In practice, legal annotation serves as a critical decision-support tool: it maps complex factual narratives to strictly controlled vocabularies—statutory provisions, treaty articles, or standardized taxonomies such as EuroVoc—enabling downstream applications including legal search, compliance monitoring, and judicial decision support. In this setting, the choice of annotation paradigm has concrete legal implications. First, hallucination-free guarantees are essential: generating a plausible but non-existent statute constitutes a validity error that can mislead practitioners. Second, taxonomic rigor is non-negotiable: collapsing fine-grained EuroVoc descriptors into broader categories disrupts regulatory monitoring workflows. Third, data sovereignty matters for sensitive legal data that cannot be sent to third-party APIs due to privacy regulations (e.g., GDPR) or attorney-client privilege. With the rise of pre-trained language models (PLMs), domain-adapted encoders such as Legal-BERT became strong defaults for legal classification [ 7 ], and benchmarks like LexGLUE and LegalBench standardized evaluation [ 2 , 16 ]. Multi-label legal annotation is particularly challenging due to label imbalance [17], inter-label correlations, and dynamic taxonomies. 
+
+2.2. Large Language Models for Legal Analysis 
+
+LLMs have enabled prompting-based legal analysis via in-context learning [ 8 , 18 , 19 ]. Prompting techniques that externalize intermediate reasoning (e.g., chain-of-thought) can further improve reliability [20 , 21 ]. However, multi-label classification at scale stresses core limitations of generation-centric inference: prompts must encode label definitions and constraints; as label spaces grow, prompt budgets saturate. Generation also introduces latency and cost that scales with input and output length. Retrieval-augmented generation (RAG) mitigates some limitations by retrieving evidence before generation [22, 23]. Yet RAG systems still face the problem that the model must reason over retrieved passages within a fixed context window. In contrast, our approach treats annotation itself as retrieval. 
+
+2.3. Text Representation and Retrieval-based Classification 
+
+Our work builds upon the shift from generation to retrieval-centric text representation. Dense re-trieval methods learn encoders that map queries and documents into a shared vector space [ 24 ]; DPR popularized contrastive training for semantic retrieval [ 25 ]. Sentence-level representation learning further improved embedding quality with SBERT [ 26 ] and SimCSE [ 27 ]. At the systems level, scalable approximate nearest neighbor search libraries such as FAISS [ 28 ] make vector-space inference practical at large scale. 
+
+## 3. Methodology 
+
+We formally define the multi-label legal annotation task. Let 𝒟 = {(𝑥 𝑖 , 𝑌 𝑖 )}𝑁 𝑖 =1 be a dataset where 
+
+𝑥 𝑖 represents a legal document and 𝑌 𝑖 ⊆ ℒ is the subset of relevant labels from the label space 
+
+ℒ = {𝑙 1, . . . , 𝑙 𝐾 }. Our goal is to learn a mapping 𝑓 : 𝒳 → 2ℒ that predicts the label subset ^𝑌 for a new document 𝑥 .
+
+3.1. Parametric Fine-tuning (BERT Baseline) 
+
+In the parametric approach, we employ an encoder-only architecture (e.g., Legal-BERT) parameterized by 𝜃 . The model parameters 𝜃 are updated to minimize the Binary Cross-Entropy (BCE) loss: 
+
+𝜃 * = arg min 
+
+> 𝜃
+
+∑︁ (𝑥,𝑌 )∈𝒟 𝑡𝑟𝑎𝑖𝑛 
+
+ℒ𝐵𝐶𝐸 (𝑓 𝜃 (𝑥 ), 𝑌 ) (1) The document 𝑥 is encoded into a hidden representation ℎ𝑥 = Encoder 𝜃 * (𝑥 ). For the Hierarchical Legal-BERT baseline, the document is split into overlapping segments, each encoded independently by the base BERT model, then aggregated by a 2-layer Transformer Encoder module to produce a document-level representation ℎ𝑥 . A classification head projects ℎ𝑥 to label logits: 
+
+𝑃 (𝑙 𝑘 |𝑥 ; 𝜃 *, 𝑊 ) = 𝜎 (𝑊 𝑘 · ℎ𝑥 + 𝑏 𝑘 ) (2) where 𝜎 is the sigmoid function and 𝑏 𝑘 is the bias term for label 𝑙 𝑘 .3.2. Generative Inference (GPT-5.2) 
+
+For Generative LLMs, we treat classification as a text generation task. We construct a prompt 𝑃 (𝑥, ℒ)
+
+containing the document text, candidate labels, and instructions. The model generates a response 
+
+𝑟 = ℳ(𝑃 (𝑥, ℒ)) , and a parsing function extracts predicted labels: ^𝑌 = 𝜑 (𝑟 ).
+
+3.3. Proposed Retrieval-based Classification 
+
+We propose a non-parametric retrieval framework. We utilize a decoder-only embedding model 𝐸 𝜑 
+
+(e.g., Qwen-3 Embedding) to map both documents and label descriptions into a shared semantic vector space R𝑑 .…
+
+> Document
+> Embeddings
+> (EOS)
+> Input
+> Embedding
+> (EOS)
+> …
+
+…
+
+> …
+
+.
+
+> K-Neighbors
+
+… Input 
+
+> Embedding
+> (CLS)
+> Layer 1
+> Layer 2
+> Layer n
+> …
+
+… Output     
+
+> Embedding
+> (CLS)
+> Classification
+> Head
+> Logits
+> Output Labels
+> Updating K
+> on Eval Set
+> Updating
+> Parameters
+> Legal BERT Retrieval Model (Proposed)
+> Backpropagation No Backpropagation
+
+Figure 2: Training Phase Comparison. (Left) BERT updates all parameters 𝜃 via gradient de-scent. (Right) The Retrieval Model keeps the encoder frozen and selects 𝑘 on the validation set (no gradient updates). 
+
+Index Construction. We do not update the model weights 𝜑 . Instead, we construct a se-mantic index ℐ of label embeddings and select the hyperparameter 𝑘 on the validation set: 
+
+𝑘 * = arg max  
+
+> 𝑘
+
+F1 (kNN (𝑘, 𝒟 𝑣𝑎𝑙 , ℐ)) (3) Adding a new label simply involves computing its embedding and updating the index. 
+
+Inference. Let 𝑑 𝑙 𝑘 be the textual description of label 𝑙 𝑘 . The embeddings are: 
+
+v𝑥 = 𝐸 𝜑 (𝑥 ), v𝑙 𝑘 = 𝐸 𝜑 (𝑑 𝑙 𝑘 ) (4) Cosine similarity determines the prediction: 
+
+^𝑌 = Top-𝑘 *(︃{︂ v𝑥 · v𝑙 𝑘 
+
+‖v𝑥 ‖‖ v𝑙 𝑘 ‖}︂ 
+
+> 𝐾 𝑘 =1
+
+)︃ 
+
+(5) 
+
+3.4. Theoretical Efficiency Analysis 
+
+Fine-tuning requires backpropagating through the full 8192-token context: 𝐶 𝐹 𝑇 ≈ 6 ×
+
+𝑁 𝑝𝑎𝑟𝑎𝑚𝑠 ×𝑆 𝑠𝑎𝑚𝑝𝑙𝑒𝑠 ×𝐸 𝑒𝑝𝑜𝑐ℎ𝑠 ×𝐿 𝑠𝑒𝑞 . Retrieval involves only inference and indexing: 𝐶 𝑅𝑒𝑡 ≈ 2×𝑁 𝑝𝑎𝑟𝑎𝑚𝑠 ×𝑆 𝑡𝑒𝑠𝑡 ×𝐿 𝑠𝑒𝑞 . Empirically, LoRA fine-tuning requires ≈ 3.8 × 10 16 FLOPs, whereas Retrieval inference requires only ≈ 1.9 × 10 15 FLOPs—a 20 ×
+
+efficiency improvement. 
+
+## 4. Experiments 
+
+We evaluate our method on datasets representing a spectrum of complexity: ECtHR-A (Judgment, 10 labels), ECtHR-B (Allegation, 10 labels), and Eurlex (Topic Induction, 100+ labels). 
+
+Table 1 
+
+Dataset statistics. |𝐿 |: label cardinality, ¯𝐿 : average labels per document. Dataset 𝑁 𝑡𝑟𝑎𝑖𝑛 𝑁 𝑡𝑒𝑠𝑡 |𝐿 | ¯𝐿 
+
+ECtHR A 9,000 1,000 10 1.16 ECtHR B 9,000 1,000 10 1.45 Eurlex 55,000 5,000 100 4.51 4.1. Implementation Details 
+
+We extend Legal-BERT ( nlpaueb/legal-bert-base-uncased , 110M parameters) to 8,192 tokens using a hierarchical architecture: documents are split into 64 segments of 128 tokens, encoded indepen-dently, and aggregated via a 2-layer nn.TransformerEncoder (nhead =8, dim_feedforward =2048). The global aggregation layer is randomly initialized. The classification head uses BCEWithLogitsLoss 
+
+with Micro-F1 as the model selection criterion. LoRA is applied only to the local Legal-BERT encoder (query and value projections, 𝑟 =8, 𝛼 =16). For Qwen Retrieval Models (0.6B, 4B, 8B), we chose Qwen-3 Embedding because it offers models at multiple scales sharing the same architecture, enabling controlled scaling analysis. The k-NN hyperparameter 𝑘 is tuned per dataset and model on the validation set, ranging from 5 to 20. GPT-5.2 is evaluated with deterministic decoding ( temperature=0 ) and JSON-only output. 
+
+## 5. Results 
+
+5.1. Efficiency                         
+
+> Table 2
+> Computational efficiency analysis (FLOPs on 2,000 samples). Method FLOPs (Est.) Rel. Cost Mem. Legal-BERT (Full FT) 5.7×10 16 ∼30 ×∼928 MB Legal-BERT (LoRA) 3.8×10 16 ∼20 ×∼50 MB
+> Local Retrieval 1.9×10 15 1×0 MB
+
+5.2. Accuracy vs. Label Cardinality                                       
+
+> Table 3
+> Main performance comparison (Micro-F1 / Macro-F1). Best results bolded. ECtHR-A ECtHR-B Eurlex Model Mi Ma Mi Ma Mi Ma Legal-BERT 76.25 65.62 81.98 78.38 60.03 24.40 GPT-5.2 79.33 76.31 73.95 73.00 43.05 40.41 Qwen-0.6B 67.47 59.02 71.76 67.75 61.85 42.77 Qwen-4B 70.44 61.05 74.63 69.94 62.97 44.71 Qwen-8B 72.34 63.24 77.02 71.07 63.76 49.12
+
+We observe a “Cardinality Threshold” phenomenon. High Cardinality (Eurlex): GPT-5.2’s perfor-mance drops substantially (Macro-F1 40.41), consistent with difficulty attending to hundreds of label definitions simultaneously. Retrieval (Qwen-8B) achieves the best Macro-F1 (49.12). Low Cardinality (ECtHR): The best paradigm depends on task structure—fine-tuned encoders excel at pattern matching (ECtHR-B), generative models at deductive reasoning (ECtHR-A), while retrieval remains competitive without task-specific training. 
+
+5.3. Data Scaling and Cold-Start Dynamics 
+
+Figure 3 reports performance scaling across training-set sizes. Cold-Start Win: At 𝑁 = 100 , Qwen-0.6B achieves nearly double the Micro-F1 of Legal-BERT on ECtHR-A (48.29 vs 27.87). Convergence: 
+
+As data increases ( 𝑁 > 2,000 ), the gap narrows; Legal-BERT catches up on ECtHR tasks but retrieval maintains its lead on Eurlex even with full data. Model Scaling: Consistent improvement from 0.6B to 8B; even the smallest 0.6B model outperforms GPT-5.2 on Eurlex. 
+
+## 6. Error Analysis 
+
+6.1. Quantifying Hallucinations 
+
+We define a hallucination as any generated label ^𝑙 / ∈ ℒ 𝑐𝑎𝑛𝑑𝑖𝑑𝑎𝑡𝑒 . Despite deterministic decoding and explicit constraints, GPT-5.2 produced hallucinations across all three datasets.             
+
+> Table 4
+> Hallucination statistics across datasets. Dataset Count Rate Top Hallucinated Labels ECtHR-A 90.9% Article 7, Article 18 ECtHR-B 70.7% Article 13, Article 7 Eurlex 60.12% statistics, insurance
+
+In ECtHR tasks, GPT-5.2 generated valid ECHR articles excluded from the specific taxonomy—for instance, “Article 7 – No punishment without law.” In Eurlex, hallucinations manifested as semantic drift : broad topics such as “statistics” that do not exist in the granular EuroVoc subset. Table 5 illustrates a concrete case.                 
+
+> Table 5
+> Hallucination vs. Retrieval example. Input: “...collection of statistical data regarding external trade...”
+> GPT-5.2 (Zero-shot) Retrieval (k-NN)
+> Predicted EU law ✓, external trade ✓,statistics ✗EU law ✓,external trade ✓,economic analysis ✓
+> Analysis “statistics” is semantically relevant but not in candidate list (hallucination) Nearest valid vector; “statistics” cannot be returned
+
+6.2. Compliance and Safety of Retrieval 
+
+Since k-NN selects from a fixed index ℐ, the probability of generating an invalid label is strictly zero (𝑃 (^𝑙 / ∈ ℒ ) = 0 ). In practice, legal annotation systems operate as decision-support tools within human-in-the-loop workflows. When a model proposes candidate labels, a legal professional reviews the output before it enters a case management system. With retrieval, the reviewer only needs to verify relevance ;with a generative model, the reviewer must also verify existence —significantly increasing cognitive load and the risk of “automation bias.” 
+
+## 7. Discussion 
+
+7.1. The Practical Meaning of F1 Scores in Legal Practice 
+
+Legal annotation systems are deployed as decision-support tools for human experts. A Micro-F1 of 70 on Eurlex means the system narrows 100 potential descriptors to a relevant shortlist, transforming an hours-long manual search into a minutes-long verification task. Because retrieval guarantees zero hallucinations, residual errors are only omissions or sub-optimal matches, never fabricated labels requiring tedious fact-checking. 7.2. From Prompt Engineering to Vector Space Geometry 
+
+Our findings challenge the prevailing “Generative-First” orthodoxy in Legal NLP. Generative models treat classification as sequence generation, bounded by the context window; as the label space grows, encoding definitions into a prompt becomes a bottleneck [ 11 ]. Retrieval Models instead project legal concepts into a high-dimensional vector space where capacity is virtually unlimited and adding a new law is 𝑂 (1) . The hallucination-free guarantee and data sovereignty are architectural properties of retrieval that remain valuable regardless of how generative capabilities evolve. We view retrieval and generation as complementary paradigms, and our Cardinality Threshold provides a guide for selecting the appropriate paradigm. 
+
+7.3. Aligning AI with the Principle of Legality 
+
+The Principle of Legality mandates that decisions be based strictly on existing statutes. Our Error Analysis revealed that Generative LLMs, despite strict instructions, invent plausible but non-existent articles, violating the closed-world assumption of legal codification. A retrieval model may retrieve an incorrect law (a relevance error) but will never fabricate one (a validity error). When a lawyer reviews retrieval output, they only need to verify relevance , reducing cognitive burden and the risk of “automation bias.” 
+
+7.4. Towards Modular and Sovereign Legal AI 
+
+Our results suggest a shift from “Monolithic” to “Modular” Legal AI: a specialized 8B retrieval model outperforms a generalist trillion-parameter model while consuming ∼30 × less compute [ 29 ]. This enables fully on-premise deployment for sensitive data under GDPR or client privilege, reserving heavy generative models for creative tasks (e.g., drafting arguments [ 30 , 31 ]) while classification is handled by efficient, sovereign retrieval systems. 
+
+## 8. Conclusion 
+
+We show that retrieval-based annotators balance efficiency, accuracy, and adaptability under evolving legal taxonomies, identifying a “Cardinality Threshold” where retrieval dominates over prompting. Retrieval offers strong cold-start performance and plug-and-play updates via re-embedding rather than retraining. GPT-5.2 hallucinates labels outside the taxonomy in 0.12–0.9% of test samples; retrieval eliminates this failure mode by construction. 
+
+## 9. Limitations and Future Work 
+
+Our evidence is based on three English datasets ( 𝐾 ≤ 100 ); extending to multilingual settings [ 6]and additional legal systems [ 32 , 33 ] would strengthen external validity. The Cardinality Threshold is empirical: higher cardinality correlates with lower per-class sample counts, making it difficult to disentangle cardinality from data scarcity. Future work should explore supersampling to isolate these factors [ 34 , 35 ] and test transfer to other controlled-vocabulary domains such as medical coding [ 36 ]and contract classification [37]. 
+
+## Reproducibility 
+
+All experimental code and configurations are publicly available at https://github.com/lizhang-AIandLaw/ Retrieval-based-Multi-label-Legal-Annotation. References 
+
+[1] K. D. Ashley, Artificial intelligence and legal analytics: new tools for law practice in the digital age, Cambridge University Press, 2017. [2] I. Chalkidis, A. Jana, D. Hartung, M. Bommarito, I. Androutsopoulos, D. Katz, N. Aletras, Lexglue: A benchmark dataset for legal language understanding in english, in: Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), 2022, pp. 4310–4330. [3] N. Aletras, D. Tsarapatsanis, D. Preoţiuc-Pietro, V. Lampos, Predicting judicial decisions of the european court of human rights: A natural language processing perspective, PeerJ computer science 2 (2016) e93. [4] I. Chalkidis, E. Fergadiotis, P. Malakasiotis, I. Androutsopoulos, Large-scale multi-label text classification on eu legislation, in: Proceedings of the 57th annual meeting of the association for computational linguistics, 2019, pp. 6314–6322. [5] W.-C. Chang, H.-F. Yu, K. Zhong, Y. Yang, I. S. Dhillon, Taming pretrained transformers for extreme multi-label text classification, in: Proceedings of the 26th ACM SIGKDD international conference on knowledge discovery & data mining, 2020, pp. 3163–3171. [6] I. Chalkidis, M. Fergadiotis, I. Androutsopoulos, Multieurlex–a multi-lingual and multi-label legal document classification dataset for zero-shot cross-lingual transfer, arXiv preprint arXiv:2109.00904 (2021). [7] I. Chalkidis, M. Fergadiotis, P. Malakasiotis, N. Aletras, I. Androutsopoulos, Legal-bert: The muppets straight out of law school, arXiv preprint arXiv:2010.02559 (2020). [8] T. Brown, B. Mann, N. Ryder, M. Subbiah, J. D. Kaplan, P. Dhariwal, A. Neelakantan, P. Shyam, G. Sastry, A. Askell, et al., Language models are few-shot learners, Advances in neural information processing systems 33 (2020) 1877–1901. [9] J. Savelka, K. D. Ashley, The unreasonable effectiveness of large language models in zero-shot semantic annotation of legal texts, Frontiers in Artificial Intelligence 6 (2023) 1279794. [10] H. Lee, K. C. Li, M. Grabmair, S. Xu, Efficient prompt optimisation for legal text classification with proxy prompt evaluator, in: Proceedings of the Natural Legal Language Processing Workshop 2025, 2025, pp. 281–290. [11] N. F. Liu, K. Lin, J. Hewitt, A. Paranjape, M. Bevilacqua, F. Petroni, P. Liang, Lost in the middle: How language models use long contexts, 2023, URL https://arxiv. org/abs/2307.03172 (2023). [12] L. Zhang, J. Savelka, K. Ashley, Do llms truly understand when a precedent is overruled?, arXiv preprint arXiv:2510.20941 (2025). [13] T. Cover, P. Hart, Nearest neighbor pattern classification, IEEE transactions on information theory 13 (1967) 21–27. [14] X. Chi, W. Zhong, Y. Wu, W. Wang, K. Kuang, F. Wu, M. Xiong, Universal legal article prediction via tight collaboration between supervised classification model and llm, in: Proceedings of the Twentieth International Conference on Artificial Intelligence and Law, 2025, pp. 21–30. [15] D. Hendrycks, C. Burns, A. Chen, S. Ball, Cuad: An expert-annotated nlp dataset for legal contract review, arXiv preprint arXiv:2103.06268 (2021). [16] N. Guha, J. Nyarko, D. Ho, C. Ré, A. Chilton, A. Chohlas-Wood, A. Peters, B. Waldon, D. Rockmore, D. Zambrano, et al., Legalbench: A collaboratively built benchmark for measuring legal reasoning in large language models, Advances in neural information processing systems 36 (2023) 44123– 44279. [17] N. Wais, M. Grabmair, Learning from computer vision: The effects of loss functions on legal text classification with class imbalance, in: Proceedings of the Twentieth International Conference on Artificial Intelligence and Law, 2025, pp. 41–50. [18] M. Gray, J. Savelka, W. Oliver, K. Ashley, Using llms to discover legal factors, arXiv preprint arXiv:2410.07504 (2024). [19] K. Luo, Q. Huang, C. Jiang, Y. Feng, Automating legal interpretation with llms: Retrieval, generation, and evaluation, arXiv preprint arXiv:2501.01743 (2025). [20] J. Wei, X. Wang, D. Schuurmans, M. Bosma, F. Xia, E. Chi, Q. V. Le, D. Zhou, et al., Chain-of-thought prompting elicits reasoning in large language models, Advances in neural information processing systems 35 (2022) 24824–24837. [21] S. Yao, D. Yu, J. Zhao, I. Shafran, T. Griffiths, Y. Cao, K. Narasimhan, Tree of thoughts: Deliberate problem solving with large language models, Advances in neural information processing systems 36 (2023) 11809–11822. [22] P. Lewis, E. Perez, A. Piktus, F. Petroni, V. Karpukhin, N. Goyal, H. Küttler, M. Lewis, W.-t. Yih, T. Rocktäschel, et al., Retrieval-augmented generation for knowledge-intensive nlp tasks, Advances in neural information processing systems 33 (2020) 9459–9474. [23] D. Bareham, K. Atkinson, J. Mumford, J. Marshall, Curb your enthusiasm: Towards a rag framework to forecast case importance in the echr, in: Proceedings of the Twentieth International Conference on Artificial Intelligence and Law, 2025, pp. 31–40. [24] A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao, C. Huang, C. Lv, et al., Qwen3 technical report, arXiv preprint arXiv:2505.09388 (2025). [25] V. Karpukhin, B. Oguz, S. Min, P. S. Lewis, L. Wu, S. Edunov, D. Chen, W.-t. Yih, Dense passage retrieval for open-domain question answering., in: EMNLP (1), 2020, pp. 6769–6781. [26] N. Reimers, I. Gurevych, Sentence-bert: Sentence embeddings using siamese bert-networks, arXiv preprint arXiv:1908.10084 (2019). [27] T. Gao, X. Yao, D. Chen, Simcse: Simple contrastive learning of sentence embeddings, arXiv preprint arXiv:2104.08821 (2021). [28] J. Johnson, M. Douze, H. Jégou, Billion-scale similarity search with gpus, IEEE Transactions on Big Data 7 (2019) 535–547. [29] P. Belcak, G. Heinrich, S. Diao, Y. Fu, X. Dong, S. Muralidharan, Y. C. Lin, P. Molchanov, Small language models are the future of agentic ai, arXiv preprint arXiv:2506.02153 (2025). [30] M. Gray, L. Zhang, K. D. Ashley, Generating case-based legal arguments with llms, in: Proceedings of the 2025 Symposium on Computer Science and Law, 2025, pp. 160–168. [31] L. Zhang, K. D. Ashley, Mitigating manipulation and enhancing persuasion: A reflective multi-agent approach for legal argument generation, arXiv preprint arXiv:2506.02992 (2025). [32] R. Goebel, Y. Kano, M.-Y. Kim, C. Kwan, K. Satoh, H. Yamada, M. Yoshioka, An overview of the COLIEE 2025 competition: Legal case law and statute law information retrieval and entailment, in: Proceedings of the Twentieth International Conference on Artificial Intelligence and Law, ICAIL 2025, ACM, 2025, pp. 506–515. doi: 10.1145/3769126.3785016 .[33] C. Xiao, H. Zhong, Z. Guo, C. Tu, Z. Liu, M. Sun, Y. Feng, X. Han, Z. Hu, H. Wang, et al., Cail2018: A large-scale legal dataset for judgment prediction, arXiv preprint arXiv:1807.02478 (2018). [34] J. Kaplan, S. McCandlish, T. Henighan, T. B. Brown, B. Chess, R. Child, S. Gray, A. Radford, J. Wu, D. Amodei, Scaling laws for neural language models, arXiv preprint arXiv:2001.08361 (2020). [35] J. Hoffmann, S. Borgeaud, A. Mensch, E. Buchatskaya, T. Cai, E. Rutherford, D. de Las Casas, L. A. Hendricks, J. Welbl, A. Clark, et al., An empirical analysis of compute-optimal large language model training, Advances in neural information processing systems 35 (2022) 30016–30030. [36] J. Mullenbach, S. Wiegreffe, J. Duke, J. Sun, J. Eisenstein, Explainable prediction of medical codes from clinical text, arXiv preprint arXiv:1802.05695 (2018). [37] D. Tuggener, P. Von Däniken, T. Peetz, M. Cieliebak, Ledgar: a large-scale multi-label corpus for text classification of legal provisions in contracts, in: Proceedings of the twelfth language resources and evaluation conference, 2020, pp. 1235–1241. 100 500 1000 2000 4500 9000 
+
+Training Samples 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+> Macro F1
+
+ECtHR A: Macro F1 
+
+BERT-H Full-FT 
+
+Qwen-Emb 0.6B 
+
+Qwen-Emb 4B 
+
+Qwen-Emb 8B 
+
+100 500 1000 2000 4500 9000 
+
+Training Samples 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+> Micro F1
+
+ECtHR A: Micro F1 
+
+BERT-H Full-FT 
+
+Qwen-Emb 0.6B 
+
+Qwen-Emb 4B 
+
+Qwen-Emb 8B (a) ECtHR-A Scaling Analysis 100 500 1000 2000 4500 9000 
+
+Training Samples 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Macro F1
+
+ECtHR B: Macro F1 
+
+BERT-H Full-FT 
+
+Qwen-Emb 0.6B 
+
+Qwen-Emb 4B 
+
+Qwen-Emb 8B 
+
+100 500 1000 2000 4500 9000 
+
+Training Samples 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+0.8 
+
+> Micro F1
+
+ECtHR B: Micro F1 
+
+BERT-H Full-FT 
+
+Qwen-Emb 0.6B 
+
+Qwen-Emb 4B 
+
+Qwen-Emb 8B 
+
+(b) ECtHR-B Scaling Analysis 100 500 1000 2000 4500 9000 55000 
+
+Training Samples 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+> Macro F1
+
+Eurlex: Macro F1 
+
+BERT-H Full-FT 
+
+Qwen-Emb 0.6B 
+
+Qwen-Emb 4B 
+
+Qwen-Emb 8B 
+
+100 500 1000 2000 4500 9000 55000 
+
+Training Samples 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+> Micro F1
+
+Eurlex: Micro F1 
+
+BERT-H Full-FT 
+
+Qwen-Emb 0.6B 
+
+Qwen-Emb 4B 
+
+Qwen-Emb 8B 
+
+(c) Eurlex Scaling Analysis 
+
+Figure 3: Performance scaling of Legal-BERT vs. Qwen Retrieval Models across varying training sample sizes.

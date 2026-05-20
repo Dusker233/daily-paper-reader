@@ -1,0 +1,366 @@
+Title: PhishSigma++: Malicious Email Detection with Typed Entity Relations
+
+URL Source: https://arxiv.org/pdf/2605.11619v1
+
+Published Time: Wed, 13 May 2026 00:45:19 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# PhishSigma++: Malicious Email Detection with Typed Entity Relations 
+
+Shang Shang 1,2⋆, Ruiqi Wang 1, Ruijie Qi 1,2, Hao Li 1,2, Yingxiao Xiang 1,Yepeng Yao 1,2, and Zhengwei Jiang 1,2 
+
+> 1
+
+Institute of Information Engineering, Chinese Academy of Sciences, Beijing, China Corresponding author: Ruiqi Wang. {wangruiqi, qiruijie, lihao, xiangyingxiao, yaoyepeng, jiangzhengwei}@iie.ac.cn  
+
+> 2
+
+School of Cyber Security, University of Chinese Academy of Sciences, Beijing, China 
+
+shangshang20@mails.ucas.ac.cn 
+
+Abstract. With the rise of AI-generated content (AIGC), phishing ac-tors now possess richer linguistic capabilities and a wider range of evasion techniques. Our analysis shows that most existing detectors over-rely on mutable textual features. As a result, they achieve high accuracy on clean datasets yet exhibit severe degradation under text-focused adver-sarial manipulation. This mirrors the performance gap widely observed between laboratory benchmarks and real-world deployments. To address this discrepancy, we investigate invariant signals in phishing emails and observe that, even when attackers freely modify surface text, the func-tional intent of the attack constrains relations among certain typed en-tities. Although threat-actor tradecraft is often described through high-level tactics, techniques, and procedures (TTPs), rule-based systems such as Sigma express these invariants only through manually curated, field-specific literal patterns. This limits flexibility and coverage. We intro-duce PhishSigma++ , an entity–relation–based malicious email detector for RFC822 messages that generalizes the design philosophy of Sigma rules. The system extracts 40 typed entity classes, computes 5 cross-type relations to construct a typed email graph, and employs particle swarm optimization (PSO) to select a sparse discriminative mask. This mask supports both classification and a type-level evidence summary, enabling auditable reasoning over cross-field invariants. On a corpus of 29,142 messages, PhishSigma++ achieves 0.9675 F 1 on clean data and sub-stantially outperforms text-centric baselines under non-adaptive Good Word padding at ρ = 0 .8. It maintains 0.9579 F 1, while a token-based Bayesian filter collapses to 0.0243 and a released DistilBERT phishing-email checkpoint falls to 0.7284. Compared with traditional Sigma rules, PhishSigma++ provides higher detection performance, broader cover-age of relational invariants, and data-driven feature selection. We fur-ther show that thresholded typed relation scores induced by our relation  
+
+> ⋆
+
+This work was supported by the National Key R&D Program of China (No. 2024YFB3109004), the National Natural Science Foundation of China (No. 62202466), the Youth Innovation Promotion Association CAS (No. 2022159), the Key Laboratory of Network Assessment Technology, Chinese Academy of Sciences, and the Beijing Key Laboratory of Network Security and Protection Technology.           
+
+> arXiv:2605.11619v1 [cs.CR] 12 May 2026 2S. Shang et al. functions encode a useful fragment of Sigma-style field conditions, plac-ing hand-crafted rule logic and learned relation masks in one single-email representational framework.
+> Keywords: Malicious email detection ·Typed entity relations ·Adver-sarial robustness ·Sigma rules ·Phishing
+
+# 1 Introduction 
+
+Recent advances in generative models have significantly expanded the attacker’s toolbox in phishing and other forms of malicious email campaigns. With large language models able to generate fluent and highly customized text at scale, at-tackers can now diversify email wording at negligible cost and conceal malicious intent through sophisticated paraphrasing, narrative restructuring, or content padding. These capabilities make contemporary phishing messages increasingly resistant to detectors that rely heavily on textual surface features. Our anal-ysis shows that many existing machine learning based email defenses exhibit an implicit dependence on mutable body text. This reliance results in strong performance on clean benchmark datasets but substantial degradation when confronted with adversarial manipulations that specifically target textual fea-tures. The gap between clean and adversarial performance helps explain why classifiers that appear highly accurate in controlled evaluations often under-perform in real deployment scenarios [1]. To address this problem, we observe that although an attacker can freely manipulate linguistic content, a phishing email must still preserve certain structural and semantic relationships among key entities in order to achieve its objective. These relationships include sta-ble interactions among sender identity, displayed and actual link targets, brand references, role semantics, and other elements that together define the social engineering tactic. In other words, many tactics, techniques, and procedures constitute higher-level invariants that cannot be simultaneously altered without undermining the attack’s purpose. Sigma rules embody a similar philosophy by encoding such invariants in manually curated field conditions. However, Sigma rules require human engineering effort, lack flexibility, and do not generalize well beyond their handwritten patterns [2,3]. Motivated by these limitations, we in-troduce PhishSigma++ , an entity–relation based malicious email detector for RFC822 messages. PhishSigma++ automatically extracts typed entities, com-putes pairwise relations between them, and identifies a sparse subset of discrimi-native relations through an optimization-guided mask. This formulation extends the core idea behind Sigma-style field consistency rules into a more expressive and data-driven framework that remains auditable at the type level. Our main contributions are as follows: 
+
+– We propose a learned relation-masking mechanism that automatically iden-tifies a sparse set of discriminative entity-relation patterns. Compared with manually curated Sigma rules, the data-driven mask yields consistent de-tection improvements in our experiments without relying on brittle textual surface features. PhishSigma++: Malicious Email Detection 3
+
+Listing 1.1: An anonymized credential-phishing email with displayed-link decep-tion, urgency pressure, and brand–sender mismatch. 
+
+> From: "HarborView IT Service Desk" notice@account-review-mail.malicious Reply-To: reset@account-review-mail.malicious To: "Alice" alice@harborview-capital.target Subject: Action Required: HarborView Mailbox Verification <html><body> <p>Your <b>HarborView Capital</b> mailbox will be restricted unless you confirm your settings before today’s cutoff.</p> <p><a href="https://account-review-mail.malicious/harborview/verify"> https ://mail.harborview-capital.target/mailbox-review</a></p> <p>Regards,< br/>HarborView IT Service Desk</p> </body></html>
+
+– We formalize how thresholded typed relation scores induced by the collapsed relation graph encode a useful fragment of Sigma-style field conditions. This bridge places hand-crafted rule logic and learned relation masks in one rep-resentational framework, while remaining limited to single-email, field-level conditions. 
+
+– On a corpus of 29,142 emails, PhishSigma++ attains competitive clean F 1
+
+scores and retains its detection accuracy under text-padding attacks that cause substantial performance degradation in token-based baselines. 
+
+# 2 Background and Threat Model 
+
+We focus on high-impact forms of social engineering, including credential phish-ing, business email compromise (BEC) style impersonation, fake invoices or de-livery notices, and account-verification scams. These messages are designed to trigger sensitive user actions such as clicking a link, disclosing credentials, or transferring funds [4,5]. In enterprise environments, such attacks are often low-volume and tailored to specific recipients rather than broadcast at campaign scale, reflecting the attacker’s goal of achieving a single successful outcome in-stead of maximizing delivery volume [6,7]. This distinction is important be-cause indicators of bulk spam, including template reuse or repeated hits across many recipients, become weak signals when the attacker customizes the message for only one organization or employee. In contrast, studies of BEC and lateral phishing emphasize elements such as impersonated business roles, exploitation of workflow trust, and inconsistencies across fields that relate sender identity, recipient expectations, and linked resources [5,7,8]. These are precisely the cues preserved by typed entity relations. In Listing 1.1, no single field is malicious on its own. The urgency phrasing is believable, the visible URL resembles an inter-nal corporate link, and the brand name appears legitimate. Credential phishing succeeds by making local cues appear routine while the overall message contra-dicts the organization-specific context that the recipient expects. What exposes the message is the inconsistency across typed entities. The brand string ap-pears in both the display name and the body, yet the domains in the From and 
+
+Reply-To fields do not belong to HarborView. The displayed URL resembles a 4 S. Shang et al. 
+
+corporate address but actually resolves to account-review-mail.malicious ,which is controlled by the attacker. The deadline cue then encourages the recip-ient to follow that deceptive link. Traditional token-based or reputation-based filters such as SpamBayes and SpamAssassin [9,10] fail to capture this pattern. The message has no attachment, targets only one user, and uses wording that may be novel. An attacker can further modify or pad the prose without altering the underlying social engineering goal, as illustrated by the Good Word attack against spam filters [1]. Prior analyses of BEC and lateral phishing reach simi-lar conclusions: sender identity, role expectations, and cross-field consistency are more reliable indicators than isolated textual features [5,7]. 
+
+Threat model. The defender analyzes RFC822 emails with parseable headers at the mail gateway before user interface rendering, without access to exter-nal threat intelligence, DNS reputation services, or URL sandbox results. The attacker controls the subject line, body text, display name, embedded URLs, and certain mail user agent fields including Reply-To and X-Mailer , and can revise or pad body text at low cost. The attacker does not control DKIM, SPF, or DMARC authentication outcomes, cannot modify relay-inserted Received 
+
+headers, and cannot eliminate payload-carrying URLs without abandoning the phishing objective. This boundary motivates separating attacker-written prose from more stable header, routing, and URL evidence. The robustness exper-iment in Section 4.3 implements a non-adaptive Good Word padding attack within this boundary. More advanced attacks such as adaptive header forgery, authenticated-domain abuse, or landing-page manipulation remain outside the scope of this work. 
+
+# 3 Methodology 
+
+Figure 1 shows the PhishSigma++ system architecture. The system consists of one detection pipeline and two parallel analysis outputs. The detection pipeline parses a raw RFC822 email into typed entities, scores their pairwise relations, selects a sparse PSO mask, and classifies the masked representation with a linear SVM to produce the final verdict. The same retained mask is then reused for analysis: thresholded relation scores are enriched into Sigma-style rule metadata (support, false-positive estimates, and tactic tags), and PSO-pruned malicious vectors are clustered into candidate TTP families for review. 
+
+3.1 Typed Entity-Relation Representation 
+
+PhishSigma++ constructs the typed entity–relation graph from 40 determin-istic extractors (Appendix Table A1). Appendix Table A1 groups them into Structural, Content, and Keyword extractors. The Structural extractors canon-icalize header fields and decompose URLs into actual targets, displayed text, host-level components, subdomains, and query parameters; the Content group preserves subject and body spans; and the Keyword extractors assign textual PhishSigma++: Malicious Email Detection 5inputs      
+
+> Raw email
+> headers, body, URLs
+> RFC822 record
+> Sigma rule
+> logsource condition
+
+PhishSigma++ framework                   
+
+> fields +relations +masks
+> Entities
+> 40 classes
+> Relations
+> 5predicates
+> PSO mask
+> sparse graph
+> Score
+> decide
+> parse
+> Field typing
+> field nodes
+> Rule enrichment
+> support +false positives +tags
+> lift
+> relations mask evidence
+
+outputs        
+
+> Verdict
+> phish /legit
+> Sigma++ rule
+> metadata
+> Tactic clusters
+> TTP candidates
+> classify
+> export rule
+> cluster masks
+
+Fig. 1: PhishSigma++ system architecture. spans to predefined phishing-related lexical categories. Importantly, extractor outputs are treated as typed candidate entities rather than fixed feature deci-sions. When a string admits multiple interpretations, PhishSigma++ preserves the corresponding typed occurrences, leaving PSO to select the entity occur-rences and cross-type relations that contribute most to phishing detection. 
+
+Abstract Relation Functions For each email e, entities v1, . . . , v k are ex-tracted and pairwise relationships are computed using 5 functions returning scores in [0 , 1] :
+
+fexact (s, t ) = ⊮{s = t}, (1) 
+
+fcontain (s, t ) = ⊮{s ⊆ t} |s||t| , (2) 
+
+flcs (s, t ) = max 
+
+ LCSubstr( s, t )
+
+|s| , LCSubstr( s, t )
+
+|t|
+
+
+
+, (3) 
+
+fjaccard (s, t ) = | tok( s) ∩ tok( t)|| tok( s) ∪ tok( t)| , (4) 
+
+flenratio (s, t ) = min( |s|, |t|)max( |s|, |t|) . (5) These cover the qualitatively distinct similarity regimes that recur in header/URL/keyword comparisons: equality, inclusion, character-level overlap, token-level overlap, and length-shape equivalence. Adding finer-grained variants would be subsumed by the max-collapse below; an ablation that keeps all five functions as separate channels achieves 0.9639 F1 versus 0.9675 for the collapsed mask (Section 4.2), so the projection is preferred because it produces a single edge weight per type pair. The edge weight between types ℓi and ℓj is 
+
+w(ℓi, ℓ j ) = max 
+
+r max 
+
+va:ℓ(va)= ℓi
+
+vb:ℓ(vb)= ℓj
+
+fr (str (va), str (vb)) , (6) yielding a directed weighted graph Ge = ( Ve, E e, w ) per email. Figure 2 shows an active subset: dark edges are PSO-selected, light dashed edges are unselected candidates, dashed node borders mark body-derived entities. 6 S. Shang et al. 
+
+Fig. 2: Entity relation graph excerpt. 
+
+Collapsed Matrix Representation Each graph is represented by F (G) ∈
+
+RN ×N with N = 40 (Appendix Table A1), flattened row-wise to x(G) ∈ Rd, d =
+
+N 2 = 1 ,600 . Off-diagonal entries are Fi,j (G) = w(ℓi, ℓ j ); the diagonal encodes presence, Fi,i (G) = min( ci/5, 1) for match count ci. The collapse from a N ×N ×5
+
+tensor to N × N is a deterministic projection: relation-specific contrasts are discarded in exchange for a single edge weight per type pair, and any linear classifier on x(G) is equivalent to the same classifier applied after this projection. 
+
+3.2 Sparse Mask Selection 
+
+Exhaustive search over 2d binary masks on the 1,600-dimensional collapsed fea-ture space is intractable [11]. We use particle swarm optimization (PSO) with a real-valued mask m ∈ [0 , 1] d; diagonal entries gate entity-type presence and off-diagonal entries gate cross-type edges. The mask remains continuous during search and is thresholded at 0.5 only when rendering analyst summaries. The fitness combines an inner cross-validated F 1 with a sparsity penalty: 
+
+O(m) = F1
+
+ SVM (Prune (X, m ), y) − λ · ∥active (m)∥0
+
+d , (7) where Prune (X, m ) = X⊙m is row-broadcast element-wise gating, ∥active (m)∥0
+
+counts coordinates above the 0.5 threshold, and λ = 0 .015 . MaxAbsScaler is used because the features are highly sparse, so StandardScaler would distort zero-valued dimensions. The inner CV is kept lightweight because PSO performs roughly 30 × 50 × 25 fitness evaluations; to prevent test-set leakage, it runs on a fixed PSO subset of 500 training emails sampled before the outer split and excluded from the outer test partition. Final results use the repeated evaluation protocol of Section 4. We use 30 particles for 50 iterations with ω = 0 .7, c1 = c2 =PhishSigma++: Malicious Email Detection 7
+
+Algorithm 1 PSO Optimization over the Collapsed Feature Space 
+
+Require: Collapsed features X ∈ Rn×d, labels y, where d = N 2 = 1 ,600 
+
+Ensure: Best-scoring collapsed mask m∗ ∈ [0 , 1] d
+
+1: Initialize particle masks m(p) and velocities v(p) with sparse priors 2: for t = 1 to 50 do 
+
+3: for each particle p do 
+
+4: Xprune ← Prune (X, m(p)) {X ⊙ m(p), row-broadcast} 5: Fit MaxAbsScaler on Xprune ; train LinearSVC 6: O(p) ← Finner-CV  
+
+> 1
+
+− λ · sparsity (m(p))
+
+7: Update personal best p(p)
+
+> best
+
+8: end for 
+
+9: Update global best m∗
+
+10: for each particle p do 
+
+11: Draw r1, r 2 ∼ U (0 , 1) {independent per dimension} 12: v(p) ← ωv(p) +c1r1(p(p) 
+
+> best
+
+−m(p))+ c2r2(m∗ −m(p))
+
+13: m(p) ← clip (m(p) + v(p), 0, 1) 
+
+14: end for 
+
+15: end for 
+
+16: return m∗
+
+1.5, and sparse initialization (off-diagonal ∼ U (0 , 0.35) , diagonal ∼ U (0 .3, 0.8) ). PSO fits this problem because the objective is non-differentiable and multimodal in m, so gradient methods such as L1-SVM cannot be applied without first relaxing the sparsity term [11]. The output mask is used throughout the rest of the paper, reshaped into its N × N form for analyst-facing summaries. 
+
+3.3 Detection and Analyst Outputs 
+
+PhishSigma++ applies the PSO-selected relation mask over header/URL enti-ties and body-derived keyword categories, rescales sparse graph features with MaxAbsScaler, and trains a linear SVM. It therefore excludes raw bag-of-words text, but it does include deterministic body-derived semantic categories. Other learners are retained only as comparison, ablation, or robustness audits. For analyst use, the same retained mask supports two secondary outputs. First, diagonal entries behave like IOC-style entity-presence checks and thresholded off-diagonal entries yield Sigma-compatible typed field conjunctions with sup-port, false-positive estimates, and tactic tags. Section 3.3 formalizes how this typed-rule view bridges to a Sigma-style field-condition fragment in the collapsed relation space considered in this paper. The current system therefore surfaces re-tained entity types and cross-type themes, not concrete field-value contradictions such as one specific sender domain conflicting with one specific URL domain. Second, we apply K-Means to PSO-pruned malicious feature vectors, choose K
+
+by silhouette over [2 , 10] , and interpret each cluster centroid as a tactic template. Pairwise Pearson correlations within each cluster reveal which entity-type rela-tionships co-vary within the same pattern. These analysis outputs explain the detector; they are not treated as standalone signatures. 8 S. Shang et al. 
+
+Sigma-style relation-rule view. The bridge to Sigma-style logic is limited to single-email, field-level conditions over collapsed typed-relation scores. Let the pre-collapse tensor be T (G) ∈ [0 , 1] N ×N ×R with Tijr (G) = ϕr (ei, e j ), and let the deployed projection be C(T )ij = max 1≤r≤R Tijr and x(G) = vec( C(T (G))) . A handcrafted typed atom is then 
+
+ak(G) = ⊮[σk(xk(G) − τk) ≥ 0] , σk ∈ { +1 , −1}. (8) Diagonal atoms encode typed-entity presence and off-diagonal atoms encode thresholded typed relations. For a clause support Sc ⊆ { 1, . . . , d },
+
+CSc (G) = ^
+
+> k∈Sc
+
+ak(G), fSc (G) = X
+
+> k∈Sc
+
+ak(G) − | Sc| + 12 . (9) Because the atoms are binary, fSc (G) > 0 holds exactly when all atoms in the clause fire. Finite disjunctions of such clauses therefore recover a useful collapsed Sigma-style fragment, and the deployed PSO+SVM model strictly generalizes this rule mode by learning the support and weights from data. Two formal bound-aries matter. First, max-collapse is not invertible for R ≥ 2: two tensors that swap the maximizing relation channel can induce the same collapsed edge while disagreeing on a relation-specific atom. Second, if the full tensor is retained, the rule language is strictly richer. Every collapsed lower-threshold atom can be rewritten as WRr=1 ⊮[Tijr ≥ τ ], and every collapsed upper-threshold atom as 
+
+VRr=1 ⊮[Tijr ≤ τ ]; however, channel-specific tests cannot in general be recovered from C(T ) alone. Hence removing max-collapse strictly increases relation-rule coverage. Within the deployed classifier s(G) = w⊤x(G) + b, any two emails with the same x(G) receive the same score, so the current max-collapse changes explanation granularity rather than the decision surface of the deployed model. 
+
+Concrete mapping instance. Listing 1.1 contains a brand–sender mis-match: the message presents the HarborView brand while the sender domain is account-review-mail.malicious . In the current implemen-tation, the 40 extractor identifiers are sorted lexicographically before row-wise flattening, so brand_mentions is index i = 5 and sender_domain 
+
+is index j = 28 . The corresponding collapsed coordinate is therefore 
+
+k = ( i − 1) N + j = (5 − 1) · 40 + 28 = 188 ; this index is deterministic once the extractor vocabulary and its lexicographic ordering are fixed. For Listing 1.1, the worked example gives x188 (G) = w(brand_mentions , sender_domain ) ≈ 0.05 .A handcrafted mismatch rule is therefore just the threshold test x188 (G) ≤ 0.1,i.e., one collapsed coordinate plus one cutoff. This is the concrete sense in which a field-consistency rule becomes a typed relation test in the deployed feature space. 
+
+Learned versus handcrafted masks. The reduction above is representational: it shows that a handcrafted Sigma-style mask can be embedded exactly in the typed-relation space. It does not imply that the PSO-learned support must nu-merically coincide with a human-authored Sigma rule base. In practical terms, PhishSigma++: Malicious Email Detection 9
+
+constructing a large, high-quality manual Sigma corpus for RFC822 malicious-email detection would require substantial expert effort, and this paper does not include such a corpus as a direct baseline; the Literal IOC/rule row in Table 4 is therefore only an external literal-rule baseline, not a full handcrafted Sigma equivalent. The practical value of the generalization claim is that PSO searches a 1,600-dimensional typed-relation space and can recover structured cross-field supports far beyond the few dozen rules that human analysts would ordinarily enumerate manually. The learned mask should therefore be read as data-driven rule discovery over the same representational substrate, rather than as evidence that a small handcrafted Sigma mask and the learned support are identical. Because the current implementation uses the max-collapse of Eq. (6), it does not preserve which relation function achieved the score. The formal propositions above show that this limits explanation recovery and channel-specific Sigma cov-erage, while leaving the deployed collapsed classifier unchanged on any pair of emails with the same x(G). The method still does not cover multi-event corre-lation, list lookups, or aggregation operators from the full Sigma language. 
+
+# 4 Evaluation 
+
+4.1 Dataset and Setup 
+
+We evaluate on a class-balanced set of 29,142 RFC822 emails (14,571 posi-tive, 14,571 benign) drawn from three public corpora and one public reposi-tory snapshot (Fig. 3): Enron [12] (11,419 benign), Phishing Pot [13] (7,893 phishing), Nazario [14] (4,818 phishing), and SpamAssassin [10] (3,152 ham, 1,860 spam). Phishing Pot does not publish a formal tagged release; we there-fore cite the repository snapshot accessed on 2025-01-15 and ingest the upstream 
+
+email/*.eml files as distributed. Our loader applies only RFC822 validity checks (minimum header presence and non-trivial message length) before feature ex-traction; it does not manually rewrite or relabel the sample content. SpamAs-sassin spam is mapped to the positive class because its urgency, impersonation, delivery-deception, and credential/payment-lure patterns would otherwise con-taminate the benign side; Table 3 confirms that the spam slice is harder than the phishing-only slices, so the positive class is heterogeneous and reported metrics describe binary malicious-email detection rather than a phishing-only benchmark. Header coverage is 100.00% ( From ), 100.00% ( Subject ), 100.00% (Message-ID ); entity extraction covers 100.0% of records (avg 14.9 types/email). All supervised results use repeated stratified cross-validation across 5 seeds (25 runs) [15]. 
+
+4.2 Detection Results    
+
+> 1https://huggingface.co/dima806/phishing-email-detection
+> 2https://huggingface.co/ElSlay/BERT-Phishing-Email-Model 10 S. Shang et al.
+
+Fig. 3: Dataset composition under the binary evaluation setting. Table 2: Clean detection results on the balanced 29,142-email corpus; bold marks the best F 1.                               
+
+> Method F1PRAcc.
+> RuleIOC (2020) [16] 0.2031 0.6830 0.1193 0.532 SpamBayes (2011) [9] 0.9583 0.9967 0.9227 0.960 SpamAssassin [10] 0.1583 0.8739 0.0870 0.537 Dima806 DistilBERT (2023) 10.9367 0.9356 0.9379 0.937 ElSlay BERT (2024) 20.8584 0.9565 0.7786 0.872 E-PhishGen NB (2025) [17] 0.8692 0.9793 0.7840 0.884
+> PhishSigma++ 0.9675 0.9736 0.9614 0.968
+
+Table 2 compares PhishSigma++ against rule-, token-, and content-based base-lines on the same 29,142-email corpus. Rows with local re-training report aggre-gate results over their own resampling protocols: PhishSigma++ uses the main repeated evaluation protocol, and the E-PhishGen NB row re-fits the released TF-IDF+NB adapter design on the same balanced local RFC822 corpus. The Dima806 and ElSlay rows are released public checkpoints applied directly to our corpus as transfer baselines. This choice is deliberate: the main comparison target in this paper is not best-case clean accuracy after local re-tuning, but the amount of performance lost once the same released model is exposed to body-text per-turbation. Using the checkpoints directly keeps that robustness-loss comparison fair, because local fine-tuning would conflate robustness with paper-specific opti-mization, data-balancing, and early-stopping choices. SpamAssassin and Spam-Bayes are single full-corpus runs. PhishSigma++ reaches 0.9675 F 1 from typed entity relations and keyword categories alone, without unrestricted bag-of-words text, and trades only ∆F1 ≈ 0.009 against SpamBayes on this balanced corpus. The clean numbers compress because token-based classifiers operating on body text are already near the corpus ceiling; the discriminating comparison is the body-padding stress of Section 4.3, where the same configurations diverge by more than 30 ×. Within the clean setting, PhishSigma++ also yields the highest accuracy in Table 2 while preserving typed, analyst-reviewable evidence rather than unrestricted lexical features. Table 3 reports source-wise slice accuracy at 
+
+ρ = 0 .0. SpamAssassin is harder than the other collections on both sides of the PhishSigma++: Malicious Email Detection 11 
+
+Table 3: Source-wise slice accuracy at ρ = 0 .0.            
+
+> Dataset Category Slice Acc.
+> Nazario phishing-only (+) 0.9907 Phishing Pot phishing-only (+) 0.9890 SpamAssassin spam spam-only (+) 0.7337 Enron benign-only ( −)0.9969 SpamAssassin ham benign-only ( −)0.8905
+
+Table 4: Component ablation.                
+
+> Configuration Role in the design F1∆
+> Literal IOC/rule matching External indicator coverage 0.2031 –Entity counts only Typed entities without relations 0.9372 +0.7341 PSO-pruned relation graph PhishSigma++ detector 0.9675 +0.0303 All interaction features Dense relation control 0.9639 -0.0036
+
+boundary: its spam slice and its ham slice achieve the lowest source-specific ac-curacies, consistent with that collection being a topically distinct, older-style commercial- and bulk-mail corpus. The residual clean errors are therefore con-centrated in SpamAssassin on both sides of the binary boundary. 
+
+Ablation. Table 4 shows that literal IOC matching alone is weak at 0.2031 F 1,while typed entity counts already lift performance to 0.9372. Adding the PSO-pruned relation graph gives the best result, 0.9675 F 1, a further +0.0303 over counts alone. Keeping all interaction features is slightly worse at 0.9639, indicat-ing that selective relation evidence is more useful than the full dense interaction set. 
+
+4.3 Adversarial Robustness 
+
+We evaluate robustness to a Good Word body-injection attack on the same full corpus as the main results. At injection rate ρ, phishing test emails are padded with text drawn from benign emails so that a fraction ρ of the final body is benign; headers and URLs are preserved (MTA-controlled or required for the attack to succeed). After injection, structural features are re-extracted from the perturbed text, so any new entities introduced by the padding are represented in the evaluated features. Locally re-fit models are evaluated on the perturbed corpus and reported by F 1; released checkpoints and direct legacy filters are evaluated once on the same perturbed corpus with no additional training. Ta-ble 5 mixes three evaluation modes. PhishSigma++ and the E-PhishGen NB adapter are locally re-fit on the perturbed corpus, the Dima806 and ElSlay rows are released public checkpoints re-evaluated on perturbed local emails with no additional training, and SpamBayes is a deterministic direct stress run on the full perturbed corpus. This is the fairest setting for the robustness comparison in this    
+
+> 1https://huggingface.co/dima806/phishing-email-detection
+> 2https://huggingface.co/ElSlay/BERT-Phishing-Email-Model 12 S. Shang et al.
+
+Table 5: Good Word body-injection robustness measured by F 1.                              
+
+> Method ρ=0.0 ρ=0.2 ρ=0.4 ρ=0.6 ρ=0.8 Dima806 DistilBERT (2023) 10.9367 0.8472 0.7395 0.7345 0.7284 ElSlay BERT (2024) 20.8584 0.7930 0.7083 0.7003 0.6851 E-PhishGen NB adapter (2025) [17] 0.8692 0.8366 0.7925 0.6914 0.4956 SpamBayes (2011) [9] 0.9672 0.8080 0.3299 0.0633 0.0243
+> PhishSigma++ 0.9675 0.9642 0.9642 0.9612 0.9579
+
+paper: it exposes the same released model or released adapter design to the clean and perturbed corpora and measures the resulting degradation, rather than mix-ing attack sensitivity with paper-specific re-tuning. PhishSigma++ stays nearly flat from 0.9675 at ρ = 0 .0 to 0.9579 at ρ = 0 .8, whereas the E-PhishGen adapter drops from 0.8692 to 0.4956 over the same range. The text-heavy sys-tems collapse under padding because their discriminative tokens are diluted; SpamBayes exhibits the textbook Good Word failure mode [1]. The robustness has a structural source. Good Word padding is applied before extraction, so every feature in F (G) is recomputed from the perturbed message; what stays stable is the feature distribution rather than a cached vector. Three properties matter. First, the Structural header and URL types, such as sender fields, reply-to, return-path, received hops, message-id domains, x-mailer fields, content-type fields, and URL components, are not modified by body insertions, so their diag-onal entries and incident edges stay unchanged across ρ. Second, the Keyword extractors are lexicon-bounded and the diagonal saturates at min( ci/5, 1) , so benign padding does not erase the original urgency, credential, or financial cues unless the padding itself introduces stronger malicious cues, which the protocol forbids. Third, the PSO mask concentrates weight on cross-type edges between Structural types and these stable Keyword categories (Table 6), so the SVM input is dominated by features whose distribution is bounded by the attacker’s permitted edits. Empirically, benign-side predictions remain unchanged across 
+
+ρ ∈ { 0, 0.2, 0.4, 0.6, 0.8} because benign emails are not padded, and the positive-side recall drops by under one percentage point on the phishing slices while remaining in the same range on the SpamAssassin-spam slice. These structural properties hold only for non-adaptive padding within the threat model of §2; adaptive header forgery, URL obfuscation, and entity splicing are explicitly out of scope and are listed in §6. 
+
+4.4 Evidence and Tactic Analysis 
+
+The retained mask supports an analyst-facing summary that uses the same pa-rameters as the classifier, with no separate explainer model. Table 6 groups the most frequent retained relations into type-level themes (rows overlap, so cover-age does not sum to 100%); cross-seed Jaccard 0.960 indicates stability under random restarts. 
+
+Worked example. Running Listing 1.1 through the deployed pipeline yields a brand-bearing display signal, brand_mentions , with value “HarborView PhishSigma++: Malicious Email Detection 13 
+
+Table 6: PSO-selected tactic evidence (overlapping coverage).                
+
+> Theme Evidence Coverage Reading
+> Sender-URL di-vergence sender identity with url structure 66% Spoofed identity points away from the payload domain. Urgent link fun-nel urgency language with url structure 37% Deadline language steers the user toward a link. Infrastructure-payload coupling routing metadata with url structure 27% Routing traces recur with payload URL structure. Authority-payment lure authority mimicry with financial language 20% Authority cues frame creden-tial or payment requests. Brand urgency lure brand impersonation with urgency language 17% Brand names pair with sus-pension or deadline pressure. Brand-sender mismatch brand impersonation with sender identity 17% Content brand conflicts with sender identity fields.
+
+Capital”, a sender domain that does not match the brand, a distinct reply-to domain, a URL domain with no shared tokens, and the keyword categories urgency, link-action, and credential. In the collapsed matrix, representative edges include w(sender_domain , url_domain ) ≈ 0.18 from length-ratio and 
+
+w(brand_mentions , sender_domain ) ≈ 0.05 from token Jaccard; the urgency coordinate is also active with the URL domain. Among the 1,600 coordinates, the PSO mask retains only a small subset. The four largest positive SVM weights connect sender identity with URL structure, brand impersonation with sender identity, urgency with URL structure, and credential cues with URL structure. The analyst-facing summary therefore reads as four typed lines (sender–URL divergence, brand–sender mismatch, urgency–link pressure, credential–link pressure) rather than a token list, and the same mask subsequently groups the email into the “brand urgency lure” family of Appendix Table A2. Because the summary is generated by the deployed model itself, a changed mask immediately changes the analyst-facing lines. Across 25 runs, K-means on PSO-pruned malicious vectors (per-run K chosen by silhouette over [2 , 10] , centroid signatures unioned) yields 41 distinct cluster-centroid labels. Of 41 unique patterns, 11 map directly to MITRE ATT&CK [18] techniques and 32 (78 .0% ) are cross-field correlations not encoded at the technique level of ATT&CK; this share reflects taxonomy granularity rather than a claim of newly discovered attacker techniques. Sender–URL divergence appears in two-thirds of families and brand–urgency pairing in about one-sixth. Some clusters are narrow and immediately actionable for analyst review, while broader clusters remain exploratory. Appendix Table A2 lists representative patterns without a direct ATT&CK counterpart. 
+
+# 5 Discussion 
+
+Clean accuracy and robustness are separate axes. The strongest clean-data end-points come from content-aware models, but those systems provide less direct typed-field provenance and degrade once body text is diluted. PhishSigma++ 14 S. Shang et al. 
+
+trades only ∆F1 ≈ 0.009 versus SpamBayes for an order-of-magnitude smaller drop under body padding and analyst-facing evidence at the type level. 
+
+A sparse malicious-pattern detector, not a campaign signature. The heteroge-neous positive class makes the learned mask a malicious-pattern detector rather than a phishing-campaign signature: shared cross-field structure transfers across phishing and spam slices, and the lower spam-only row in Table 3 reflects the same heterogeneity. Tactic clusters expose this mask at the type level but remain analyst-review candidates rather than validated threat-intelligence rules. 
+
+Cost separation between training and inference. PSO and tactic clustering are a single offline training stage (148.4 min on 29,142 emails) that runs at the ca-dence of model refreshes. Gateway inference uses the frozen extractors, frozen mask, and one linear-SVM decision function and processes 60 emails/s; the per-email cost is deterministic extraction plus one 1,600-dimensional sparse dot prod-uct, and the offline search complexity affects refresh cadence rather than online throughput. 
+
+# 6 Limitations and Future Work 
+
+Regex extraction may not cover all encodings, the five relation functions capture string similarity rather than deeper semantics, max-collapse discards relation-specific contrasts; retaining the full relation tensor would let the mask select relation channels and inequality directions directly, bringing the implementation closer to richer Sigma-style field logic; and PSO is a metaheuristic (cross-seed Jaccard 0.960 suggests stability but not optimality). Stratified CV may overes-timate generalization if source identity correlates with labels; the binary setup maps SpamAssassin spam to the positive class, so results are not phishing-only campaign generalization. The body-padding stress is non-adaptive: attacks that target the typed-relation surface itself — adaptive URL obfuscation lowering the sender–URL edge weight, brand-token splicing into the display name, or benign-header splicing to dilute relation evidence — require attacker-aware pro-tocols and remain future work, alongside authenticated-header forgery, sender-reputation manipulation, landing-page rewriting, concept drift [19], and larger pretrained text encoders. 
+
+# 7 Related Work 
+
+Email-phishing detection has largely been framed as a content problem. URL-lexical models [20], deep-learning text classifiers [21,22], and the broader survey of Das et al. [4] show that strong clean performance is achievable when the model can freely consume body text, URLs, and surface tokens. These systems are effective at recognizing recurring lexical patterns, but their evidence is often difficult to map back to the operational question an analyst asks about a specific message: which fields disagree, which role is being impersonated, and which link PhishSigma++: Malicious Email Detection 15 
+
+or sender relationship actually made the email suspicious. A second line of work focuses on organizational phishing, where those cross-field inconsistencies mat-ter more than broad text similarity. Cidon et al. [5] characterize BEC through sender behavior and historical communication context; Ho et al. [7] detect lateral phishing from header-level and behavioral anomalies at enterprise scale; Gascon et al. [8] show that content-agnostic email features can separate spear-phishing from benign traffic. Together these works motivate a detector that treats phish-ing as abuse of business context rather than as generic spam text. Our setting is narrower than theirs in that we stay within single-message RFC822 evidence, but richer than pure header anomaly scoring because we explicitly model relations among header entities, brand cues, and embedded URLs. Recent email-security studies further highlight why this distinction matters. Reporting-evasion tech-niques, user-facing URL-inspection tasks, and blocklist manipulation all exploit the gap between what the message looks like locally and what it is doing opera-tionally [23,24,25]. Those works motivate email-specific evaluation and analyst-facing evidence, but they do not model pairwise relations between typed enti-ties inside one message. The clean-accuracy/robustness gap has been studied since Dalvi et al. [26] and the Good Word attack [1]; Li et al. [27] generalize the pattern to neural text systems and Biggio et al. [28] study evasion against learned spam filters. These attacks target token-level or differentiable feature sur-faces. Our typed-relation representation reduces that exposure for the specific non-adaptive setting we test, because header and URL extractors remain stable under simple body-text padding even when the prose itself changes. Intelligence-driven methods anchor detection on curated knowledge. IOC extractors [16] and CTI aggregation [29] treat indicators largely in isolation. Sigma rules [2,3] en-code analyst-written SIEM detections as structured YAML rules. Graph-based provenance systems [30,31,32] capture rich relational structure, but they do so at the system-call or network level. PhishSigma++ instead applies PSO-guided graph masks within single emails [11], so the same sparse typed-relation structure drives both the verdict and the analyst-reviewable evidence summary. 
+
+# 8 Conclusion 
+
+PhishSigma++ couples a typed entity-relation graph with a PSO-selected sparse mask to produce both a malicious-email verdict and type-level relation evidence from RFC822 messages. On 29,142 emails it reaches 0.9675 F 1 on clean data and retains 0.9579 F 1 under Good Word body padding at ρ = 0 .8, where token-based baselines drop by an order of magnitude. The same retained mask also groups malicious examples into 41 candidate tactic families, showing that detection accuracy, evidence provenance, and robustness should be evaluated together. 
+
+# References  
+
+> 1. Daniel Lowd and Christopher Meek. Good word attacks on statistical spam filters. In CEAS , volume 2005, 2005.
+
+16 S. Shang et al. 2. Sigma HQ. Sigma rules specification, version 2.1.0, 2025. Released 2025-08-02. https://sigmahq.io/sigma-specification/specification/sigma-rules-specification.html , accessed 2026-05-02. 3. Peng Gao, Fei Shao, Xiaoyuan Liu, Xusheng Xiao, Zheng Qin, Fengyuan Xu, Pra-teek Mittal, Sanjeev R Kulkarni, and Dawn Song. Enabling efficient cyber threat hunting with cyber threat intelligence. In 2021 IEEE 37th International Confer-ence on Data Engineering (ICDE) , pages 193–204. IEEE, 2021. 4. Avisha Das, Shahryar Baki, Ayman El Aassal, Rakesh Verma, and Arthur Dun-bar. Sok: a comprehensive reexamination of phishing research from the security perspective. IEEE Communications Surveys & Tutorials , 22(1):671–708, 2019. 5. Asaf Cidon, Lior Gavish, Itay Bleier, Nadia Korshun, Marco Schweighauser, and Alexey Tsitkin. High precision detection of business email compromise. In 28th USENIX Security Symposium (USENIX Security 19) , pages 1291–1307, 2019. 6. Verizon Business. 2023 data breach investigations report. Technical report, Verizon Business, 2023. https://www.verizon.com/business/resources/reports/2023-data-breach-investigations-report-dbir.pdf , accessed 2026-05-02. 7. Grant Ho, Asaf Cidon, Lior Gavish, Marco Schweighauser, Vern Paxson, Stefan Savage, Geoffrey M Voelker, and David Wagner. Detecting and characterizing lateral phishing at scale. In 28th USENIX security symposium (USENIX security 19) , pages 1273–1290, 2019. 8. Hugo Gascon, Steffen Ullrich, Benjamin Stritter, and Konrad Rieck. Reading be-tween the lines: content-agnostic detection of spear-phishing emails. In Interna-tional Symposium on Research in Attacks, Intrusions, and Defenses , pages 69–91. Springer, 2018. 9. SpamBayes Project. Spambayes: Bayesian anti-spam classifier, 2011. https:// spambayes.sourceforge.io/ , accessed 2026-05-02. 10. Apache Software Foundation. Apache spamassassin, 2025. https : / / spamassassin.apache.org/ , accessed 2026-05-02. 11. Bing Xue, Mengjie Zhang, Will N Browne, and Xin Yao. A survey on evolutionary computation approaches to feature selection. IEEE Transactions on evolutionary computation , 20(4):606–626, 2015. 12. Bryan Klimt and Yiming Yang. The enron corpus: A new dataset for email clas-sification research. In European conference on machine learning , pages 217–226. Springer, 2004. 13. rf-peixoto. Phishing pot (public phishing .eml repository snapshot), 2024. GitHub repository snapshot; no formal release or tag published. https://github.com/rf-peixoto/phishing_pot . Accessed 2025-01-15. 14. J. Nazario. Phishing corpus, 2006. https://monkey.org/~jose/phishing/ . Ac-cessed 2025-01-15. 15. Daniel Arp, Erwin Quiring, Feargus Pendlebury, Alexander Warnecke, Fabio Pier-azzi, Christian Wressnegger, Lorenzo Cavallaro, and Konrad Rieck. Dos and don’ts of machine learning in computer security. In 31st USENIX Security Symposium (USENIX Security 22) , pages 3971–3988, 2022. 16. F. Hightower. ioc-finder: Library to find indicators of compromise in text, 2020. 
+
+https://github.com/fhightower/ioc-finder .17. Luca Pajola, Eugenio Caripoti, Stefan Banzer, Simeone Pizzi, Mauro Conti, and Giovanni Apruzzese. E-phishgen: Unlocking novel research in phishing email de-tection. In Proceedings of the 18th ACM Workshop on Artificial Intelligence and Security , pages 64–76, 2025. 18. MITRE Corporation. MITRE ATT&CK framework, v14, 2023. https://attack. mitre.org/versions/v14/ , accessed 2026-05-02. PhishSigma++: Malicious Email Detection 17 19. Feargus Pendlebury, Fabio Pierazzi, Roberto Jordaney, Johannes Kinder, and Lorenzo Cavallaro. {TESSERACT }: Eliminating experimental bias in malware classification across space and time. In 28th USENIX security symposium (USENIX Security 19) , pages 729–746, 2019. 20. Ozgur Koray Sahingoz, Ebubekir Buber, Onder Demir, and Banu Diri. Machine learning based phishing detection from urls. Expert Systems with Applications ,117:345–357, 2019. 21. Panagiotis Bountakas and Christos Xenakis. Helphed: Hybrid ensemble learn-ing phishing email detection. Journal of network and computer applications ,210:103545, 2023. 22. Victor Sanh, Lysandre Debut, Julien Chaumond, and Thomas Wolf. Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter. arXiv preprint arXiv:1910.01108 , 2019. 23. Anish Chand, Nick Nikiforakis, and Phani Vadrevu. Doubly dangerous: Evad-ing phishing reporting systems by leveraging email tracking techniques. In 34th USENIX Security Symposium (USENIX Security 25) , pages 3181–3200, 2025. 24. Daniele Lain, Yoshimichi Nakatsuka, Kari Kostiainen, Gene Tsudik, and Srdjan Capkun. {URL } inspection tasks: Helping users detect phishing links in emails. In 
+
+34th USENIX Security Symposium (USENIX Security 25) , pages 1435–1454, 2025. 25. Ruixuan Li, Chaoyi Lu, Baojun Liu, Yunyi Zhang, Geng Hong, Haixin Duan, Yanzhong Lin, Qingfeng Pan, Min Yang, and Jun Shao. Hades attack: Under-standing and evaluating manipulation risks of email blocklists. In NDSS , 2025. 26. Nilesh Dalvi, Pedro Domingos, Mausam, Sumit Sanghai, and Deepak Verma. Ad-versarial classification. In Proceedings of the tenth ACM SIGKDD international conference on Knowledge discovery and data mining , pages 99–108, 2004. 27. Jinfeng Li, Shouling Ji, Tianyu Du, Bo Li, and Ting Wang. Textbugger: Generating adversarial text against real-world applications. arXiv preprint arXiv:1812.05271 ,2018. 28. Battista Biggio, Igino Corona, Davide Maiorca, Blaine Nelson, Nedim Šrndić, Pavel Laskov, Giorgio Giacinto, and Fabio Roli. Evasion attacks against machine learning at test time. In Joint European conference on machine learning and knowledge discovery in databases , pages 387–402. Springer, 2013. 29. Xander Bouwman, Harm Griffioen, Jelle Egbers, Christian Doerr, Bram Klievink, and Michel Van Eeten. A different cup of {TI }? the added value of commercial threat intelligence. In 29th USENIX security symposium (USENIX security 20) ,pages 433–450, 2020. 30. Xueyuan Han, Thomas Pasquier, Adam Bates, James Mickens, and Margo Seltzer. Unicorn: Runtime provenance-based detector for advanced persistent threats. 
+
+arXiv preprint arXiv:2001.01525 , 2020. 31. Sadegh M Milajerdi, Rigel Gjomemo, Birhanu Eshete, Ramachandran Sekar, and VN Venkatakrishnan. Holmes: real-time apt detection through correlation of sus-picious information flows. In 2019 IEEE symposium on security and privacy (SP) ,pages 1137–1152. IEEE, 2019. 32. Wajih Ul Hassan, Shengjian Guo, Ding Li, Zhengzhang Chen, Kangkook Jee, Zhichun Li, and Adam Bates. Nodoze: Combatting threat alert fatigue with auto-mated provenance triage. In network and distributed systems security symposium ,2019. 18 S. Shang et al. 
+
+# A Supplementary Tables 
+
+Table A1: Entity extractor groups. 
+
+Extractor Group Entity Types Count 
+
+Sender identity Structural sender_address, display_name, domain, re-turn_path, reply_to 5Routing Structural received_hops, x_mailer, mes-sage_id_domain, content_type 4Recipient Structural recipient_address, domain, username 3URL structure Structural url_actual, display_text, domain, subdo-main, params 5Attachment Structural attachment_info 1Content Content subject_text, body_text 2Direct indicators Keyword urgency, action, threat, financial, credential 5Brand / social eng. Keyword brand, greeting, closing, link-action, time-pressure, legal-threat 6Authority / scare Keyword government, notification, tech-jargon, scam-prize, security-alert, account-status 6Financial deception Keyword money-transfer, personal-info, shipping 3PhishSigma++: Malicious Email Detection 19 
+
+Table A2: Representative cross-entity patterns without direct MITRE ATT&CK counterparts. 
+
+Cross-Type Pattern Entity Groups Why Not in MITRE #Tactics 
+
+Sender–URL domain divergence sender identity 
+
+↔ URL structure MITRE separates spearphishing links from masquerading rather than encoding one cross-field relation. 27 Urgency–link pressure pattern urgency language ↔
+
+URL structure No MITRE technique models urgency language correlated with a linked action target. 15 Infrastructure– payload fingerprint routing metadata ↔
+
+URL structure MITRE does not model sending infrastructure and payload-URL correlation as a distinct pattern. 11 Authority–financial exploitation authority mimicry ↔
+
+financial language No MITRE technique models authority impersonation co-occurring with financial-request language. 8Brand impersonation + urgency pressure brand cues ↔
+
+urgency language No single MITRE technique captures the brand-urgency co-occurrence. 7Brand–sender identity mismatch brand cues ↔
+
+sender identity T1036.005 covers name matching, not brand-sender cross-field correlation. 7Fear–link exploitation fear cues ↔
+
+URL structure Social engineering is generic in MITRE; fear-to-link coupling is outside its granularity. 4

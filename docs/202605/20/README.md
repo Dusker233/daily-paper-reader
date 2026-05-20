@@ -1,93 +1,48 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-20
 
-## 每次日报
-- 最新运行日期：2026-05-20
-- 运行时间：2026-05-20 22:03:09 UTC
-- 运行状态：成功
-- 本次总论文数：15
+- 生成时间：2026-05-20 22:03:09 UTC
+- 当次推荐总数：15
 - 精读区：4
 - 速读区：11
 
-### 今日简报（AI）
-今天精读 4 篇、速读 11 篇，聚焦 LLM 驱动的网络安全与用户画像研究。  
-最值得关注的是基于 LLM 的多层云入侵检测管道和网站人格推断的新方法，分别在安全策略优化与隐私分析上提供了新视角。  
-建议普通读者关注网络安全与隐私保护趋势，可尝试了解 LLM 在实际安全工具中的应用。
-- 详情：[/202605/20/README](/202605/20/README)
+## 今日简报（AI）
+今日完成 15 篇论文阅读，重点聚焦 LLM 在网络安全与用户画像推断的应用。  
+精读显示，多层云 IDS 与自适应 Q 学习优化显著提升检测能力，同时 LLM 驱动的浏览可推断网站用户画像。  
+建议关注 AI 在安全防护和隐私分析中的实际落地，并尝试结合工具进行实验验证。
 
-### 精读区论文标签
-1. [A Multi\-Layer Cloud\-IDS Pipeline with LLM and Adaptive Q\-Learning Calibration](/202605/20/2605.15889v1-a-multi-layer-cloud-ids-pipeline-with-llm-and-adaptive-q-learning-calibration)  
-   标签：评分：8.2/10、query:profile-1
+## 精读区
+1. [结合大语言模型与自适应Q学习校准的多层云入侵检测流水线](/202605/20/2605.15889v1-a-multi-layer-cloud-ids-pipeline-with-llm-and-adaptive-q-learning-calibration)（8.2/10）
    摘要：本文针对云计算环境中多层入侵检测系统（IDS）存在的静态阈值与单层检测局限，提出了一个结合强化学习自适应阈值和大语言模型（LLM）多层管道的解决方案，通过网络层、主机层和虚拟机监控层联合检测，低置信度事件依次经过信心门控、记忆匹配及LLM分析，显著降低不必要的LLM调用（减少58.78%），整体性能达到88.68%准确率，表明方法在资源效率与跨层检测上均有优势，值得进一步精读以评估多层IDS实用性。
-   evidence：结合LLM与强化学习的云入侵检测系统
-2. [PersonaFingerprint: Measuring Persona Inference on Modern Websites with LLM\-Driven Browsing](/202605/20/2605.15962v1-personafingerprint-measuring-persona-inference-on-modern-websites-with-llm-driven-browsing)  
-   标签：评分：8.0/10、query:q7
+2. [PersonaFingerprint：基于大型语言模型浏览的现代网站用户画像推断测量](/202605/20/2605.15962v1-personafingerprint-measuring-persona-inference-on-modern-websites-with-llm-driven-browsing)（8.0/10）
    摘要：本文提出了PersonaFingerprint方法，利用LLM驱动的多代理浏览框架，通过分析加密流量的包长度和到达时间序列来推断用户的浏览行为特征（persona）。研究在10个现代网站和15种不同persona上实验，发现仅凭短窗口加密流量即可达到约84%的persona识别准确率，同时保留93%的网站识别能力，揭示现代网站流量元数据的隐私风险。对于关注网络隐私和网站指纹的读者，值得精读。
-   evidence：基于LLM的加密网页流量用户画像推断
-3. [Federated Stream\-Processing and Latency\-Gated Response for Cross\-Sector Threat Detection and Collaborative Containment](/202605/20/2605.17325v1-federated-stream-processing-and-latency-gated-response-for-cross-sector-threat-detection-and-collaborative-containment)  
-   标签：评分：8.0/10、query:q9
+3. [跨部门威胁检测与协作遏制的联邦流处理与延迟门控响应](/202605/20/2605.17325v1-federated-stream-processing-and-latency-gated-response-for-cross-sector-threat-detection-and-collaborative-containment)（8.0/10）
    摘要：本文针对跨部门关键基础设施的高级持续威胁（APT）攻击，提出了一种联邦流处理与延迟门控响应框架，实现机器级速度的威胁检测与协同隔离。方法通过预过滤分发器、锁分片状态工作器以及95%统计水印策略，支持延迟数据的推测性处理与最终一致性。实验表明在50万事件/秒负载下，端到端响应可在12\-20秒完成，显示了高效性和可扩展性，值得继续精读。
-   evidence：跨部门使用高通量流处理的联邦威胁检测
-4. [UniAlign: A Model\-Agnostic Framework for Robust Network Traffic Classification under Distribution Shifts](/202605/20/2605.17575v1-unialign-a-model-agnostic-framework-for-robust-network-traffic-classification-under-distribution-shifts)  
-   标签：评分：8.0/10、query:q4
+4. [UniAlign：一种面向模型的鲁棒网络流量分类框架应对分布偏移](/202605/20/2605.17575v1-unialign-a-model-agnostic-framework-for-robust-network-traffic-classification-under-distribution-shifts)（8.0/10）
    摘要：本论文提出了UniAlign，一种模型无关的网络流量分类（NTC）鲁棒训练框架，旨在解决分布变化导致的性能下降问题。方法结合域对齐微调与稳定模型集成，学习跨域稳定特征并利用平滑损失区域提高泛化能力。实验表明，在三类分布变化数据集上，UniAlign显著提升准确率和F1分数，同时训练开销远低于现有鲁棒方法。该研究值得精读，尤其对关注NTC模型在实际环境下鲁棒性的读者。
-   evidence：用于网络流量分类的机器学习方法
 
-### 速读区论文标签
-1. [ExploitBench: A Capability Ladder Benchmark for LLM Cybersecurity Agents](/202605/20/2605.14153v1-exploitbench-a-capability-ladder-benchmark-for-llm-cybersecurity-agents)  
-   标签：评分：7.8/10、query:q9
+## 速读区
+1. [ExploitBench：面向大语言模型网络安全代理的能力阶梯基准](/202605/20/2605.14153v1-exploitbench-a-capability-ladder-benchmark-for-llm-cybersecurity-agents)（7.8/10）
    摘要：本论文提出 ExploitBench，一个分级能力基准，用于评估大型语言模型在真实生产环境中的漏洞利用能力。通过对 V8 浏览器 41 个漏洞的测试，将漏洞利用拆解为 16 个可测标志，从覆盖、崩溃到沙箱原语、任意读写、控制流劫持和任意代码执行。实验结果显示，公开模型通常能触发漏洞和崩溃，但很少达到任意代码执行；私有预览模型则能在多漏洞上完成高级利用。这为理解 LLM 漏洞利用潜力提供了细粒度指标，值得安全与 AI 研究者深入精读。
-   evidence：LLM网络安全利用基准测试
-2. [On the \(non\-\)resilience of encrypted controllers to covert attacks](/202605/20/2605.14230v2-on-the-non-resilience-of-encrypted-controllers-to-covert-attacks)  
-   标签：评分：7.8/10、query:q4
+2. [关于加密控制器对隐蔽攻击的（非）鲁棒性](/202605/20/2605.14230v2-on-the-non-resilience-of-encrypted-controllers-to-covert-attacks)（7.8/10）
    摘要：本文研究了网络化控制系统中加密控制器对隐蔽攻击的脆弱性，指出尽管同态加密（HE）可保证数据保密，但其固有的可塑性导致系统仍易受攻击。作者提出基于可验证计算的方案，将计算负担转移至服务器，同时无通信开销，提供对隐蔽攻击的防御。实验验证了理论分析和方法有效性，对于关注控制系统安全和加密控制的读者具有参考价值。
-   evidence：加密控制器与隐蔽攻击分析
-3. [Detecting Privilege Escalation in Polyglot Microservices via Agentic Program Analysis](/202605/20/2605.15569v1-detecting-privilege-escalation-in-polyglot-microservices-via-agentic-program-analysis)  
-   标签：评分：7.8/10、query:q7
+3. [通过代理式程序分析检测多语言微服务中的权限提升](/202605/20/2605.15569v1-detecting-privilege-escalation-in-polyglot-microservices-via-agentic-program-analysis)（7.8/10）
    摘要：本文提出 NEO，一种结合大语言模型（LLM）与经典程序分析的代理式框架，用于检测多语言微服务中的权限升级漏洞。NEO 通过 LLM 动态生成分析计划、执行跨服务代码搜索，并验证语义。实验在 25 个开源微服务应用中发现 24 个零日漏洞，精确率 81%、召回率 85%，显示出较现有工具明显提升。该研究值得安全研究者及云系统开发者关注。
-   evidence：用于复杂代码系统的LLM代理分析
-4. [From Detection to Response: A Deep Learning and Retrieval\-Augmented Generation Framework for Network Intrusion Mitigation](/202605/20/2605.17960v1-from-detection-to-response-a-deep-learning-and-retrieval-augmented-generation-framework-for-network-intrusion-mitigation)  
-   标签：评分：7.8/10、query:q5
+4. [从检测到响应：一种用于网络入侵缓解的深度学习与检索增强生成框架](/202605/20/2605.17960v1-from-detection-to-response-a-deep-learning-and-retrieval-augmented-generation-framework-for-network-intrusion-mitigation)（7.8/10）
    摘要：论文尝试解决“IDS 只会报警不会处置”的现实痛点，提出一个从攻击检测到缓解建议生成的一体化框架。前半部分使用三路二分类 DNN 对 Benign、DoS、DDoS 流量进行检测，后半部分结合 SHAP 风格特征解释、混合检索与 RAG，从 NIST、MITRE 等知识库中生成带引用的结构化缓解报告。实验显示检测准确率较高，且 RAG 输出优于普通 LLM 生成。若关注 SOC 自动化、LLM\+网络安全融合，值得继续精读。
-   evidence：用于网络流量的DNN入侵检测
-5. [More Than Meets the Eye: A Semantics\-Aware Traffic Augmentation Framework for Generalizable Website Fingerprinting](/202605/20/2605.11402v1-more-than-meets-the-eye-a-semantics-aware-traffic-augmentation-framework-for-generalizable-website-fingerprinting)  
-   标签：评分：7.6/10、query:q5
+5. [不止于表象：一种面向语义的可泛化网站指纹识别流量增强框架](/202605/20/2605.11402v1-more-than-meets-the-eye-a-semantics-aware-traffic-augmentation-framework-for-generalizable-website-fingerprinting)（7.6/10）
    摘要：本论文针对现有基于深度学习的网站指纹识别\(WF\)模型在真实世界中泛化能力差的问题，提出了SATA框架，通过语义感知的流量增强和跨层特征对齐机制，模拟应用层资源组合和帧序列变化，显著改善模型在开放世界场景下的准确率和AUROC表现。实验证明SATA能够生成训练集中缺失但真实存在的流量模式，值得关注用于研究WF泛化与流量增强方法。
-   evidence：用于加密流量分析的深度学习
-6. [Model Forensics in AI\-Native Wireless Networks: Taxonomy, Applications, and Case Study](/202605/20/2605.14387v1-model-forensics-in-ai-native-wireless-networks-taxonomy-applications-and-case-study)  
-   标签：评分：7.6/10、query:q9
+6. [AI原生无线网络中的模型取证：分类、应用与案例研究](/202605/20/2605.14387v1-model-forensics-in-ai-native-wireless-networks-taxonomy-applications-and-case-study)（7.6/10）
    摘要：本文针对AI原生无线网络中模型异常、篡改及恶意功能带来的安全风险，提出模型取证的系统化方法。通过对模型真实性验证、恶意功能识别和责任追踪进行分类，总结了模型取证在无线场景的应用，并以RF指纹识别为案例展示水印认证和后门检测的具体工作流程。结果显示，模型取证能够支持异常评估、来源追踪及可信操作，为网络安全提供重要保障。本文值得继续精读以了解具体方法与应用示例。
-   evidence：无线网络安全中的AI模型取证
-7. [PhishSigma\+\+: Malicious Email Detection with Typed Entity Relations](/202605/20/2605.11619v1-phishsigma-malicious-email-detection-with-typed-entity-relations)  
-   标签：评分：6.9/10、query:q5
+7. [PhishSigma\+\+：基于类型实体关系的恶意邮件检测](/202605/20/2605.11619v1-phishsigma-malicious-email-detection-with-typed-entity-relations)（6.9/10）
    摘要：本文提出 PhishSigma\+\+，一种基于类型实体关系的恶意邮件检测方法，旨在提升对抗文本篡改攻击的鲁棒性。方法通过提取40类实体、5类跨类型关系，并利用粒子群优化筛选稀疏判别掩码，实现分类与类型级证据可审计化。实验显示在29,142封邮件数据集上，对清洁数据F1达0.9675，并在文本填充攻击下依然保持0.9579 F1，远超传统文本特征和Sigma规则。整体显示该方法在实际部署中值得精读和深入研究。
-   evidence：检测恶意邮件，方法可用于加密恶意流量分析
-8. [Beyond Parameter Aggregation: Semantic Consensus for Federated Fine\-Tuning of LLMs](/202605/20/2605.11857v1-beyond-parameter-aggregation-semantic-consensus-for-federated-fine-tuning-of-llms)  
-   标签：评分：6.9/10、query:q9
+8. [超越参数聚合：大语言模型联邦微调的语义共识方法](/202605/20/2605.11857v1-beyond-parameter-aggregation-semantic-consensus-for-federated-fine-tuning-of-llms)（6.9/10）
    摘要：本文提出了一种用于大语言模型（LLM）联邦微调的新方法，称为 Semantic Consensus，通过在共享公有提示集上交换模型生成行为而非参数，实现通信量与模型规模无关，同时支持异构架构和黑箱模型。实验显示，该方法在多项基准任务上可匹配或超越强联邦 LoRA 基线，同时显著减少通信开销、运行时间和能耗，适合在敏感领域应用。值得继续精读以了解其方法细节和实验设置。
-   evidence：LLM联邦微调用于协作任务
-9. [On the Limitations of Large Language Models for Conceptual Database Modeling](/202605/20/2605.11986v1-on-the-limitations-of-large-language-models-for-conceptual-database-modeling)  
-   标签：评分：6.9/10、query:q3
+9. [大型语言模型在概念数据库建模中的局限性](/202605/20/2605.11986v1-on-the-limitations-of-large-language-models-for-conceptual-database-modeling)（6.9/10）
    摘要：本文评估大语言模型（LLMs）在关系数据库概念建模中生成实体\-关系（ER）图的能力，结合不同模型与提示工程方法进行实验。结果显示，LLMs在简单需求场景下表现尚可，但复杂场景中一致性和约束表达能力显著下降，验证成本可能抵消生产力提升。该研究为理解LLMs在概念建模中的局限提供系统性证据，值得数据库与AI交叉领域研究者精读。
-   evidence：LLM用于概念建模
-10. [Probing Privacy Leaks in LLM\-based Code Generation via Test Generation](/202605/20/2605.15248v1-probing-privacy-leaks-in-llm-based-code-generation-via-test-generation)  
-   标签：评分：6.9/10、query:q6
+10. [通过测试生成探查基于大型语言模型的代码生成中的隐私泄露](/202605/20/2605.15248v1-probing-privacy-leaks-in-llm-based-code-generation-via-test-generation)（6.9/10）
    摘要：本文针对LLM在代码生成任务中可能泄露敏感个人信息（PII）的问题，提出了一种基于测试用例生成的隐私泄露评估管道。通过构建真实开发场景、引入自动化隐私特征库，以及生成单元测试间接触发模型记忆，作者在5种主流LLM上进行实验，发现该方法检测到的隐私泄露比现有基线高2.56倍。论文方法系统且结果明确，值得继续精读以理解评估流程和实验设计。
-   evidence：通过测试生成探测LLM隐私泄露
-11. [Retrieval\-Based Multi\-Label Legal Annotation: Extensible, Data\-Efficient and Hallucination\-Free](/202605/20/2605.16767v1-retrieval-based-multi-label-legal-annotation-extensible-data-efficient-and-hallucination-free)  
-   标签：评分：6.9/10、query:q7
+11. [基于检索的多标签法律标注：可扩展、高效数据利用及无幻觉](/202605/20/2605.16767v1-retrieval-based-multi-label-legal-annotation-extensible-data-efficient-and-hallucination-free)（6.9/10）
    摘要：本文针对多标签法律文本标注问题，提出了一种基于检索的非参数方法，通过将文档和标签描述嵌入到固定的检索空间中，利用 k\-近邻预测标签，实现对标签集扩展和数据高效适应。实验显示该方法在三个法律数据集上均能提升精度和数据效率，同时避免生成模型的幻觉问题，提供了低成本、高可靠性的可部署方案，值得精读了解其检索机制和性能优势。
-   evidence：基于检索的LLM多标签注释，相关于网络流量理解方法
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。

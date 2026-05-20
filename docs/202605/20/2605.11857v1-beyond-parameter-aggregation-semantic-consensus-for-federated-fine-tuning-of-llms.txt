@@ -1,0 +1,1186 @@
+Title: Beyond Parameter Aggregation: Semantic Consensus for Federated Fine-Tuning of LLMs
+
+URL Source: https://arxiv.org/pdf/2605.11857v1
+
+Published Time: Wed, 13 May 2026 01:02:24 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# Beyond Parameter Aggregation: Semantic Consensus for Federated Fine-Tuning of LLMs 
+
+Amr Abourayya 
+
+Lamarr Institute for ML and AI, Technical University Dortmund Institute for AI in medicine (IKIM),University Hospital Essen 
+
+amr.abourayya@tu-dortmund.de 
+
+Jens Kleesiek 
+
+Institute for AI in medicine (IKIM) University Hospital Essen 
+
+Michael Kamp 
+
+Lamarr Institute for ML and AI, Technical University Dortmund Institute for AI in medicine (IKIM), University Hospital Essen 
+
+## Abstract 
+
+Federated fine-tuning of large language models is commonly formulated as a pa-rameter aggregation problem. However, even parameter-efficient methods require transmitting large collections of trainable weights, assume aligned architectures, and rely on white-box access to model parameters. As model sizes continue to grow and deployments become increasingly heterogeneous, these assumptions become progressively misaligned with practical constraints. We consider an al-ternative formulation in which collaboration is mediated through model behavior rather than parameters. Clients fine-tune local models on private data and exchange generated outputs on a shared, public prompt set. The server maps these outputs into a semantic representation space, forms a per-prompt semantic consensus, and returns pseudo-labels for further local fine-tuning. This formulation fundamentally changes the communication scaling of federated LLM fine-tuning. The amount of information exchanged depends only on the public prompt budget and the size of the communicated behaviors, independent of model size. As a consequence, the protocol naturally accommodates heterogeneous architectures and applies directly to open-ended text generation. We present a theoretical analysis and empirical results demonstrating that this approach can match strong federated fine-tuning baselines while substantially reducing communication by orders of magnitude (e.g., analytically by a factor of 1006 for Llama3.1-405B), as well as reductions in runtime and energy consumption. These results suggest that, for generative founda-tion models, behavior-level consensus provides a more appropriate abstraction for federated adaptation than parameter aggregation. 
+
+## 1 Introduction 
+
+Large language models are increasingly being adapted to specific sensitive domains, including healthcare, finance, and enterprise workflows. In many practical deployments, the data required for effective fine-tuning is distributed across organizations and devices and cannot be centralized due to privacy, legal, or competitive constraints. Federated learning provides a natural framework for collaborative adaptation in such settings, enabling participants to improve local models without 
+
+> Preprint.
+> arXiv:2605.11857v1 [cs.LG] 12 May 2026
+
+exposing sensitive raw data. Yet for modern LLMs, the dominant practical constraint is often not local compute but what can be communicated. 
+
+Most federated learning protocols are parameter-centric, which means that clients transmit and aggregate weights, gradients, or adapter updates. For LLMs, this formulation faces three fundamental difficulties. First, communication cost becomes a dominant bottleneck. Even parameter-efficient fine-tuning approaches require repeatedly transmitting large collections of trainable weights, which are increasingly constrained by realistic bandwidth limits. Second, clients may differ in LoRA rank, adapted layers, tokenizers, or even base architectures, making parameter aggregation difficult or ill-defined. Third, white-box access to model parameters is often unavailable in practice. These difficulties reflect a more fundamental misalignment between parameter aggregation and the deployment and use of modern LLMs. In practice, what downstream systems consume from an LLM is not its internal parameters but its behaviour. For example, responses to prompts, preference judgments, tool calls, structured outputs, safety decisions, or intermediate reasoning artifacts emitted by the interface. This motivates a more general question: Can federated collaboration be mediated through behaviour rather than parameters? 
+
+At a high level, behaviour sharing treats each client model as a black-box client that can be queried on shared public stimuli and that can return compact, shareable summaries of its behaviour. The shared object need not be restricted to predictions in the classical supervised sense, depending on the application. It could be ranked preferences (for alignment), structured API calls (for tool-augmented workflows), extracted entities or plans (for enterprise pipelines), or free-form generation (for instruction following). If collaboration is expressed in a common semantic space over such behaviours, then communication can be decoupled from model size and remain meaningful even when clients are heterogeneous. We call this general approach Semantic Consensus : a framework that builds on top of the federated co-training approach [Abourayya et al., 2025] in which clients exchange model behaviour on a shared public prompt set and a server aggregates these behaviours to construct consensus targets that guide further local fine-tuning. For LLMs, behaviour is naturally captured by responses generated to a set of shared public prompts. By embedding these responses into a semantic space, consensus can be formed via geometric operations (e.g., clustering) that identify semantically consistent groups and select representative behaviours as supervision. We provide a concrete instantiation of this principle in Sec. 3. This design directly addresses the main friction points of the federated LLM adaptation. Communication becomes independent of model size, since clients transmit only generated text responses and receive consensus targets. Because aggregation occurs in the behaviour space, the framework naturally accommodates heterogeneity in architectures, tokenizers, and LoRA configu-rations. Finally, Semantic Consensus requires only forward access to model behaviour, making it applicable to open-ended generation without task-specific heads. In summary, our contributions are as follows. • We introduce Semantic Consensus , a general federated co-training principle that replaces parameter aggregation with consensus over client behaviour on shared public inputs, yielding communication independent of model size. • We propose FedCoFiT , an instantiation of Semantic Consensus for open-ended text genera-tion that builds consensus using semantic embeddings, similarity metrics, and clustering to obtain high-quality pseudo-labels for further local fine-tuning. • We provide a theoretical analysis explaining why behaviour-sharing yields substantially im-proved communication scaling relative to adapter aggregation, and we show that FedCoFiT is compatible with record-level differential privacy. • We empirically evaluate FedCoFiT across multiple benchmarks, showing that it can match or approach strong federated fine-tuning baselines while significantly reducing communication and improving practical efficiency (runtime and energy consumption). 
+
+## 2 Related Work 
+
+Traditional federated learning approaches rely on iterative model averaging (e.g., FedAvg McMahan et al. [2017]), requiring clients to upload full model updates constantly. Although effective for smaller 2architectures, it becomes impractical for large language models due to the high cost of communication. A promising solution to this bottleneck is the adoption of parameter-efficient fine-tuning (PEFT) within the Federated Learning framework. Parameter-efficient federated fine-tuning of LLMs such as LoRA Hu et al. [2022] is widely adopted to reduce the number of trainable parameters, and several works adapt LoRA to federated fine-tuning by aggregating LoRA updates at the server. A key challenge is that naively averaging LoRA adapters can be mathematically inconsistent, introducing aggregation noise and degrading performance when client configurations differ. For example, FedIT Zhang et al. [2024] integrates LoRA directly with FedAvg by having the server independently average the local LoRA adapters A and B received from clients. While this reduces communication costs, it cannot aggregate local LoRAs with heterogeneous ranks and introduces aggregation noise as the matrix multiplication required to reconstruct the update is non-linear. Specifically, the product of the averaged matrices is not equal to the sum of the individual products, leading to mathematical errors in the global model. FLoRA addresses this issue via a stacking-based aggregation method that supports heterogeneous LoRA adapters and improves the stability of federated LoRA fine-tuning Wang et al. [2024]. FlexLoRA synthesizes and redistributes LoRA weights using SVD to exploit heterogeneous client budgets Bai et al. [2024], while HetLoRA (and related heterogeneous-LoRA methods) allows dif-ferent ranks across devices and aggregates while accounting for differences in data and sparsity patterns Cho et al. [2024]. More recent studies improved initialization, aggregation, and robustness for federated LoRA tuning Bian et al. [2025], Koo et al. [2025]. These approaches are strong baselines when clients share a compatible parameter space and have white-box access to adapters. However, they fundamentally rely on transmitting trainable parameters (or structured adapter weights), which remains costly at scale and becomes inapplicable when clients use different architectures, tokenizers, or only have black-box access. More recent work continues to refine parameter-space aggregation for federated LoRA. Fed-PLoRA Zhang et al. [2026] introduces parallel one-rank LoRA modules and a Select-N-Fold strategy to reduce initialization and aggregation noise under heterogeneous client ranks, while SFed LoRA Huang et al. [2026] studies the interaction between LoRA rank, client count, and aggregation stability through a rank-dependent scaling factor. These methods further improve heterogeneous LoRA aggregation, but they remain parameter-centric as clients must still communicate adapter-side information and the server must reason about compatible LoRA structures. An alternative to parameter aggregation is to avoid sharing weights altogether, e.g., via distillation such as [Bistritz et al., 2020] or black-box control. Distillation-based FL can be viewed as a special case of behavior sharing under a fixed label space, where the shared behavior is a soft predictive distribution over classes. FedID Ma et al. [2023] is a direct application of this distillation paradigm, but it applies only to classification with fixed label spaces and does not extend to open-ended generation, where token-level supervision and an unconstrained output space make aggregation more complex and bandwidth-intensive. Additionally, it assumes server-held labels and iterative feedback. When parameters are inaccessible, black-box FL instead tunes prompts via gradient-free updates (e.g., FedBPT Sun et al. [2023]), but prompt tuning is often less expressive than weight adaptation and can be query-intensive. 
+
+## 3 Method 
+
+We consider K clients indexed by i ∈ { 1, . . . , K }. Client i has a private dataset Di = {zi,k }ni
+
+> k=1
+
+drawn from a client-specific distribution Pi and a local language model Mi. Clients may differ in architecture, tokenizer, adaptation module, LoRA rank, or access level. They collaborate without sharing raw data, gradients, optimizer states, model parameters, or adapter weights. All clients also have access to a public prompt set Dpub = {xj }Mj=1 drawn from a public prompt distribution Ppub ,containing inputs only. Let Bi(x) ∈ Y denote the observable behavior of client i on input x, such as a generated response, preference ranking, tool call, or structured output. Our goal is to use Dpub to transfer behavior across clients while keeping communication independent of model size, avoiding parameter- or adapter-alignment assumptions, and preserving the federated constraint that private data remain local. 
+
+Semantic Consensus is a behavior-level aggregation principle for federated fine-tuning. Instead of averaging parameters, clients expose their behavior on public prompts, and the server aggregates these behaviors in a shared semantic space. Let g : Y → Rde be a semantic encoder and let dist( ·, ·) be a 3Figure 1: Overview of FedCoFiT. Clients fine-tune locally, generate responses to shared public prompts, and send only these responses to the server. The server embeds and clusters the responses to select consensus pseudo-labels, which are broadcast back for further local training. Unlike parameter aggregation, FedCoFiT aggregates behavior and is compatible with heterogeneous clients. distance function in the embedding space. For each public prompt xj , client i produces a behavior 
+
+bi,j = Bi(xj ) and sends it to the server. The server computes ei,j = g(bi,j ) and aggregates {ei,j }Ki=1 
+
+to form a consensus target tj . This yields a pseudo-labeled public set ˜Dpub = {(xj , t j )}Mj=1 , which is returned to clients for local fine-tuning. Because aggregation occurs over behaviors, Semantic Consensus does not require clients to share architectures, tokenizers, adapter shapes, or white-box model access. 
+
+3.1 FedCoFiT: Semantic Consensus for Generative LLM Fine-Tuning Algorithm 1: FedCoFiT via Semantic Consensus 
+
+Input: clients {1, . . . , K }, private datasets {Di};public prompts Dpub = {xj }Mj=1 ; encoder g;distance dist ; clustering rule Cluster 
+
+Output: updated models M1, . . . , MK 
+
+> 1
+
+initialize M1, . . . , MK ; 
+
+> 2
+
+repeat  
+
+> 3
+
+foreach client i ∈ { 1, . . . , K } in parallel do  
+
+> 4
+
+update Mi on Di; 
+
+> 5
+
+generate ˆyi,j ← M i(xj ) for all xj ∈ Dpub ; 
+
+> 6
+
+send {ˆyi,j }Mj=1 to server;  
+
+> 7
+
+end  
+
+> 8
+
+foreach xj ∈ Dpub do  
+
+> 9
+
+compute ei,j = g(ˆ yi,j )/∥g(ˆ yi,j )∥2,
+
+i ∈ { 1, . . . , K }; 
+
+> 10
+
+cluster {ei,j }Ki=1 using Cluster and dist ; 
+
+> 11
+
+select consensus cluster C⋆j ; 
+
+> 12
+
+compute centroid ¯ej of C⋆j ; 
+
+> 13
+
+choose i⋆ = arg min i∈C⋆j dist( ei,j , ¯ej ); 
+
+> 14
+
+set y⋆j = ˆ yi⋆,j ; 
+
+> 15
+
+end  
+
+> 16
+
+broadcast ˜Dpub = {(xj , y ⋆j )}Mj=1 ; 
+
+> 17
+
+foreach client i ∈ { 1, . . . , K } in parallel do  
+
+> 18
+
+update Mi on Di ∪ ˜Dpub ; 
+
+> 19
+
+end  
+
+> 20
+
+until convergence ;
+
+We instantiate Semantic Consensus for open-ended generation as FedCoFiT . For each pub-lic prompt xj , client i generates a response 
+
+ˆyi,j ← M i(xj ). The server embeds each response with a sentence encoder, normal-izes the embedding, clusters the responses by semantic similarity, and selects a repre-sentative response as the pseudo-label. For each response ˆyi,j , the server computes vi,j =
+
+g(ˆ yi,j ) ∈ Rde and normalizes it as ei,j =
+
+vi,j /∥vi,j ∥2. All clustering and representative-selection steps are performed on the normal-ized embeddings. We use cosine distance, 
+
+dist( e, e ′) = 1 −e⊤e′, so semantically similar responses are close even when they differ in surface form. The encoder choice, decoding parameters, and clustering hyperparameters are fixed within each run and reported in the experimental setup. For each prompt xj , the server clusters the em-beddings {ei,j }Ki=1 using a density-based clus-tering rule. Density-based clustering is use-ful because the number of semantic response modes is unknown and isolated responses can be treated as outliers. The server selects the largest non-outlier cluster as the consensus cluster C⋆j . If multiple clusters have the same 4size, the server selects the cluster with the smallest average pairwise cosine distance, with any remaining tie broken by the smallest client index. If all responses are marked as outliers, the server uses all responses as the candidate set by setting C⋆j = {1, . . . , K }. Given C⋆j , the server computes its normalized centroid ¯ej = P
+
+> i∈C⋆j
+
+ei,j /∥ P
+
+> i∈C⋆j
+
+ei,j ∥2. The pseudo-label is the original response closest to this centroid: i⋆ = arg min i∈C⋆j dist( ei,j , ¯ej ) and y⋆j = ˆ yi⋆,j . If multiple responses are equally close to the centroid, ties are broken by the shortest response length and then by the smallest client index. This keeps the pseudo-label as a real client-generated response rather than requiring the server to synthesize a new target. The server constructs ˜Dpub = {(xj , y ⋆j )}Mj=1 and broadcasts it to all clients. Each client then continues fine-tuning on Di ∪ ˜Dpub using the standard causal language-modeling loss. Private examples and consensus pseudo-labeled examples receive equal loss weight. The local objective is 
+
+Li(θi) = E(x,y )∼Di
+
+ℓCE (Mθi (x), y ) + E(x,y ⋆)∼ ˜Dpub 
+
+ℓCE (Mθi (x), y ⋆),
+
+where ℓCE is applied to response tokens. In the convergence analysis, this corresponds to the normalized objective weights α = β = 1 /2. FedCoFiT performs aggregation in semantic behavior space rather than parameter space. The majority-cluster rule favors responses supported by multiple clients, while centroid-based representative selection keeps the pseudo-label as a natural response generated by an actual client. Since clients communicate only public-prompt behaviors and receive pseudo-labels, the protocol remains communication-efficient, architecture-agnostic, and compatible with heterogeneous LLMs. 
+
+## 4 Theory 
+
+4.1 Communication Complexity 
+
+Semantic Consensus avoids parameter exchange and instead communicates model behavior on a shared public prompt set. Let M = |Dpub | be the number of public prompts per round, K the number of clients, and ¯ℓ the average response length in tokens. In each round, every client uploads one text response per public prompt, so the upload scales as KM ¯ℓ. The server computes semantic embeddings and performs clustering and representative selection locally. It then broadcasts one pseudo-label per public prompt to all clients, so the download also scales as KM ¯ℓ. Let ct be the average number of bytes per token. The total per-round communication, upload plus download and aggregated over all clients, is CSC = Θ  KM ¯ℓc t
+
+, which is independent of model size and does not require aligned architectures or adapter shapes. 
+
+Parameter sharing baselines. In contrast, parameter-centric FL methods communicate model updates. For parameter subsampling, client i transmits a fraction ρ ∈ (0 , 1] of an update vector with Pi parameters. If cparam denotes bytes per communicated scalar, the per-round total communi-cation scales as Csubsample = Θ  KρP icparam 
+
+, up to comparable download cost for broadcasting aggregated updates. 
+
+LoRA aggregation. Suppose LoRA is applied to Llayers layers at client i, with rank ri, and layer ℓ has dimensions (din  
+
+> ℓ
+
+, d out  
+
+> ℓ
+
+). The LoRA parameter count is PLlayers  
+
+> ℓ=1
+
+ri(din  
+
+> ℓ
+
++ dout  
+
+> ℓ
+
+), so the per-round total communication scales as CLoRA = Θ 
+
+
+
+Kc param 
+
+PLlayers  
+
+> ℓ=1
+
+ri(din  
+
+> ℓ
+
++ dout  
+
+> ℓ
+
+)
+
+
+
+, up to method-specific overhead. This cost scales with model geometry and LoRA rank and assumes aligned adapter shapes. Semantic Consensus instead scales with (K, M, ¯ℓ) and remains valid under LoRA, architecture, tokenizer, and access heterogeneity. 
+
+Example: Llama 3.1 405B scale. Consider K = 10 clients, M = 1024 prompts per round, average response length ¯ℓ = 128 , and ct ≈ 2 bytes/token. Semantic Consensus communicates only public-prompt responses and pseudo-labels, so its total upload-plus-download cost is 
+
+CSC ≈ 2KM ¯ℓc t = 2 · 10 · 1024 · 128 · 2 ≈ 5.2 MiB ,
+
+where the leading factor 2 accounts for upload and download. Now consider a Llama 3.1–405B-scale backbone with Llayers = 126 , hidden size dmodel = 16 ,384 , FFN size dff = 53 ,248 ,FP16 communication cparam = 2 , and LoRA rank r = 32 . If LoRA is applied only to Wq
+
+5and Wv , the upload cost is C↑ 
+
+> LoRA( q,v )
+
+= cparam Llayers 2r(dmodel + dmodel ) = 528 ,482 ,304 
+
+bytes ≈ 504 .0 MiB , or 1008 .0 MiB including download, which is ≈ 194 × larger than Seman-tic Consensus. If LoRA is applied to all attention projections and the MLP, the upload cost is 
+
+C↑ 
+
+> LoRA(attn+MLP)
+
+= cparam Llayers r{4( dmodel + dmodel ) + 3( dmodel + dff )} ≈ 2,741 ,501 ,952 bytes 
+
+≈ 2614 .5 MiB , or 5229 .0 MiB including download, which is ≈ 1006 × larger. Thus, for a 405B-scale model, Semantic Consensus reduces total per-round communication by roughly 194 ×–1006 ×
+
+while remaining independent of model size. Additional communication examples are provided in Appendix.E.6 
+
+4.2 Convergence 
+
+FedCoFiT alternates between local updates on private data and local updates on a pseudo-labeled public prompt set. Since pseudo-labels may be noisy and the public prompt distribution may differ from a reference prompt distribution, each client performs SGD on a time-varying surrogate objective whose gradient is a biased approximation of a fixed reference objective gradient. In the non-IID setting, client distributions differ, introducing additional variability through client heterogeneity. We provide a descent-to-stationarity guarantee where the bias is controlled by covariate shift, pseudo-label noise, and finite-sample concentration from using Bpub public examples per step. Let there be K clients. Client i draws i.i.d. data from Pi(x, y ) = Pi,X (x)Pi(y | x). Define the global mixture P(x, y ) = K−1 PKi=1 Pi(x, y ), with marginal PX and conditional P(y | x). The private objectives are Fi(θ) = E(x,y )∼P i [ℓ(θ; x, y )] and F (θ) = K−1 PKi=1 Fi(θ).At communication round q, public prompts follow Q(q) 
+
+> X
+
+. Given prompt x, the pseudo-labeling mechanism induces eP(q)(· | x) over pseudo-labels ˜Y . Since the public pool is unlabeled, define the reference public objective as G(θ) = Ex∼P X Ey∼P (·| x)[ℓ(θ; x, y )] . For the equal-weight objective used in FedCoFiT, define the round-q surrogate objective as 
+
+Φ(q)(θ) = 12 F (θ) + 12 G(θ; eP(q), Q (q) 
+
+> X
+
+), (1) where G(θ; eP(q), Q (q) 
+
+> X
+
+) = Ex∼Q(q)
+
+> X
+
+E ˜Y ∼ eP(q)(·| x)[ℓ(θ; x, ˜Y )] . We measure stationarity with respect to 
+
+¯Φ( θ) = 12 F (θ) + 12 G(θ).
+
+Assumption 1 (Smoothness and stochastic gradients) . Assume: (i) ¯Φ is Λ-smooth along {θt}Tt=0 ; and (ii) for each SGD step t, E[gt | θt, q (t)] = ∇Φ(q(t)) (θt) and E∥gt − ∇ Φ(q(t)) (θt)∥2 | θt, q (t) ≤
+
+σ2 + 14 ζ2. Here σ2 captures minibatch noise, and ζ2 captures client heterogeneity. 
+
+Assumption 2 (Client heterogeneity) . Along the iterates {θt}Tt=0 , assume K−1 PKi=1 ∥∇ Fi(θt) −∇F (θt)∥2 ≤ ζ2 for all t ∈ { 0, . . . , T }.
+
+Assumption 3 (Public shift, pseudo-label noise, and finite public sampling) . Assume: (i) for each round q, KL( PX ∥Q(q) 
+
+> X
+
+) ≤ τq and τ = max q τq ; (ii) for all (θ, x, y ), ∥∇ θ ℓ(θ; x, y )∥ ≤ Ggrad ; (iii) for each round q, ηq = Ex∼Q(q)
+
+> X
+
+[TV( P(· | x), eP(q)(· | x))] and ηpl = max q ηq ; and (iv) whenever a client forms a public-gradient estimate at step t, it uses Bpub i.i.d. samples {(xk, ˜Yk)}Bpub  
+
+> k=1
+
+with 
+
+xk ∼ Q(q(t))  
+
+> X
+
+and ˜Yk ∼ eP(q(t)) (· | xk), independent of θt conditional on the past. Define the high-probability public-gradient gap 
+
+∆T (ρ) = Ggrad 
+
+√2τ + 2 Ggrad ηpl + 4 Ggrad 
+
+s
+
+2
+
+Bpub 
+
+
+
+dθ log 5 + log 2Tρ
+
+
+
+. (2) 
+
+Lemma 1 (Surrogate–reference public gradient gap) . Under Assumption 3, with probability at least 
+
+1 − ρ over the sampling of public prompts and pseudo-labels across the T SGD steps, ∥∇ θ Gt(θt) −∇θ G(θt)∥ ≤ ∆T (ρ) for all t ∈ { 0, . . . , T −1}, where Gt(θ) is the empirical public objective formed from the Bpub samples in Assumption 3(4). 
+
+Theorem 1 (Stationarity under shift, pseudo-label noise, and non-IID heterogeneity) . Let {θt}Tt=0 be produced by SGD, θt+1 = θt − ηg t for t = 0 , . . . , T − 1. Under Assumptions 1, 2, and 3, choose 
+
+6η ≤ 1/(4Λ) and fix ρ ∈ (0 , 1) . Then, on the event of Lemma 1, 
+
+1
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+E∥∇ ¯Φ( θt)∥2 ≤ 4  ¯Φ( θ0) − ¯Φ⋆
+
+ηT + 2Λ η σ2 + 14 ζ2 + 34 ∆T (ρ)2, (3) 
+
+where ¯Φ⋆ = inf θ ¯Φ( θ) and the expectation is over SGD minibatch randomness. 
+
+Remark. The full proof is available in the appendix.A. The term ζ2/4 captures client heterogeneity under the equal-weight global SGD abstraction. An analysis with multiple explicit local steps between communication rounds typically introduces additional drift terms depending on the number of local steps and the heterogeneity level. 
+
+4.3 Privacy Analysis 
+
+Federated LoRA-based fine-tuning methods such as FlexLoRA and FLoRA keep raw client data local while aggregating adapter-side information at the server. Prior work shows that PEFT can be combined with differential privacy through mechanisms such as DP-SGD [Liu et al., 2024]. Motivated by this, we introduce DP-FedCoFiT and show that FedCoFiT admits a record-level differential privacy guarantee when each client’s local LoRA fine-tuning mechanism is differentially private. Let ϕi denote the trainable LoRA parameters of client i, with the backbone frozen. At communication round q, client i applies a randomized local training mechanism ϕ(q) 
+
+> i
+
+← A i,q (Di, H (q−1) ), where 
+
+H(q−1) is the transcript up to round q − 1. Assume that, for every fixed history H(q−1) , Ai,q is 
+
+(εi,q , δ i,q )-differentially private with respect to Di. After local training, client i generates responses on Dpub = {xj }Mj=1 and releases R(q) 
+
+> i
+
+= {ˆy(q) 
+
+> i,j
+
+}Mj=1 , where ˆy(q) 
+
+> i,j
+
+← M i(xj ; ϕ(q) 
+
+> i
+
+).
+
+Definition 1 (Neighboring datasets) . For a fixed client i, two datasets Di and D′ 
+
+> i
+
+are neighboring if they differ in one training example. 
+
+Theorem 2. Suppose that, for each communication round q, the client-side mechanism 
+
+Ai,q (·, H (q−1) ) is (εi,q , δ i,q )-differentially private with respect to Di. Then the released public-prompt responses R(q) 
+
+> i
+
+are also (εi,q , δ i,q )-differentially private with respect to Di. More-over, the overall multi-round mechanism induced by client i over Q communication rounds is 
+
+(PQq=1 εi,q , PQq=1 δi,q )-differentially private with respect to Di.Proof sketch. At communication round q, the local LoRA fine-tuning mechanism is (εi,q , δ i,q )-DP by assumption. The released responses R(q) 
+
+> i
+
+depend only on the resulting private model state and the public prompts, so they are DP by post-processing. Server-side embedding, clustering, representative selection, and broadcast are also post-processing. Adaptive composition across communication rounds gives the stated bound. Details are given in appendix B .In DP-FedCoFiT, sharing responses on the public prompt set does not break the privacy guarantee, as those responses are outputs of a differentially private client-side fine-tuning mechanism. The guarantee is record-level with respect to each client’s local dataset. 
+
+## 5 Empirical Evaluation 
+
+We evaluate FedCoFiT along three axes: performance, communication, and efficiency. In all experiments, clients fine-tune locally on private data and collaborate through semantic consensus rounds using a shared public prompt set Dpub that was sampled from the dataset and excluded from the training data (the effect of this shared public prompt set size and distribution is studied in Appendix E.1 and E.2). We report task performance on held-out evaluation benchmarks, total communication volume measured as gigabytes uploaded/downloaded between clients and server across all rounds, and end-to-end wall-clock runtime and energy consumption. All methods are run with the same number of clients and rounds, and we report the mean score across clients. Full training hyperparameters, hardware details, and additional results are provided in Appendix C. In the empirical evaluation, we consider three adaptation regimes: instruction compliance, knowledge generalization, and chat quality. For instruction compliance, clients fine-tune on Dolly-15k Zhang et al. [2024], and 7Table 1: Comparison of Semantic Consensus FedCoFiT with baselines across instruction compliance (IFEval), knowledge generalization (MMLU), and chat quality (MT-Bench). GB denotes the cumula-tive communication volume (in gigabytes) summed across all clients and all rounds.                                                                                                                                                                                                           
+
+> Foundation Method IFEval ↑MMLU ↑MT-Bench ↑
+> Dolly-15K Alpaca Wizard OpenOrca ShareGPT UltraChat Score GB Score GB Score GB Score GB Score GB Score GB TinyLlama
+> Centralized (LoRA) 49 .32 –52 .03 –21 .32 –21 .36 –2.74 –2.61 –FedIT 43 .82 0.949 .21 0.922 .19 0.54 21 .38 0.54 2.53 0.18 2.65 0.18
+> FLoRA 50 .26 11 .35 51 .10 11 .35 22 .25 3.96 22 .84 3.96 2.81 1.98 3.10 1.98
+> FlexLoRA 50 .73 1.250 .45 1.221 .08 0.72 21 .80 0.72 2.73 0.36 2.84 0.36
+> FedCoFiT (ours) 51 .19 0.007 50 .71 0.002 22 .60 0.005 22 .73 0.001 2.79 0.002 2.97 0.002
+> LLaMA
+> Centralized (LoRA) 54 .18 –55 .17 –34 .28 –35 .19 –3.34 –3.25 –FedIT 50 .37 3.13 50 .92 3.13 31 .46 1.88 31 .74 1.88 3.29 0.625 3.17 0.625
+> FLoRA 53 .29 20 .63 54 .91 20 .63 34 .92 13 .75 35 .21 13 .75 3.41 6.875 3.31 6.875
+> FlexLoRA 52 .61 3.75 53 .79 3.75 34 .85 2.534 .62 2.53.36 1.25 3.27 1.25
+> FedCoFiT (ours) 54 .36 0.006 54 .83 0.004 34 .89 0.004 35 .78 0.001 3.45 0.002 3.34 0.002
+> LLaMA2
+> Centralized (LoRA) 58 .71 –59 .24 –43 .27 –43 .85 –5.86 –6.13 –FedIT 52 .38 2.62 53 .29 2.62 43 .29 1.57 42 .06 1.57 5.93 0.52 6.03 0.52
+> FLoRA 58 .49 17 .30 60 .25 17 .30 44 .57 11 .53 44 .52 11 .53 6.03 5.77 6.21 5.77
+> FlexLoRA 57 .24 3.14 59 .50 3.14 44 .29 2.143 .96 2.15.97 1.05 6.14 1.05
+> FedCoFiT (ours) 57 .96 0.006 60 .31 0.004 45 .02 0.004 44 .28 0.001 6.12 0.002 6.19 0.003
+
+Alpaca Taori et al. [2023]. We evaluate instruction-following behaviour using IFEval benchmark Zhou et al. [2023]. For knowledge generalization, clients fine-tune on Wizard Luo et al. [2023] and OpenOrca Lian et al. [2023], we evaluate on MMLU benchmark Hendrycks et al. [2020]. For chat quality, clients fine-tune on ShareGPT Chiang et al. [2023] and UltraChat Ding et al. [2023] and evaluate on MT-Bench Zheng et al. [2023]. For each setting, we compare FedCoFiT against parameter aggregation baselines (e.g., FLoRA, FedIT, FlexLoRA) under matched federation budgets. We report final scores over rounds, together with total communication bytes (upload and download). To connect communication to practical cost, we additionally report wall-clock runtime and energy usage measured with Lamarr Energy Tracker Fischer [2025]. Finally, we perform ablations to study the effect of design choices in public prompt size |Dpub |, public prompt distribution, and the semantic encoder 1.
+
+Experiment results: We first evaluate the performance of FedCoFiT under a homogeneous LoRA setting, where all clients use the same LoRA rank r = 32 . For TinyLlama, LLaMA, and LLaMA2, we use 10 , 10 , and 5 clients, respectively, with a micro-batch size of 16 . We additionally use a public prompt budget M = 500 prompts sampled from the fine-tuning dataset. Table 1 compares FedCoFiT with parameter-aggregation baselines across the three regimes. We also report the total communication in GB. Two trends are consistent across all three foundation models. First, FedCoFiT matches or exceeds the strongest federated baseline in task quality. On TinyLlama, FedCoFiT attains the best IFEval score on Dolly ( 51 .19 ) and competitive performance across MMLU and MT-Bench benchmarks. On LLaMA-7B, it achieves the top score on IFEval ( 54 .36 Dolly), MMLU( 35 .78 
+
+OpenOrca), and on LLaMA2-13B, it achieved the highest score across most settings (e.g., MMLU Wizard 45 .02 ). These results indicate that behavior-level consensus provides learning signals that are effective. Second, these quality levels are achieved with orders of magnitude lower communication. Across all experiments and baselines, FedCoFiT communication budget is in the range of ≈ 0.001 −
+
+0.007 GB , where parameter aggregation-based methods require substantially larger transfers, e.g., FLoRA ranges from ≈ 4−21 GB and FlexLoRA from ≈ 0.36 −3.75 GB . Concretely, on LLaMA-7B instruction tuning (Dolly), FedCoFiT uses 0.006 GB versus 3.13 GB (FedIT), 3.75 GB (FlexLoRA), and 20 .63 GB (FLoRA), while achieving the highest IFEval score. Similar gaps hold for MMLU and MT-Bench, demonstrating that FedCoFiT delivers comparable accuracy at a much smaller federation budget. Overall, FedCoFiT is consistently competitive in performance while minimizing communication, and this communication reduction translates into practical system benefits. For example, FedCoFiT reduces end-to-end runtime, energy consumption, and estimated CO 2 emissions relative to parameter aggregation (Figure 2, details are in Appendix E.3). As model size grows and adapter updates become more expensive to transmit, these efficiency gains become increasingly pronounced. 
+
+> 1Code available at https://anonymous.4open.science/r/FedCoFiT
+
+8Table 2: TinyLlama results under heterogeneous LoRA ranks . Clients use ranks ri ∈ { 8, 16 , 32 }
+
+distributed across K=10 clients.                                   
+
+> Method IFEval ↑MMLU ↑MT-Bench ↑
+> Dolly-15K Alpaca Wizard OpenOrca ShareGPT UltraChat
+> FedIT N/A N/A N/A N/A N/A
+> FLoRA 49 .87 50 .26 20 .93 21 .04 2.58 2.61
+> FlexLoRA 49 .38 50 .12 20 .19 20 .93 2.46 2.57
+> FedCoFiT (ours) 51 .20 50 .39 21 .34 22 .08 2.74 2.84 FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Wallclock time (× FedCoFiT)
+> 1.43×
+> 2.47×
+> 1.58×
+> 1.00×
+> FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> Energy (× FedCoFiT)
+> 1.41×
+> 2.16×
+> 1.44×
+> 1.00×
+> FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> CO 2 (× FedCoFiT)
+> 1.36×
+> 1.96×
+> 1.54×
+> 1.00×
+
+Figure 2: Relative efficiency comparison on Dolly-15K using LLaMA-7B 
+
+Heterogeneous LoRA Ranks: In many federated deployments, clients cannot be assumed to use identical PEFT configurations due to different compute, memory, or personalization needs. To evaluate robustness under such heterogeneity, we consider a heterogeneous LoRA-rank setting in which clients fine-tune the same TinyLlama backbone but use different LoRA ranks. In this setting, we report task scores. Let ri denote the LoRA rank used by client i. We assign ranks across clients by sampling from a small set of representative ranks ri ∈ { 8, 16 , 32 } and distributing across the 
+
+10 clients. All other hyperparameters (target modules, learning rate, batch size, rounds, and public prompt budget) are kept identical to the homogeneous setting. Table 2 reports performance under heterogeneous ranks across instruction following (IFEval), knowledge generalization (MMLU), and chat quality (MT-Bench). FedIT is marked as N/A because it does not support heterogeneous LoRA ranks. Parameter-aggregation such as FLoRA and FlexLoRA baselines degrade under rank heterogeneity because adapter shapes differ across clients. In contrast, FedCoFiT aggregates client behaviour in prediction space and is therefore agnostic to rank choices. Empirically, FedCoFiT remains stable under heterogeneous ranks and achieves the best or competitive scores across tasks, demonstrating that behaviour-level consensus naturally supports heterogeneous PEFT configurations. 
+
+Ablations and Robustness: We further evaluate the robustness of FedCoFiT to the design of the public prompt set. First, we vary the public prompt budget M = |Dpub | and find that per-formance is stable for moderate prompt budgets, while very small public sets reduce consensus quality (Appendix E.1). Second, we test public-prompt distribution shift by replacing in-distribution Dolly prompts with prompts from Alpaca, OpenOrca, and ShareGPT; FedCoFiT remains robust to instruction-style shifts but degrades under stronger chat-format shift (Appendix E.2). We also ablate the consensus selection rule in Appendix E.5. Finally, Appendix E.3 reports wall-clock, energy, and 
+
+CO 2 efficiency results, and Appendix E.4 ablates the semantic encoder choice, motivating our default use of all-MiniLM-L6-v2 .
+
+## 6 Discussion and Conclusion 
+
+This work introduces Semantic Consensus as a fundamental principle for federated fine-tuning of large language models, in which collaboration is mediated through shared model behaviours rather than shared parameters. FedCoFiT shows that clients can collaborate by exchanging responses to public prompts, allowing the server to form consensus pseudo-labels without sharing weights, gradients, or adapters. This directly reduces communication, supports heterogeneous architectures, and remains applicable when clients have different LoRA configurations. 9The theoretical analysis shows that FedCoFiT communication cost depends on the number of public prompts and response length, not model size, giving a fundamentally different scaling law from LoRA or parameter aggregation approaches. Furthermore, we theoretically show that FedCoFiT converges with high probability under standard assumptions and identify the main factors that affect its convergence quality. Our privacy analysis shows that if local client fine-tuning is differentially private, then the released public-prompt responses and server-side consensus steps preserve record-level differential privacy through post-processing and composition. Empirically, FedCoFiT matches or exceeds strong federated LoRA baselines across instruction following, knowledge generalization, and chat-quality tasks while using orders of magnitude less communication. It also remains effective under heterogeneous LoRA ranks, where parameter aggregation is difficult or unsupported. As shown in our Ablations, the main limitation of FedCoFiT is dependence on the public prompt set and semantic clustering quality, as performance can degrade when prompts are too few or poorly aligned with the target task. Overall, Semantic Consensus suggests that behavior-level sharing is a promising alternative to parameter aggregation for federated adaptation of large and heterogeneous LLMs. Future work should improve prompt selection, robustness under distribution shift, and extensions to behaviors beyond text generation. 10 References 
+
+Martín Abadi, Andy Chu, Ian Goodfellow, H. Brendan McMahan, Ilya Mironov, Kunal Talwar, and Li Zhang. Deep learning with differential privacy. In Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security , pages 308–318, 2016. doi: 10.1145/ 2976749.2978318. Amr Abourayya, Jens Kleesiek, Kanishka Rao, Erman Ayday, Bharat Rao, Geoffrey I Webb, and Michael Kamp. Little is enough: Boosting privacy by sharing only hard labels in federated semi-supervised learning. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 39, pages 15293–15301, 2025. Gholamali Aminian, Mahed Abroshan, Mohammad Mahdi Khalili, Laura Toni, and Miguel Ro-drigues. An information-theoretical approach to semi-supervised learning under covariate-shift. In Proceedings of The 25th International Conference on Artificial Intelligence and Statistics ,volume 151 of Proceedings of Machine Learning Research , pages 7433–7449. PMLR, 2022. URL https://proceedings.mlr.press/v151/aminian22a.html. Jiamu Bai, Daoyuan Chen, Bingchen Qian, Liuyi Yao, and Yaliang Li. Federated fine-tuning of large language models under heterogeneous tasks and client resources. Advances in Neural Information Processing Systems , 37:14457–14483, 2024. Jieming Bian, Lei Wang, Letian Zhang, and Jie Xu. Lora-fair: Federated lora fine-tuning with aggre-gation and initialization refinement. In Proceedings of the IEEE/CVF International Conference on Computer Vision , pages 3737–3746, 2025. Ilai Bistritz, Ariana Mann, and Nicholas Bambos. Distributed distillation for on-device learning. 
+
+Advances in Neural Information Processing Systems , 33:22593–22604, 2020. Xiangyi Chen, Zhiwei Steven Wu, and Mingyi Hong. Understanding gradient clipping in private sgd: A geometric perspective. In Advances in Neural Information Processing Systems , 2020. URL https: //proceedings.neurips.cc/paper/2020/hash/9ecff5455677b38d19f49ce658ef0608-Abstract.html. Wei-Lin Chiang, Zhuohan Li, Ziqing Lin, Ying Sheng, Zhanghao Wu, Hao Zhang, Lianmin Zheng, Siyuan Zhuang, Yonghao Zhuang, Joseph E Gonzalez, et al. Vicuna: An open-source chatbot impressing gpt-4 with 90%* chatgpt quality. See https://vicuna. lmsys. org (accessed 14 April 2023) , 2(3):6, 2023. Yae Jee Cho, Luyang Liu, Zheng Xu, Aldi Fahrezi, and Gauri Joshi. Heterogeneous lora for federated fine-tuning of on-device foundation models. arXiv preprint arXiv:2401.06432 , 2024. Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Zhi Zheng, Shengding Hu, Zhiyuan Liu, Maosong Sun, and Bowen Zhou. Enhancing chat language models by scaling high-quality instructional conversations. arXiv preprint arXiv:2305.14233 , 2023. Raphael Fischer. Ground-truthing AI energy consumption: Validating CodeCarbon against external measurements, 2025. URL https://arxiv.org/abs/2509.22092. Saeed Ghadimi and Guanghui Lan. Stochastic first- and zeroth-order methods for nonconvex stochastic programming. SIAM Journal on Optimization , 23(4):2341–2368, 2013. doi: 10.1137/ 120880811. Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt. Measuring massive multitask language understanding. arXiv preprint arXiv:2009.03300 , 2020. Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen, et al. Lora: Low-rank adaptation of large language models. ICLR , 1(2):3, 2022. Jiayu Huang, Xiaohu Wu, Tiantian He, and Qicheng Lao. Stabilized fine-tuning with lora in federated learning: Mitigating the side effect of client size and rank via the scaling factor. arXiv preprint arXiv:2603.08058 , 2026. 11 Michael Kamp. Black-Box Parallelization for Machine Learning . PhD thesis, Rheinische Friedrich-Wilhelms-Universität Bonn, Universitäts-und Landesbibliothek Bonn, 2019. Michael Kamp, Sebastian Bothe, Mario Boley, and Michael Mock. Communication-efficient dis-tributed online learning with kernels. In ECMLPKDD , pages 805–819. Springer, 2016. Michael Kamp, Linara Adilova, Joachim Sicking, Fabian Hüger, Peter Schlicht, Tim Wirtz, and Stefan Wrobel. Efficient decentralized deep learning by dynamic model averaging. In Joint European conference on machine learning and knowledge discovery in databases , pages 393–409. Springer, 2018. Sai Praneeth Karimireddy, Satyen Kale, Mehryar Mohri, Sashank J. Reddi, Sebastian U. Stich, and Ananda Theertha Suresh. Scaffold: Stochastic controlled averaging for federated learn-ing. In Proceedings of the 37th International Conference on Machine Learning , volume 119 of Proceedings of Machine Learning Research , pages 5132–5143. PMLR, 2020. URL https://proceedings.mlr.press/v119/karimireddy20a.html. Jabin Koo, Minwoo Jang, and Jungseul Ok. Towards robust and efficient federated low-rank adaptation with heterogeneous clients. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 416–429, 2025. Tian Li, Anit Kumar Sahu, Manzil Zaheer, Maziar Sanjabi, Ameet Talwalkar, and Virginia Smith. Federated optimization in heterogeneous networks. 2018. Also appeared in Proceedings of Machine Learning and Systems (MLSys) 2020. Xiang Li, Kaixuan Huang, Wenhao Yang, Shusen Wang, and Zhihua Zhang. On the convergence of fedavg on non-iid data. In International Conference on Learning Representations , 2020. URL https://openreview.net/forum?id=HJxNAnVtDS. Wing Lian, Bleys Goodson, Eugene Pentland, Austin Cook, Chanvichet Vong, and "Teknium". Openorca: An open dataset of gpt augmented flan reasoning traces. https://https://huggingface.co/ datasets/Open-Orca/OpenOrca, 2023. Hongbin Liu, Lun Wang, Om Thakkar, Abhradeep Thakurta, and Arun Narayanan. Differentially private parameter-efficient fine-tuning for large asr models. arXiv preprint arXiv:2410.01948 ,2024. Haipeng Luo, Qingfeng Sun, Can Xu, Pu Zhao, Jianguang Lou, Chongyang Tao, Xiubo Geng, Qingwei Lin, Shifeng Chen, and Dongmei Zhang. Wizardmath: Empowering mathematical reasoning for large language models via reinforced evol-instruct. arXiv preprint arXiv:2308.09583 ,2023. Xinge Ma, Jiangming Liu, Jin Wang, and Xuejie Zhang. Fedid: Federated interactive distillation for large-scale pretraining language models. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing , pages 8566–8577, 2023. Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, and Blaise Aguera y Arcas. Communication-efficient learning of deep networks from decentralized data. In Artificial intelli-gence and statistics , pages 1273–1282. PMLR, 2017. Nagarajan Natarajan, Inderjit S. Dhillon, Pradeep K. Ravikumar, and Ambuj Tewari. Learning with noisy labels. In Advances in Neural Information Processing Systems , pages 1196–1204, 2013. URL https://papers.nips.cc/paper/5073-learning-with-noisy-labels. Masashi Sugiyama, Matthias Krauledat, and Klaus-Robert Müller. Covariate shift adaptation by importance weighted cross validation. Journal of Machine Learning Research , 8(35):985–1005, 2007. URL https://www.jmlr.org/papers/v8/sugiyama07a.html. Jingwei Sun, Ziyue Xu, Hongxu Yin, Dong Yang, Daguang Xu, Yiran Chen, and Holger R Roth. Fedbpt: Efficient federated black-box prompt tuning for large language models. arXiv preprint arXiv:2310.01467 , 2023. Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li, Carlos Guestrin, Percy Liang, and Tatsunori B Hashimoto. Stanford alpaca: An instruction-following llama model, 2023. 12 Ziyao Wang, Zheyu Shen, Yexiao He, Guoheng Sun, Hongyi Wang, Lingjuan Lyu, and Ang Li. Flora: Federated fine-tuning large language models with heterogeneous low-rank adaptations. Advances in Neural Information Processing Systems , 37:22513–22533, 2024. Colin Wei, Kendrick Shen, Yining Chen, and Tengyu Ma. Theoretical analysis of self-training with deep networks on unlabeled data. In International Conference on Learning Representations , 2021. URL https://openreview.net/forum?id=rC8sJ4i6kaH. Jianyi Zhang, Saeed Vahidian, Martin Kuo, Chunyuan Li, Ruiyi Zhang, Tong Yu, Guoyin Wang, and Yiran Chen. Towards building the federatedgpt: Federated instruction tuning. In ICASSP 2024-2024 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) ,pages 6915–6919. IEEE, 2024. Zikai Zhang, Rui Hu, and Jiahao Xu. Heterogeneous federated fine-tuning with parallel one-rank adaptation. arXiv preprint arXiv:2602.16936 , 2026. Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric Xing, et al. Judging llm-as-a-judge with mt-bench and chatbot arena. Advances in neural information processing systems , 36:46595–46623, 2023. Jeffrey Zhou, Tianjian Lu, Swaroop Mishra, Siddhartha Brahma, Sujoy Basu, Yi Luan, Denny Zhou, and Le Hou. Instruction-following evaluation for large language models. arXiv preprint arXiv:2311.07911 , 2023. 13 A Convergence Proofs and Supporting Lemmas 
+
+A.1 Proof of Lemma 1 
+
+Fix a parameter θ ∈ Rdθ and a communication round q. Define the population risks using the global reference distribution P:
+
+RP (θ) := Ex∼P X Ey∼P (·| x)[ℓ(θ; x, y )] (= G(θ)) ,R(q) 
+
+> Q
+
+(θ) := Ex∼Q(q)
+
+> X
+
+Ey∼P (·| x)[ℓ(θ; x, y )] , eR(q) 
+
+> Q
+
+(θ) := Ex∼Q(q)
+
+> X
+
+E ˜Y ∼ eP(q)(·| x)[ℓ(θ; x, ˜Y )] .
+
+For any θ and x, define vθ (x) := Ey∼P (·| x)[∇θ ℓ(θ; x, y )] and ev(q) 
+
+> θ
+
+(x) := E ˜Y ∼ eP(q)(·| x)[∇θ ℓ(θ; x, ˜Y )] .By Assumption 3(2), ∥vθ (x)∥ ≤ Ggrad and ∥ev(q) 
+
+> θ
+
+(x)∥ ≤ Ggrad .
+
+A. Covariate shift bound. Lemma 2 (Pinsker) . For distributions μ, ν on the same space, TV( μ, ν ) ≤
+
+q 12 KL( μ∥ν).
+
+Lemma 3 (Expectation shift under total variation) . Let h : X → Rdθ be measurable and satisfy 
+
+∥h(x)∥ ≤ B for all x. Then ∥Ex∼Q[h(x)] − Ex∼P [h(x)] ∥ ≤ 2B TV( P, Q ).
+
+Lemma 4 (Covariate shift gradient bound) . If KL( PX ∥Q(q) 
+
+> X
+
+) ≤ τq and ∥vθ (x)∥ ≤ Ggrad , then 
+
+∥∇ R(q) 
+
+> Q
+
+(θ) − ∇ RP (θ)∥ ≤ Ggrad 
+
+p2τq ≤ Ggrad 
+
+√2τ . 
+
+Proof. Since ∇R(q) 
+
+> Q
+
+(θ) = EQ(q)
+
+> X
+
+[vθ (x)] and ∇RP (θ) = EPX [vθ (x)] , Lemma 3 with h = vθ and 
+
+B = Ggrad gives ∥∇ R(q) 
+
+> Q
+
+(θ) − ∇ RP (θ)∥ ≤ 2Ggrad TV( PX , Q (q) 
+
+> X
+
+). Pinsker and KL( PX ∥Q(q) 
+
+> X
+
+) ≤
+
+τq imply TV( PX , Q (q) 
+
+> X
+
+) ≤ pτq /2, yielding the claim. 
+
+B. Pseudo-label noise bound. Lemma 5 (Pseudo-label noise gradient bound) . Under Assumption 3, for all θ and each communica-tion round q,
+
+∥∇ eR(q) 
+
+> Q
+
+(θ) − ∇ R(q) 
+
+> Q
+
+(θ)∥ ≤ 2Ggrad ηq ≤ 2Ggrad ηpl .
+
+Proof. For fixed θ and x, ev(q) 
+
+> θ
+
+(x) − vθ (x) = E ˜Y ∼ eP(q)(·| x)[∇θ ℓ(θ; x, ˜Y )] − Ey∼P (·| x)[∇θ ℓ(θ; x, y )] .Since ∥∇ θ ℓ(θ; x, y )∥ ≤ Ggrad , the total-variation expectation bound gives ∥ev(q) 
+
+> θ
+
+(x) − vθ (x)∥ ≤ 
+
+2Ggrad TV( P(· | x), eP(q)(· | x)) . Taking Ex∼Q(q)
+
+> X
+
+yields the result. 
+
+C. Finite-sample concentration for the empirical public gradient. At a public-gradient evaluation using communication round q, let {(xk, ˜Yk)}Bpub  
+
+> k=1
+
+be i.i.d. with xk ∼ Q(q) 
+
+> X
+
+and ˜Yk ∼ eP(q)(· | xk).Define bg(q)(θ) := B−1pub 
+
+PBpub  
+
+> k=1
+
+∇θ ℓ(θ; xk, ˜Yk), so E[bg(q)(θ)] = ∇ eR(q) 
+
+> Q
+
+(θ).
+
+Lemma 6 (Vector Hoeffding via a 1/2-net) . Fix θ and ρ ∈ (0 , 1) . If ∥∇ θ ℓ(θ; x, y )∥ ≤ Ggrad , then with probability at least 1 − ρ,
+
+∥bg(q)(θ) − ∇ eR(q) 
+
+> Q
+
+(θ)∥ ≤ 4Ggrad 
+
+s
+
+2
+
+Bpub 
+
+
+
+dθ log 5 + log 2
+
+ρ
+
+
+
+.
+
+Proof. Construct a 1/2-net N of Sdθ −1 with |N | ≤ 5dθ . For each u ∈ N , apply scalar Hoeffding to 
+
+⟨u, bg(q)(θ) − ∇ eR(q) 
+
+> Q
+
+(θ)⟩ and union bound over N . Lift from net control to full norm control by the standard approximation argument. 14 D. Combine and union bound over T steps. Fix step t and write q = q(t). By the triangle inequality, 
+
+∥bg(q)(θt) − ∇ RP (θt)∥ ≤ ∥ bg(q)(θt) − ∇ eR(q) 
+
+> Q
+
+(θt)∥ + ∥∇ eR(q) 
+
+> Q
+
+(θt) − ∇ R(q) 
+
+> Q
+
+(θt)∥
+
++ ∥∇ R(q) 
+
+> Q
+
+(θt) − ∇ RP (θt)∥.
+
+Lemma 6 with ρt, Lemma 5, and Lemma 4 imply that with probability at least 1 − ρt,
+
+∥bg(q)(θt) − ∇ RP (θt)∥ ≤ Ggrad 
+
+√2τ + 2 Ggrad ηpl + 4 Ggrad 
+
+s
+
+2
+
+Bpub 
+
+
+
+dθ log 5 + log 2
+
+ρt
+
+
+
+.
+
+Set ρt = ρ/T and union bound over t = 0 , . . . , T − 1 to obtain, with probability at least 1 − ρ,
+
+∥bg(q(t)) (θt) − ∇ RP (θt)∥ ≤ ∆T (ρ) for all t. Identifying ∇θ Gt(θt) with bg(q(t)) (θt) and ∇θ G(θt)
+
+with ∇RP (θt) proves Lemma 1. 
+
+A.2 A Supporting Lemma: Heterogeneity Contributes Extra Variance Lemma 7 (Client sampling variance bound) . Fix θ ∈ Rdθ and suppose a client index I is sampled uniformly from {1, . . . , K }. Let b∇FI (θ) be a possibly minibatched unbiased estimator of ∇FI (θ)
+
+satisfying E[ b∇Fi(θ)] = ∇Fi(θ) and E[∥ b∇Fi(θ) − ∇ Fi(θ)∥2] ≤ σ2priv for all i. Then b∇FI (θ) is unbiased for ∇F (θ) = K−1 PKi=1 ∇Fi(θ) and 
+
+E∥ b∇FI (θ) − ∇ F (θ)∥2 ≤ σ2priv + 1
+
+K
+
+> K
+
+X
+
+> i=1
+
+∥∇ Fi(θ) − ∇ F (θ)∥2.
+
+In particular, under Assumption 2, E[∥ b∇FI (θ) − ∇ F (θ)∥2] ≤ σ2priv + ζ2.Proof. Unbiasedness follows from E[ b∇FI (θ)] = K−1 PKi=1 E[ b∇Fi(θ)] = ∇F (θ). Also, 
+
+E∥ b∇FI − ∇ F ∥2 = 1
+
+K
+
+> K
+
+X
+
+> i=1
+
+E∥ b∇Fi − ∇ F ∥2.
+
+Adding and subtracting ∇Fi gives b∇Fi − ∇ F = ( b∇Fi − ∇ Fi) + ( ∇Fi − ∇ F ). The cross term vanishes because E[ b∇Fi − ∇ Fi] = 0 , so E∥ b∇Fi − ∇ F ∥2 ≤ σ2priv + ∥∇ Fi − ∇ F ∥2. Averaging over i proves the claim. 
+
+A.3 Proof of Theorem 1 
+
+Let t = 0 , . . . , T − 1 and let q(t) be the communication round corresponding to step t. The SGD update is θt+1 = θt − ηg t.
+
+Bias–noise decomposition. Define the surrogate gradient bias 
+
+bt := ∇Φ(q(t)) (θt) − ∇ ¯Φ( θt) = 12
+
+ ∇θ Gt(θt) − ∇ θ G(θt).
+
+On the event of Lemma 1, ∥bt∥ ≤ ∆T (ρ)/2 for all t. Define ξt := gt − ∇ Φ(q(t)) (θt). By Assumption 1(2), E[ξt | θt, q (t)] = 0 and E[∥ξt∥2 | θt, q (t)] ≤ σ2 + ζ2/4. Hence 
+
+gt = ∇ ¯Φ( θt) + bt + ξt.
+
+One-step descent on ¯Φ. By Λ-smoothness of ¯Φ along iterates, 
+
+¯Φ( θt+1 ) ≤ ¯Φ( θt) − η⟨∇ ¯Φ( θt), g t⟩ + Λη2
+
+2 ∥gt∥2.
+
+Taking conditional expectation given θt, q (t), using Young’s inequality, and bounding the squared norm gives 
+
+E[ ¯Φ( θt+1 ) | θt, q (t)] ≤ ¯Φ( θt)−η
+
+ 12 − Λη
+
+
+
+∥∇ ¯Φ( θt)∥2+
+
+ η
+
+2 + Λ η2
+
+∥bt∥2+ Λη2
+
+2
+
+
+
+σ2 + 14 ζ2
+
+
+
+.
+
+Choose η ≤ 1/(4Λ) so that (1 /2 − Λη) ≥ 1/4 and (η/ 2 + Λ η2) ≤ 3η/ 4. Since ∥bt∥ ≤ ∆T (ρ)/2,
+
+E[ ¯Φ( θt+1 )] ≤ E[ ¯Φ( θt)] − η
+
+4 E[∥∇ ¯Φ( θt)∥2] + 3η
+
+16 ∆T (ρ)2 + Λη2
+
+2
+
+
+
+σ2 + 14 ζ2
+
+
+
+.
+
+15 Telescope. Summing over t = 0 , . . . , T − 1 and using E[ ¯Φ( θT )] ≥ ¯Φ⋆ := inf θ ¯Φ( θ) gives 
+
+1
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+E[∥∇ ¯Φ( θt)∥2] ≤ 4( ¯Φ( θ0) − ¯Φ⋆)
+
+ηT + 34 ∆T (ρ)2 + 2Λ η
+
+
+
+σ2 + 14 ζ2
+
+
+
+,
+
+which proves Theorem 1. 
+
+Proof overview and standard assumptions. Our convergence analysis follows a standard noncon-vex SGD template. Lemma 1 bounds the gap between the empirical public gradient and the reference public gradient uniformly over T steps by decomposing it into prompt covariate shift, pseudo-label conditional mismatch, and finite-sample concentration. Theorem 1 then plugs this uniform gap into a biased-SGD descent argument using Λ-smoothness, a bias–noise decomposition, Young’s inequal-ity, and telescoping. The assumptions are standard in nonconvex SGD and federated convergence analyses Ghadimi and Lan [2013], Karimireddy et al. [2020], Li et al. [2020]; bounded-gradient assumptions are common and can be enforced via gradient clipping Li et al. [2020], Abadi et al. [2016], Chen et al. [2020]; gradient-dissimilarity assumptions appear in FedProx/SCAFFOLD-style analyses Li et al. [2018], Karimireddy et al. [2020]; KL/TV controls are standard in covariate-shift and domain-adaptation theory Sugiyama et al. [2007], Aminian et al. [2022]; and modeling pseudo-labels as noisy labels or conditional mismatch aligns with noisy-label and self-training analyses Natarajan et al. [2013], Wei et al. [2021]. 
+
+## B Detailed Privacy Analysis of FedCoFiT 
+
+This appendix provides a detailed privacy analysis of DP-FedCoFiT. We show that if each client’s local LoRA fine-tuning procedure is differentially private, then the responses released on the public prompt set are also differentially private, and the full multi-round mechanism remains differentially private under adaptive composition. 
+
+Setup. Let K be the number of clients, with client index set [K] = {1, . . . , K }. Training proceeds for Q communication rounds, with round index set [Q] = {1, . . . , Q }. For each client i ∈ [K], let 
+
+Di = {zi, 1, . . . , z i,n i } denote the private local dataset of client i, where ni = |Di|. Let Dpub =
+
+{x1, . . . , x M } denote the public prompt set shared by all clients, where M = |Dpub |.Each client maintains a local language model. For client i, ϕi denotes the trainable LoRA parameters, while the backbone parameters are frozen. At communication round q ∈ [Q], the client updates its LoRA parameters using its private dataset Di and the information available from previous rounds. 
+
+Round history. For each round q ∈ [Q], let H(q−1) denote the history available before round q.This history may include all previous client releases, server-side computations, and pseudo-labels or broadcasts sent back to clients up to round q − 1. The exact contents of H(q−1) are not important for the privacy argument; the only requirement is that round q may depend adaptively on earlier rounds through H(q−1) .
+
+Client-side private fine-tuning mechanism. At round q, client i applies a randomized local training mechanism ϕ(q) 
+
+> i
+
+← A i,q (Di, H (q−1) ). We assume that, for every fixed history H(q−1) , the mechanism Ai,q (·, H (q−1) ) is (εi,q , δ i,q )-differentially private with respect to Di.
+
+Released responses on the public prompt set. After the local update, client i evaluates its local model on each public prompt xj ∈ Dpub . We write ˆy(q) 
+
+> i,j
+
+← M i(xj ; ϕ(q) 
+
+> i
+
+) for j ∈ [M ]. The round-q
+
+message released by client i is R(q) 
+
+> i
+
+= {ˆy(q) 
+
+> i,j
+
+}Mj=1 .
+
+Server-side processing. After receiving {R (q) 
+
+> i
+
+}Ki=1 , the server performs the standard FedCoFiT consensus step, including embedding the generated responses, clustering them in semantic space, selecting representative pseudo-labels, and broadcasting the pseudo-labeled public set back to clients. These operations are functions only of the released client messages and public information. 
+
+Definition 2 (Neighboring datasets) . Fix a client i ∈ [K]. Two datasets Di and D′ 
+
+> i
+
+are neighboring if they differ in exactly one training example. 16 Definition 3 (Differential privacy) . A randomized mechanism A is (ε, δ )-differentially private with respect to client dataset Di if, for every pair of neighboring datasets Di, D ′ 
+
+> i
+
+and every measurable set of outputs S,
+
+Pr[ A(Di) ∈ S] ≤ eε Pr[ A(D′
+
+> i
+
+) ∈ S] + δ. 
+
+Round-level privacy. We first show that the public-prompt responses released by a client in a single round inherit the privacy guarantee of the local training mechanism. 
+
+Lemma 8 (Privacy of released round-q responses) . Fix a client i ∈ [K] and a communication round q ∈ [Q]. Suppose that, for the fixed history H(q−1) , the local mechanism Ai,q (·, H (q−1) ) is 
+
+(εi,q , δ i,q )-differentially private with respect to Di. Then the released message R(q) 
+
+> i
+
+= {ˆy(q) 
+
+> i,j
+
+}Mj=1 is also (εi,q , δ i,q )-differentially private with respect to Di.Proof. For fixed history H(q−1) , the output ϕ(q) 
+
+> i
+
+is produced by Ai,q (Di, H (q−1) ), which is 
+
+(εi,q , δ i,q )-differentially private by assumption. The released message R(q) 
+
+> i
+
+is obtained by applying 
+
+Mi(·; ϕ(q) 
+
+> i
+
+) to the public prompt set Dpub . Since Dpub is public and fixed independently of Di,the map ϕ(q) 
+
+> i
+
+7 → R (q) 
+
+> i
+
+is a function of the private mechanism output and public information only. Therefore, by post-processing, R(q) 
+
+> i
+
+is also (εi,q , δ i,q )-differentially private with respect to Di.
+
+Multi-round privacy. Let Gi(Di) = ( R(1)  
+
+> i
+
+, R(2)  
+
+> i
+
+, . . . , R(Q) 
+
+> i
+
+) denote the overall multi-round mech-anism induced by client i. Since each R(q) 
+
+> i
+
+may depend on the previous history H(q−1) , Gi is an adaptive composition of the per-round release mechanisms. 
+
+Theorem 3 (Record-level privacy of DP-FedCoFiT) . Suppose that, for every communication round 
+
+q ∈ [Q] and every fixed history H(q−1) , the client-side mechanism Ai,q (·, H (q−1) ) is (εi,q , δ i,q )-differentially private with respect to Di. Then: 1. the released public-prompt responses R(q) 
+
+> i
+
+are (εi,q , δ i,q )-differentially private with respect to Di for every round q ∈ [Q];2. the overall multi-round mechanism Gi(Di) = ( R(1)  
+
+> i
+
+, . . . , R(Q) 
+
+> i
+
+) is 
+
+> Q
+
+X
+
+> q=1
+
+εi,q ,
+
+> Q
+
+X
+
+> q=1
+
+δi,q 
+
+!
+
+-differentially private with respect to Di.Proof. Part (1) follows directly from Lemma 8. For Part (2), the sequence R(1)  
+
+> i
+
+, . . . , R(Q) 
+
+> i
+
+is adaptive because the mechanism used at round q may depend on H(q−1) . Differential privacy is closed under adaptive composition, so composing the per-round mechanisms over Q rounds gives the stated guarantee. Finally, all server-side operations in FedCoFiT, including response embedding, clustering, representative selection, and pseudo-label broadcast, are functions of released messages and public information only; hence, they incur no additional privacy loss by post-processing. 
+
+Interpretation. The theorem establishes a record-level privacy guarantee for each client’s private dataset. Sharing responses on the public prompt set does not invalidate privacy in DP-FedCoFiT be-cause those responses are outputs of a differentially private client-side LoRA fine-tuning mechanism. 
+
+## C DETAILS ON EXPERIMENTS 
+
+C.1 Environments, Datasets and Metrics Compute Resources : All experiments are run on a server with an Intel(R) Platinum 8480 and 5 xNVIDIA H100 80GB. 17 Public Prompt Set : Across all experiments, clients collaborate via a shared public prompt set Dp,which is sampled from the corresponding dataset and excluded from the private fine-tuning data used by clients in that setting. 
+
+Datasets :
+
+Dolly-15K. An instruction-tuning dataset of 15 K examples spanning diverse tasks (e.g., QA, summarization, extraction). In our instruction-compliance regime, we partition Dolly-15K across clients as private data and sample in-distribution public prompts from the same instruction pool when studying prompt-budget effects. 
+
+Alpaca. A widely used instruction-following corpus (tens of thousands of instruction–response pairs). We use Alpaca as a private fine-tuning dataset in the instruction-compliance regime and also as an out-of-distribution source of public prompts for robustness tests. 
+
+Wizard. A complex instruction-tuning dataset (Evol-Instruct style) emphasizing harder instructions and reasoning-heavy responses. We use Wizard for the knowledge/generalization regime as clients’ private fine-tuning data. 
+
+OpenOrca. A GPT-augmented instruction dataset with reasoning traces (derived from FLAN-style tasks). We use OpenOrca as a private fine-tuning corpus in the knowledge/generalization regime and as an OOD public-prompt source in robustness experiments. 
+
+ShareGPT. A chat-style conversation dataset collected from ShareGPT, containing multi-turn user–assistant interactions. We use ShareGPT as a private fine-tuning corpus for chat-quality exper-iments and also as a format-shifted public-prompt source; compared to instruction prompts, these chat-oriented prompts can induce more diverse generations and reduce consensus strength. 
+
+UltraChat. A large-scale, high-quality conversational/instructional dialogue dataset. We use UltraChat as a private fine-tuning corpus for chat-quality experiments. 
+
+Benchmarks and Metrics: IFEval (Instruction-Following Evaluation). We measure instruction-compliance by evaluating models fine-tuned on instruction data (Dolly-15K/Alpaca) using the IFEval benchmark, which tests whether a model follows explicit instruction constraints. 
+
+MMLU (Massive Multitask Language Understanding). We evaluate knowledge and generaliza-tion after fine-tuning on Wizard/OpenOrca using MMLU, a broad multi-subject benchmark designed to probe factual knowledge and reasoning across many domains. 
+
+MT-Bench. We evaluate chat quality after fine-tuning on ShareGPT/UltraChat using MT-Bench, a multi-turn open-ended benchmark for chat assistants (commonly judged by a strong LLM-as-a-judge protocol). 
+
+## D Experiment setup 
+
+We evaluate FedCoFiT across three adaptation regimes: instruction compliance, knowledge, and generalization and chat quality. For instruction compliance, clients fine-tune on Dolly-15K Zhang et al. [2024] and Alpaca Taori et al. [2023], and we evaluate instruction-following behaviour on IFEval Zhou et al. [2023]. For knowledge and generalization, clients fine-tune on Wizard Luo et al. [2023] and OpenOrca Lian et al. [2023], and we evaluate on MMLU Hendrycks et al. [2020]. For chat quality, clients fine-tune on ShareGPT Chiang et al. [2023] and UltraChat Ding et al. [2023], and we evaluate on MT-Bench Zheng et al. [2023]. We consider three foundation models: TinyLlama, LLaMA-7B, and LLaMA2-13B. For TinyLlama and LLaMA-7B we use K = 10 clients, and for LLaMA2-13B, we use K = 5 clients. All methods are evaluated under the same federation budget ( same number of clients and communication rounds ). We run IFEval experiments for 3 communication 18 rounds, MMLU experiments for 2 rounds, and MT-Bench experiment for 1 communication round. In FedCoFiT experiments, clients share a public prompt set Dpub constructed by sampling prompts from the corresponding fine-tuning dataset and excluding them from private training splits. We use a fixed public prompt budget of M = 500 prompts. We apply LoRA with rank r = 32 . For all models, we adapt the attention projection modules: q_proj , k_proj , v_proj , o_proj . We use a micro-batch size of 16 and an effective batch size of 128 . The learning rate is set to 3 × 10 −4 across experiments. 
+
+## E Extra Experiment results 
+
+E.1 Effect of Public Prompt Budget: 
+
+We first vary the number of public prompts by subsampling M ∈ { 1000 , 800 , 500 , 100 , 50 } prompts from the Dolly-15K instruction pool, yielding public sets that are in-distribution with respect to the private fine-tuning data. Fig. 3 shows that FedCoFiT is stable for moderate public prompt size as performance is nearly unchanged at M = 1000 , 800 , 500 (IFEval ≈ 0.514 − 0.510 ). When the size is reduced to M ≤ 100 , performance drops to ≈ 0.481 . Importantly, even at large budgets, FedCoFiT matches or exceeds strong baselines (e.g., FLoRA at 0.5026 ) while at very small budgets it remains substantially above FedIT ( 0.4382 ). 1000 800 500 100 50     
+
+> Public prompt budget m
+> 0.44
+> 0.46
+> 0.48
+> 0.50
+> IFEval
+> 0.5119 0.5140 0.5107
+> 0.4829 0.4812
+> FLoRA
+> FedIT
+> FedCoFiT
+
+Figure 3: IFEval vs public prompt budget M .Dolly (ID) Alpaca OpenOrca ShareGPT     
+
+> Public prompt source Dp
+> 0.46
+> 0.48
+> 0.50
+> 0.52
+> IFEval
+> 0.5107 0.5082 0.5094
+> 0.4692
+
+Figure 4: FedCoFiT robustness to public-prompt distribution shift 
+
+E.2 Effect of public prompt distribution shift: 
+
+Next, we test whether FedCoFiT requires the public prompts to match the client data distribution. We fix the prompt budget to a constant 500 and keep the private fine-tuning data unchanged (Dolly-15k), but replace the public prompt source. Specifically, we compare (1) Dpub sampled from Dolly-15k prompts (in-distribution) against out-of-distribution public prompts sampled from (2) Alpaca, (3) OpenOrca, and (4) ShareGPT, using prompts only in all cases. We report IFEval score for each setting. As shown in Fig. 4, using instruction-style public prompts such as Alpaca and OpenOrca yields only minor changes compared to Dolly-15k. This suggests that FedCoFiT is robust to moderate shifts in the public prompt distribution as long as the prompts remain instruction-following and aligned in format. In contrast, using ShareGPT prompts leads to a drop to 0.4692 . We attribute this to a stronger distribution shift. ShareGPT prompts are chat-oriented and often reflect multi-turn conversational context, informal style, and different intent distributions than Dolly-style single-run instructions. As a result, client generations on these prompts become more diverse in surface form and content. Overall, these results indicate that FedCoFiT does not require a perfectly matched public prompt set, but benefits from public prompts that are at least format-consistent with the downstream adaptation task. 
+
+E.3 FedCoFiT Efficiency Evaluation 
+
+Beyond accuracy and communication volume, we evaluate the efficiency of FedCoFiT in terms of end-to-end wall clock runtime, energy consumption, and estimated CO 2 emissions. We measure runtime, aggregate energy in kwh and CO 2 in kg using the Lamarr Energy tracker Fischer [2025] under a realistic bandwidth. We report end-to-end measurements that include local fine-tuning, public-prompt generation, server-side consensus construction, and communication overhead. To ensure a fair comparison, all methods are run with the same number of clients, the same number of communication rounds, and matched local training budgets. Hardware and hyperparameter details are provided 19 FedIT 
+
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Wallclock time (× FedCoFiT)
+> 1.43×
+> 2.47×
+> 1.58×
+> 1.00×
+> FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> Energy (× FedCoFiT)
+> 1.41×
+> 2.16×
+> 1.44×
+> 1.00×
+> FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> CO 2 (× FedCoFiT)
+> 1.36×
+> 1.96×
+> 1.54×
+> 1.00×
+
+Figure 5: Efficiency comparison on Dolly-15k using Llama-7B FedIT 
+
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0
+> 2
+> 4
+> Wallclock time (h)
+> 3.104
+> 5.372
+> 3.440
+> 2.171
+> FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0
+> 1
+> 2
+> 3
+> Energy (kWh)
+> 2.346
+> 3.601
+> 2.404
+> 1.664
+> FedIT
+> FLoRA
+> FlexLoRA
+> FedCoFiT
+> 0.0
+> 0.5
+> 1.0
+> CO 2 (kg)  0.865
+> 1.243
+> 0.978
+> 0.634
+
+Figure 6: Efficiency comparison on Dolly-15 using Llama-7B in Appendix C. Figure 6 shows that across the main experimental settings, FedCoFiT achieves comparable task performance to strong aggregation baselines while reducing end-to-end wall-clock time and energy consumption, and consequently lowering estimated CO 2 emissions. The gains are most pronounced in regimes where communication and synchronization dominate the runtime (e.g., larger backbones and higher-rank LoRA baselines), consistent with our communication-scaling analysis. 
+
+E.4 Choice of Semantic Encoder 
+
+FedCoFiT builds server-side consensus in a semantic embedding space, where each client-generated response is mapped by a sentence encoder into a fixed-dimensional vector. The encoder choice affects both (1) the quality of semantic similarity and thus the quality of pseudo-labels and (2) algorithm efficiency, since embeddings are computed for every public prompt and client output each round. We therefore ablate a small set of widely used SBERT-style encoders that span different speed/size regimes. We fix the federated setup (TinyLlama clients, Dolly-15K private fine-tuning, fixed public prompt budget, identical decoding and clustering hyperparameters) and vary only the semantic encoder. We then evaluate the resulting fine-tuning model on IFEval benchmark. Table 3 summarizes encoder size, embedding dimension, encoding throughput (sentence/sec), and the downstream IFEval score obtained when fine-tuning on Dolly-15K and evaluating on IFEval. Across the tested encoders, all-MiniLM-L6-v2 provides the best overall trade-off. While larger encoders such as all-mpnet-base-v2 can be competitive, they are substantially slower and heavier. Multilingual encoders (e.g., distiluse-base-multilingual-cased-v1) also introduce additional overhead without improving Dolly/IFEval performance in our instruction-following setting. We therefore select all-MiniLM-L6-v2 as the default semantic encoder in all experiments due to its strong IFEval performance coupled with low model size and high encoding speed. 20 Table 3: Semantic encoder ablation for FedCoFiT. We report encoder size, embedding dimension, encoding throughput (sentences/sec), and downstream IFEval when training on Dolly-15K and evaluating on IFEval.                          
+
+> Encoder Size (MB) Dim Speed (sent/s) IFEval ↑
+> all-mpnet-base-v2 420 768 2800 52.47 all-distilroberta-v1 290 768 4000 51.29 all-MiniLM-L12-v2 120 384 7500 51.12
+> all-MiniLM-L6-v2 80 384 14200 51.19
+> distiluse-base-multilingual-cased-v1 480 512 4000 52.17
+
+E.5 Ablation on Consensus Representative Selection 
+
+FedCoFiT selects one client-generated response as the pseudo-label for each public prompt. To isolate the effect of this selection rule, we run FedCoFiT on TinyLlama with Dolly-15K private fine-tuning data and evaluate the resulting models on IFEval. We keep the semantic encoder, DBSCAN clustering hyperparameters, decoding configuration, public prompt budget M = 500 , and local training setup fixed, and vary only how the final pseudo-label y⋆j is chosen. We compare three alternatives: (i) our default majority-cluster centroid rule, which first selects the largest non-outlier cluster and then chooses the response closest to its centroid; (ii) majority-cluster random , which selects a uniformly random response from the largest non-outlier cluster; and (iii) global medoid , which ignores clustering and chooses the response with the smallest average distance to all other client responses. This ablation tests whether both parts of the consensus rule are useful: majority-cluster selection filters minority modes and outliers, while centroid-based representative selection avoids arbitrary pseudo-label choice within the consensus cluster. Table 4 shows that our default representative-selection rule performs best. Selecting the response closest to the centroid of the majority cluster improves over choosing a random response from the same cluster, indicating that centrality within the consensus cluster matters for pseudo-label quality. The larger drop for the global-medoid baseline shows that clustering and outlier filtering are also important: choosing the most central response over all client outputs can be affected by minority modes or noisy generations. These results support the two-stage design of FedCoFiT, where the server first identifies the dominant semantic mode and then selects the most representative response within that mode. Table 4: Ablation of pseudo-label representative selection for FedCoFiT on TinyLlama with Dolly-15K private data and IFEval evaluation. We keep DBSCAN, the semantic encoder, decoding, public prompt budget, and training setup fixed, and vary only how the final pseudo-label y⋆j is selected.              
+
+> Selection rule Uses majority cluster? Outlier filtering? IFEval ↑
+> Majority-cluster centroid representative Yes Yes 51.10
+> Random representative from majority cluster Yes Yes 50.06 Global medoid over all responses No No 48.17
+
+E.6 Communication Example: LLaMA-2-13B scale. 
+
+Consider K = 10 clients, M = 1024 prompts per round, average response length ¯ℓ = 128 , and 
+
+ct ≈ 2 bytes/token. Then CSC ≈ 2KM ¯ℓc t = 2 · 10 · 1024 · 128 · 2 ≈ 5.2 MiB , where the leading factor 2 accounts for upload and download. For a LLaMA-2-13B-scale model with Llayers = 40 ,hidden size dmodel = 5120 , FP16 communication cparam = 2 , and rank r = 32 , LoRA on Wq and 
+
+Wv gives upload C↑ 
+
+> LoRA( q,v )
+
+= cparam Llayers 2r(dmodel + dmodel ) = 52 ,428 ,800 bytes ≈ 50 .0 MiB ,or about 100 .0 MiB upload plus download. If LoRA is applied to all attention projections and the MLP with dff = 13824 , the upload is C↑ 
+
+> LoRA(attn+MLP)
+
+= cparam Llayers r{4( dmodel + dmodel ) + 3( dmodel + dff )} ≈ 238 .7 MiB , or about 477 .4 MiB total. Orthogonal communication-saving mechanisms, such as dynamic or event-triggered communication protocols, could in principle be combined with Semantic Consensus by skipping consensus rounds when local model behavior or its semantic embedding changes only marginally across rounds [Kamp, 2019, Kamp et al., 2018, 2016]. 21 F Impact Statement 
+
+FedCoFiT has the potential to make federated fine-tuning of large language models substantially more practical by replacing costly parameter aggregation with semantic consensus over model outputs. By exchanging only generated responses to shared public prompts, the method reduces communication independently of model size, supports heterogeneous clients with different architectures, tokenizers, or LoRA ranks, and can operate even when only black-box model access is available. Empirically, the paper shows that FedCoFiT matches or exceeds strong federated LoRA baselines across instruction following, knowledge generalization, and chat-quality tasks while using orders of magnitude less communication, with additional reductions in runtime, energy use, and estimated emissions. Its compatibility with differential privacy further strengthens its relevance for sensitive domains such as healthcare, finance, and enterprise settings, where data cannot be centralized but collaborative adaptation is valuable. 22
