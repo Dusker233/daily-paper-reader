@@ -1,0 +1,444 @@
+Title: LogRouter: Adaptive Two-Level LLM Routing for Log Question Answering in Big Data Systems
+
+URL Source: https://arxiv.org/pdf/2605.18015v1
+
+Published Time: Tue, 19 May 2026 02:05:40 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+# LogRouter: Adaptive Two-Level LLM Routing for Log Question Answering in Big Data Systems 
+
+Mert Coskuner 
+
+TUBITAK BILGEM 
+
+Kocaeli, Turkey mert.coskuner@tubitak.gov.tr 
+
+Merve Zeybel 
+
+TUBITAK BILGEM 
+
+Kocaeli, Turkey kaya.merve@tubitak.gov.tr 
+
+Melik Mert Dolan 
+
+TUBITAK BILGEM 
+
+Kocaeli, Turkey mert.dolan@tubitak.gov.tr 
+
+Abstract —Production log analytics in self-hosted, resource-constrained environments requires natural-language access to massive log streams without the cost of routing every query through a large language model. We present LogRouter, an end-to-end log question-answering system deployed on TUBITAK BILGEM’s national big data platform that combines a PySpark-based Drain3 ingestion pipeline, GPU-accelerated embeddings, and dual-index storage in Apache Druid and PostgreSQL with 
+
+pgvector . A two-level cost-aware router dispatches each query along one of four execution paths—direct response, Druid keyword search, template lookup with SQL generation, and 
+
+pgvector semantic retrieval—while a Level-2 router selects a 14B-class or 32B-class generator for the semantic path. A dedicated coder LLM handles text-to-SQL. We evaluate the system on four LogHub datasets (Linux, Apache, Windows, Mac; 70 questions in total) under both an online full-pipeline configuration and an offline configuration that isolates the gen-erator. The router reaches 88.4 % mean accuracy across datasets and 94.7 % on Linux, while the full pipeline attains a mean ROUGE-1 of 0.373, BERTScore of 0.879, RAGAS Faithfulness of 0.779, and an end-to-end latency of 18.6 s. In an apples-to-apples offline comparison, the routed system cuts mean latency by 55 % versus a Fixed-32B baseline (46.3 s vs. 102.1 s) while preserving Answer Correctness within 5.8 points and exceeding a Fixed-14B baseline on RAGAS Faithfulness across every dataset. Cost-aware dispatching is therefore a practical mechanism for production log QA: routing recovers most of the quality of an always-32B configuration at less than half the latency, and the L1 keyword vocabulary makes that routing decision with high precision without a learned classifier. 
+
+Index Terms —log analysis, retrieval-augmented generation, query routing, cost-aware inference, local large language models, big data observability, Drain, Apache Druid, hybrid retrieval, text-to-SQL 
+
+I. I NTRODUCTION 
+
+Operational log analysis is a core software maintenance ac-tivity: maintainers continually consult log streams to compre-hend system behaviour, diagnose regressions, and investigate incidents on live deployments. Modern distributed systems emit these streams at a rate that outpaces human inspection, and maintainers routinely need natural-language access during evolution and incident response. Retrieval-augmented genera-tion (RAG) [1] provides a compelling interface, yet deploying large language models (LLMs) over operational log data in a real enterprise environment surfaces three practical challenges that the maintenance and evolution literature has not jointly addressed. This work reports our experience deploying such a system within TUBITAK BILGEM, a national research institute that operates a production big data platform for public-sector analytics workloads. This paper contributes to the use of Large Language Models for software evolution and maintenance tasks , providing an empirical evaluation of an on-premises LLM-based log QA system in a live production setting. 
+
+Challenge 1: Scale and continuity. Existing log-RAG pro-totypes operate on static, pre-collected log files [2], [3]. A pro-duction platform cannot batch-process logs offline: ingestion must be continuous, parsing must be distributed, and the in-dexes that feed retrieval must remain fresh. In our deployment on TUBITAK BILGEM’s national big data platform, we meet this requirement with a streaming pipeline spanning Grafana Loki, PySpark-based Drain3 template extraction [4], GPU-accelerated embedding via Ollama, and dual-index storage in Apache Druid (structured/keyword) and PostgreSQL with 
+
+pgvector (semantic). 
+
+Challenge 2: Heterogeneous query types and LLM cost. 
+
+Production log workloads contain fundamentally different question types. “How many ERROR events occurred in the last hour?” is a database aggregation; “Why did the inges-tion pipeline stall on Tuesday?” requires multi-hop semantic reasoning over many log lines. Early iterations of our system routed every query through a single large generative model, wasting GPU resources on structured lookups and returning numerically incorrect counts instead of exact database results. The deployment insight is that query type, not query content, determines the appropriate backend : misrouting a simple fact-seeking query to an LLM is not just inefficient, it is actively harmful to answer quality. 
+
+Challenge 3: Right-sizing the generator. Even within the semantically-routed subset, not all questions are equal. Summarising a failure pattern across fifty log lines requires a capable model; identifying the service that emitted a single line does not. A static one-model policy either wastes capacity on simple queries or degrades under concurrent workloads on a single GPU. We address these challenges with LogRouter , a production log QA system deployed on TUBITAK BILGEM’s national big data platform. Building on the modular routing philosophy of LLMLogAnalyzer [5], LogRouter extends it to a distributed big data environment with three practical extensions: (i) ex-
+
+> arXiv:2605.18015v1 [cs.LG] 18 May 2026
+
+plicit LLM-bypass paths that skip generative inference entirely for non-semantic queries; (ii) Level-2 dynamic model-size selection that assigns the 32B generator only where complexity warrants it; and (iii) fully self-hosted GPU inference with no external API calls, a hard requirement in public-sector deployments where log data may not leave the organisation. The main contributions of this paper are:  
+
+> •
+
+An end-to-end log analysis pipeline that connects Grafana Loki ingestion, PySpark-based Drain3 template min-ing [4], GPU-accelerated chunk embedding via Ollama, and dual-index storage in Apache Druid and pgvector . 
+
+> •
+
+A two-level cost-aware query router: Level-1 dispatches across four execution paths (G ENERAL , KEYWORD ,SQL, S EMANTIC ) using a regex-based keyword signal vocabulary of seven structural patterns (P0–P6) and a question-starter guard (P7); Level-2 selects the generator size (14B or 32B) for the semantic path; and a dedicated coder LLM serves the SQL path.  
+
+> •
+
+An evaluation on four LogHub datasets (70 questions) under both online (Druid + pgvector ) and offline (raw chunk injection) configurations, including a nine-condition ablation study covering router removal, hybrid retrieval, model-size fixation, and Drain removal.  
+
+> •
+
+Deployment lessons: (a) routing recovers most of the faithfulness of an always-32B configuration at less than half the latency; (b) Drain template extraction contributes almost entirely to routing precision, not to generation quality; (c) LLM-based judges systematically penalise the verbatim style of bypass answers, a structural artefact rather than a quality regression. II. R ELATED WORK 
+
+A. Log Parsing 
+
+Automated log parsing extracts structured templates from unstructured log lines and is a prerequisite for downstream analytics. Drain [4] clusters log lines online with a fixed-depth parse tree, achieving high accuracy at low overhead; the production fork Drain3 adds configurable masking and per-sistence. Benchmarks on LogHub [6] confirm Drain’s strong accuracy and throughput. All published Drain3 deployments operate on single-node, file-based collections; to our knowl-edge no prior work runs Drain3 as a PySpark stage over live log streams, the gap our ingestion architecture addresses. 
+
+B. Log Analysis and Anomaly Detection 
+
+A substantial body of work addresses log-based anomaly detection. DeepLog [7] models log-event sequences with an LSTM; LogBERT [8] fine-tunes BERT on log templates; LogRobust [9] adds semantic representations for robustness to log evolution. All three share the same design goal of classifying sequences as normal or anomalous; none support free-form natural-language querying or the heterogeneous mix of keyword, aggregation, and semantic queries that operators ask in practice. Our system is complementary: rather than detecting anomalies, it provides an interactive QA interface over historical log data. 
+
+C. LLM-Based Log Analysis 
+
+LogGPT [3] applies ChatGPT to log anomaly detection with strong interpretability but full reliance on commercial cloud APIs. Mudgal and Wouhaybi [2] systematically assess ChatGPT on log processing, finding consistency and scala-bility limitations once logs exceed the context window. Most closely related, LLMLogAnalyzer [5] proposes a clustering-based log chatbot with a router, log recogniser, log parser, and search tools, reporting substantial gains over ChatGPT and NotebookLM. These systems share two limitations that block enterprise deployment: every query traverses a large generative model regardless of complexity, and external cloud APIs raise privacy and cost concerns at scale. LogRouter adopts the modular routing philosophy of [5] and extends it with LLM-bypass paths, Level-2 model-size selection, and fully on-premises GPU inference. 
+
+D. Retrieval-Augmented Generation 
+
+RAG [1] couples a neural retriever with a generative model to improve factual grounding. Dense passage retrieval, and later hybrid extensions, established vector similarity search as the dominant retrieval backbone. RAG has been applied to open-domain QA, code understanding, and enterprise knowl-edge bases, but its use on operational logs remains nascent and largely offline. Our architecture targets the distributed-ingestion, query-cost, and structural heterogeneity gaps in the context of a production big data platform. 
+
+E. Query Routing and Cost-Aware LLM Inference 
+
+Routing queries to backends of different cost has become an active line of work in LLM serving. FrugalGPT [10] cascades LLM APIs with an early-exit confidence threshold, reaching 98 % cost reduction with no accuracy loss. Adaptive-RAG [11] trains a lightweight classifier to route among no-retrieval, single-step, and multi-step retrieval, matching always-expensive baselines at lower cost. Both share a struc-tural assumption: every query ultimately reaches a generative LLM. Neither considers LLM-bypass paths —routes that skip generation in favour of a structured database query. In log analytics, a substantial fraction of operator questions are factual keyword lookups or template aggregations that a time-series database can answer exactly; bypass paths are essential. LogRouter introduces LLM-bypass multi-path routing to the log domain, with four Level-1 paths and Level-2 model-size selection in a unified framework. III. S YSTEM ARCHITECTURE 
+
+LogRouter is deployed within TUBITAK BILGEM’s na-tional big data platform (hereafter the host platform ). The system has two stages: an offline indexing pipeline that turns raw log streams into structured and vector indexes, and a 
+
+query-time execution layer that routes user questions across four paths under cost-aware dispatching. The two stages are summarised in Figures 1 and 2. A. Platform Context 
+
+The host platform is a cloud-native big data infrastruc-ture operated by TUBITAK BILGEM, the Informatics and Information Security Research Center of the Scientific and Technological Research Council of Turkey, for public-sector analytics workloads. It implements a Lambda architecture with:  
+
+> •
+
+Batch processing : PySpark for historical log processing and ETL pipelines.  
+
+> •
+
+OLAP storage : Apache Druid, a columnar time-series database optimised for log retention and sub-second ag-gregation over high-cardinality event data.  
+
+> •
+
+Query layer : Superset for dashboards, Trino for ad-hoc SQL. LogRouter integrates into this stack as a semantic query service, consuming the same Loki → Spark → Druid log streams as the host platform’s observability pipeline while adding a pgvector retrieval path for semantic queries. 
+
+Storage and orchestration.  
+
+> •
+
+Druid serves as the keyword index (full-text search over raw lines) and the SQL backend (template-aware aggre-gation), with native time-based partitioning and rollup.  
+
+> •
+
+PostgreSQL with the pgvector extension stores log-chunk embeddings for dense retrieval.  
+
+> •
+
+Airflow orchestrates the indexing pipeline and periodic re-embedding jobs.  
+
+> •
+
+All components run on Kubernetes with node affinity policies that co-locate GPU workloads (embedding, in-ference) and storage-heavy tasks (Druid historicals). 
+
+Hardware configuration. All embedding and inference workloads run on a single GPU node with an NVIDIA RTX 8000. Three models are served via Ollama on this node: 
+
+nomic-embed-text (768-dim) for log-chunk embedding; 
+
+Qwen2.5-14B-Instruct for simple semantic queries and as the Answer Correctness judge; and Qwen2.5-Coder-14B for SQL generation. The Qwen3-32B model handles complex semantic synthesis and is scheduled exclusively because it consumes the full GPU memory budget. Druid and PostgreSQL run on separate cluster nodes connected via the platform’s internal network. 
+
+B. Indexing Pipeline 
+
+Raw logs are pulled from Grafana Loki by a PySpark ingestion job and normalised into a unified schema (ts, namespace, app, pod, container, level, line) . After normalisation the pipeline forks into two parallel branches that share no state at indexing time:  
+
+> •
+
+Structured branch. A Drain3 parser [4] runs as a Spark stage with two modes: a driver-side mode (annotate_df ) suitable for at most one million rows, and a distributed mode (annotate_df_distributed ) that broadcasts apre-trained read-only Drain3 state file and processes partitions in parallel via mapPartitions . Template IDs are content-addressable MD5 prefixes of the normalised template string, which makes the IDs deterministic across executors. Severity levels are extracted from the line text and post-processed against a stack-trace heuristic so that an Exception-bearing line is always marked ERROR . The annotated rows and the extracted template catalogue are then ingested into Apache Druid, which serves the keyword and SQL paths at query time.  
+
+> •
+
+Semantic branch. The same normalised line stream is grouped by source and split into chunks by a sliding window (default 25 lines, 3-line overlap). Each chunk is embedded with nomic-embed-text via Ollama on the RTX 8000 and written to a pgvector table with associated metadata ( namespace , app , pod , level ,
+
+dataset ). The chunker operates directly on raw lines and does not depend on Drain output, so the two branches can be materialised independently. Only the embedding stage requires GPU residency; the rest of the pipeline is CPU-bound and scales horizontally on the Spark cluster. 
+
+C. Query-Time Routing 
+
+Query execution is governed by two lightweight routers. The Level-1 router classifies each incoming query into one of four paths:  
+
+> •
+
+General : direct model response without retrieval (trig-gered only by short greetings).  
+
+> •
+
+Keyword : exact or regex-based lookup over raw log lines in Druid.  
+
+> •
+
+SQL : template lookup followed by LLM-generated Druid SQL.  
+
+> •
+
+Semantic : vector retrieval followed by evidence-grounded answer synthesis. The Level-1 decision is made by counting matches against three regex families—SQL signals (count, top-k, group-by, percentage), keyword signals (P0–P6, described below), and event/template signals—weighted by 0.4 per match and com-pared against per-category thresholds. The default thresh-olds are sql_threshold =keyword_threshold =0.3 and event_threshold =0.5. To prevent compound analyt-ical questions from accidentally triggering the keyword path on a sub-clause, an additional gating regex (P7) requires the question to begin with a fact-seeking word ( what, where, which, when, how, is, are, was, were, has, had, did, do, does ). 
+
+Level-1 Keyword Signal Vocabulary: Table I lists the seven structural patterns (P0–P6) that constitute the keyword sig-nal vocabulary, together with the question-starter guard (P7). The vocabulary was iterated on the development partition of LogHub and is intentionally small: each pattern targets a clearly delimited class of fact-seeking question. 
+
+Level-2 Model-Size Selection: For queries that reach the Semantic path, a Level-2 router selects between the 14B-class generator (Qwen2.5-14B-Instruct) and the 32B generator (Qwen3-32B). Complexity is scored as the bounded sum of four features: 
+
+c(q) = slen (q) + sagg (q) + stemp (q) + sent (q), (1) TABLE I: Level-1 Keyword Signal Vocabulary.                         
+
+> ID Name Example trigger
+> P0 Search command “Find lines containing error 503” P1 Attribute lookup “What is the IP address?” P2 Action-verb lookup “What module is being exe-cuted?” P3 Gerund activity “What is the service doing?” P4 Past-event lookup “What process crashed?” P5 Conceptual meaning “What does this error mean?” P6 Timestamped event “What happened at 03:28:22?” P7 Question-starter guard Requires what/where/. . . at start
+
+where each si ∈ [0 , 0.25] contributes at most one quarter of the score: slen is proportional to query word count (saturating at 40 words); sagg counts matches of aggregation vocabulary (summarize, compare, root cause, correlate ); stemp counts temporal-scope phrases ( over time, last 24h, between, after ); and sent counts multi-entity connectors ( and, versus, across, multiple, each ). The threshold c(q) ≥ 0.5 routes to Qwen3-32B; otherwise the query is served by Qwen2.5-14B-Instruct. 
+
+Retrieval Strategies: The default Semantic path uses hybrid retrieval : each query is issued in parallel as a dense vector query and a PostgreSQL plainto_tsquery full-text query (with the simple dictionary so that log-specific tokens like IPs, hostnames, and error codes are not stemmed away). When the question contains quoted literals, those literals are also issued as a separate FTS query. The three ranked lists are fused with Reciprocal Rank Fusion [12] ( k=60) and the top-10 chunks are passed to the generator. A pure-vector and a pure-keyword variant are evaluated as ablation conditions in Section V-D. 
+
+SQL Path: For SQL-routed queries, the pipeline first at-tempts a template lookup in Druid using a regex over the 
+
+template and line columns; if no template matches, it falls back to a pgvector metadata search to retrieve representative templates. The retrieved templates are passed as context to Qwen2.5-Coder-14B, which generates a Druid SQL statement that is executed against the logs_raw datasource. The numerical result of the SQL query is returned as the answer directly, with no further LLM rewriting, preserving exact aggregate correctness. 
+
+Resilience: Each backend is wrapped in a defensive try/except that downgrades the response to a service-unavailable message rather than failing the whole pipeline; the routing decision and per-stage latencies are logged with a per-request trace ID. The Level-1 router enforces an input-validation whitelist on the extracted search term so that the keyword path cannot inject SQL via crafted operator queries. IV. E XPERIMENTAL SETUP 
+
+A. Datasets and Question Sets 
+
+We evaluate on the public LogHub benchmark [6], re-stricted to four heterogeneous system log types: Linux (19 questions), Apache (17), Windows (17), and Mac (17), for a total of 70 questions . Questions cover seven task families: Summarisation, Pattern Extraction, Anomaly Detection, Root Cause Analysis, Predictive Failure Analysis, Log Understand-ing/Interpretation, and Operational Lookup. Each question is paired with a human-written reference answer and a gold routing label ( KEYWORD / SEMANTIC / SQL ) used to compute per-class router metrics. 
+
+B. Evaluation Modes 
+
+We report two complementary evaluation modes that share the same question sets:  
+
+> •
+
+Full pipeline (online) : end-to-end execution with live Druid and pgvector instances populated by the LogHub-indexed corpus. This mode measures the system as deployed: keyword answers come from Druid, SQL an-swers are executed against Druid, and semantic answers retrieve from pgvector . 
+
+> •
+
+Offline : deterministic chunk injection without Druid or 
+
+pgvector . The relevant log file is loaded from disk, chunked, and the top-10 chunks are passed directly to the generator regardless of route. This mode isolates the generator and router from retrieval-system variability and is used for the Fixed-14B and Fixed-32B baselines. 
+
+C. Baselines and Ablation Conditions 
+
+Two fixed-model baselines remove the Level-2 router by overriding the generator size:  
+
+> •
+
+Fixed-14B : always Qwen2.5-14B-Instruct (the L2 “small” generator).  
+
+> •
+
+Fixed-32B : always Qwen3-32B (the L2 “large” genera-tor). In addition, Section V-D reports nine ablation conditions: 
+
+full (the routed system); no-L1 (L1 bypass, all queries routed to SEMANTIC ); no-L2 (always 14B); no-routing 
+
+(L1+L2 bypass); semantic-only (no keyword backend); 
+
+keyword-only (no semantic backend); hybrid (BM25-style + dense RRF fusion); always-32B (always Qwen3-32B); and no-drain (no template-derived context). 
+
+D. Metrics 
+
+We adopt seven complementary metrics covering routing, lexical overlap, semantic similarity, retrieval, generation, and latency:  
+
+> •
+
+Routing accuracy with per-class precision, recall, and 
+
+F1 over the gold {keyword, semantic, sql } labels.  
+
+> •
+
+Cosine similarity between sentence embeddings of the generated and reference answers.  
+
+> •
+
+ROUGE-1 F1 [13]: unigram-overlap F1, sensitive to ex-act tokens, particularly informative for short fact-seeking responses.  
+
+> •
+
+BERTScore F1 [14]: token-level contextual similarity, tolerant of paraphrase and synonym variation.  
+
+> •
+
+RAGAS Faithfulness [15]: fraction of atomic claims in the generated answer that are grounded in the retrieved context; 1.0 means every stated fact is supported. Grafana Loki  
+
+> PySpark Ingester
+> Drain3 Parser
+> Annotated rows + template catalogue
+> Apache Druid
+> Log Chunker
+> Ollama nomic-embed pgvector
+> (a) structured branch — keyword + SQL backend
+> (b) semantic branch — vector retrieval
+
+Fig. 1: Indexing pipeline. Raw logs flow from Loki through a PySpark ingester that normalises lines into a unified schema. The normalised stream then forks into a structured branch , where a Drain3 parser produces annotated rows and a template catalogue ingested into Apache Druid, and a semantic branch , where a fixed-window chunker feeds Ollama’s nomic-embed-text 
+
+and the resulting vectors are stored in pgvector . The two branches run in parallel and share no state at indexing time.   
+
+> User query
+> L1 Router
+> GENERAL
+> (greeting)
+> Druid full-text search
+> Template lookup
+> Hybrid retrieval (pgvector + FTS)
+> Qwen2.5 14B
+> Qwen2.5 14B (summary)
+> Coder-14B
+> →Druid L2 Router
+> Qwen2.5 14B
+> Qwen3 32B
+> Answer
+
+Fig. 2: Query-time routing. The Level-1 router dispatches each query into one of four execution paths (G ENERAL , K EYWORD ,SQL, S EMANTIC ). On the semantic path the Level-2 router selects the generator size based on a complexity score. The SQL path uses Qwen2.5-Coder-14B to emit Druid SQL that is executed against the structured index; its numerical result is returned without further LLM rewriting.  
+
+> •
+
+RAGAS Context Precision [15]: fraction of retrieved chunks that are relevant to the question, isolating retrieval precision from generation quality.  
+
+> •
+
+Answer Correctness : a local LLM judge score (Qwen2.5-14B-Instruct as judge) that compares generated and reference answers on a [0 , 1] scale, combining factual overlap and semantic similarity. The judge is sensitive to stylistic differences between verbatim keyword-bypass responses and synthesised reference answers (see Sec-tion V-D).  
+
+> •
+
+Retrieval metrics : Hit@ k, Recall@ k, and MRR with 
+
+k=10 over the offline log-chunk candidate set. Hit@ k is 1 iff any top-k chunk contains the reference text.  
+
+> •
+
+End-to-end latency : wall-clock time from query submis-sion to answer delivery, including routing, retrieval, and generation. E. Hardware and Implementation 
+
+All experiments run on a single Kubernetes node with one NVIDIA RTX 8000 GPU; Druid and PostgreSQL run on separate nodes. Ollama hosts nomic-embed-text 
+
+(embeddings, 768-d), Qwen2.5-14B-Instruct, Qwen3-32B, and Qwen2.5-Coder-14B (generators); the 32B model occupies the full GPU memory budget and is scheduled exclusively. The Level-1 router uses default thresholds sql/keyword_threshold = 0.3 and 
+
+event_threshold = 0.5; the Level-2 router uses 
+
+complexity_threshold = 0 .5. Chunking uses 25-line windows with 3-line overlap. Retrieval returns the top 10 chunks (or top 20 candidates per backend prior to RRF fusion). V. R ESULTS 
+
+A. Full-Pipeline (Online) Results 
+
+Table II reports end-to-end results across the four LogHub datasets with the full online pipeline. The router achieves a mean accuracy of 88.4 % (62/70 questions), with 94.7 % on Linux. Answer quality is consistently strong across datasets: mean BERTScore F1 is 0.879 (range 0.855–0.890), mean ROUGE-1 is 0.373, mean RAGAS Faithfulness is 0.779, and the LLM-judge Answer Correctness averages 0.742. End-to-end latency averages 18.6 s : Apache and Windows are fastest (13.1–15.2 s) because a larger share of their questions resolve on the keyword or SQL paths that bypass the 32B generator; Mac is slowest (23.6 s) because its complex semantic questions disproportionately trigger the Level-2 router into the 32B path. The relationship between routing accuracy and answer qual-ity is direct. Linux—with the highest routing accuracy—also yields the highest Cosine, ROUGE-1, BERTScore, and An-swer Correctness. The few percent loss on Apache, Windows, and Mac stems almost entirely from keyword-to-semantic over-routing: questions phrased like attribute lookups (P1) sometimes belong to the semantic path, and forcing them onto the keyword path produces a single matched line instead of the synthesised paragraph that the reference answer expects. 
+
+B. Routing Accuracy and Confusion Analysis 
+
+Table III reports per-class metrics for the Linux benchmark, our highest-routing dataset. The keyword signal vocabulary (P0–P7) classifies 18 of 19 questions correctly, with keyword 
+
+F1 of 0.909, semantic F1 of 0.957, and SQL F1 of 1.0. The single remaining error is linux_q8 (“What does each column in this log mean?”), which triggers the conceptual-meaning pattern P5 even though it is a schema-level question with no matching log line to retrieve. P5 is therefore a residual false-positive source we revisit in the Limitations section. Across all four datasets, the dominant remaining error pattern is semantic-to-keyword over-routing, in which two “what is the behaviour of X?” style questions are routed to the keyword path because P1/P2 fire on the literal entity term while the question semantically requires multi-line synthesis. The aggregate confusion matrix over the four datasets (Fig-ure 3) shows perfect SQL classification and a small residual 
+
+Fig. 3: Router confusion matrix (left) and recall-normalised view (right) aggregated over the four LogHub datasets. SQL is classified perfectly; the residual error is semantic-to-keyword over-routing. flow of keyword-style predictions on semantic questions; no semantic queries are misrouted to the SQL path and no SQL queries are misrouted at all. 
+
+C. Offline Baseline Comparison 
+
+Table IV compares the routed system against Fixed-14B and Fixed-32B baselines in the offline configuration (raw chunk injection, no Druid/ pgvector ). Three findings stand out. 
+
+Latency. The routed system reduces mean end-to-end la-tency by 55 % versus Fixed-32B (46.3 s vs. 102.1 s) and is on par with Fixed-14B (46.3 s). The Mac dataset shows the largest gap: 73.8 s (routed) vs. 136.1 s (Fixed-32B), because Mac contains the longest semantic questions and Qwen3-32B amortises the slowest on those. The Level-2 router invokes the 32B model only when query complexity warrants it, which is the primary cost-reduction mechanism. 
+
+Faithfulness. The routed system reaches a mean RAGAS Faithfulness of 0.858 —higher than Fixed-14B (0.799) and lower than Fixed-32B (0.918). On a per-dataset basis the routed system exceeds Fixed-14B on every dataset (notably Mac: 0.744 vs. 0.625) and recovers most of the Fixed-32B faithfulness gap at less than half the cost. Fixed-32B is the strongest in absolute faithfulness because the larger model hallucinates less under multi-evidence synthesis, but it does so at a 2.2× latency penalty. 
+
+Answer Correctness. Mean LLM-judge Correctness is 
+
+0.726 (routed) versus 0.716 (Fixed-14B) and 0.784 (Fixed-32B). The 5.8-point gap to Fixed-32B is concentrated on Apache and Mac, where the 32B model’s elaborated para-graphs better match the length of the reference answers; on Linux and Windows the routed system is within 3 points of Fixed-32B at less than half the latency. The Correctness metric reflects stylistic closeness to the reference; a brief, verbatim keyword-bypass answer is penalised even when it is factually exact. 
+
+BERTScore. The three systems are nearly indistinguishable in BERTScore (routed: 0.856, Fixed-14B: 0.857, Fixed-32B: 0.846); the 32B model’s verbosity slightly hurts BERTScore by extending answers beyond the reference length. TABLE II: Full-Pipeline (Online) Results Across LogHub Datasets (70 Total Questions).                                                       
+
+> Dataset NRouter Acc Cosine ROUGE-1 BERTScore RAGAS Faith. Ctx Prec. Correct. Lat. (s)
+> Linux 19 0.947 0.853 0.434 0.890 0.741 0.900 0.828 22.5 Apache 17 0.824 0.832 0.393 0.883 0.766 1.000 0.766 13.1
+> Windows 17 0.882 0.798 0.388 0.886 0.760 0.747 0.708 15.2 Mac 17 0.882 0.753 0.277 0.855 0.850 0.700 0.668 23.6
+> Mean 70 0.884 0.809 0.373 0.879 0.779 0.837 0.742 18.6
+> Bold marks the best per-column value. Latency is wall-clock end-to-end.
+
+TABLE III: Per-Class Routing Results on Linux (full pipeline).                 
+
+> Class Supp. Prec. Rec. F1
+> Keyword 50.833 1.000 0.909 Semantic 12 1.000 0.917 0.957 SQL 21.000 1.000 1.000
+
+D. Ablation Study 
+
+Table V reports the nine-condition ablation averaged over the four LogHub datasets, and Figure 4 visualises the same conditions side by side. Several conclusions emerge. 
+
+(1) Drain is the single most important component for routing accuracy. Removing template-derived context (no-drain ) drops routing accuracy by 19.7 percentage points (0.884 →0.687), matching the drop produced by re-moving the L1 router entirely. Without templates the L1 keyword vocabulary lacks the normalised tokens it relies on, and the system silently falls back to semantic for every query. Generation quality is essentially unchanged (BERTScore 0.851 vs. 0.849), so the cost of removing Drain is paid entirely in misrouting and a 54 % latency penalty (29.4 s vs. 19.1 s)— most queries then traverse the more expensive semantic path unnecessarily. 
+
+(2) The Level-2 router is a near-free quality knob. no-L2 
+
+retains the same routing accuracy as the full system (0.884) but routes every semantic query to the 14B generator. BERTScore and Cosine are virtually identical to the full system, while latency drops marginally (17.4 s vs. 19.1 s). The full system is therefore spending a small latency budget at L2 to gain its larger faithfulness margin (see Section V-C, where the routed system exceeds Fixed-14B on faithfulness on every dataset). Conversely, always-32B achieves the same routing accuracy and slightly higher Cosine (0.756 vs. 0.739) but raises mean latency by 160 % (49.6 s vs. 19.1 s). The L2 router occupies a favourable efficient frontier between these extremes. 
+
+(3) Routing accuracy and LLM-judge correctness can diverge. no-L1 , no-routing , and semantic-only all collapse routing accuracy to 0.687 yet leave ROUGE-1, BERTScore, and Cosine essentially unchanged. The judge rewards stylistic closeness: when a keyword-style question is misrouted to the semantic path, the generator produces a syn-thesised paragraph that better matches the reference’s prose, even though the answer is factually less precise than the bypass response. This is a structural artefact of LLM-judge scoring rather than a real quality regression—retrieval-grounded met-
+
+Fig. 4: Metric comparison across ablation conditions, averaged over the four LogHub datasets. Removing L1, routing, or Drain collapses routing accuracy without recovering quality; 
+
+always-32B matches the full system’s routing but costs more than 2.5× the latency. rics (RAGAS Faithfulness, exact retrieval Hit@ k) capture the underlying precision that the judge misses. 
+
+(4) Hybrid retrieval extends recall at modest cost. 
+
+hybrid (RRF fusion of vector and BM25-style scoring) achieves the highest mean Recall@ k (0.269 vs. 0.154 for the full system) and the second-highest Cosine (0.759), confirming that combining dense and lexical signals enlarges the recall envelope on fact-seeking sub-questions. Latency is 33.8 s— higher than full because the system runs two retrieval passes, but lower than always-32B . keyword-only is the absolute Recall winner (0.361), but its routing accuracy collapses to 0.198 because every query is forced through the keyword path—a useful diagnostic but not a deployable configuration. 
+
+(5) Routing is what saves latency; retrieval barely registers. Figure 5 stacks the per-stage latency breakdown across all conditions. The llm_generate stage dominates every condition; L1 routing, L2 routing, keyword search, and semantic search are collectively sub-second on a single GPU node. The latency gap between always-32B (49.6 s) and full (19.1 s) is therefore attributable entirely to model selection, not retrieval engineering. 
+
+E. Per-Route Answer Quality 
+
+Within the Linux full-pipeline run, answer quality dif-fers sharply by route. Correctly-routed semantic questions average Cosine 0.778 and ROUGE-1 F1 0.175. The two TABLE IV: Offline Baseline Comparison Across Four LogHub Datasets (17–19 questions each, 70 total). 
+
+Dataset System BERTScore F1 ↑ RAGAS Faith. ↑ Answer Correct. ↑ Latency (s) ↓
+
+Linux Routed (ours) 0.870 0.930 0.763 43.3 Fixed-14B 0.877 0.908 0.745 42.2 
+
+Fixed-32B 0.852 0.968 0.792 99.2 Apache Routed (ours) 0.870 0.824 0.712 30.3 
+
+Fixed-14B 0.866 0.794 0.703 31.0 Fixed-32B 0.861 0.985 0.797 99.4 Windows Routed (ours) 0.865 0.934 0.753 37.7 Fixed-14B 0.866 0.871 0.747 37.5 
+
+Fixed-32B 0.840 0.871 0.806 73.8 Mac Routed (ours) 0.818 0.744 0.677 73.8 
+
+Fixed-14B 0.818 0.625 0.671 74.6 Fixed-32B 0.831 0.848 0.741 136.1 
+
+Mean 
+
+Routed (ours) 0.856 0.858 0.726 46.3 Fixed-14B 0.857 0.799 0.716 46.3 
+
+Fixed-32B 0.846 0.918 0.784 102.1 
+
+> Bold: best value per group. Fixed-14B refers to Qwen2.5-14B-Instruct (the L2 “small” generator).
+
+TABLE V: Ablation Study: Mean Metrics Across Four LogHub Datasets. 
+
+Condition Router Acc ↑ BERTScore ↑ Cosine ↑ ROUGE-1 ↑ Recall@ k ↑ Lat. (s) ↓
+
+Full (ours) 0.884 0.849 0.739 0.233 0.154 19.1 
+
+no-L1 0.687 0.850 0.740 0.242 0.154 17.6 no-L2 0.884 0.851 0.740 0.238 0.154 17.4 no-routing 0.687 0.850 0.738 0.232 0.154 18.1 semantic-only 0.687 0.851 0.744 0.243 0.154 26.1 keyword-only 0.198 0.857 0.767 0.262 0.361 37.3 hybrid 0.884 0.853 0.759 0.250 0.269 33.8 always-32B 0.884 0.847 0.756 0.249 0.154 49.6 no-drain 0.687 0.851 0.735 0.236 0.154 29.4  
+
+> Bold: best value per column. Recall@ kcomputed over the offline log-chunk candidate set.
+
+Fig. 5: Per-stage latency breakdown by ablation condition. The 
+
+llm_generate stage dominates; routing and retrieval are collectively sub-second. The full system spends an order of magnitude less time in generation than always-32B .keyword-misrouted semantic questions average Cosine 0.576 and ROUGE-1 F1 0.113: the keyword bypass returns asingle matched log line, whereas the reference answer is a paragraph—surface-form metrics penalise this mismatch, even though the matched line is itself factually relevant. SQL-path answers return in under 4 s, semantic-path answers average 26.6 s on the 14B generator (longer when the L2 router invokes the 32B model), and keyword-bypass answers return in under 1 s. Bypass routing is therefore both the latency floor of the system and the path with the highest format mismatch to synthesised references. VI. D ISCUSSION 
+
+The results yield three architectural lessons for production log QA systems. 
+
+Routing is a latency lever, not a quality penalty. The offline comparison in Table IV shows that the routed system recovers most of the Fixed-32B faithfulness gain (0.858 vs. 0.918) while halving its latency (46.3 s vs. 102.1 s). Compared to Fixed-14B, the routed system is faster on Apache, Windows, and Mac and strictly more faithful on every dataset. The cost-aware router is therefore Pareto-improving against the smaller fixed baseline and a strong latency-quality trade-off against the larger one. 
+
+Drain templates buy routing, not generation. The 
+
+no-drain ablation drops routing accuracy by 19.7 points but leaves BERTScore unchanged. This isolates the role of template extraction in the system: it normalises log vocabulary so the L1 router can match keyword patterns reliably, but it does not directly contribute to generation quality once a question reaches the correct path. Practitioners can deprioritise Drain accuracy tuning for generation purposes but should not skip Drain altogether. 
+
+LLM-judge correctness rewards style. The ablation con-ditions that destroy routing accuracy ( no-L1 , no-routing ,
+
+semantic-only ) maintain or even slightly improve LLM-judge correctness. This is a quiet but consequential measure-ment artefact: when keyword-style questions are misrouted to the semantic path the generator returns longer, more reference-shaped paragraphs, even when the underlying fact is less precisely identified. RAGAS Faithfulness and routing accuracy are therefore the metrics that align with operational answer quality, and we use them as the primary criteria for production tuning. Future work should treat LLM-judge scores with explicit style-correction or pair them with factual-precision oracles. VII. L IMITATIONS AND FUTURE WORK  
+
+> •
+
+Keyword recall ceiling. The router correctly handles patterns P0–P6 but misses naturally phrased questions outside the vocabulary: why -phrased questions describing directly observable log events and what -phrased ques-tions with compositional structures (e.g., conjoined sub-questions). A learned intent classifier trained on the mis-routed set would likely close this gap without sacrificing the high precision of the pattern-based approach.  
+
+> •
+
+P5 false positive on schema questions. The P5 pat-tern ( what does X mean ) misclassifies schema-level questions (e.g., linux_q8 : “What does each column in this log mean?”) as keyword lookups. A simple fix is to require P5 to be shorter than N tokens or to include a vocabulary-based exclusion for schema vocabulary ( col-umn, field, row, schema, format ).  
+
+> •
+
+SQL routing precision. SQL routing precision is 66.7 % in the full pipeline: one in three SQL-path predictions arrives from a non-SQL question, causing an unnecessary SQL-generation attempt. The cause is broad temporal-phrase matching in the SQL signal; tightening the pattern to require explicit aggregation vocabulary alongside a temporal scope term would improve precision without losing the high recall observed in our SQL test set.  
+
+> •
+
+Hybrid context precision. Hybrid retrieval improves mean Recall@ k (0.269 vs. 0.154 for the full system) but introduces additional chunks that reduce RAGAS Context Precision. A cross-encoder re-ranker between retrieval and generation would filter noise while retaining the recall gains.  
+
+> •
+
+Hardware constraints and model capacity. Self-hosting on a single RTX 8000 caps the largest generator at Qwen3-32B and forces exclusive scheduling. Future work will evaluate the LogRouter framework with larger on-premises models (e.g. Llama-3.1-70B) to test whether the Level-2 router still occupies the efficient frontier when the “large” path becomes substantially more capable.  
+
+> •
+
+Ingestion scalability and ecosystem integration. The Grafana Loki ingestion path is sufficient for the current host platform workload but limits horizontal throughput. A planned transition to Apache Kafka + Spark Streaming will enable backpressure-controlled, real-time ingestion at scale and unify the streaming path with the rest of the host platform’s infrastructure. VIII. C ONCLUSION 
+
+We presented LogRouter, an end-to-end, self-hosted log question-answering system built from production-grade ob-servability components: Grafana Loki for ingestion, PySpark + Drain3 for template extraction, pgvector for semantic recall, Apache Druid for keyword and SQL execution, and local Qwen-family models for generation. A two-level cost-aware router dispatches each query across four execution paths and selects a 14B-class or 32B-class generator only when query complexity warrants the larger model. Across four LogHub datasets the router reaches 88.4 % mean accuracy (94.7 % on Linux); the full pipeline attains a mean ROUGE-1 of 0.373, BERTScore of 0.879, and end-to-end latency of 18.6 s. The routed system recovers most of the faithfulness of an always-32B configuration while halving its latency, and it strictly dominates the always-14B baseline on faithfulness across every dataset. The nine-condition ablation isolates Drain template extraction as the dominant component for routing accuracy, the Level-2 router as a near-free quality knob, and hybrid retrieval as the cheapest recall lever available. Beyond the specific deployment, the results support abroader architectural claim: in cost-constrained, self-hosted log analytics, cost-aware routing is not a quality compromise—it is the mechanism that makes high-quality on-premises log QA economically viable. DISCLOSURE ON AI U SE 
+
+In line with IEEE policy on AI-generated content, we dis-close that Claude (Anthropic) was used as a writing assistant in the preparation of this manuscript. Its involvement was limited to refining wording and restructuring passages for clarity in the narrative sections (Abstract, Introduction, Related Work, Discussion, and Limitations); no AI system contributed to the system design, experimental setup, evaluation, or the production of any results, figures, or tables. All technical claims, statistical analyses, and quantitative findings reported in this paper were produced and verified by the authors, who are solely responsible for the correctness and integrity of the content. OPEN SCIENCE 
+
+To support replication, the implementation, evaluation har-ness, the LogHub-derived question set with gold routing labels, and the hyper-parameter configurations used to produce the results in this paper will be released under an open-source licence in a public repository upon acceptance. REFERENCES [1] P. Lewis, E. Perez, A. Piktus, F. Petroni, V. Karpukhin, N. Goyal, H. K¨ uttler, M. Lewis, W. tau Yih, T. Rockt¨ aschel, S. Riedel, and D. Kiela, “Retrieval-augmented generation for knowledge-intensive NLP tasks,” in Advances in Neural Information Processing Systems (NeurIPS) , vol. 33, 2020, pp. 9459–9474. [2] P. Mudgal and R. Wouhaybi, “An assessment of ChatGPT on log data,” in International Conference on AI-Generated Content . Springer, 2023, pp. 148–169. [3] J. Qi, S. Han, Z. Li, S. Yu, C. Fang, H. Yang, D. Qian, J. Shi, Z. Xu, and Z. Wang, “LogGPT: Exploring ChatGPT for log-based anomaly detection,” in 2023 IEEE International Conference on High Performance Computing and Communications (HPCC/DSS/SmartCity/DependSys) .IEEE, 2023, pp. 273–280. [4] P. He, J. Zhu, Z. Zheng, and M. R. Lyu, “Drain: An online log parsing approach with fixed depth tree,” in 2017 IEEE International Conference on Web Services (ICWS) . IEEE, 2017, pp. 33–40. [5] P. Cai, R. Ryan, and N. M. Karie, “LLMLogAnalyzer: A clustering-based log analysis chatbot using large language models,” arXiv preprint arXiv:2510.24031 , 2025. [6] J. Zhu, S. He, P. He, J. Liu, and M. R. Lyu, “Loghub: A large collection of system log datasets for AI-driven log analytics,” in 2023 IEEE 34th International Symposium on Software Reliability Engineering (ISSRE) .IEEE, 2023, pp. 355–366. [7] M. Du, F. Li, G. Zheng, and V. Srikumar, “DeepLog: Anomaly detection and diagnosis from system logs through deep learning,” in Proceedings of the 2017 ACM SIGSAC Conference on Computer and Communica-tions Security (CCS) . ACM, 2017, pp. 1285–1298. [8] H. Guo, S. Yuan, and X. Wu, “LogBERT: Log anomaly detection via BERT,” in 2021 International Joint Conference on Neural Networks (IJCNN) . IEEE, 2021, pp. 1–8. [9] X. Zhang, Y. Xu, Q. Lin, B. Qiao, H. Zhang, Y. Dang, C. Xie, X. Yang, Q. Cheng, Z. Li, S. Rajmohan, and D. Zhang, “Robust log-based anomaly detection on unstable log data,” in Proceedings of the 27th ACM Joint Meeting on European Software Engineering Conference and Symposium on the Foundations of Software Engineering (ESEC/FSE) .ACM, 2019, pp. 807–817. [10] L. Chen, M. Zaharia, and J. Zou, “FrugalGPT: How to use large language models while reducing cost and improving performance,” Transactions on Machine Learning Research , 2023, arXiv:2305.05176. [11] S. Jeong, J. Baek, S. Cho, S. J. Hwang, and J. C. Park, “Adaptive-RAG: Learning to adapt retrieval-augmented large language models through question complexity,” in Proceedings of the 2024 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL) , 2024. [12] G. V. Cormack, C. L. A. Clarke, and S. Buettcher, “Reciprocal rank fusion outperforms condorcet and individual rank learning methods,” in 
+
+Proceedings of the 32nd Annual International ACM SIGIR Conference on Research and Development in Information Retrieval . ACM, 2009, pp. 758–759. [13] C.-Y. Lin, “ROUGE: A package for automatic evaluation of summaries,” in Text Summarization Branches Out , 2004, pp. 74–81. [14] T. Zhang, V. Kishore, F. Wu, K. Q. Weinberger, and Y. Artzi, “BERTScore: Evaluating text generation with BERT,” in International Conference on Learning Representations (ICLR) , 2020. [15] S. Es, J. James, L. Espinosa-Anke, and S. Schockaert, “RAGAS: Au-tomated evaluation of retrieval augmented generation,” in Proceedings of the 18th Conference of the European Chapter of the Association for Computational Linguistics (EACL): System Demonstrations , 2024, pp. 150–158.
