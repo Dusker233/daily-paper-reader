@@ -1,97 +1,50 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-05-22
 
-## 每次日报
-- 最新运行日期：2026-05-22
-- 运行时间：2026-05-22 21:14:34 UTC
-- 运行状态：成功
-- 本次总论文数：16
+- 生成时间：2026-05-22 21:14:34 UTC
+- 当次推荐总数：16
 - 精读区：5
 - 速读区：11
 
-### 今日简报（AI）
-今日共浏览16篇网络安全与AI论文，精读重点聚焦用户画像推断与入侵响应框架。  
-值得关注的方向：LLM驱动的网页用户画像测量，以及深度学习结合检索增强的网络入侵缓解策略。  
-建议关注这些技术在日常网络安全与隐私保护中的实际应用潜力。
-- 详情：[/202605/22/README](/202605/22/README)
+## 今日简报（AI）
+今日精读与速读共涉网络安全与LLM应用，共浏览16篇最新研究。  
+重点关注网站个性化推断与网络入侵检测深度学习框架的进展。  
+建议普通读者关注隐私防护与智能入侵防御的新方法，理解技术趋势。
 
-### 精读区论文标签
-1. [PersonaFingerprint: Measuring Persona Inference on Modern Websites with LLM\-Driven Browsing](/202605/22/2605.15962v1-personafingerprint-measuring-persona-inference-on-modern-websites-with-llm-driven-browsing)  
-   标签：评分：8.3/10、query:q7
+## 精读区
+1. [PersonaFingerprint：利用大语言模型驱动的浏览测量现代网站上的用户画像推断](/202605/22/2605.15962v1-personafingerprint-measuring-persona-inference-on-modern-websites-with-llm-driven-browsing)（8.3/10）
    摘要：本文提出PersonaFingerprint方法，通过LLM驱动的多代理浏览框架，在现代网站上仅利用加密流量元数据（数据包长度与到达时间）推断用户行为人格，实现行为指纹分析。实验覆盖10个主流网站与15种人格类型，混合站点条件下准确率约84%，同时保留网站识别性能。结果显示，即便在加密环境下，用户身份特征仍可被显著泄露，提示强烈隐私风险，值得进一步精读方法与实验细节。
-   evidence：基于LLM的加密流量人物识别
-2. [From Detection to Response: A Deep Learning and Retrieval\-Augmented Generation Framework for Network Intrusion Mitigation](/202605/22/2605.17960v1-from-detection-to-response-a-deep-learning-and-retrieval-augmented-generation-framework-for-network-intrusion-mitigation)  
-   标签：评分：8.3/10、query:q5
+2. [从检测到响应：一种用于网络入侵缓解的深度学习与检索增强生成框架](/202605/22/2605.17960v1-from-detection-to-response-a-deep-learning-and-retrieval-augmented-generation-framework-for-network-intrusion-mitigation)（8.3/10）
    摘要：本文提出了一种结合深度学习入侵检测和检索增强生成（RAG）的端到端框架，旨在从网络攻击检测到可执行响应闭环。方法包括三重DNN分类网络实现高精度攻击识别，并通过RAG从权威知识库生成带解释和引用的缓解报告。实验显示，该框架在CICIDS2018和UNSW\-NB15数据集上表现优异，生成的报告在自动评价指标上优于单独LLM输出，值得对网络安全响应应用深入阅读。
-   evidence：深度学习用于加密流量检测
-3. [Detecting Data Exfiltration through I2P Anonymity Networks: A Two\-Phase Machine Learning Approach](/202605/22/2605.20546v1-detecting-data-exfiltration-through-i2p-anonymity-networks-a-two-phase-machine-learning-approach)  
-   标签：评分：8.3/10、query:q4
+3. [通过 I2P 匿名网络检测数据泄露：一种两阶段机器学习方法](/202605/22/2605.20546v1-detecting-data-exfiltration-through-i2p-anonymity-networks-a-two-phase-machine-learning-approach)（8.3/10）
    摘要：本文针对I2P匿名网络在企业环境中可能被用于数据外泄的风险，提出了一种两阶段机器学习检测方法。第一阶段使用随机森林区分I2P流量与正常流量，精度达99.96%；第二阶段对识别出的I2P流量进行行为分析，利用XGBoost区分恶意外泄和合法活动，精度91.11%。研究表明基于树的集成方法在该任务中优于深度神经网络和支持向量机，适合在实际网络环境中部署。本文值得关注并可进一步精读。
-   evidence：用于分析匿名网络流量的两阶段机器学习模型
-4. [A Multi\-Layer Cloud\-IDS Pipeline with LLM and Adaptive Q\-Learning Calibration](/202605/22/2605.15889v1-a-multi-layer-cloud-ids-pipeline-with-llm-and-adaptive-q-learning-calibration)  
-   标签：评分：8.0/10、query:q9
+4. [结合大语言模型与自适应Q学习校准的多层云入侵检测管线](/202605/22/2605.15889v1-a-multi-layer-cloud-ids-pipeline-with-llm-and-adaptive-q-learning-calibration)（8.0/10）
    摘要：本文提出了一种多层云入侵检测系统（Cloud\-IDS）管道，结合机器学习、强化学习和大型语言模型（LLM），通过自适应信心阈值动态校准多层检测，针对网络层、主机层和虚拟化层实现高效攻击识别。实验结果显示，该方法显著减少了不必要的LLM调用（58.78%），并保持整体高性能（准确率88.68%，精确率85.29%，召回率84.72%）。论文值得精读，尤其适合关注云安全和智能IDS设计的读者。
-   evidence：基于LLM和Q学习的云入侵检测系统
-5. [GenAI\-Driven Threat Detection with Microsoft Security Copilot](/202605/22/2605.20896v1-genai-driven-threat-detection-with-microsoft-security-copilot)  
-   标签：评分：8.0/10、query:q9
+5. [基于生成式 AI 的威胁检测与 Microsoft 安全 Copilot](/202605/22/2605.20896v1-genai-driven-threat-detection-with-microsoft-security-copilot)（8.0/10）
    摘要：本文提出了基于生成式AI的动态威胁检测代理（DTDA），整合Microsoft Defender的多源安全数据，实现自主威胁发现和可解释告警。通过统一活动时间线、LLM驱动的计划\-执行循环及动态告警生成，DTDA在120天线上评测中达到80.1%精准度，并发现约15%的新威胁。结果表明，自动化威胁检测在生产环境下可行且高效，值得安全研究和运维人员进一步精读。
-   evidence：用于安全运营的LLM威胁检测代理
 
-### 速读区论文标签
-1. [Parser\-Free Querying of Security Logs](/202605/22/2605.22027v1-parser-free-querying-of-security-logs)  
-   标签：评分：7.9/10、query:q9
+## 速读区
+1. [无解析器的安全日志查询](/202605/22/2605.22027v1-parser-free-querying-of-security-logs)（7.9/10）
    摘要：本论文提出Sieve，一种无需手工解析器即可对多源安全日志进行查询的系统。通过自动提取日志模板并结合大语言模型生成可执行查询代码，Sieve支持复杂的多行时间序列和跨事件分析。在133个安全查询实验中，相较人工脚本错误率降低超过3倍，尤其在关键的多行关联任务中效果显著，显示出对实时安全分析的实用价值。值得继续精读以了解方法实现与实验细节。
-   evidence：基于LLM的安全日志查询系统
-2. [SGR: A Stepwise Reasoning Framework for LLMs with External Subgraph Generation](/202605/22/2605.16117v1-sgr-a-stepwise-reasoning-framework-for-llms-with-external-subgraph-generation)  
-   标签：评分：7.8/10、query:q7
+2. [SGR：一种通过外部子图生成增强大型语言模型逐步推理的框架](/202605/22/2605.16117v1-sgr-a-stepwise-reasoning-framework-for-llms-with-external-subgraph-generation)（7.8/10）
    摘要：本文提出了SGR框架，通过从外部知识图生成查询相关的子图，引导大语言模型\(LLM\)进行逐步推理，从而提升复杂多步推理的准确性与事实可靠性。实验表明，在多个基准数据集上，SGR显著优于现有方法，尤其在逻辑一致性和中间推理可解释性上有提升。对于关注LLM增强推理和知识图结合的研究者，值得进一步精读。
-   evidence：LLM通过外部子图增强推理
-3. [On\-Device Interpretable Tsetlin Machine\-Based Intrusion Detection for Secure IoMT](/202605/22/2605.16707v1-on-device-interpretable-tsetlin-machine-based-intrusion-detection-for-secure-iomt)  
-   标签：评分：7.8/10、query:q5
+3. [基于可解释Tsetlin机的设备端物联网医疗安全入侵检测](/202605/22/2605.16707v1-on-device-interpretable-tsetlin-machine-based-intrusion-detection-for-secure-iomt)（7.8/10）
    摘要：本文提出了一种基于可解释Tsetlin机（TM）的物联网医疗设备（IoMT）入侵检测系统，可在边缘设备上实时运行。方法通过逻辑规则捕捉攻击模式，并提供特征级、类别级和子句激活热图的解释。实验表明，该方法在MedSec\-25数据集上实现97.83%的分类准确率，同时兼具高性能与可解释性，对于保障IoMT安全和患者数据可信具有重要意义。
-   evidence：机器学习入侵检测系统用于加密IoMT流量检测
-4. [GRID: Graph Representation of Intelligence Data for Security Text Knowledge Graph Construction](/202605/22/2605.16714v1-grid-graph-representation-of-intelligence-data-for-security-text-knowledge-graph-construction)  
-   标签：评分：7.8/10、query:q8
+4. [GRID：用于安全文本知识图构建的情报数据图表示](/202605/22/2605.16714v1-grid-graph-representation-of-intelligence-data-for-security-text-knowledge-graph-construction)（7.8/10）
    摘要：本论文提出GRID框架，通过无监督构建CTI文章与安全知识图谱的对齐数据，并引入任务库奖励机制优化LLM端到端文档到图生成，显著提升精度和召回率。实验在249篇CTI文章的统一基准上验证，Task\-bank Reward模型达到84.62%精度和68.53%平均F1，显示低成本、高效益。若关注安全领域知识图谱自动构建，值得继续深入阅读。
-   evidence：基于LLM的网络威胁情报安全知识图谱
-5. [HIDBench: Benchmarking Large Language Models for Host\-Based Intrusion Detection](/202605/22/2605.21773v1-hidbench-benchmarking-large-language-models-for-host-based-intrusion-detection)  
-   标签：评分：7.8/10、query:q9
+5. [HIDBench：面向主机入侵检测的大型语言模型基准测试](/202605/22/2605.21773v1-hidbench-benchmarking-large-language-models-for-host-based-intrusion-detection)（7.8/10）
    摘要：论文提出 HIDBench，一个专门评测大语言模型在主机入侵检测（HIDS）中的能力基准。作者将 DARPA\-E3、DARPA\-E5 与 NodLink 三类系统日志统一为适配 LLM 的结构化输入，并围绕攻击窗口组织上下文，兼顾恶意与正常行为。实验发现，LLM 在简单数据集上精度较高，但面对复杂、噪声强、类别极不平衡的日志时性能明显下降，MCC 与误报率问题突出。若关注 LLM\+安全运维、日志推理或 HIDS 评测体系，这篇值得细读。
-   evidence：用于主机入侵检测的LLM在网络安全中
-6. [From Parameters to Data: A Task\-Parameter\-Guided Fine\-Tuning Pipeline for Efficient LLM Alignment](/202605/22/2605.21558v1-from-parameters-to-data-a-task-parameter-guided-fine-tuning-pipeline-for-efficient-llm-alignment)  
-   标签：评分：7.6/10、query:q3
+6. [从参数到数据：一种基于任务参数的高效大语言模型对齐微调流程](/202605/22/2605.21558v1-from-parameters-to-data-a-task-parameter-guided-fine-tuning-pipeline-for-efficient-llm-alignment)（7.6/10）
    摘要：本论文提出了P2D（From Parameters to Data）框架，通过识别任务敏感的注意力头来同时指导数据选择和参数稀疏微调，实现LLM在专业任务上的高效对齐。实验证明，仅更新10%的注意力头并使用10%的数据，即可在多个基准任务上获得8.3个百分点的性能提升和7倍加速。研究表明，精确的参数\-数据同步能够大幅降低冗余，值得深入阅读其方法和实验设计。
-   evidence：面向任务的LLM微调方法
-7. [On the \(non\-\)resilience of encrypted controllers to covert attacks](/202605/22/2605.14230v1-on-the-non-resilience-of-encrypted-controllers-to-covert-attacks)  
-   标签：评分：6.9/10、query:q4
+7. [论加密控制器对隐蔽攻击的（非）抗性](/202605/22/2605.14230v1-on-the-non-resilience-of-encrypted-controllers-to-covert-attacks)（6.9/10）
    摘要：本文研究网络控制系统中基于同态加密的控制器在面对隐蔽攻击时的脆弱性，提出了一种结合可验证计算的防御方法以提升系统完整性。作者通过理论分析与数值实验，证明即使在加密控制下，系统仍可能被攻击者在未知明文模型的情况下操控。该研究对加密控制的安全性认知具有重要启示，值得对安全敏感的控制系统研究者深入阅读。
-   evidence：用于网络流量安全的同态加密
-8. [LRCP: Low\-Rank Compressibility Guided Visual Token Pruning for Efficient LVLMs](/202605/22/2605.15621v1-lrcp-low-rank-compressibility-guided-visual-token-pruning-for-efficient-lvlms)  
-   标签：评分：6.9/10、query:q6
+8. [LRCP：基于低秩可压缩性引导的视觉令牌剪枝以提升LVLMs效率](/202605/22/2605.15621v1-lrcp-low-rank-compressibility-guided-visual-token-pruning-for-efficient-lvlms)（6.9/10）
    摘要：本文提出LRCP，一种基于低秩可压缩性指导的视觉Token剪枝方法，旨在降低大规模视觉\-语言模型\(LVLMs\)推理成本。通过PCA估计视觉Token的主导低秩子空间，并基于投影残差选择信息量大的Token，实验显示在大幅减少Token数量的同时仍能保留94%以上图像理解和97%以上视频理解性能，显示出在高效推理场景中值得关注。
-   evidence：LVLM的视觉令牌剪枝可支持加密视频或多模态分析
-9. [A Method for Securely Transmitting Large Video Files Using Chaotic Compression and Encryption](/202605/22/2605.16563v1-a-method-for-securely-transmitting-large-video-files-using-chaotic-compression-and-encryption)  
-   标签：评分：6.9/10、query:q6
+9. [一种基于混沌压缩与加密的大型视频文件安全传输方法](/202605/22/2605.16563v1-a-method-for-securely-transmitting-large-video-files-using-chaotic-compression-and-encryption)（6.9/10）
    摘要：本论文提出了一种针对大规模视频文件的同时压缩与加密（SDCE）方法，将混沌映射加密与哈夫曼编码无损压缩结合，实现高安全性与高压缩效率的统一框架。实验结果显示，该方法在吞吐量、压缩率、PSNR及数据完整性上优于传统分离方法，能够有效保障传输过程中的数据隐私与完整性。对于实时或大容量视频传输应用，值得进一步精读。
-   evidence：结合加密与视频文件处理
-10. [Text\-Guided Visual Representation Learning for Robust Multimodal E\-Commerce Recommendation](/202605/22/2605.17366v1-text-guided-visual-representation-learning-for-robust-multimodal-e-commerce-recommendation)  
-   标签：评分：6.9/10、query:q6
+10. [文本引导的视觉表示学习用于鲁棒多模态电商推荐](/202605/22/2605.17366v1-text-guided-visual-representation-learning-for-robust-multimodal-e-commerce-recommendation)（6.9/10）
    摘要：本文提出了面向电商推荐的文本引导视觉表示学习方法TGQ\-Former，针对商品图像中的促销叠加和背景杂乱问题，通过结构化元数据引导视觉特征提取，同时保留补充视觉信息。实验显示，该方法在大规模真实电商数据集上显著提升Hit Rate@100约6%，在噪声条件下表现稳健。值得继续精读以了解多模态检索的可部署策略和噪声适应机制。
-   evidence：将LLM与视觉特征聚合用于商品分析
-11. [FedSDR: Federated Self\-Distillation with Rectification](/202605/22/2605.18028v1-fedsdr-federated-self-distillation-with-rectification)  
-   标签：评分：6.9/10、query:q3
+11. [FedSDR：带修正的联邦自蒸馏](/202605/22/2605.18028v1-fedsdr-federated-self-distillation-with-rectification)（6.9/10）
    摘要：本文提出 FedSDR，一种面向个性化联邦学习的大型语言模型微调框架，核心通过自蒸馏对客户端异构数据进行统一建模，同时引入纠正机制避免幻觉和冗余。实验表明 FedSDR 在多种非独立同分布场景下显著优于传统方法，是值得深入研究的数据驱动优化策略。
-   evidence：LLM的联邦自蒸馏方法
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
