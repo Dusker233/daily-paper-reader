@@ -1,0 +1,594 @@
+Title: HIDBench: Benchmarking Large Language Models for Host-Based Intrusion Detection
+
+URL Source: https://arxiv.org/pdf/2605.21773v1
+
+Published Time: Fri, 22 May 2026 00:17:54 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# HIDBench: Benchmarking Large Language Models for Host-Based Intrusion Detection 
+
+Danyu Sun 
+
+University of California, Irvine 
+
+danyus2@uci.edu 
+
+Jinghuai Zhang 
+
+University of California, Los Angeles 
+
+jinghuai1998@g.ucla.edu 
+
+Yuan Tian 
+
+University of California, Los Angeles 
+
+yuant@ucla.edu 
+
+Zhou Li 
+
+University of California, Irvine 
+
+zhou.li@uci.edu 
+
+## Abstract 
+
+Recent benchmark efforts have advanced the evaluation of large language models (LLMs) in cybersecurity, including tasks such as penetration testing and vulnerabil-ity identification. However, a critical cybersecurity task, namely intrusion detection from system logs, remains unexplored. In this work, we present a new benchmark to assess LLMs’ capabilities in supporting host-based intrusion detection systems (HIDS). This task requires fine-grained reasoning over large-scale, noisy, and highly imbalanced system logs, where complex interactions between benign and malicious activities make reliable detection challenging. Our benchmark unifies three public system log datasets, DARPA-E3, DARPA-E5, and NodLink, and introduces a data construction pipeline that transforms raw host telemetry into LLM-compatible inputs, enabling systematic evaluation under realistic intrusion detection settings. Our evaluation of frontier LLMs reveals substantial performance gaps across datasets. While many models achieve high precision (often above 0.8) on simpler datasets, their performance degrades significantly as system logs become noisier and more complex, with MCC frequently dropping below 0.5 and false positive rates increasing sharply. We further analyze model behavior and identify distinct regimes, including conservative detectors with low false positive rates and over-sensitive models that generate excessive alerts. Overall, our results highlight that while LLMs show strong potential for HIDS, their effectiveness is highly sensitive to data complexity, and robust system design is essential for reliable deployment. 
+
+## 1 Introduction 
+
+Recent benchmark efforts have explored the evaluation of large language models (LLMs) in cyberse-curity. General benchmarks such as GLUE [ 1] and MMLU [ 2] assess broad language capabilities but do not capture domain-specific security challenges. More recent domain-specific benchmarks, including CyberSecEval [ 3] and CyberBench [ 4 ], focus on structured tasks such as vulnerability understanding and security-oriented NLP. Other efforts such as Cybench [ 5] and CyberGym [ 6]evaluate LLM agents in CTF-style or vulnerability exploitation scenarios. In parallel, specialized harnesses have been designed for cybersecurity tasks like penetration testing [ 7 , 8], vulnerability detection [ 9 , 10 ], threat intelligence analysis [ 11 –13 ], and interpreting attack artifacts such as mali-cious scripts [ 14 ]. These benchmarks/tasks focus on software implementations or offensive security. Yet, a benchmark is missing for a critical cyber-security task, namely intrusion detection on the log telemetry. As intrusion detection is performed more frequently than the other tasks by defenders and LLMs are demonstrating increasingly advanced reasoning capabilities, a natural question arises: can 
+
+> Preprint.
+> arXiv:2605.21773v1 [cs.CR] 20 May 2026
+
+they support real-world cybersecurity operations that demand fine-grained analysis of massive, noisy telemetry streams? In this work, we systematically investigate their performance on Host-based intrusion detection System (HIDS) [ 15 ], which presents a uniquely challenging evaluation setting. Unlike isolated text inputs, host telemetry consists of heterogeneous event streams, such as process executions, file accesses, network connections, and provenance dependencies, generated continuously at enterprise scale. Malicious evidence is rare and often fragmented across multiple events, requiring models to reason over weak and distributed signals under severe class imbalance and extended temporal contexts. Benchmark construction poses an additional challenge: widely used datasets such as DARPA-E3 [ 16 ] and DARPA-E5 [ 17 ] contain massive audit logs with realistic background noise, making naive LLM evaluation impractical. Direct prompting on raw logs is constrained by context limits and computational cost, while filtering to attack-only events removes the benign context necessary for realistic detection. Several works have proposed integrating LLMs into HIDS frameworks, including agent-based systems for explainable intrusion detection [ 18 ], knowledge-driven provenance-based detection systems [ 19 ], and hybrid pipelines [ 20 ]. However, LLMs play a limited role in these works and their capabilities are not systematically assessed. Concurrently, Bilot et al. developed PIDSMaker [21], a benchmark containing log telemetry to evaluate the provenance-based intrusion detection systems (PIDS) [ 22 ]. However, the customized design for PIDS does not match the strengths (e.g., built-in knowledge of cyber-attack patterns) and weaknesses (e.g., limited context window) of LLMs. To address this gap, we introduce HIDB ENCH , a unified benchmark for evaluating LLMs in HIDS. HIDB ENCH integrates three public log datasets (DARPA-E3, DARPA-E5, and NodLink) through a coherent data pipeline that transforms raw host telemetry into LLM-compatible inputs. Rather than directly prompting on raw logs, we design an evaluation framework that organizes system events around attack-centric windows, preserving malicious activity alongside its surrounding benign context while keeping inputs within model context limits. We further construct structured representations of system behavior that enable models to reason over heterogeneous signals involving processes, files, and network interactions, directly targeting the core challenges of long-context reasoning, sparse attack signals, and class imbalance. HIDBench is designed as a model-agnostic harness: integrating a new LLM requires only specifying its API endpoint, with no changes to the data pipeline, prompts, and evaluation logic. Our evaluation of 9 frontier LLMs reveals substantial and recurring performance gaps across datasets. While many models achieve high precision on simpler datasets, performance degrades sharply as logs become noisier and more complex, with Matthews Correlation Coefficient (MCC) frequently dropping below 0.5 and false positive rates increasing substantially. Analysis of model behavior reveals distinct detection regimes, including conservative detectors that suppress alerts and over-sensitive models that generate excessive false positives. These findings underscore the importance of robust system design for reliable HIDS deployment and establish HIDB ENCH as a rigorous testbed for this underexplored but operationally critical task. Rather than introducing a new standalone intrusion detection algorithm, HIDB ENCH is designed as a unified benchmark and evaluation harness for systematically assessing LLM capabilities in host-based intrusion detection under realistic telemetry settings. Specifically, our main contributions are as follows: • Benchmark. We introduce HIDB ENCH , a unified and plug-and-play benchmark for evalu-ating LLMs in host-based intrusion detection. Our benchmark integrates three widely used datasets (DARPA-E3, DARPA-E5, and NodLink) into a standardized evaluation framework, enabling systematic and cross-dataset comparison. • System Design. We design a principled pipeline that transforms large-scale, noisy, and highly imbalanced system telemetry into structured, LLM-compatible inputs. Our ap-proach preserves both malicious activity and surrounding benign context, enabling realistic evaluation under LLM context constraints. • Comprehensive Evaluation and Insights. We conduct an extensive evaluation of frontier LLMs and uncover consistent performance gaps across datasets. Our analysis reveals that high precision can be misleading under severe class imbalance, and identifies distinct model behaviors (e.g., conservative vs. over-sensitive detectors), highlighting key challenges for deploying LLM-powered HIDS. 22 System Design 
+
+Figure 1 illustrates the workflow of our benchmark HIDB ENCH . It consists of four components: (i) 
+
+Data Construction & Segmentation , which transforms high-volume, highly-imbalanced raw host logs into structured inputs suitable for evaluation by LLMs; (ii) Malicious Evidence Identification , which extracts attack evidence using the LLM; (iii) Attack Graph Expansion , which augments the identified evidence with its surrounding context; and (iv) Attack Chain Reconstruction , which instructs the LLM to perform intrusion detection over the attack graph and produce structured outputs. Together, these components address the core challenges of scale, imbalance, and contextual complexity that make HIDS a particularly challenging setting for LLM. LLM Prompt 
+
+Malicious Evidence 
+
+Identification 
+
+Attack Graph 
+
+Expansion 
+
+Data Construction 
+
+& Segmentation   
+
+> Analyze the command lines in
+> <cmds> and identify suspicious
+> command, processes, files,
+> etc, ......
+> 1.PhpStudyExp2.py (process)
+> 2.powershell.exe
+> 3.192.16.1.10 (IP) ......
+
+Attack Chain 
+
+Reconstruction   
+
+> Majority Vote
+> Before
+> Before : Attack : After
+> = 1:1:1
+> Attack
+> Shuffle node / edge order
+> Raw System Logs
+> After
+> Benign Malicious
+> Extracted Evidence
+> Expanded
+> Subgraph
+> Expanded
+> Subgraph
+> (Shuffled)
+> LLMs
+> Structured Output
+> Attack
+> Narrative
+> Key
+> Steps IOCs
+
+Figure 1: Overview of the HIDB ENCH benchmark pipeline. 
+
+2.1 Data Construction & Segmentation 
+
+Feeding the logs of an HIDS dataset directly into an LLM usually cannot generate meaningful results for two reasons. First, an HIDS dataset usually contains millions of events, far exceeding the input window of an LLM (e.g., 1M tokens). Second, though we can slice an HIDS dataset into smaller segments that fit in the LLM’s input window, naive approaches like constant-interval sliding windows would severely degrade the input quality, because benign events often overwhelmingly dominate a window and cause class imbalance. We carefully construct log segments by examining the ground-truth reports. To preserve execution semantics and system interactions, we retain identifiers, event attributes, and entity-level information (e.g., process paths, file paths, and network attributes) following prior provenance-based HIDS preprocessing practices [ 23 , 24 ]. We additionally remove redundant events to suppress noise. Detailed preprocessing descriptions are provided in Appendix B.1. We first identify the attack interval that is documented by the report (e.g.,"/tmp/vUgefal" for DARPA E3 Cadets). Then, given a log stream L
+
+with an attack interval [ts, t e], we define the attack duration as ∆t = te − ts. We partition events into three temporally aligned segments: benign events before the attack, attack-period events, and benign events after the attack. Specifically, the benign context is selected using windows of the same duration as the attack interval, i.e., [ts − ∆t, t s) before the attack and (te, t e + ∆ t] after the attack. The three segments are concatenated to form an attack-centric window that preserves both malicious activity and its surrounding benign context. Though the input window limits of the tested LLMs range from 131,072 (DeepSeek V3.2 and gpt-oss-120b) to 1,048,576 (Gemini-2.5-Flash) tokens, we found that none of the attack-centric windows exceed the limit. 
+
+2.2 Malicious Evidence Identification (MEI) 
+
+An attack-centric window after the previous step still contains a substantial amount of benign events that obscures malicious events. Directly prompting LLMs to detect the attack events over such inputs risks producing erroneous outputs due to the “lost-in-the-middle” effect [ 25 ]. To address this issue, we request the LLM to identify a compact set of high-confidence attack evidence E from the input events E. An HIDS dataset could contain various event types, but it is genuinely more difficult to classify certain types, e.g., network events with only IP addresses and flow types. Hence, we focus on events with semantically rich signals such as command-line executions and process behaviors (e.g., execution of a suspicious process “./gtcache” via “/bin/sh” ). By anchoring LLM 3on the high-confidence attack evidence E, we found that detection accuracy can be significantly improved. The prompt template for this step is described in Appendix C.7. 
+
+2.3 Attack Graph Expansion (AGE) 
+
+High-confidence evidence identified by MEI captures salient malicious signals but lacks the sur-rounding context necessary for reasoning over multi-step attack behaviors. As an example, in the Browser Extension w/ Drakon Dropper attack from the DARPA-E3 THEIA dataset, the suspicious process “./gtcache” exhibited stealthy shell execution and repeated memory manipulation behav-iors (e.g., EVENT_MMAP and EVENT_MPROTECT), but reconstructing the full attack chain required additional provenance context, including process lineage, file modifications, and external network communications. Without such context, benign intermediary processes and previously unseen network entities involved in the attack chain may be omitted from the investigation. Therefore, we develop a lightweight context-building module to augment E from the previous step, inspired by prior provenance-based attack analysis works [ 26 , 23 , 27 ]. Given the extracted evidence 
+
+E, we perform k-hop expansion to collect interacting entities and relations that capture contextual dependencies. The resulting subgraph is serialized into a structured representation for downstream reasoning. To reduce positional bias introduced by deterministic serialization, we randomly shuffle the order of nodes and edges before serialization while preserving graph structure and edge semantics. Appendix B.2 provides the pseudo-code of this procedure. 
+
+2.4 Attack Chain Reconstruction (ACR) 
+
+Given the serialized subgraph produced by AGE, we prompt the LLM to generate two structured outputs: (i) an attack narrative describing the sequence of adversarial actions, and (ii) key indicators of compromise (IOCs) such as suspicious processes, files, and network connections. While IOCs can also be derived by traditional intrusion detection systems, attack narratives provide higher-level contextual explanations favored by human analysts. To ensure fair comparison, we use the same prompt template across all models without dataset-specific hints or handcrafted rules. Full prompt templates are provided in Appendix C.7. In this step, we also experiment with some post-processing techniques, including majority voting under test-time scaling [ 28 ] and iterative self-reflection [ 29 , 30 ]. We found majority voting improves the detection results and include it as a default option in HIDB ENCH . Self-reflection produces mixed outcomes and we discuss this issue in Section 4. 
+
+## 3 Experiments and Results 
+
+3.1 Experimental Setup Datasets. We evaluate HIDBench on three public host telemetry datasets: DARPA-E3 [ 16 ], DARPA-E5 [ 17 ], and NodLink-simulated data (NL-SD) [ 31 ], comprising nine sub-datasets in total. All datasets consist of host-level audit logs capturing endpoint system activities under realistic attack scenarios, with highly imbalanced distributions between malicious and benign events. Dataset statistics after “Data Construction & Segmentation” described in Section 2.1 are summarized in Table 2 in Appendix. The full dataset descriptions are provided in Appendix C.1. 
+
+Ground-truth Labels. Labeling strategy significantly affects evaluation reliability, particularly given the severe class imbalance in host telemetry data. We adopt the labeling strategy that precisely models the attack activities. For DARPA-E3/E5, we adopt the labeling strategy from Orthrus [ 32 ]and Velox [ 33 ], which strictly follows the official ground-truth documentation without additional expansion. Far fewer attack events are labeled compared to other more aggressive labeling strategies (e.g., multi-hop neighbors of annotated malicious nodes [ 23 , 34 , 35 ]), which present a more chal-lenging but realistic setting for intrusion detection. For NL-SD, we use the ground-truth node labels directly provided by the dataset authors [36]. 
+
+LLM Models. We evaluate a diverse set of frontier LLMs spanning multiple providers and devel-opment paradigms, including both proprietary and open-weight models. Specifically, we include Claude-Opus-4.6 [ 37 ], Claude-Sonnet-4.5 [ 38 ], Claude-Sonnet-4 [ 39 ], GPT-5.2 [ 40 ], GPT-4.1 [ 41 ]and Gemini-2.5-Flash [ 42 ] as proprietary models and GPT-OSS-120B [ 43 ], DeepSeek-V3.2 [ 44 ] and 4Qwen3.6-Plus [ 45 ] as open-weight models. This selection covers a range of model families, scales, and training paradigms, enabling a comprehensive assessment of current LLM capabilities in HIDS. 
+
+Evaluation Metrics. We evaluate model performance using precision, false positive rate (FPR), and Matthews Correlation Coefficient (MCC). Precision and FPR measure alert quality and false-alarm behavior, while MCC captures overall prediction quality under severe class imbalance. Detailed metric definitions are provided in Appendix C.3. 
+
+Data Contamination. A primary threat to validity is that the tested LLMs have seen the ground-truth labels of the public dataset and use them to answer prompts. To mitigate such data contamination issue, our prompt templates do not expose dataset names, attack labels, or ground-truth annotations. Models only receive serialized provenance graphs and must reason over contextual system behaviors. We also manually inspected outputs and did not observe evidence of explicit ground-truth memorization. The substantial performance degradation on harder datasets such as DARPA-E5 further suggests that successful detection depends on contextual reasoning rather than memorized attack signatures. 
+
+3.2 Main Results 
+
+We evaluate all models using precision, MCC, and FPR. Full per-model, per-dataset results are provided in Table 3 in the Appendix. In the main text, we organize our findings under four research questions ( RQ1 to RQ4 ) highlighted below. 
+
+RQ1: How do dataset characteristics and complexity affect the performance of an LLM? CADETS   
+
+> THEIA
+> TRACE
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> Average MCC / Precision  DARPA-E3
+> CADETS
+> THEIA
+> TRACE
+> DARPA-E5
+> HW17
+> HW20
+> WIN10
+> NL-SD
+> 0.000
+> 0.005
+> 0.010
+> 0.015
+> 0.020
+> FPR (%)
+> 0.1
+> 0.2
+> 0.3
+> FPR (%)
+> 0.5
+> 1.0
+> 1.5
+> FPR (%)
+> MCC Precision FPR
+
+Figure 2: Per-sub-dataset performance averaged across all LLMs. Higher MCC and precision indicate better detection quality and alert accuracy, while lower FPR indicates fewer false alarms. Table 2 reveals substantial variation in both data volume and class imbalance across datasets. The DARPA datasets are significantly larger, ranging from 39,198 to 121,263 events per sub-dataset, after data construction steps including attack-centric splitting and filtering based on unique event identifiers. These values reflect the size of the LLM-compatible inputs rather than the full raw logs. The datasets exhibit extremely low malicious-to-benign ratios, as low as 0.004% in DARPA-E3 TRACE and 0.005% in DARPA-E5 TRACE. In contrast, NL-SD sub-datasets are considerably smaller (481–2,411 events) and exhibit higher malicious ratios, ranging from 3.4% to 6.0%. These structural differences translate directly into measurable performance variation, as shown in Figure 2 and Table 3. Across all evaluated LLMs, DARPA-E3 TRACE is consistently the easiest sub-dataset, achieving nearly perfect precision and MCC for most models (average precision: 1.000; average MCC: 0.879) with near-zero FPR. This suggests that attacks in TRACE expose highly distinguishable malicious behaviors that remain separable from benign background activity despite severe class imbalance. In contrast, DARPA-E3 THEIA exhibits substantially lower MCC despite relatively high precision. Averaged across models, THEIA achieves only 0.229 MCC, compared to 0.475 for CADETS and 0.879 for TRACE. For example, GPT-4.1 and GPT-OSS-120B both achieve perfect precision (1.000) on THEIA, yet their MCC scores remain low (0.250 and 0.216, respectively), indicating that identifying isolated suspicious events alone is insufficient for reconstructing the full attack chain. This behavior suggests that THEIA requires reasoning over long-range contextual dependencies between benign and malicious activities. CADETS presents an intermediate level of difficulty. Although its average MCC is substantially higher than THEIA, it consistently produces 5higher FPR than TRACE. Even small FPR values become operationally costly under the significantly larger event volume of provenance graphs. Moving to DARPA-E5 and NL-SD, detection quality degrades substantially as dataset complexity increases. Compared to DARPA-E3, average precision on E5 drops from 0.839 to 0.237 on CADETS and from 0.781 to 0.071 on THEIA, while FPR increases significantly across models (e.g., GPT-4.1 rises from 0.02% to 0.543% FPR on CADETS). These results suggest that the noisier telemetry and more ambiguous attack behaviors in E5 substantially increase the difficulty of reliable attack reconstruction. NL-SD exhibits a different failure mode. While HW17 and HW20 maintain relatively strong average MCC values (0.458 and 0.570, respectively), WIN10 remains substantially harder despite its higher malicious ratio, achieving only 0.268 average MCC across models. This suggests that overlapping attack campaigns and interleaved attack chains introduce additional reasoning complexity beyond class imbalance alone. See Appendix C.4 for additional dataset-specific analysis. Taken together, these results reveal that detection difficulty is multidimensional and dataset-specific. Class imbalance and background noise jointly explain the uniform performance degradation observed in DARPA-E5, while attack pattern visibility, rather than imbalance, is the primary driver of variation within DARPA-E3. In NL-SD, neither imbalance nor noise is the bottleneck; instead, attack density and cross-platform behavioral ambiguity introduce qualitatively different challenges that current LLMs are ill-equipped to handle. These findings suggest that no single dataset characteristic captures the full difficulty of HIDS evaluation, and that robust benchmarking must account for the interplay of multiple complexity factors simultaneously. 1
+
+RQ2: How do frontier LLMs navigate the tradeoff between precision and false positive rate? 
+
+Figure 3 reveals a clear and consistent pattern: as dataset complexity increases, the precision–FPR tradeoff becomes increasingly difficult to maintain. On DARPA-E3, the simplest dataset family, most models cluster in the upper-left region of the plot, achieving both high precision and near-zero FPR. Averaged across models, DARPA-E3 achieves 0.893 precision with only 0.008% average FPR, indicating that frontier LLMs can effectively suppress false alarms when attack behaviors remain distinguishable from benign activity. Claude-Opus-4.6 represents the strongest operating point in this regime, achieving approximately 0.92 average precision while maintaining only 0.01% average FPR. As dataset complexity increases, models spread more noticeably along the precision–FPR tradeoff curve. Compared to DARPA-E3, average precision on DARPA-E5 drops from 0.893 to 0.614, while average FPR increases from 0.008% to 0.128%. The tradeoff becomes most pronounced on NL-SD, where models separate into distinct behavioral regimes. Over-sensitive models aggressively flag suspicious behaviors at the cost of elevated FPR, while conservative models maintain lower FPR but suppress broader classes of attack indicators. For example, Gemini-2.5-Flash reaches approximately 2.1% average FPR across NL-SD, substantially higher than other evaluated models. These results suggest that under noisier and more behaviorally heterogeneous environments, frontier LLMs increasingly diverge not only in overall capability, but also in their implicit detection strategies. Additional model-specific analysis of DARPA-E5 and NL-SD is provided in Appendix C.5. We also observe a consistent gap between proprietary frontier models and open-weight/open-access models across datasets. Averaged over all sub-datasets, proprietary models achieve higher overall precision and substantially lower FPR. For example, on DARPA-E3, proprietary models achieve approximately 0.90 average precision compared to 0.82 for open models, while maintaining similarly negligible FPR. The gap becomes more pronounced on harder datasets such as DARPA-E5 and NL-SD, where open models exhibit substantially less stable operating behavior. For instance, GPT-OSS-120B and Gemini-2.5-Flash frequently drift toward high-FPR regimes under noisy telemetry, whereas Claude-Opus-4.6 and GPT-5.2 maintain comparatively stable precision–FPR tradeoffs. These results suggest that stronger frontier reasoning capabilities improve robustness under complex provenance analysis settings, particularly when attacks are heavily interleaved with benign behaviors. 
+
+> 1Recent non-LLM HIDS such as Orthrus [ 24 ] and Velox [ 33 ], report similar performance on DARPA-E3 and E5. For example, Orthrus and Velox achieve average precision of 0.66 and 0.85 on E3, and 0.43 and 0.12 on E5, respectively. However, the numbers do not necessarily reflect their real capability gaps due to different setups (e.g., the non-LLM HIDS have a training phase using the “attack-free” logs on the same machines, which are not used by HIDB ENCH ).
+
+6Overall, these results demonstrate that the precision–FPR tradeoff is not a fixed property of an LLM, but strongly depends on dataset complexity and attack characteristics. While most frontier models achieve highly stable operating points on structured and lower-noise datasets such as DARPA-E3, their behaviors diverge substantially as background noise, attack density, and behavioral ambiguity increase. In particular, proprietary frontier models generally maintain more stable precision–FPR tradeoffs under complex settings, whereas open-weight/open-access models exhibit greater variance and are more likely to drift toward high-FPR regimes. These observations motivate a closer examination of the distinct behavioral patterns exhibited by different LLM families, which we explore in RQ3. 0.0 0.5 1.0 1.5 2.0 
+
+> Average FPR (%)
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> Average Precision
+> Models
+> Claude-opus-4.6
+> Claude-sonnet-4.5
+> Claude-sonnet-4
+> GPT-5.2
+> GPT-4.1
+> GPT-oss-120b
+> Gemini-2.5-Flash
+> DeepSeek-V3.2
+> Qwen3.6-plus
+> Dataset Family
+> DARPA-E3
+> DARPA-E5
+> NodLink
+
+Figure 3: Precision–FPR tradeoff across models and dataset families. Each point represents a model– dataset family pair, with marker shape indicating dataset family and color indicating model identity. 
+
+RQ3: Can frontier LLMs be categorized into distinct behavioral regimes, and what drives these differences? 
+
+To move beyond per-dataset comparisons, we characterize each model’s false positive behavior globally across all datasets. Using only a single dataset-level FPR can be misleading because different provenance datasets exhibit substantially different event scales, attack densities, and background noise levels, leading to highly uneven FPR distributions and dataset-specific outliers. To better capture overall operational behavior, we therefore use two complementary metrics: the average FPR across all datasets f avg  
+
+> i
+
+, which reflects a model’s overall false-alarm tendency, and the worst-case FPR f max  
+
+> i
+
+,which captures peak deployment risk under challenging conditions. Based on these metrics, we define three behavioral regimes. Conservative models maintain both low average and low worst-case FPR ( f avg  
+
+> i
+
+< 0.25 , f max  
+
+> i
+
+< 1.0). Over-sensitive models exceed either threshold ( f avg  
+
+> i
+
+≥ 0.50 or 
+
+f max  
+
+> i
+
+≥ 2.0), indicating unstable behavior under noisy conditions. Balanced models fall between these two extremes. Figure 4 reveals that this categorization is both meaningful and stable. Claude-Opus-4.6 and Claude-Sonnet-4 emerge as the most conservative models, maintaining consistently low FPR across the DARPA datasets while avoiding extreme false-positive spikes on NL-SD. At the other extreme, Gemini-2.5-Flash exhibits the most severe over-sensitivity, with FPR peaking at 4.52% on NL-HW17 and remaining substantially elevated on WIN10 (1.41%), despite near-zero FPR on DARPA-E3. GPT-4.1 and DeepSeek-V3.2 similarly fall into the over-sensitive regime, with GPT-4.1 reaching 0.54% FPR on DARPA-E5 CADETS and both models exhibiting elevated false positives across multiple NL-SD settings. The balanced regime, occupied by Qwen3.6-Plus, GPT-OSS-120B, and Claude-Sonnet-4.5, represents models that avoid extreme false-alarm rates while maintaining moderate detection coverage. A consistent pattern emerges across all regimes: FPR on DARPA datasets remains near zero for virtually all models, while NL-SD, particularly HW17, acts as the primary differentiator. This confirms that behavioral regime membership is not an intrinsic property of a model, but is revealed only under sufficiently challenging conditions. Models that appear behaviorally similar on simpler datasets diverge substantially under concurrent attacks and cross-platform behavioral ambiguity, underscoring the necessity of diverse and realistic benchmarks for meaningful model comparison. 7E3-CADETS                                                                         
+
+> E3-THEIA
+> E3-TRACE
+> E5-CADETS
+> E5-THEIA
+> E5-TRACE
+> NL-HW17
+> NL-HW20
+> NL-WIN10
+> Claude-opus-4.6
+> Claude-sonnet-4
+> Qwen3.6-plus
+> GPT-oss-120b
+> Claude-sonnet-4.5
+> GPT-5.2
+> DeepSeek-V3.2
+> GPT-4.1
+> Gemini-2.5-Flash
+> 0.04 0.00 0.00 0.07 0.01 0.01 0.65 0.85 0.18
+> 0.02 0.00 0.00 0.44 0.05 0.02 0.65 0.60 0.04
+> 0.01 0.00 0.00 0.02 0.05 0.02 0.43 1.19 0.18
+> 0.02 0.00 0.00 0.56 0.05 0.02 1.50 0.26 0.18
+> 0.03 0.00 0.00 0.42 0.01 0.02 1.07 1.02 0.22
+> 0.01 0.00 0.00 0.03 0.04 0.01 2.15 0.51 0.22
+> 0.02 0.00 0.00 0.03 0.04 0.02 2.15 0.60 0.31
+> 0.02 0.00 0.00 0.54 0.04 0.02 2.80 0.51 0.31
+> 0.02 0.00 0.00 0.46 0.39 0.02 4.52 0.26 1.41
+> Behavior
+> Conservative
+> Avg=0.20, Max=0.85
+> Conservative
+> Avg=0.20, Max=0.65
+> Balanced
+> Avg=0.21, Max=1.19
+> Balanced
+> Avg=0.29, Max=1.50
+> Balanced
+> Avg=0.31, Max=1.07
+> Over-sensitive
+> Avg=0.33, Max=2.15
+> Over-sensitive
+> Avg=0.35, Max=2.15
+> Over-sensitive
+> Avg=0.47, Max=2.80
+> Over-sensitive
+> Avg=0.79, Max=4.52
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> FPR (%)
+
+Figure 4: Per-model FPR across all sub-datasets, with models sorted by average FPR. Color intensity reflects false-alarm severity, and behavior categories on the right are assigned based on both average and worst-case FPR, capturing overall tendency and peak deployment risk simultaneously. 
+
+RQ4: What is the cost and runtime overhead caused by LLMs? 
+
+We further analyze the monetary cost of using LLMs for HIDS. Stronger frontier models such as Claude-Opus-4.6 and GPT-5.2 achieve better detection performance but incur substantially higher inference cost, evaluating a full dataset such as DARPA-E3 CADETS. In contrast, lightweight models such as Gemini-2.5-Flash and GPT-OSS-120B typically remain below $0.1 per dataset, though often with reduced robustness on more challenging datasets. Runtime overhead follows a similar trend, with larger reasoning-oriented models requiring substantially longer inference time; however, even the slowest models complete inference within approximately one minute per sample. Detailed per-model cost and runtime statistics are provided in Appendix D. 
+
+## 4 Advanced Capabilities on HIDS: Reasoning, Scaling, and Reflection 
+
+The main results reveal substantial performance gaps across datasets, raising a natural follow-up question: can these gaps be narrowed through more sophisticated inference strategies, without modifying model parameters? We investigate three complementary directions: explicit reasoning, test-time scaling via majority voting, and iterative self-reflection, probing the extent to which inference-time strategies can compensate for the inherent difficulty of HIDS. 
+
+How much does LLM reasoning rely on inferred versus explicit evidence? To understand whether LLMs rely on overtly suspicious signals or contextual reasoning, we analyze reasoning traces produced by DeepSeek on DARPA-E3 CADETS. We first use GPT-5.4 for initial IOC categorization and then manually verify all classifications. We divide IOCs into two categories: explicit IOCs, corresponding to directly observable malicious artifacts, and inferred IOCs, which require contextual reasoning over co-occurring events and provenance relationships. Across all analyzed attack cases, inferred IOCs consistently outnumber explicit ones, suggesting that the model actively constructs contextual evidence chains beyond directly observable malicious indicators. Additional quantitative statistics and case studies are provided in Appendix E.3. As shown in Table 8, inferred IOCs consistently outnumber explicit ones across all four attack cases, with the gap most pronounced in medium-quality cases. This suggests that LLMs do not simply pattern-match on obvious indicators, but actively construct evidence chains that extend beyond directly observable signals. Representative examples in Table 1 illustrate this: while explicit IOCs capture artifacts such as suspicious executables and external IPs, inferred IOCs surface subtler relationships such as system services and configuration files implicated through multi-step behavioral context. Further case analysis is provided in Appendix E.3. 
+
+Does test-time scaling improve detection performance? We evaluate majority voting under test-time scaling with sample sizes k ∈ { 1, 3, 5, 7}. As shown in Figure 5, increasing k from 1 to 3 yields the largest performance improvement across models, while larger values provide diminishing returns. 8Table 1: Representative explicit and inferred IOCs of DARPA-E3. 
+
+Case Quality Explicit IOCs Inferred IOCs 
+
+CADETS-A1 High vUgefal, 61.167.39.128, /tmp /etc, /var, /dev 
+
+CADETS-A2 Medium nginx, /etc/passwd, /tmp/grain 76.56.184.25, rc.conf 
+
+CADETS-A3 Medium minions, XIM /tmp/minions, sshd 
+
+CADETS-A4 Medium pEja72mA, /tmp/*.so 128.55.12.122, sshd 
+
+Stronger models such as Claude-Opus-4.6 remain relatively stable even at k = 1 , whereas weaker or more variable models benefit substantially from aggregation. See Appendix E.2 for details. 1 3 5 7                   
+
+> # Votes
+> 0.25
+> 0.50
+> 0.75
+> Precision
+> (a) Precision vs. TTS Scale
+> 1357
+> # Votes
+> 0.2
+> 0.4
+> 0.6
+> MCC
+> (b) MCC vs. TTS Scale
+> k=1 k=3 k=5 k=7
+> Claude-opus-4.6
+> GPT-5.2
+> DeepSeek-V3
+> (c) MCC over k=3
+> -0.04 +0.00 -0.01 -0.01
+> -0.26 +0.00 +0.08 +0.08
+> -0.35 +0.00 +0.02 +0.01 0.2
+> 0.0
+> 0.2
+> MCC
+> Claude-opus-4.6 GPT-5.2 DeepSeek-V3
+
+Figure 5: Effect of test-time scaling on detection performance. (a) Precision and (b) MCC versus the number of voting samples for three representative LLMs. (c) ∆MCC relative to the k = 3 baseline, showing that gains largely saturate beyond k = 3 . Stronger models (Claude-Opus-4.6) remain stable even at k = 1 , whereas weaker models benefit more from aggregation. 
+
+Does iterative self-reflection improve detection performance? Recent studies suggest that self-reflection can improve reasoning consistency and error correction in LLMs [ 46 , 47 ]. We evaluate two self-reflection strategies combined with majority voting: Ref-then-Agg , where each sample is refined before aggregation, and Agg-then-Ref , where self-reflection is applied once after aggregation. Overall, neither strategy consistently outperforms the baseline across all models, suggesting that the effectiveness of self-reflection is highly model-dependent. For example, GPT-5.2 benefits substan-tially from Ref-then-Agg, improving MCC from 0.510 to 0.675, while DeepSeek achieves its best performance under Agg-then-Ref, improving MCC from 0.428 to 0.553. In contrast, Claude exhibits reduced MCC under both reflection strategies despite slight precision improvements, indicating a tradeoff between conservative prediction behavior and attack coverage. Detailed ablation results and additional analysis are provided in Appendix E.1. 
+
+## 5 Conclusion 
+
+We present HIDB ENCH , the first benchmark for evaluating LLMs in host-based intrusion detection, unifying three public provenance graph datasets under a common evaluation framework. Our eval-uation shows that LLM performance is highly sensitive to dataset complexity. Detection quality degrades substantially as background noise, class imbalance, and attack density increase, exposing distinct failure modes that simpler benchmarks cannot capture. Models further diverge into conserva-tive and over-sensitive behavioral regimes under more challenging settings. Inference-time strategies such as test-time scaling and self-reflection provide targeted improvements, but no universal solution across models and datasets. These findings suggest that current LLMs are better suited as a triage and investigation layer than as primary detectors. Reliable deployment will require advances in both model robustness and hybrid system design beyond current inference-time techniques. 
+
+Limitations and Future Work. HIDB ENCH does not explore the entire design space for the LLM harness, such as a retrieval-augmented generation (RAG) module, which requires dataset-specific tuning. The generation of attack-centric windows relies on pre-defined heuristics and the detection results may vary with different parameter choices. HIDB ENCH is not a real-time detector as it waits for the entire subset processed before running the detection logic. Future work includes extending the benchmark to streaming settings, incorporating more real-world telemetry datasets, and exploring more design choices for the harness. 9References 
+
+[1] A. Wang, A. Singh, J. Michael, F. Hill, O. Levy, and S. Bowman, “GLUE: Amulti-task benchmark and analysis platform for natural language understanding,” in 
+
+Proceedings of the 2018 EMNLP Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP , T. Linzen, G. Chrupała, and A. Alishahi, Eds. Brussels, Belgium: Association for Computational Linguistics, Nov. 2018, pp. 353–355. [Online]. Available: https://aclanthology.org/W18-5446/ [2] Y. Wang, X. Ma, G. Zhang, Y. Ni, A. Chandra, S. Guo, W. Ren, A. Arulraj, X. He, Z. Jiang et al. ,“Mmlu-pro: A more robust and challenging multi-task language understanding benchmark,” 
+
+Advances in Neural Information Processing Systems , vol. 37, pp. 95 266–95 290, 2024. [3] M. Bhatt, S. Chennabasappa, C. Nikolaidis, S. Wan, I. Evtimov, D. Gabi, D. Song, F. Ahmad, C. Aschermann, L. Fontana et al. , “Purple llama cyberseceval: A secure coding benchmark for language models,” arXiv preprint arXiv:2312.04724 , 2023. [4] Z. Liu, J. Shi, and J. F. Buford, “Cyberbench: A multi-task benchmark for evaluating large language models in cybersecurity,” in AAAI 2024 Workshop on Artificial Intelligence for Cyber Security , 2024. [5] A. K. Zhang, N. Perry, R. Dulepet, J. Ji, C. Menders, J. W. Lin, E. Jones, G. Hussein, S. Liu, D. Jasper, P. Peetathawatchai, A. Glenn, V. Sivashankar, D. Zamoshchin, L. Glikbarg, D. Askaryar, M. Yang, T. Zhang, R. Alluri, N. Tran, R. Sangpisit, P. Yiorkadjis, K. Osele, G. Raghupathi, D. Boneh, D. E. Ho, and P. Liang, “Cybench: A framework for evaluating cybersecurity capabilities and risks of language models,” 2025. [Online]. Available: https://arxiv.org/abs/2408.08926 [6] Z. Wang, T. Shi, J. He, M. Cai, J. Zhang, and D. Song, “Cybergym: Evaluating ai agents’ cybersecurity capabilities with real-world vulnerabilities at scale,” arXiv e-prints , pp. arXiv– 2506, 2025. [7] J. Xu, J. W. Stokes, G. McDonald, X. Bai, D. Marshall, S. Wang, A. Swaminathan, and Z. Li, “Autoattacker: A large language model guided system to implement automatic cyber-attacks,” 
+
+arXiv preprint arXiv:2403.01038 , 2024. [8] G. Deng, Y. Liu, V. Mayoral-Vilches, P. Liu, Y. Li, Y. Xu, T. Zhang, Y. Liu, M. Pinzger, and S. Rass, “ {PentestGPT }: Evaluating and harnessing large language models for automated penetration testing,” in USENIX Security Symposium , 2024. [9] R. Meng, M. Mirchev, M. Böhme, and A. Roychoudhury, “Large language model guided protocol fuzzing,” in Annual Network and Distributed System Security Symposium , 2024. [10] P. Liu, J. Liu, L. Fu, K. Lu, Y. Xia, X. Zhang, W. Chen, H. Weng, S. Ji, and W. Wang, “Exploring 
+
+{ChatGPT’s } capabilities on vulnerability management,” in USENIX Security Symposium , 2024. [11] J. Liu and J. Zhan, “Constructing knowledge graph from cyber threat intelligence using large language model,” in 2023 IEEE International Conference on Big Data , 2023. [12] L. Huang and X. Xiao, “Ctikg: Llm-powered knowledge graph construction from cyber threat intelligence,” in First Conference on Language Modeling , 2024. [13] O. Sorokoletova, E. Antonioni, and G. Colò, “Towards a scalable ai-driven framework for data-independent cyber threat intelligence information extraction,” in International Conference on Foundation and Large Language Models , 2024. [14] J. Deng, X. Li, Y. Chen, Y. Bai, H. Weng, Y. Liu, T. Wei, and W. Xu, “Raconteur: A knowl-edgeable, insightful, and portable llm-powered shell command explainer,” arXiv preprint arXiv:2409.02074 , 2024. [15] M. Liu, Z. Xue, X. Xu, C. Zhong, and J. Chen, “Host-based intrusion detection system with system calls: Review and future trends,” ACM computing surveys (CSUR) , vol. 51, no. 5, pp. 1–36, 2018. 10 [16] DARPA I2O, “Transparent computing engagement 3,” https://github.com/darpa-i2o/ Transparent-Computing/blob/master/README-E3.md, accessed: 2023-03-13. [17] ——, “Transparent computing engagement 5 data release,” https://github.com/darpa-i2o/ Transparent-Computing, 2026, accessed: 2026-02-16. [18] Y. Li, Z. Xiang, N. D. Bastian, D. Song, and B. Li, “Ids-agent: An llm agent for explainable intrusion detection in iot networks,” 2024. [19] W. Cheng, T. Zhu, S. Jing, J.-P. Mei, M. Ma, J. Jin, and Z. Weng, “Omnisec: Llm-driven provenance-based intrusion detection via retrieval-augmented behavior prompting,” arXiv preprint arXiv:2503.03108 , 2025. [20] M. F. Al-Hammouri, Y. Otoum, R. Atwa, and A. Nayak, “Hybrid llm-enhanced intrusion detec-tion for zero-day threats in iot networks,” in 2025 IEEE/ACIS 29th International Conference on Software Engineering, Artificial Intelligence, Networking and Parallel/Distributed Computing (SNPD) . IEEE, 2025, pp. 864–869. [21] T. Bilot, B. Jiang, and T. Pasquier, “Pidsmaker: Building and evaluating provenance-based intrusion detection systems,” arXiv preprint arXiv:2601.22983 , 2026. [22] M. A. Inam, Y. Chen, A. Goyal, J. Liu, J. Mink, N. Michael, S. Gaur, A. Bates, and W. U. Hassan, “Sok: History is a vast early warning system: Auditing the provenance of system intrusions,” in 
+
+2023 IEEE Symposium on Security and Privacy (SP) . IEEE, 2023, pp. 2620–2638. [23] M. Ur Rehman, H. Ahmadi, and W. Ul Hassan, “Flash: A comprehensive approach to intrusion detection via provenance graph representation learning,” in IEEE Symposium on Security and Privacy , 2024. [24] B. Jiang, T. Bilot, N. El Madhoun, K. Al Agha, A. Zouaoui, S. Iqbal, X. Han, and T. Pasquier, “ORTHRUS: Achieving High Quality of Attribution in Provenance-based Intrusion Detection Systems,” in USENIX Security Symposium , 2025. [25] N. F. Liu, K. Lin, J. Hewitt, A. Paranjape, M. Bevilacqua, F. Petroni, and P. Liang, “Lost in the middle: How language models use long contexts,” Transactions of the Association for Computational Linguistics , 2024. [26] Z. Cheng, Q. Lv, J. Liang, Y. Wang, D. Sun, T. Pasquier, and X. Han, “Kairos: Practical intrusion detection and investigation using whole-system provenance,” 2023. [Online]. Available: https://arxiv.org/abs/2308.05034 [27] Z. Li et al. , “Threat detection and investigation with system-level provenance graph: A survey,” 
+
+Computers & Security , 2021. [28] C. Snell et al. , “Scaling llm test-time compute optimally can be more effective than scaling model parameters,” arXiv preprint arXiv:2408.03314 , 2024. [29] A. Madaan, N. Tandon, P. Gupta, S. Hallinan, L. Gao, S. Wiegreffe, U. Alon, N. Dziri, S. Prabhumoye, Y. Yang et al. , “Self-refine: Iterative refinement with self-feedback, 2023,” URL https://arxiv. org/abs/2303.17651 , vol. 2303, 2023. [30] N. Shinn, F. Cassano, E. Berman, A. Gopinath, K. Narasimhan, and S. Yao, “Reflexion: Lan-guage agents with verbal reinforcement learning, 2023,” URL https://arxiv. org/abs/2303.11366 ,vol. 8, 2024. [31] S. Li, F. Dong, X. Xiao, H. Wang, F. Shao, J. Chen, Y. Guo, X. Chen, and D. Li, “Nodlink: An online system for fine-grained apt attack detection and investigation,” in Network and Distributed System Security Symposium , 2024. [32] Orthrus, “Darpa e3 cadets ground-truth,” https://github.com/ubc-provenance/ground-truth/ blob/012f321f46137650496e639b0ad7e0a66db07a73/darpa/E3-CADETS/node_Nginx_ Backdoor_12.csv, 2025. 11 [33] T. Bilot, B. Jiang, Z. Li, N. E. Madhoun, K. A. Agha, A. Zouaoui, and T. Pasquier, “Sometimes simpler is better: A comprehensive analysis of State-of-the-Art Provenance-Based intrusion detection systems,” in 34th USENIX Security Symposium (USENIX Security 25) . Seattle, WA: USENIX Association, Aug. 2025, pp. 7193–7212. [Online]. Available: https://www.usenix.org/conference/usenixsecurity25/presentation/bilot [34] Z. Jia, Y. Xiong, Y. Nan, Y. Zhang, J. Zhao, and M. Wen, “ {MAGIC }: Detecting advanced persistent threats via masked graph representation learning,” in USENIX Security Symposium ,2024. [35] S. Wang, Z. Wang, T. Zhou, H. Sun, X. Yin, D. Han, H. Zhang, X. Shi, and J. Yang, “Threatrace: Detecting and tracing host-based threats in node level through provenance graph learning,” 
+
+IEEE Transactions on Information Forensics and Security , 2022. [36] PKU-ASAL, “Nodlink repo,” https://github.com/PKU-ASAL/Simulated-Data, 2023. [37] Anthropic, “Introducing claude sonnet 4.6,” https://www.anthropic.com/news/ claude-sonnet-4-6, 2026, accessed: 2026-02-28. [38] ——, “Claude sonnet 4.5,” https://www.anthropic.com/claude/sonnet, 2025, accessed: 2026-02-28. [39] ——, “Introducing claude 4,” https://www.anthropic.com/news/claude-4, 2025, accessed: 2026-02-28. [40] OpenAI, “Openai api model documentation,” https://platform.openai.com/docs/models, 2026, gPT-5.2, Accessed: 2026-02-28. [41] ——, “Openai api model documentation,” https://platform.openai.com/docs/models, 2025, gPT-4.1, Accessed: 2026-02-28. [42] G. DeepMind, “Gemini 2.5 flash,” https://deepmind.google/technologies/gemini/flash/, 2025, accessed: 2026-02-28. [43] OpenAI, “Gpt-oss-120b,” https://platform.openai.com/docs/models, 2025, accessed: 2026-02-28. [44] DeepSeek-AI, “Deepseek-v3.2,” https://api-docs.deepseek.com/, 2026, accessed: 2026-02-28. [45] Q. Team, “Qwen3.6-plus,” https://qwenlm.github.io/blog/qwen3/, 2026, accessed: 2026-02-28. [46] R. Kamoi, Y. Zhang, N. Zhang, J. Han, and R. Zhang, “When can llms actually correct their own mistakes,” A critical survey of self-correction of LLMs , 2024. [47] L. Pan, M. Saxon, W. Xu, D. Nathani, X. Wang, and W. Y. Wang, “Automatically correcting large language models: Surveying the landscape of diverse self-correction strategies,” arXiv preprint arXiv:2308.03188 , 2023. [48] M. A. Inam, Y. Chen, A. Goyal, J. Liu, J. Mink, N. Michael, S. Gaur, A. Bates, and W. U. Hassan, “Sok: History is a vast early warning system: Auditing the provenance of system intrusions,” in IEEE Symposium on Security and Privacy , 2023. [49] Y. Wu et al. , “Inference scaling laws: An empirical analysis of compute-optimal inference in large language models,” arXiv preprint arXiv:2408.00724 , 2024. [50] X. Wang et al. , “Self-consistency improves chain of thought reasoning in language models,” in 
+
+ICLR , 2023. 12 A Impact Statement 
+
+This paper presents HIDB ENCH , a benchmark for evaluating large language models in host-based intrusion detection. Our work is intended to advance the scientific understanding of LLM capabilities in cybersecurity, with the goal of supporting the development of more reliable and robust intrusion detection systems. We acknowledge that benchmark datasets and evaluation pipelines of this kind could potentially be misused to identify weaknesses in detection systems or to craft evasion strategies. However, we believe that the benefits of open evaluation and transparent model comparison substantially outweigh these risks. All datasets used in this work are publicly available and have been widely used in prior academic research. Our benchmark does not introduce new attack capabilities or provide operational attack tooling. We hope that HIDB ENCH will serve as a foundation for future research into more robust LLM-based security systems, and encourage the community to use these resources responsibly in pursuit of stronger defensive capabilities. 
+
+## B System Design Details 
+
+B.1 Data Pre-processing Details 
+
+To guarantee input quality, we retain fields that capture execution semantics and system interactions, following standard normalization practices in prior HIDS work [ 23 , 24 ]. Specifically, we preserve three categories of information: • Identifiers: subject and object identifiers used to preserve provenance relationships. • Event attributes: event type, command line, timestamp, and related execution metadata. • Entity information: process paths, file paths, and network attributes such as IP addresses and ports when available. When entity-level information is unavailable, we rely on identifiers and event attributes only. We additionally remove redundant or repeated events to reduce noise and avoid over-representation of frequent benign activities in serialized provenance graphs. 
+
+B.2 Graph Serialization Shuffle Example 
+
+To reduce positional bias introduced by deterministic graph serialization, we randomly permute the order of nodes and edges before converting the provenance graph into textual input for the LLM, as summarized in Algorithm 1. The underlying graph structure and edge semantics remain unchanged; only the serialization order is modified. 
+
+Algorithm 1: Graph Serialization Shuffle 
+
+Input: Provenance graph G = ( V, E )
+
+Randomly permute node order in V ;Randomly permute edge order in E;Serialize shuffled (V, E ) into textual graph format; 
+
+return serialized graph representation; 
+
+## C Additional Experiment Details 
+
+C.1 Dataset Description DARPA-E3/E5. The DARPA-E3 and DARPA-E5 datasets are collected under the DARPA Transpar-ent Computing (TC) program, and are widely used in host-based intrusion detection research [ 48 ]. Red-team attackers simulate real-world attack scenarios within enterprise environments, while host-level audit logs are collected from endpoint systems for forensic analysis. The logs contain both 13 malicious activities and substantial benign background behavior, resulting in realistic and highly imbalanced data distributions. Both datasets are released into the public domain by DARPA to facilitate research, with no restrictions on use [ 16 ]. We evaluate on three sub-datasets per version: CADETS, THEIA, and TRACE. 
+
+NodLink (NL-SD). The NL-SD dataset [ 31 ] is generated from a simulated enterprise environment consisting of multiple hosts with heterogeneous operating systems. It includes realistic attack scenarios such as Apache Struts2-046 along with normal system operations, and covers both Linux and Windows environments across three sub-datasets: HW17, HW20, and WIN10. The dataset is publicly released under a Research-Only MIT License, permitting academic and educational use [ 36 ]. Table 2: Dataset Summary.                               
+
+> Dataset #Event #Malicious Malicious:Benign
+> DARPA-E3 CADETS 39,198 52 1:753 DARPA-E3 THEIA 121,263 64 1:1894 DARPA-E3 TRACE 106,395 41:26598 DARPA-E5 CADETS 83,323 18 1:4628 DARPA-E5 THEIA 112,741 56 1:2012 DARPA-E5 TRACE 61,892 31:20630 NL-SD HW17 481 16 1:29 NL-SD HW20 1,217 43 1:27 NL-SD WIN10 2,411 136 1:17
+
+C.2 Running environment 
+
+All running and evaluation were conducted on a server running Ubuntu 22.04, equipped with a 3.8GHz 16-core Intel(R) Xeon(R) Gold 5222 CPU, 768 GB of memory, and an NVIDIA A6000 GPU with 48GB of memory. 
+
+C.3 Evaluation Metrics Precision measures the correctness of predicted alerts and is particularly important in intrusion detection, where excessive false positives can overwhelm analysts and reduce operational usability. 
+
+False Positive Rate (FPR) measures the proportion of benign events incorrectly classified as ma-licious. Very low FPR is critical in production HIDS deployments because each alert may require manual investigation by security analysts. 
+
+Matthews Correlation Coefficient (MCC) captures overall prediction quality by jointly considering true positives, true negatives, false positives, and false negatives, making it suitable for highly imbalanced intrusion detection settings. 
+
+C.4 Additional Dataset-Specific Analysis for RQ1 DARPA-E5. Compared to DARPA-E3, detection quality degrades substantially across all evaluated models and sub-datasets. Averaged across models, precision drops from 0.839 to 0.237 on CADETS and from 0.781 to 0.071 on THEIA when comparing E3 to E5. Similarly, average MCC decreases from 0.475 to 0.179 on CADETS. At the same time, FPR increases significantly. For example, GPT-4.1 exhibits 0.543% FPR on E5 CADETS compared to only 0.02% on E3 CADETS, while Gemini-2.5-Flash increases from 0.003% to 0.389% on THEIA. These results suggest that DARPA-E5 contains substantially noisier telemetry and more ambiguous attack behaviors, making reliable attack reconstruction significantly more challenging. 
+
+NL-SD. NL-SD presents a distinct performance profile shaped by different sources of difficulty than the DARPA datasets. HW17 and HW20 achieve relatively stronger detection quality, with average MCC values of 0.458 and 0.570 across models, respectively, indicating that their attack patterns expose relatively distinguishable malicious behaviors within a smaller and more structured event space. In contrast, WIN10 proves substantially harder despite its higher malicious ratio. Although several models maintain moderate precision on WIN10 (e.g., 0.840 for Claude-Opus-4.6 and 0.833 14 for Claude-Sonnet-4), MCC scores remain consistently low across models, with an average MCC of only 0.268. At the same time, WIN10 exhibits unstable false positive behavior, with Gemini-2.5-Flash reaching 1.407% FPR, substantially higher than HW20. This behavior suggests that the primary difficulty in WIN10 does not arise from class imbalance alone, but from the presence of multiple concurrent attack campaigns with overlapping execution periods. As a result, models must disentangle interleaved attack chains rather than reason over a single coherent attack narrative, leading to substantially less stable detection behavior. 
+
+C.5 Additional Model Tradeoff Analysis for RQ2 
+
+As dataset complexity increases in DARPA-E5, models spread noticeably along the precision–FPR tradeoff curve. Compared to E3, average precision drops from 0.893 to 0.614, while average FPR increases from 0.008% to 0.128%. Models that previously achieved similar operating behavior on E3 begin to diverge substantially under noisier telemetry. For example, GPT-4.1 reaches 0.543% FPR on E5 CADETS despite only 0.02% FPR on E3 CADETS, reflecting increased sensitivity to ambiguous benign behaviors. The tradeoff becomes most pronounced on NL-SD, where models separate into two distinct be-havioral regimes. Over-sensitive models aggressively flag suspicious behaviors, achieving higher recall at the cost of elevated FPR, while conservative models maintain lower FPR but suppress broader classes of attack indicators. Gemini-2.5-Flash represents the most over-sensitive behavior, reaching approximately 2.1% average FPR across NL-SD, substantially higher than all other models. In contrast, Claude-Opus-4.6 and Qwen3.6-plus maintain comparatively stable operating points, achieving around 0.64 average precision with average FPR below 1%. These results suggest that as attack environments become noisier and more behaviorally heteroge-neous, frontier LLMs increasingly differentiate not only in overall capability, but also in their implicit detection strategies. 
+
+C.6 Main Results. 
+
+We list the all main results in the Table 3. 
+
+C.7 Prompts 
+
+We provide the prompt templates used in different stages of the benchmark pipeline. 
+
+Prompt for Attack Evidence Identification. This prompt is used in the Malicious Evidence Identification (MEI) stage to extract high-confidence malicious evidence from serialized provenance graphs. 
+
+Prompt for Attack Evidence Identification                
+
+> Required: Command lines [CMDs] in truncated events. Analyze the command lines and identify all commands related to attacks or highly suspicious malware activity without internet search. •Command Lines: [CMDs] .•Environment: The command lines are collected on xxx. •Output Format: –Command line 1: [The command line] Reason: [Brief description]
+> –Command line 2: [The command line] Reason: [Brief description]
+> –... •Summarize All Highly Suspicious Commands: –1. [Command line].
+> –2. [Command line].
+> –...
+
+15 Table 3: Main benchmark results across multiple provenance graph datasets. We report precision (Pre), MCC, and false positive rate (FPR). 
+
+DARPA E3 
+
+Models CADETS THEIA TRACE Pre MCC FPR Pre MCC FPR Pre MCC FPR Claude-opus-4.6 0.694 0.602 0.04% 0.857 0.283 0.001% 1.000 0.980 0.000% Claude-sonnet-4.5 0.703 0.561 0.03% 0.667 0.250 0.002% 1.000 0.979 0.000% Claude-sonnet-4 0.774 0.566 0.02% 0.800 0.224 0.001% 1.000 0.073 0.000% GPT-5.2 0.808 0.510 0.01% 0.833 0.255 0.001% 1.000 0.979 0.000% GPT-4.1 0.774 0.534 0.02% 1.000 0.250 0.000% 1.000 0.980 0.000% GPT-oss-120b 0.667 0.429 0.02% 1.000 0.216 0.000% 1.000 0.980 0.000% Gemini-2.5-Flash 0.562 0.279 0.02% 0.500 0.177 0.003% 1.000 0.979 0.000% DeepSeek-V3.2 0.667 0.428 0.02% 0.625 0.221 0.002% 1.000 0.980 0.000% Qwen3.6-plus 0.786 0.364 0.01% 0.750 0.187 0.001% 1.000 0.979 0.000% 
+
+DARPA E5 
+
+Models CADETS THEIA TRACE Pre MCC FPR Pre MCC FPR Pre MCC FPR Claude-opus-4.6 0.280 0.404 0.074% 0.211 0.122 0.013% 0.500 0.707 0.005% Claude-sonnet-4.5 0.064 0.192 0.424% 0.158 0.054 0.014% 0.200 0.447 0.019% Claude-sonnet-4 0.061 0.188 0.440% 0.062 0.066 0.053% 0.200 0.447 0.019% GPT-5.2 0.200 0.182 0.033% 0.078 0.074 0.042% 0.333 0.577 0.010% GPT-4.1 0.050 0.170 0.543% 0.022 0.019 0.039% 0.200 0.447 0.019% GPT-oss-120b 0.014 0.048 0.559% 0.062 0.066 0.053% 0.200 0.447 0.019% Gemini-2.5-Flash 0.009 0.026 0.456% 0.009 0.024 0.389% 0.200 0.447 0.019% DeepSeek-V3.2 0.200 0.182 0.033% 0.022 0.019 0.039% 0.200 0.447 0.019% Qwen3.6-plus 0.286 0.218 0.021% 0.017 0.017 0.052% 0.200 0.447 0.019% 
+
+NodLink 
+
+Models HW17 HW20 WIN10 Pre MCC FPR Pre MCC FPR Pre MCC FPR Claude-opus-4.6 0.700 0.542 0.645% 0.714 0.633 0.852% 0.840 0.348 0.176% Claude-sonnet-4.5 0.500 0.379 1.075% 0.714 0.695 1.022% 0.722 0.250 0.220% Claude-sonnet-4 0.571 0.365 0.645% 0.731 0.557 0.596% 0.833 0.168 0.044% GPT-5.2 0.565 0.665 2.151% 0.739 0.529 0.511% 0.688 0.224 0.220% GPT-4.1 0.500 0.622 2.796% 0.714 0.487 0.511% 0.788 0.373 0.308% GPT-oss-120b 0.300 0.217 1.505% 0.800 0.463 0.256% 0.667 0.187 0.176% Gemini-2.5-Flash 0.400 0.573 4.516% 0.700 0.328 0.256% 0.522 0.341 1.407% DeepSeek-V3.2 0.333 0.300 2.151% 0.794 0.697 0.596% 0.731 0.305 0.308% Qwen3.6-plus 0.714 0.462 0.430% 0.708 0.739 1.193% 0.714 0.218 0.176% 
+
+Prompt for Attack Investigation. This prompt is used in the Attack Chain Reconstruction (ACR) stage to analyze the expanded provenance subgraph and reconstruct attack behaviors. 
+
+Prompt for Attack Investigation Prompt 
+
+Required: Provenance graph G.Inspect the provided provenance graph. Analyze the graph to determine whether it indicates malicious activity. Use only the given information (no external lookup). • Logs (Graph): G
+
+• Environment: The logs are collected on [Env] 
+
+• Guidelines: – Provenance: Use knowledge of attack patterns, tools, and techniques to identify IoCs from graph interactions. 
+
+– Attack Narrative: Summarize the attack flow using a kill chain perspective. 
+
+– Tools: Pay attention to specific tools (e.g., Metasploit, Meterpreter, PowerShell). 
+
+– Timeline: Construct a chronological step-by-step description based on graph structure and temporal signals (if available). 
+
+16 – IoCs: Identify suspicious IPs, domains, processes, and files. • Output Format: – Attack Narrative: A concise paragraph summarizing the attack flow. 
+
+– Key Steps: 
+
+1) [Tactic name]: description of the attack step 2) [Tactic name]: description of the attack step ... 
+
+– IoCs: 
+
+* IPs: [Suspicious IPs] * Processes: [Suspicious process names] * Files: [Suspicious file modifications or deletions] 
+
+C.8 Example LLM Investigation Output. Example LLM Investigation Output 
+
+=== RESPONSE === Analysis 
+
+I’ll systematically analyze all processes in the provenance graph, comparing their behaviors against expected baselines for a FreeBSD system. 
+
+Process-by-Process Review Normal system processes (no anomalies detected): 
+
+• cron : Accesses /etc/spwd.db , /etc/group , /etc/login.conf , /bin/sh , /libexec/ld-elf.so.1 ,
+
+/root — all standard cron behavior. • syslogd : Writes to /var/log/cron , /var/log/maillog — normal logging. • sh : Executes /usr/libexec/save-entropy , /usr/libexec/atrun , /usr/sbin/newsyslog ,
+
+/sbin/sysctl — standard cron-invoked scripts. • sysctl, unlink, mv, dd : Entropy-saving operations under /var/db/entropy/ — normal periodic task. • atrun : Standard at-job runner. • newsyslog : Log rotation — normal. • sshd : Standard SSH authentication and session setup for users user and admin .• bash : Shell sessions for user and admin , executing standard utilities. • Postfix stack : Standard mail delivery operations involving master , smtpd , cleanup , qmgr , local , and related processes. • imapd : IMAP mailbox access for users bob and george .• alpine : Mail client activity for user user .• nginx : Web server operations — mostly normal, except as noted below. 
+
+Critical Anomaly: vUgefal Process 
+
+vUgefal is a process with a randomly generated name executing from /tmp/vUgefal , which is highly suspicious. 1. nginx writes /tmp/vUgefal , suggesting a web exploitation vector. 2. master (postfix) accesses /tmp/vUgefal , indicating possible interaction with the mail subsystem. 3. vUgefal reads /etc/passwd , consistent with reconnaissance behavior. 4. vUgefal reads /dev/urandom , suggesting cryptographic operations. 5. vUgefal accesses /var/log , indicating possible anti-forensics activity. 6. vUgefal writes /var/log/devc , creating a suspicious file in the log directory. 7. vUgefal accesses /dev/null , consistent with daemonized malware behavior. 8. vUgefal loads /lib/libthr.so.3 , indicating multi-threaded execution. 
+
+Attack Narrative 
+
+An attacker likely exploited the nginx web server, potentially through the PHP application served by php-fpm 
+
+at /usr/local/www/nginx-dist/index.php , to upload a malicious binary named vUgefal into /tmp .The malware subsequently performed reconnaissance by reading /etc/passwd , accessed /dev/urandom 
+
+17 for cryptographic operations, enumerated /var/log , and created a suspicious file /var/log/devc . The process also redirected activity to /dev/null , suggesting daemonization behavior. Interaction with the Postfix subsystem may indicate persistence or exfiltration attempts. 
+
+IOCs IPs: None explicitly present in the graph. 
+
+Processes: 
+
+• vUgefal 
+
+• nginx 
+
+• php-fpm 
+
+Files: 
+
+• /tmp/vUgefal 
+
+• /var/log/devc 
+
+• /usr/local/www/nginx-dist/index.php 
+
+=== RUN METADATA === 
+
+• Model: Claude-Opus-4.6 • Runtime: 27.54 seconds • Prompt tokens: 24,901 • Completion tokens: 1,309 • Total tokens: 26,210 • Estimated cost: $0.15723 
+
+## D Cost and Runtime Analysis. 
+
+We report the API cost and runtime of evaluating LLMs across all datasets in table 4, 5, 6. Table 4: Average API cost and estimated runtime for DARPA-E3. 
+
+Model CADETS THEIA TRACE Cost/File ($) Time (s) Cost/File ($) Time (s) Cost/File ($) Time (s) 
+
+Claude Opus 4.6 2.94 30 1.05 60 0.29 35 Claude Sonnet 4.5 0.49 12 0.19 25 0.06 14 Claude Sonnet 4 0.53 12 0.19 25 0.05 14 GPT-5.2 2.51 9 0.79 28 0.22 16 GPT-4.1 0.30 8 0.09 20 0.03 12 GPT-OSS-120B 0.14 7 0.05 18 0.01 10 Gemini 2.5 Flash 0.01 4 0.01 10 0.00 6DeepSeek V3.2 0.07 18 0.03 45 0.02 25 Qwen3.6 Plus 0.14 14 0.04 35 0.02 20 
+
+Table 5: Average API cost and estimated runtime for DARPA-E5. 
+
+Model CADETS THEIA TRACE Cost/File ($) Time (s) Cost/File ($) Time (s) Cost/File ($) Time (s) 
+
+Claude Opus 4.6 7.85 60 0.14 18 0.72 15 Claude Sonnet 4.5 1.84 26 0.03 8 0.13 7Claude Sonnet 4 1.84 26 0.02 8 0.10 7GPT-5.2 7.51 20 0.09 6 0.09 5GPT-4.1 0.83 18 0.01 5 0.06 4GPT-OSS-120B 0.41 16 0.01 4 0.03 3Gemini 2.5 Flash 0.01 8 0.00 2 0.00 2DeepSeek V3.2 0.09 40 0.01 12 0.02 10 Qwen3.6 Plus 0.12 30 0.01 9 0.03 7
+
+18 Table 6: Average API cost and estimated runtime for NodLink.                                                               
+
+> Model HW17 HW20 WIN10 Cost/File ($) Time (s) Cost/File ($) Time (s) Cost/File ($) Time (s)
+> Claude Opus 4.6 1.81 30 3.69 40 9.03 60 Claude Sonnet 4.5 0.36 14 0.74 18 1.81 28 Claude Sonnet 4 0.35 14 0.73 18 1.80 28 GPT-5.2 1.48 10 2.99 13 7.38 20 GPT-4.1 0.16 90.34 12 0.82 18 GPT-OSS-120B 0.08 80.16 10 0.40 16 Gemini 2.5 Flash 0.01 40.02 50.04 8DeepSeek V3.2 0.05 20 0.11 26 0.27 40 Qwen3.6 Plus 0.07 16 0.15 20 0.38 30
+
+Table 7: Self-reflection ablation. Arrows indicate changes relative to the baseline without self-reflection.                                       
+
+> None Ref-then-Agg Agg-then-Ref Model Pre MCC Pre MCC Pre MCC Claude 0.700 0.613 0.714 ↑0.574 ↓0.696 ↓0.585 ↓
+> GPT-5.2 0.808 0.510 0.872 ↑0.675 ↑0.818 ↑0.476 ↓
+> DeepSeek 0.667 0.428 0.605 ↓0.520 ↑0.765 ↑0.553 ↑
+
+D.1 Additional Self-Reflection Analysis 
+
+Table 7 presents detailed self-reflection ablation results under two strategies: Ref-then-Agg , where each sample is independently refined before aggregation, and Agg-then-Ref , where self-reflection is applied once after aggregation. Neither strategy consistently outperforms the baseline across all evaluated models, revealing a complex and model-dependent interaction between self-reflection and detection behavior. Ref-then-Agg improves precision for Claude and GPT-5.2, but at the cost of MCC, suggesting that per-sample reflection encourages more conservative predictions that reduce false positives while missing some true positives. In contrast, DeepSeek benefits more from Agg-then-Ref, achieving improvements in both precision and MCC. This behavior suggests that some models benefit more from reflecting on consolidated predictions rather than refining individual generations independently. Overall, these results indicate that the effectiveness of self-reflection strongly depends on the underly-ing reasoning stability of each model. For relatively stable models such as Claude, self-reflection provides limited additional benefit and may reduce recall. For more variable models, applying reflection after aggregation appears more robust because it operates on a more stable prediction context and avoids compounding errors introduced during per-sample refinement. 
+
+## E Detials of Advanced Capabilities on HIDS 
+
+E.1 Additional Self-Reflection Analysis 
+
+Table 7 presents detailed self-reflection ablation results under two strategies: Ref-then-Agg , where each sample is independently refined before aggregation, and Agg-then-Ref , where self-reflection is applied once after aggregation. Neither strategy consistently outperforms the baseline across all evaluated models, revealing a complex and model-dependent interaction between self-reflection and detection behavior. Ref-then-Agg improves precision for Claude and GPT-5.2, but at the cost of MCC, suggesting that per-sample reflection encourages more conservative predictions that reduce false positives while missing some true positives. 19 In contrast, DeepSeek benefits more from Agg-then-Ref, achieving improvements in both precision and MCC. This behavior suggests that some models benefit more from reflecting on consolidated predictions rather than refining individual generations independently. Overall, these results indicate that the effectiveness of self-reflection strongly depends on the underly-ing reasoning stability of each model. For relatively stable models such as Claude, self-reflection provides limited additional benefit and may reduce recall. For more variable models, applying reflection after aggregation appears more robust because it operates on a more stable prediction context and avoids compounding errors introduced during per-sample refinement. 
+
+E.2 Additional Test-Time Scaling Analysis 
+
+Recent studies show that test-time scaling can improve LLM reasoning performance without modify-ing model parameters [ 28 , 49 ]. Approaches such as self-consistency and majority voting improve reasoning robustness by aggregating multiple independent generations [ 50 ]. This strategy is par-ticularly relevant for intrusion detection, where noisy and heterogeneous security logs can lead to unstable reasoning behavior. The transition from k = 1 to k = 3 yields the most substantial gains: both GPT-5.2 and DeepSeek-V3 recover from near-random performance at k = 1 to competitive levels at k = 3 , confirming that a small ensemble already provides meaningful stabilization over single-sample inference. Claude-Opus-4.6, by contrast, exhibits stable performance even at k = 1 , suggesting that stronger base models are less reliant on voting to produce reliable predictions. Beyond k = 3 , scaling provides negligible additional benefit. As shown in Figure 5(c), ∆MCC remains close to zero at k = 5 and 
+
+k = 7 for all models, indicating that the default setting of k = 3 captures most of the available gain while avoiding unnecessary computational overhead. 
+
+E.3 Reasoning Analysis: Explicit vs. Inferred IOCs 
+
+Table 8: # of explicit and inferred IOCs.                
+
+> Attack Qual. #Exp. #Inf. DARPA-E3 CADETS-A1 HIGH 46DARPA-E3 CADETS-A2 MEDIUM 714 DARPA-E3 CADETS-A3 MEDIUM 715 DARPA-E3 CADETS-A4 MEDIUM 11 6
+
+We provide additional quantitative statistics on explicit and inferred IOCs, together with detailed case-by-case analysis across the four DARPA-E3 CADETS attack cases. Table 8 summarizes the number of explicit and inferred IOCs identified in each attack case. We further examine how the model distinguishes directly observable malicious indicators from contextually derived evidence, and assess the quality of the resulting reasoning chain. This reliance on inferred evidence has a dual implication. On one hand, it enables detection of stealthy attacks whose signals are too weak or fragmented to be identified in isolation. On the other hand, it introduces a risk of overgeneralization, where benign processes that co-occur with malicious activity are incorrectly implicated. The balance between these effects ultimately determines whether contextual reasoning improves or degrades detection reliability. 
+
+CADETS-A1 (High Quality) 
+
+CADETS-A1 represents a high-quality reasoning case in which the model demonstrates clear separa-tion between explicit and inferred evidence. The model correctly identifies the core explicit IOCs: the suspicious process vUgefal , two external IP connections ( 61.167.39.128 and 139.123.0.113 ), and execution originating from /tmp . These are directly flagged as malicious in the reasoning trace without requiring contextual inference. The inferred IOCs consist primarily of system directories accessed by vUgefal , including /etc ,
+
+/var , /dev , and /lib . While these paths are not inherently malicious, the model correctly implicates 20 them through their role in the malware activity chain, recognizing that a suspicious process systemati-cally accessing core system directories constitutes a meaningful behavioral signal. Importantly, the model avoids over-implicating benign services such as nginx , sshd , and postfix that co-occur in the same log window, demonstrating appropriate restraint in contextual inference. The primary limitation in this case is the lack of file-level specificity: the model identifies /tmp as a suspicious execution source but does not recover the specific artifact executed from that directory, leaving a gap in the reconstructed attack chain. Overall, CADETS-A1 confirms that when attack signals are strong and well-separated from benign activity, the model can reliably distinguish explicit from inferred evidence with high precision. 
+
+CADETS-A2 (Medium Quality) 
+
+CADETS-A2 presents a more complex reasoning scenario centered on a compromised nginx 
+
+process. The explicit IOCs are well-identified: the model correctly flags nginx reading sensitive files ( /etc/passwd , /etc/group ) and writing a payload to /tmp/grain , along with repeated outbound connections to 128.55.12.10 . These form a coherent and directly observable attack pattern involving a web-facing service performing credential access and staging malicious artifacts. The inferred IOCs reveal both the strengths and limitations of contextual reasoning. On the positive side, the model successfully identifies three additional external IPs contacted exclusively by the suspicious nginx process, a non-obvious but meaningful signal that requires reasoning over process-to-network relationships rather than direct observation. It also correctly implicates procstat 
+
+spawned by nginx as anomalous, inferring that a web server spawning diagnostic tools is behaviorally inconsistent. However, the model overextends suspicion in several instances. System files such as rc.conf ,
+
+/etc/hosts , and monitoring output files are flagged as inferred IOCs despite being commonly accessed by benign system processes. Similarly, postfix subprocesses ( local , master ) are impli-cated primarily due to co-occurrence with malicious activity rather than any intrinsic behavioral signal. These false extensions illustrate the risk of over-inference when benign and malicious processes share the same system context. Compared to CADETS-A1, this case demonstrates that medium-quality reasoning is characterized not by failure to identify explicit evidence, but by insufficient discrimination between genuinely suspicious contextual signals and incidental co-occurrences, inflating the inferred IOC set with weakly supported entries. 
+
+CADETS-A3 (Medium Quality) 
+
+CADETS-A3 presents a stealthy multi-stage attack in which the explicit evidence is process-centric but lacks direct network indicators. The model correctly identifies the core malicious processes, including master , minions , XIM , and test , along with the staging file /minions . However, no IPs or domains are flagged as explicit IOCs, reflecting the more covert nature of this attack compared to CADETS-A1 and A2. The most significant strength in this case lies in the inferred reasoning chain. The model successfully reconstructs a non-obvious multi-step attack pattern: nginx writing payload-like files to /tmp 
+
+(/tmp/minions , /tmp/font , /tmp/XIM , /tmp/test ), followed by their execution through system services such as sshd and inetd . This staging-and-execution pattern is a hallmark of web-facing service exploitation and is entirely non-obvious from individual events in isolation, requiring the model to reason over the full dependency chain to surface the connection. The model also correctly implicates nginx as the likely initial compromise point, despite it not being directly flagged as malicious in the explicit evidence. Two limitations are notable. First, the model does not explicitly label any IP address as malicious, treating outbound connections as potentially benign despite their association with the compromised process. Second, the reasoning trace is truncated before reaching a full conclusion, suggesting that the complexity of this attack chain approaches the limits of the model’s context utilization. Together, these limitations explain why despite strong inferred reasoning, the overall quality remains medium rather than high. 21 CADETS-A4 (Medium Quality) 
+
+CADETS-A4 is characterized by a relatively rich set of explicit IOCs, centered on a clearly malicious process pEja72mA and its associated artifacts. The model correctly identifies the suspicious process, two external IPs, a compromised nginx instance, and multiple /tmp payloads including injected shared libraries ( memhelp.so , done.so ) and an injection log ( injectLog.txt ), forming a coherent picture of a code injection attack staged through temporary storage. The inferred IOCs are fewer and of mixed quality. On the positive side, the model correctly identifies two additional IPs as probable attacker SSH source addresses, and implicates sshd as the execution path for the malicious binary through process ancestry reasoning. These are meaningful non-obvious inferences that require reasoning over process-to-network relationships. However, the inferred evidence also reveals notable artifacts typing errors: several filenames such as injectLog.txt and 
+
+memhelp.so are misclassified as domains rather than files, indicating a failure to maintain consistent artifact categorization across the reasoning trace. A broader limitation in this case is the lack of clean separation between direct observations and speculative conclusions. The model makes claims about command-and-control and exfiltration behavior without sufficient grounding in the observed evidence, mixing hypothesis with fact in a way that reduces the reliability of the overall reasoning output. This contrasts with CADETS-A1, where the model maintained a clear boundary between what was directly observed and what was inferred. Across all four cases, a consistent pattern emerges: explicit IOC identification is generally reliable when attack signals are strong, while inferred IOC quality varies significantly with attack complexity. The primary failure modes are overgeneralization to benign co-occurring processes in A2, truncated reasoning chains in A3, and artifact typing inconsistencies and speculative overreach in A4. These findings highlight that improving the precision and consistency of contextual inference remains a key challenge for LLM-based intrusion detection. 22
