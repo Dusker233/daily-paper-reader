@@ -1,0 +1,712 @@
+Title: Cloak: Heuristic ORAM Optimization Through Fixed Temporal Distribution
+
+URL Source: https://arxiv.org/pdf/2605.27565v1
+
+Published Time: Thu, 28 May 2026 00:08:47 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Cloak: Heuristic ORAM Optimization Through Fixed Temporal Distribution 
+
+# Onur Eren Arpaci 
+
+# University of Waterloo 
+
+# Florian Kerschbaum 
+
+# University of Waterloo 
+
+# Sujaya Maiyya 
+
+# University of Waterloo 
+
+# Abstract 
+
+Encrypted cloud storage can hide data contents but still leak sensitive information through access patterns. ORAM ad-dresses this by hiding access patterns, but existing ORAM systems are too inefficient to deploy in practice. We present Cloak, an oblivious storage system that dramatically improves performance by leveraging a simple, widely observed property of real workloads: temporal locality , where recently accessed items are more likely to be accessed again soon. Instead of trying to make server accesses look perfectly uniform, Cloak makes server traffic follow a fixed, “recentness-biased” pat-tern and then uses real queries to fill as much of that traffic as possible. When the workload exhibits temporal locality, Cloak achieves overheads as low as 1.1× over a non-oblivious and unencrypted baseline. Importantly, this heuristic affects only performance, not security. We evaluate Cloak on Netflix click-stream and Ethereum transaction traces, achieving 165,000 and 157,000 operations per second, respectively, on a single machine. 
+
+# 1 Introduction 
+
+Cloud storage plays a critical role for many businesses by providing on-demand scalability to accommodate fluctuating traffic volumes and storage needs. This scalability can sub-stantially reduce costs compared to traditional on-premises deployments, where system administrators must provision for peak load from the start. However, outsourcing storage in plaintext to a potentially untrusted cloud provider risks expos-ing sensitive information. While encrypting data acts as a first layer of defense, encryption alone is insufficient to protect data privacy from powerful adversaries who can observe the accesses made to encrypted data. Specifically, access-pattern attacks [5, 12, 20 – 25, 29, 38, 39, 43, 51] exploit features such as query frequencies, correlations across queries, and partial auxiliary knowledge to infer plaintext values in encrypted databases. Oblivious Random Access Memory (ORAM) [18] is a cryptographic primitive designed to prevent such attacks by ensuring that the access pattern observable by the storage server is independent of the client’s true queries. Works such as [18, 31, 41] show that any ORAM scheme must incur at least O(log N) overhead in computation and communication, where N is the dataset size. Informally, this implies that for ev-ery real query issued by a client, the scheme must access log N
+
+elements from the remote storage to hide the real element requested by the client. While many constructions (fully or nearly) achieve the asymptotic bound [1,6 –9,33,44,45,47,48], this lower bound is still prohibitively expensive as the state of the art implementa-tions still incur between 40 × and 100 × slowdown compared to the insecure baseline [9, 45]. These systems typically rely on either a trusted proxy or trusted execution environments (TEEs) between clients and the storage server to run protocol logic. Some proposals scale ORAM horizontally to achieve reasonable throughput and latency [9, 46], but this primarily trades performance cost for monetary cost. For example, Tree-beard [46] reports 150,000 operations per second, but requires 16 machines to do so. As a result, ORAM continues to face a significant cost barrier that limits real-world adoption. A separate line of work [19, 34] explores weakening ORAM-style security in exchange for better performance. Given the limited deployment of traditional ORAM, this di-rection is pragmatic: partial protection can be preferable to none. Pancake [19] uses frequency smoothing and selective duplication to make the server-observed access distribution uniform. However, their threat model requires that clients draw queries independently from a known frequency distribu-tion. Oya and Kerschbaum [39] show this assumption is often unrealistic and can be exploited on real workloads consisting of correlated queries. Waffle [34] obfuscates access patterns by sending dummy requests to the least recently accessed elements, and exposes parameters that trade security for per-formance. However, the concrete security meaning of these parameters and, how exploitable the resulting leakage is in practice, is not clear to users. To summarize, ORAM-based oblivious schemes preserve strong security guarantees but incur prohibitively high over-1
+
+> arXiv:2605.27565v1 [cs.CR] 26 May 2026
+
+heads. In contrast, recent works [19, 34] achieve improved performance by weakening security, but either make strong as-sumptions about the input workload or have privacy leakages whose practical impact is unclear. To address these shortcomings, we introduce Cloak , a trusted proxy-based oblivious storage system that incurs over-heads as low as 1.1× relative to simple unencrypted storage on real-world traces, while leaking no information about the underlying access pattern. We make two key observations that explain why Cloak is feasible. First, existing oblivious schemes typically aim to make adversary-observable accesses to the outsourced database 
+
+uniform . However, real-world workloads rarely access all database elements uniformly; instead, they exhibit temporal skew (or temporal locality), where recently accessed elements are more likely to be accessed again than elements that have remained untouched for long periods. This assumption is pervasive in computer systems, take for example caching, which is effective precisely because temporal locality holds. Intuitively, when client accesses are skewed, forcing a uniform server access distribution incurs high overhead, measured by the number of dummy queries per real query. Second, we observe that uniformity is not the only way to achieve obliviousness. Obliviousness only requires that the server-observed access pattern be independent of the true access pattern, implying that the observed pattern can follow any fixed distribution as long as it remains independent of the client access distribution. Motivated by these observations, Cloak forces the server accesses to always follow a temporally skewed distribution. If and when client queries exhibit similar temporal skew, most server requests can be filled with real queries. If not, the proxy fills the remaining requests with dummy queries. Our goal is to improve the efficiency of oblivious access for real-world distributions by minimizing wasted computation and bandwidth due to dummy queries. But importantly, even if the client access distribution deviates from this assump-tion, Cloak’s security guarantees remain unchanged , unlike schemes like Pancake [19]. 
+
+Overview: Cloak generates temporally distributed server-side accesses by aggregating client requests and issuing batched queries to the server according to a deterministic batching rule. This batching algorithm must satisfy the fol-lowing three requirements: 1. Generate batches that conform to a specified, config-urable temporal distribution. 2. Maximize the fraction of real queries per batch when client access patterns closely match the configured dis-tribution. 3. Hide the true client access pattern from the server. To enforce a temporal pattern, we define reuse distance of an stored element as the number of batches sent by the proxy since that element was last accessed. When the proxy includes an element in a batch, that element’s reuse distance becomes 0, while the reuse distance of all other elements increases by 1. Cloak partitions all stored elements into disjoint reuse-distance sets where elements within a set have the same reuse distance. When forming a batch, the proxy selects a fixed number of elements from each reuse-distance set; we call these fixed counts budgets . For instance, if the budget for reuse distance 1 is 10 and the budget for reuse distance 2 is 5, when forming a batch, the proxy selects exactly 10 elements from the reuse-distance set 1, and exactly 5 elements from the set 2. These predetermined budgets, known to the adversary, ensure that every batch follows the same (fixed) temporal access pattern. The database admin can configure budgets per reuse-distance set, with each set having a minimum budget of 1. This enables Cloak to meet the second requirement: if real client queries are temporally skewed in a way that matches the budgets, then Cloak fills most budget slots with real requests instead of dummies. To satisfy the third requirement (hiding the true pattern), af-ter each batch, the proxy re-encrypts the accessed values, shuf-fles the elements within the batch, and writes back the freshly encrypted, permuted batch to the server. This forms the most recent reuse-distance set. Executing the above steps hides which specific elements were accessed because, from the server’s perspective, elements within the same reuse-distance set are indistinguishable. Consequently, the only information the server can observe is how many items were drawn from each reuse-distance set, which is dictated by the budgets, mak-ing the observed access pattern independent of the real one. This design introduces two additional security considera-tions. First, because the real query distribution affects how many dummy requests are needed, it can also affect the num-ber of batches sent to the server over a fixed time window. This creates volume/throughput leakage : for example, unusually high traffic could indicate that client accesses are less tempo-rally skewed (requiring more dummy filling). Attacks such as [13 –15, 20, 22, 24, 26, 35, 36, 43] exploit volume patterns to infer information about private queries. Cloak mitigates the volume/throughput leakage by sending batches at fixed time intervals. To keep our scope focused, we adopt the simplest (but also most expensive) approach by fixing the batch rate to a constant. More efficient alternatives such as padding to the nearest power of two [12] or adding differentially private noise can easily be integrated into Cloak’s design. Second, standard ORAM threat models often allow the ad-versary to act as a client: the adversary can inject queries, measure request-response times, and monitor traffic between clients and the proxy. We adopt a slightly restricted threat model in which the adversary may inject queries but can-not observe client-proxy traffic nor measure request-response times . This threat model is stronger than the adversaries con-sidered in [19, 34] who cannot inject queries. We argue that 2this model matches many real deployments in which all users are authenticated and authorized before receiving any data. Examples include internal enterprise databases, government systems restricted to specific officials, hospital systems re-stricted to clinicians, and research databases restricted to ap-proved lab members. We implement Cloak and evaluate it on Netflix click-stream [16] and Ethereum transaction traces [10]. On these workloads, Cloak retains 91% – 94% of the throughput of an unsafe, non-oblivious baseline, reaching up to 169,344 ops/s on a single machine. Compared to Treebeard [46], a tree-based ORAM system, Cloak achieves 2.8×– 7.6× higher throughput and 2×– 5.5× lower latency, and it outperforms Waffle [34] by 4.7×–6.6× in throughput despite Waffle pro-viding strictly weaker security guarantees. 
+
+# 2 Related Work 
+
+An ORAM [18] protocol aims to hide a client’s access pat-tern from untrusted memory, ensuring that the server’s ob-served sequence of physical accesses is independent of the logical access sequence. Goldreich and Ostrovsky establish the O(log N) asymptotic overhead for complete obliviousness, motivating a large body of work that optimizes bandwidth, latency, and client storage under the standard ORAM threat model [3,6,8,33,44 –47]. Among the most influential practical designs are tree-based ORAMs, including Path ORAM [47], which popularized a simple binary-tree organization with a client-side stash and position map, and later optimizations such as Ring ORAM [44] and Circuit ORAM [50] that re-duce constants and/or improve the scheme’s efficiency. More recent theoretical progress (e.g., optimal-amortized construc-tions [1]) shows the limits of what can be achieved asymptoti-cally, however their behavior in practice is yet to be studied. A parallel line of work integrates ORAM into storage sys-tems and distributed datastores. ObliviStore [48] and Tree-beard [46] demonstrate that careful systems design (e.g., asyn-chronous I/O and distributed storage) can significantly im-prove throughput while retaining strong ORAM-style security guarantees. TaoStore [45] formalizes and mitigates security pitfalls that arise under asynchronous scheduling and con-current access, providing a non-blocking tree-based design suitable for proxy-mediated deployments. Subsequent work such as QuORAM [33] brings replication and fault toler-ance to ORAM-backed datastores, showing how to preserve obliviousness while providing quorum-style availability and consistency. However, as proven in [18, 31, 41], any ORAM scheme must incur at least O(log N) overhead, which can be unacceptable to support the scale of existing applications that serve tens of millions of requests [2, 4, 11, 49]. Recent systems show that relaxing the adversarial model can unlock orders of magnitude higher performance than tra-ditional ORAM. Pancake [19] introduces a passive persistent adversary model (the server observes accesses but cannot 
+
+Figure 1: Cloak Overview inject its own) and achieves small constant-factor overhead using frequency smoothing . One of Pancake’s main draw-backs is assuming that queries are selected independently from a frequency distribution, which ignores the natural corre-lations between queries. Using this vulnerability, IHOP [39] successfully attacks Pancake with real-world data. Moreover, Pancake’s security holds as long as its anticipation of the client query distribution matches the actual client query dis-tribution. Waffle [34] removes Pancake’s strict requirement of know-ing the input distribution a priori by providing online pro-tection under the same passive persistent model. It adapts to the observed sequence while maintaining constant band-width overhead and a bounded cache, and exposes tunable parameters that trade security for performance. However, the concrete security implications of poorly chosen parameter settings are unclear to users. Cloak differentiates itself from Pancake [19] and Waf-3fle [34] by decoupling performance from security. Both Pan-cake and Waffle trade-off security for performance, Pancake implicitly by assuming non-correlation between queries, and Waffle explicitly by providing parameters to tune security and performance. Whereas, Cloak leaks no information about the underlying query distribution. Unlike Pancake, a mismatch in anticipated query distribution can affect Cloak’s performance but not its security. 
+
+# 3 System and Threat Model 3.1 System Model 
+
+We model Cloak as a remote random access memory (RAM) supporting single address READ and WRITE operations. Sim-ilar to commonly employed architecture in many oblivious systems [8, 19, 33, 34, 45, 47], Cloak utilizes a trusted proxy to obliviously access encrypted and outsourced elements from a remote storage server. The proxy acts as a router between the clients and the storage server and executes the oblivious algorithm proposed in this work. Clients treat proxy as a simple remote RAM and send READ and WRITE queries to proxy. Similarly, the proxy treats the storage server as a re-mote RAM that accepts batch queries. As part of the protocol, the proxy batches client queries before interacting with the storage server. Batches have a predetermined fixed size and are sent at fixed time intervals for security, both of which are configurable. While we assume the proxy to be always avail-able, a real-world deployment can choose techniques such as a primary-secondary replication [17] or a quorum replica-tion [30] to enforce high availability; however, this choice is orthogonal to Cloak’s goals. 
+
+# 3.2 Threat Model 
+
+Cloak protects organizational data from honest but curious adversaries who adhere to the protocol but may try to learn some private information about the data or the queries by persistently observing access patterns to the encrypted remote storage. Specifically, the adversary can monitor the accesses to the storage server over time and leverage these access traces to mount attacks such as frequency analysis, lp-optimization, and quadratic query recovery [27, 32, 37, 39]. The adversary can also observe or delay (encrypted) messages between the proxy and the storage server and can inject queries. However, it cannot observe the responses to the injected queries nor observe or control the communication between clients and the proxy, including request-response times. Although weaker than traditional ORAM threat model [18], this threat model is significantly stronger than than the snapshot adversaries who can only access snapshots of the database without observing query accesses [28, 40, 42], and is stronger than the passive persistent adversary [19, 34] who cannot inject queries. Table 1: Data Structure and Helper Function Definitions 
+
+Name Definition 
+
+pmap 
+
+Bi-directional map between logical and physical addresses. Each physical ad-dress also stores the most recent batch ID that accessed it. 
+
+reuse _dist _sets 
+
+A list of sets with each set tracking the logical addresses with the same reuse distance. 
+
+> reuse _dist _queues
+
+A list of queues per reuse-distance set holding pending (logical) addresses to be served. Init Initializes pmap and reuse _dist _sets by (i) mapping each logical address to a random physical address, and (ii) ran-domly partitioning the logical addresses across reuse-distance sets so that |st | =
+
+∑len (budgets ) 
+
+> i=t
+
+ai.ReadQuery Reads and parses a client query from 
+
+client _conn .SendResponse Sends a response value to a client over 
+
+client _conn .Forward Forwards a client query to the other coroutine via query _channel .NextQuery Receives the next forwarded query from 
+
+query _channel .MapToPhysical Maps a list of logical addresses to their current physical addresses using pmap .Random-Permutation Returns a random permutation over 
+
+batch _size items. StorageRead Write Given a list of physical addresses, a per-mutation, and a list of WRITE queries: (i) reads the requested elements from the server, (ii) applies the writes, (iii) re-encrypts and permutes the elements, (iv) writes them back to the server, and (v) returns the decrypted read values. 
+
+# 4 Protocol 4.1 Protocol Description 
+
+This section describes Cloak’s oblivious access protocol exe-cuted by the client-side trusted proxy, with Figure 1 providing an overview. The proxy routes client queries to the storage server in sequential batches , each with a monotonically in-4creasing id. A batch is a list of physical addresses requested from the server; these addresses may correspond to real client queries or to dummy queries. The proxy maintains a position map (shown at the top of Figure 1) that tracks the bidirectional mapping between logical addresses (used by clients) and physical addresses (used by the server), along with the batch id in which each physical address was last accessed. The proxy also maintains a cache of recently written values, allowing it to serve read queries for recently accessed data without waiting for the next batch. The proxy operates on a fixed batching interval: it collects incoming client queries for batch _interval seconds, then sends a batched request to the server. After receiving the server’s response, the proxy serves the pending client queries, re-encrypts and shuffles the elements within the batch, updates the position map to reflect the shuffle, and writes the newly encrypted elements back to the server. To enforce a target temporal access pattern, the proxy tracks the reuse distance of the physical addresses. Addresses with the same reuse distance form a reuse-distance set st , where t
+
+denotes the reuse distance (depicted as buckets in Figure 1). Each time the proxy sends a batch, it creates a new set s0
+
+such that the id of every existing set increments by 1 (i.e., st
+
+becomes st+1). The proxy assigns a fixed per-batch budget 
+
+at to each set st (depicted as test tubes in Figure 1) and in every batch, the proxy includes exactly at addresses from st .We require at ≥ 1 for all t to ensure that every portion of the database remains accessible. Clearly, the notion of reuse-distance sets and the number of elements within each set are known to the server (as the sets operate on physical addresses). However, the encrypted ele-ments within a reuse-distance set are indistinguishable to the server: after each batch, the proxy shuffles and re-encrypts the accessed elements before writing them back, and whenever an address is accessed, it is removed from its previous reuse-distance set, so the remaining elements in that set stay indis-tinguishable. Because the proxy accesses a predetermined number of addresses (i.e., elements) from each reuse-distance set in every batch, the observable access pattern becomes fully deterministic. By allocating larger budgets to smaller reuse distances (more recent sets), we obtain low overhead on workloads with skewed temporal locality. In other words, if real queries have a similar temporal access pattern to the pattern implied by the budgets sizes, this batching algorithm ensures that most batch entries correspond to real queries, while hiding clients’ access patterns. The proxy runs two co-routines, G ET CLIENT QUERIES 
+
+and P ROCESS BATCHES , to process client queries while con-currently interacting with the server. Algorithms 1 and 2 provide the pseudocode and Table 1 defines the data struc-tures and helper functions. G ET CLIENT QUERIES waits for a client query indefinitely. Upon receiving a WRITE query, it updates the cache, immediately acknowledges the client, and forwards the query to P ROCESS BATCHES via a buffered mes-
+
+Algorithm 1 Get Client Queries  
+
+> 1:
+
+procedure GET CLIENT QUERIES (client _conn , cache ,
+
+query _channel ) 
+
+> 2:
+
+loop  
+
+> 3:
+
+query ← ReadQuery( client _conn ) 
+
+> 4:
+
+if query .type = READ then  
+
+> 5:
+
+if cache .contains (query .address ) then  
+
+> 6:
+
+SendResponse( client _conn ,
+
+cache [query .address ]) 
+
+> 7:
+
+else  
+
+> 8:
+
+Forward( query _channel , query ) 
+
+> 9:
+
+else if query .type = WRITE then  
+
+> 10:
+
+cache [query .address ] ← query .value  
+
+> 11:
+
+Forward( query _channel , query ) 
+
+> 12:
+
+SendResponse( client _conn , OK)  
+
+> 13:
+
+client _conn .close () 
+
+sage channel. Unlike systems like Pancake [19], Cloak uses configurable fixed size cache with any eviction policy. Evict-ing dirty entries does not impact correctness because each write is forwarded to P ROCESS BATCHES , which ensures it is eventually written to the server. For a READ query, G ET CLIEN -
+
+> T
+
+QUERIES first checks the cache and replies immediately on a hit; otherwise, it forwards the query to P ROCESS BATCHES .PROCESS BATCHES processes forwarded queries in a loop, tracking pending queries for each physical address in the 
+
+query _map data structure (Algorithm 2, line 4). When a query arrives, if no other query for the same address is al-ready pending, P ROCESS BATCHES enqueues it into the queue corresponding to its reuse-distance set (lines 8-11). If another query exists for the same address, the algorithm handles the query without enqueuing it, for two reasons: (i) each batch can include a given address at most once, so duplicate queries to the same address cannot be issued to the server, and (ii) to minimize client latency, we respond to queries as soon as possible rather than deferring them to a future batch. Concretely, if the incoming query is a READ and another READ for the same address is already pending, the algorithm coalesces them by appending the new request to the existing entry in query _map (line 16). All coalesced reads lead to one physical read from the server and will be answered together once the address is fetched. If the incoming READ 
+
+finds a pending WRITE for the same address, the algorithm responds immediately using the buffered write value (line 13). Whereas, if the incoming query is a WRITE , it responds to all pending READ s for that address with the new value and replaces any previously pending WRITE (line 18). These opti-mizations do not violate linearizability, as we discuss formally in Theorem 2. If clients inject queries at a rate that exceeds the proxy’s processing capacity, requests will accumulate in query_map ,leading to large queues. In extreme (and unlikely) cases, 5this could cause excessive memory consumption at the proxy. To prevent this, P ROCESS BATCHES bounds the size of 
+
+query_map and applies backpressure by blocking when the map is full, causing the proxy to wait until an in-flight batch completes before accepting additional queries (lines 20–21). Independently, PROCESS BATCHES checks whether 
+
+batch _interval seconds have elapsed since the last batch was sent. If so, it constructs the next batch by popping up to at
+
+addresses from the queues maintained for each reuse-distance. If a queue contains fewer than at addresses, the proxy selects random addresses for dummy queries from the corresponding reuse-distance set to fill the remaining budget. PROCESS BATCHES then sends a batched read to the server. Upon receiving the response, it replies to any pending client in query _map , applies any writes, re-encrypts and shuffles the elements in the batch, updates the position map, writes the permuted ciphertexts back to the server, and resets the batch timer. The addresses written back in the batch become reuse-distance set 0, and the process continues to handle the next set of incoming client queries. 
+
+# 4.2 Dummy Selection Optimization 
+
+When constructing a batch, if the queue of pending real queries for a reuse-distance set st contains fewer than at en-tries, the proxy fills the remaining slots with dummy queries to randomly drawn addresses from st (Algorithm 2, line 28). Recall that addresses within the same reuse-distance set are in-distinguishable to the server after shuffling and re-encryption. Therefore, the choice of which addresses serve as dummies does not affect security, only the number of addresses drawn from each set matters. This degree of freedom enables a per-formance optimization. To implement this optimization, the proxy extends the posi-tion map to also track, for each logical address, the timestamp at which a client last issued a query for that address. Whenever a client query for an address arrives, this client-side access timestamp is updated to the current time. When selecting dummy queries from a reuse-distance set 
+
+st , the proxy prefers addresses with the most recent client-side access timestamps. Formally, let Dt ⊆ st denote the set of addresses available for dummy selection (i.e., hitherto un-accessed addresses in st ). The proxy selects k addresses from 
+
+Dt with the most recent client-side access timestamps, where 
+
+k = at − | Qt | and Qt is the set of real queries targeting st in the current batch. 
+
+Rationale. This heuristic improves batch utilization under temporally skewed workloads. When an address for a dummy query is included in a batch, it moves to reuse-distance set 
+
+s0. Selecting recent client-accessed addresses as dummies preemptively repositions them into recent reuse-distance sets. Under temporal locality, recently accessed addresses are likely to be accessed again soon. When such an address is queried again, it will reside in a recent set st with small t, which have larger budgets, improving the chances of serving the query immediately in the subsequent batch. In effect, the dummy traffic anticipates future client demand, reducing the mismatch between real queries and available budget slots. Because ad-dresses within a reuse-distance set are indistinguishable, this optimization is equivalent to choosing random addresses for dummy queries. 
+
+# 5 Security and Correctness Analysis 5.1 Security 
+
+In this section, we prove the security of Cloak in the semi-honest model. As mentioned in our threat model, the adversary can only observe the access traces to the remote storage server, so we can model the clients and the proxy as a single entity, and thus cache responses and query de-duplication do not bear any influence on the security proof. Since the batches are consistently sent at fixed time intervals, timing or amount of batches do not carry any private information. We assume the encryption scheme is IND-CPA secure so that ciphertexts are computationally indistinguishable from random numbers to any probabilistic polynomial-time (PPT) adversary, and we model the security of the protocol with the following game TRACE-IND Π 
+
+> A
+
+(λ):• The game chooses a challenge bit b ←R {0, 1}
+
+• A PPT adversary chooses two arbitrary query sequences 
+
+Q0, Q1 and sends them to the game. • The game send Qb as the input queries to Cloak’s proxy. • The adversary starts observing batch traces sent to the storage server at each batch _interval seconds. Batch traces contain a list of physical addresses requested by the proxy and subsequently a list of encrypted values to be written to those physical addresses. • Adversary can continue observing the batch traces up to poly (λ) number of batches. (Protocol will continue sending batches even if Qb finishes) • Finally, the adversary outputs a guess b′ for b. If b′ = b,the adversary wins the game. The adversary’s advantage is defined as Adv Π 
+
+> A
+
+= |P(b′ = b) −
+
+1/2|. We say that the protocol is secure if Adv Π 
+
+> A
+
+is negligible for every PPT adversary. 
+
+Theorem 1. For any PPT adversary A interacting in the game TRACE-IND Cloak  
+
+> A
+
+(λ), A’s advantage is negligible as-suming the underlying encryption scheme is IND-CPA secure. Proof. Let H0 be the real game i.e., TRACE-IND Cloak  
+
+> A
+
+(λ). In 
+
+H1, we replace all encryptions and re-encryptions performed 6Algorithm 2 Process Batches  
+
+> 1:
+
+procedure PROCESS BATCHES (query _channel , client _conn ) 
+
+> 2:
+
+pmap , reuse _dist _sets ← Init()  
+
+> 3:
+
+cur _batch _id ← t − 1 
+
+> 4:
+
+query _map ← /0 ▷ A map of address → pending reads or a pending write  
+
+> 5:
+
+last _batch _time ← time .now ()  
+
+> 6:
+
+while receiving queries from query _channel do  
+
+> 7:
+
+query ← NextQuery( query _channel ) 
+
+> 8:
+
+if query .address /∈ query _map then  
+
+> 9:
+
+query _reuse _dist ← cur _batch _id − pmap .lastBatchId [query .address ] 
+
+> 10:
+
+reuse _dist _queues [query _reuse _dist ].insert (query .address ) 
+
+> 11:
+
+query _map [query .address ] ← [query ] 
+
+> 12:
+
+else if query .type = READ then ▷ Coalesce reads / satisfy from pending write  
+
+> 13:
+
+if there is a pending WRITE in query _map [query .address ] then  
+
+> 14:
+
+SendResponse( client _conn , query .id , pending WRITE value)  
+
+> 15:
+
+else  
+
+> 16:
+
+query _map [query .key ].append [query ] 
+
+> 17:
+
+else if query .type = WRITE then  
+
+> 18:
+
+Respond to all pending READ queries in query _map [query .address ] with query .value  
+
+> 19:
+
+query _map [query .address ] ← [query ] 
+
+> 20:
+
+if query _map .len () ≥ max _queue _capacity then  
+
+> 21:
+
+Sleep( batch _interval − (time .now () − last _batch _time )) 
+
+> 22:
+
+is _timeout ← time .now () − last _batch _time > batch _interval  
+
+> 23:
+
+if is _timeout then  
+
+> 24:
+
+batch _addresses ← /0 
+
+> 25:
+
+batch _write _queries ← /0 
+
+> 26:
+
+for each (reuse _dist _set , reuse _dist _queue ) in (reuse _dist _sets , reuse _dist _queues ) do  
+
+> 27:
+
+budget _queries ← Pop queries from reuse_dist_queue up to the budget or until the queue is emptied  
+
+> 28:
+
+budget _queries ← Add dummy queries from reuse_dist_set to fill remaining budget  
+
+> 29:
+
+remove budget _queries from the reuse_dist_set  
+
+> 30:
+
+batch _addresses .extend (budget _queries .addresses ) 
+
+> 31:
+
+batch _write _queries .extend (budget _queries . f ilter (type == WRITE ))  
+
+> 32:
+
+physical _addresses ← MapToPhysical( pmap , batch _addresses ) 
+
+> 33:
+
+permutation ← RandomPermutation( |batch _addresses |) 
+
+> 34:
+
+responses ← StorageReadWrite( physical _addreses , permutation , batch _write _queries ) 
+
+> 35:
+
+Send responses to clients for each READ query in query _map whose address was in batch _addresses  
+
+> 36:
+
+Update pmap with new physical addresses and lastBatchId  
+
+> 37:
+
+reuse _dist _sets .append (batch _addresses ) 
+
+> 38:
+
+cur _batch _id ← cur _batch _id + 1inside StorageReadW rite with encryptions of a dummy value (e.g., zeros) of the same length. By IND-CPA security of the encryption scheme, any PPT adversary distinguishes H0 and 
+
+H1 with only negligible advantage, so it suffices to argue indistinguishability in H1.Conditioned on H1, the adversary only sees batch traces: the sizes of batches (fixed by design), the timing of batches (fixed by design), and the physical indices requested in each batch. Cache hits and de-duplication are invisible because the communication between the proxy and the clients is not visible to the adversary. Fix any two query sequences Q0, Q1; we argue that the distribution of batch traces generated from Q0 and Q1 in H1
+
+are identical. The proof is done by induction over batches. Let pmap : {l1, l2, . . . lN } → { (p1, r1), (p2, r2), . . . (pN , rN )}
+
+be the position map, where L := {l1, l2, . . . lN } are the logi-cal addresses of the stored elements, P := {p1, p2, . . . pN } are the physical addresses of the stored elements in the storage server, and R := {r1, r2, . . . rN } are the batch index of the last batch that updated the corresponding physical address. Let 
+
+Bk ⊂ P denote the kth batch request by the proxy, and let kcur 
+
+denote the current batch index. The storage is partitioned into disjoint reuse-distance sets. The reuse-distance set st contains all physical addresses whose reuse distance is t, i.e., addresses 7last accessed t batches ago: st := {pi ∈ P | kcur − ri = t}. The adversary can observe the batch requests Bk ⊂ P sent to the server, and by tracking which addresses appear in each batch, it can derive all reuse-distance sets st .
+
+Base case: Before the first batch, pmap is created by ran-domly mapping each logical address li to a physical address p j
+
+and assigning random batch indices that create reuse-distance sets with sizes dictated by the budgets. Let B00 ⊂ P and B01 ⊂ P
+
+be the first batches of Q0 and Q1 respectively. |B00| = |B01| be-cause of the fixed budget sizes. And due to the initial random mapping, B00 and B01 will be identically distributed. Therefore 
+
+Q0 and Q1 cannot be distinguished by observing B00 and B01.
+
+Inductive step: Assume batch traces up to batch k − 1are identically distributed. Let Bk 
+
+> 0
+
+⊂ P and Bk 
+
+> 1
+
+⊂ P be the 
+
+kth batches of Q0 and Q1 respectively. Batches Bk 
+
+> 0
+
+and Bk
+
+> 1
+
+will contain the same number of elements from each reuse-distance set, due to the predefined budgets. More formally: 
+
+|st ∩ Bk
+
+> 0
+
+| = |st ∩ Bk
+
+> 1
+
+| = at ∀t. In addition, the distributions of 
+
+st ∩ Bk 
+
+> 0
+
+and st ∩ Bk 
+
+> 1
+
+will be identical and independently uni-formly random for all t. This holds because when a batch 
+
+Bk is processed, the logical addresses within that batch are randomly permuted before being written back, forming reuse-distance set s0. As the current batch index advances, this set’s reuse distance grows (from s0 to s1 to s2, etc.), and each subsequent batch removes at addresses from st . Since, by definition, a physical address is only accessed once while in a given reuse-distance set and then moved to s0, all remain-ing elements in st retain their fresh permutation. Thus, any equal-size subsets of st are identically distributed. Therefore, 
+
+Bk 
+
+> 0
+
+and Bk 
+
+> 1
+
+are identically distributed, and Q0 and Q1 cannot be distinguished by observing Bk 
+
+> 0
+
+and Bk
+
+> 1
+
+.By induction, every batch trace is identically distributed across Q0 and Q1 in H1, so the adversary’s distinguishing advantage in H1 is 0. Combining with the IND-CPA hybrid transition yields only a negligible overall advantage in the real game. Therefore, the protocol is secure under the stated game. 
+
+# 5.2 Linearizability 
+
+We define a history Hist as a sequence of logical read/write operations with each operation op i consisting of a pair of request-response events, { req i, res i}. A complete history is the one where every request event req i in the history has a corresponding response event res i; and otherwise the history is said to be partial. Let each read or write operation op i be represented as a tuple of (li, vi, ui) where li is the logical address of the element the operation targets, vi equals ⊥ for read operations and otherwise the element’s value to be updated with, and ui is the response value. Let ≤lin represent a linearizable relation between any two operations op i and op j: op i ≤lin op j implies  
+
+> res i
+
+precedes req j in a given history. Given a complete and finite history of operations executed by Cloak, this section proves Cloak is linearizable. Informally, linearizability implies that in the history, if an operation op i happens before or precedes op j, then op i should be ordered before op j. This implies that if op j immediately succeeds op i and op i is a write, then op j should read the value written by op i. Note that since linearizability is a per-element guarantee, op i and op j operate on the same logical element l. Formally, we say that the system is linearizable if there exists a total order ≤lin over the operation identifiers such that: If res i precedes req j in the history such that no other write operation op k exists in between and if vi̸ = ⊥,then u j = vi.
+
+Theorem 2. Cloak is linearizable. Proof. When op i precedes op j in the history and op i writes an element l (i.e., vi̸ = ⊥) with op j being the subsequent operation on l with no other operation on l in between, we show that u j = vi. To show this, we consider the following invariant: 
+
+Invariant. A value vi written by op i will exist in at least one of the possible places: cache, queue, or server. This invariant holds because upon receiving the write op-eration op i, the proxy adds val i to the cache and forwards it to the P ROCESS REQUESTS procedure where it gets queued. Since P ROCESS REQUESTS is single-threaded, only one pro-cess dequeues the requests atomically and sends them to the server. Note that we can ignore the time spent inside the 
+
+req _channel as the requests are sent sequentially by G ET -CLIENT REQUESTS and received sequentially by P ROCESS -REQUESTS . Therefore, apart from possibly still exiting in the cache, vi will either be in queue or written to the server. Given the invariant we examine each possible situation with respect to the processing of the operation op j:• Stored in cache . If vi is in cache, then op j will read vi
+
+from the cache as shown in Algorithm 1, line 5. • Evicted from cache and waiting in queue . If vi is al-ready evicted from cache but still waiting in query _map ,then op j will get the response vi in Algorithm 2, lines 13–18. • Evicted from cache, dequeued, and stored in the server . If vi is only stored in the server, then op j will get the response vi in Algorithm 2, line 35 after the proxy retrieves the value from the server. Thus, u j = vi.
+
+# 6 Budget Sizes for Reuse-distance Sets 
+
+The protocol described in Section 4 allows the database admin to choose an arbitrary budget distribution over reuse-distance sets (with a minimum budget of 1 for any set). While the choice of budget distribution has no impact on the security 810 0 10 1 10 2 10 3 10 4 10 5
+
+Time Passed Since Last Access (log scale) 
+
+10 0
+
+10 1
+
+10 2
+
+10 3
+
+10 4
+
+10 5
+
+10 6
+
+> Frequency (log scale)
+
+Temporal Histogram 
+
+Zipf Function s=1.1 
+
+Figure 2: Ethereum Transaction Data Temporal Distribution (Log-Log Plot) of the protocol, as shown in Theorem 1, it critically impacts Cloak’s performance. Cloak hides the true access pattern un-der a fixed target temporal access pattern observed by the server. The closer the target distribution matches the client access distribution, the better its performance because Cloak can then populate each batch primarily with real queries rather than dummy queries. Since real-world workloads exhibit tem-poral skewness, i.e., recently accessed items are likely ac-cessed again, it is natural to assign larger budgets to more recent reuse-distance sets. Determining an appropriate budget distribution, however, is non-trivial. We hypothesize that Zipf’s law approximately character-izes the temporal locality of real-world access patterns. To evaluate this hypothesis, we analyze two datasets: Netflix click-stream traces [16] and Ethereum transaction traces [10]. In the Netflix dataset, each record corresponds to a user se-lecting a movie to watch and we interpret the timestamped events as a query trace over a movie database. The Ethereum dataset consists of all on-chain transactions from 2025-08-02 to 2025-08-13, in the execution order within the blockchain. We interpret these as queries to a database indexed by recipi-ent wallet addresses. To characterize temporal locality, Figures 2 and 3 plot, for each x, the number of access pairs to the same item that are separated by exactly x intervening accesses, aggregated over all items. For example, at x = 10 , the y-axis counts the number of times an item is accessed and then re-accessed after 10 accesses to other items. We additionally plot the Zipf distribution with exponent s that best fits each empirical distribution. Although neither dataset follows a strict Zipf distribution, both exhibit strong similarity. This empirical 10 0 10 1 10 2 10 3 10 4
+
+Time Passed Since Last Access (log scale) 10 0
+
+10 1
+
+10 2
+
+10 3
+
+10 4
+
+> Frequency (log scale)
+
+Temporal Histogram Zipf Function s=0.9 Figure 3: Netflix Click Stream Data Temporal Distribution (Log-Log Plot) regularity is sufficient for Cloak to achieve high efficiency in practice. Motivated by this observation, we compute budgets using Algorithm 3. The algorithm takes the following inputs: the number of elements N in the storage server and an initial budget f irst _budget for the most recent reuse-distance set. It initializes the budget list with f irst _budget and assigns subsequent budgets by decreasing f irst _budget according to a Zipf distribution with exponent s = 1.0. The loop terminates once the resulting budget list is sufficient to cover the entire database, and the function returns the budget list. The resulting budget list jointly determines the batch size and the sizes of all reuse-distance sets. Since each batch draws 
+
+budget [i] number of items from a reuse-distance set i, the batch size is |B| = ∑ budgets . Whereas, a reuse-distance set s
+
+starts with |B| entries, and every subsequent batch removes a decreasing yet fixed number of items from it, where the decrease is dictated by the Zipf distribution. Thus, the size of set st with reuse distance t can be computed as |s| = |B| − 
+
+∑tcurrent −ti=0 budgets [i]. Because the database is partitioned into reuse-distance sets, the budget list also determines the total database size. Summing over all reuse-distance sets yields 
+
+N = ∑|st | =
+
+> |budgets |
+
+# ∑
+
+> i=1
+
+budgets [|budgets | − i + 1] · i.
+
+From this relationship, we obtain the lower bound |B| ≥ 
+
+# O(√N). However, for temporally distributed client queries, much of this batch can be filled with real queries, as we show in Section 7. This constraint makes Cloak most suitable for high-throughput workloads, where batching overhead can be 9amortized over many concurrent queries. 
+
+Algorithm 3 Set Budgets  
+
+> 1:
+
+procedure SET BUDGETS (N, f irst _budget ) 
+
+> 2:
+
+budgets ← []  
+
+> 3:
+
+total ← 0 
+
+> 4:
+
+i ← 1 
+
+> 5:
+
+while total < N do  
+
+> 6:
+
+budget ← ⌈ f irst _budget /i⌉ 
+
+> 7:
+
+budgets .append (budget ) 
+
+> 8:
+
+total ← total + ( budget ∗ i) 
+
+> 9:
+
+i ← i + 1 
+
+> 10:
+
+return budgets 
+
+# 7 Evaluation 7.1 Setup 
+
+We implement Cloak in Rust with ∼ 1900 lines of code. The system has 3 binaries, client, proxy, and server, that connect to each other with TCP connections. All components are deployed on AWS across three m6a.4xlarge machines with 64GB RAM and 16 vCPUs. Cloak’s implementation utilizes multiple threads to parallelize execution where safe, with a default of 16 threads set for experiments. Each reported data point in the experiments is an average of 5 runs to account for variations in a multi-tenant cloud. We use OpenSSL Li-brary for encryption and use AES-128-GCM as the encryption scheme. 
+
+Baselines. We compare Cloak with three baselines: (i) an unsafe baseline without any encryption or obliviousness logic, where clients simply read and write elements from/to an in-memory storage server. The unsafe baseline does not utilize batching or caching for query processing. (ii) Treebeard [46], which acts as a parallelized ORAM-based baseline. For a fair comparison with Cloak, we run Treebeard with a scale factor of 1 (i.e., no sharding for scalability), and deploy its storage server in one machine, all three components of its proxy in a second machine, and the client on a third machine. (iii) Waffle [34], which acts as an oblivious baseline with weaker guarantees than Cloak (due to its more restrictive threat model). Similar to Treebeard, the deployment places the storage server, proxy, and the client on three different machines. 
+
+Datasets. We compare all four systems on three datasets: Netflix [16], Ethereum [10], and synthetic datasets, with Ta-ble 2 describing the dataset sizes. Section 6 describes the details on the two real-world datasets. The real-world datasets contain only read queries, while the synthetic dataset con-tains 50% reads and 50% writes. To generate a temporally-distributed synthetic query trace, we repeatedly sample a value from a Zipf distribution and query the element whose current reuse distance equals the sampled value, updating all reuse Table 2: Throughput and latency across datasets and systems. 
+
+Dataset #Elements System Tpx (ops/s) Latency (ms) 
+
+Netflix 8,473 unsafe 173,459 96 cloak 162,369 69 treebeard 58,823 166 waffle 34,415 29 1
+
+Ethereum 701,314 unsafe 185,572 157 cloak 169,344 203 treebeard 23,935 416 waffle 25,650 39 1
+
+Synthetic Z. exp: 1 1M unsafe 157,036 85 cloak 147,620 94 treebeard 19,370 520 waffle 24,994 40 1
+
+distances after each query. This process continues until the trace reaches the desired length. 
+
+Configurable parameters. Unless otherwise noted, the following are the default values for Cloak’s configurable pa-rameters. The experiments set the cache size to 1000 elements, the batching interval to 20 ms, and the batch size to 4,000 for all the experiments except the ones for the Netflix dataset, for which we set the cache size to 100, batching interval to 5 ms, and the batch size to 520 due to its small number of elements. The size of each element (in real or synthetic data) is set to 1KB. Because Cloak responds to queries, if possible, from the request queue (Section 4), by default we set the queue size to be twice the batch size. Finally, the budget size distri-bution in all experiments follow a discrete Zipf probability density function with the exponent s = 1.0, calculated with the Algorithm 3. In other words, Cloak anticipates the input distribution to follow Zipf s = 1.0 by default and allocates budgets to reuse-distance sets accordingly. 
+
+# 7.2 Results 
+
+7.2.1 Baseline Comparisons 
+
+Table 2 summarizes the throughput and latency of all four systems across the three datasets. Cloak retains 91% – 94% of the unsafe baseline’s throughput on all three workloads, while providing formal obliviousness guarantees. On the Net-flix dataset, Cloak reaches 162,369 ops/s compared to the unsafe baseline’s 173,459 ops/s, and even achieves lower la-tency (69 ms vs. 96 ms) due to caching effects. On the larger 
+
+> 1Waffle uses an aggregate latency calculation method that produce very optimistic results.
+
+10 Ethereum and synthetic datasets, Cloak sustains 169,344 and 147,620 ops/s, respectively, with only modest latency increases over the unsafe baseline. Compared to Treebeard, which provides ORAM-level se-curity, Cloak delivers 2.8×– 7.6× higher throughput and 2×–5.5× lower latency. Moreover, Treebeard’s throughput de-grades with dataset size, from 58,823 ops/s on Netflix ( N ≈
+
+8,500 ) to 19,370 ops/s on the synthetic dataset ( N = 10 6), consistent with the O(log N) overhead inherent in tree-based ORAMs. In contrast, Cloak’s overhead relative to the unsafe baseline remains nearly constant across all three dataset sizes. Cloak also outperforms Waffle by 4.7×–6.6× in through-put, despite Waffle providing strictly weaker security, as dis-cussed in Section 2. The experiments set Waffle’s batch size to be same with Cloak, with up to 50% real requests per batch, which is the medium security option suggested in [34]. Waf-fle’s performance is significantly worse that Cloak because (i) although Waffle utilizes a cache to store frequently queries ele-ments, it does not respond to clients until after communicating with the server, and (ii) its batching logic is not optimized for temporal queries, injecting a constant rate of dummy queries in every batch. We note that Waffle’s reported latencies are computed using an aggregate method that produces optimistic estimates, making a direct latency comparison misleading. 
+
+7.2.2 Ablation Experiments 
+
+Having established Cloak’s performance with the state of the art baselines, the next set of experiments analyze how different parameter selection affects Cloak’s performance. 
+
+Effect of workload skew. Cloak achieves optimal perfor-mance when its estimate of the input distribution closely matches the actual client query distribution. To study this effect, we fix the anticipated Zipf skew at s = 1.0 and vary the input workload from Zipf s = 0.0 (uniform) to s = 2.0 .Figure 4 reports three metrics: throughput, end-to-end mean query latency, and batch utilization. Batch utilization mea-sures Cloak ’s ability to populate each batch (on average) with real client requests, and hence, higher utilization is desirable. Figure 4 indicates that throughput increases monotonically with the Zipf exponent, rising from roughly 30,000 ops/s un-der a near-uniform workload ( s = 0) to approximately 150,000 ops/s once s ≥ 1.0, where it plateaus. The batch utilization graph (bottom panel) corroborates this behavior, where uti-lization peaks at roughly 73% near s = 1.0. At this point, the workload’s temporal skew closely matches Cloak’s target dis-tribution, which determines the budget allocation, allowing Cloak to fill most of a batch with real requests. The sharp in-crease in throughput between s = 0.8 and s = 1.0 corresponds directly to this improved alignment between the workload dis-tribution and the configured budgets. For lower exponents ( s < 0.5 ), the mismatch between the near-uniform workload and Cloak ’s skewed budget allocation reduces batch utilization to approximately 35% , leading to 0k 60k 120k 180k Tpx (ops/s) 0120 240 360 Latency (ms) 0.0 0.5 1.0 1.5 2.0Zipf Exponent: s
+
+0% 25% 50% 75% Batch Utilization Figure 4: Throughput, mean latency, and mean batch uti-lization for different Zipf distributions ( N = 10 6, Cache Size = 1,000 , Batch Size: = 4,000 , Element Size = 1 KB, Proxy Queue Capacity = 2 × Batch Size) lower throughput. Somewhat counter-intuitively, this correla-tion weakens or drops for s > 1.0: although batch utilization declines, throughput remains near its peak. This occurs be-cause highly skewed workloads repeatedly access a small set of items, many of which are served from the cache or from recent reuse-distance sets. As a result, batches include more dummy requests (particularly for older reuse-distance sets), reducing utilization, while throughput remains high be-cause most real requests target cached or recently accessed elements. Latency mirrors these trends: for s ≥ 1.0, mean latency sta-bilizes at roughly 100–120 ms, whereas for lower exponents it is both higher and more variable (spiking above 300 ms) due to queue buildup when low batch utilization limits the number of real queries served per batch. These results demon-strate that Cloak is most efficient and effective when the its anticipated temporality matches the real distribution. 
+
+Effect of batch size. The previous experiment fixed a batch size and varied the input distribution, whereas this experiment reverses the order: it fixes the input to Zipf distribution with exponent s = 1.0 and studies how Cloak performs as the batch size changes. Figure 5 depicts the three performance metrics for this experiment. Throughput peaks at roughly 145,000 ops/s around a batch size of 4,000 and declines for both smaller and larger batches. Batch utilization follows a 11 0k 
+
+50k 
+
+100k 
+
+150k 
+
+Throughput (ops/s) 
+
+0
+
+60 
+
+120 
+
+180 Latency (ms) 
+
+2000 4000 6000 8000 10000 
+
+Batch Size 
+
+0% 
+
+25% 
+
+50% 
+
+75% 
+
+Batch Utilization 
+
+Figure 5: Throughput, mean latency, and mean batch utiliza-tion for different batch sizes ( N = 10 6, Cache Size = 1,000 ,Zipf Exponent = 1.0, Element Size = 1KB, Proxy Queue Ca-pacity = 2 × Batch Size) similar pattern, peaking at approximately 74% near batch size 4,000 and decreasing steadily for larger batches. Small batches limit throughput because fewer real queries can be served per batch, even though individual batches are processed quickly (latency is lower for smaller batches). In-creasing the batch size initially improves throughput by pro-viding more budget slots that can be filled with real queries. Beyond the optimum, however, the fixed 20 ms batching inter-val becomes a bottleneck: larger batches require more time for encryption, shuffling, and network transfer, and there aren’t enough client queries accumulated within the batching in-terval to amortize this cost over. As a result, not only the batch utilization drops, but throughput also decreases due to more wasted compute and bandwidth overheads. Latency also rises—reaching roughly 140 ms at a batch size of 11,000—as per-batch processing time grows. These results suggest that, for a given workload distribution, there exists a sweet spot for batch size that balances the number of available budget slots against the proxy’s ability to fill and process them. 
+
+Effect of element size. Next, we analyze the effect of element size variability on Cloak’s performance. Figure 6 varies the element size from 0.5 KB to 32 KB on a log scale. Throughput decreases monotonically, from 162,425 ops/s at 0.5 KB to 2,490 ops/s at 32 KB, approximately halving with each doubling of element size. This is expected: since each 10 3
+
+10 4
+
+10 5
+
+Throughput (ops/s) 0150 300 450 Latency (ms) 0.5 1.0 2.0 4.0 8.0 16.0 32.0 Element Size (KB) 0% 25% 50% 75% Batch Utilization Figure 6: Throughput, mean latency, and mean batch utiliza-tion for different Element sizes ( N = 10 6, Cache Size = 1,000 ,Zipf Exponent = 1.0, Batch Size: = 4,000 , Proxy Queue Ca-pacity = 2 × Batch Size) batch transfers a fixed number of elements, the total data volume per batch scales linearly with element size, and the per-batch cost of encryption, shuffling, and network transfer grow accordingly. With the batching interval fixed at 20 ms, larger elements reduce both throughput and batch utilization, with the latter dropping from 70% at 1 KB to 20% at 32 KB. Latency follows the inverse trend, rising from 51 ms at 1 KB to over 300 ms at 16 KB. 
+
+Effect of cache size. Finally, we study the impact of cache size on Cloak ’s performance, with a particular focus on la-tency. This analysis presents a subtle challenge: as described in Section 4, the proxy stops accepting new client queries when its request queue reaches capacity. When saturated, new requests are blocked, making it difficult to isolate the effect of cache size. To avoid this challenge, we fix the client request rate below the proxy’s maximum sustainable through-put, specifically at 115,000 ops/s. Figure 7 reports mean latency and batch utilization as the cache size increases (we omit throughput since it is fixed by the client at 115,000 ops/s). As the cache grows from 1,000 to 256 ,000 entries, mean latency drops from 27 ms to 12.5 ms, because an increasing fraction of queries are served directly from the cache without incurring a batch round-trip to the server. Batch utilization decreases correspondingly, from 59% to 48% , since fewer real queries enter the batching pipeline. 12 10 
+
+15 
+
+20 
+
+25 
+
+30 Latency (ms) 
+
+10 3 10 4 10 5
+
+Cache Size (# of Elements) 
+
+45% 
+
+50% 
+
+55% 
+
+60% 
+
+64% Batch Utilization 
+
+Figure 7: Mean latency, and mean batch utilization for differ-ent cache sizes ( N = 10 6, Block Size = 1KB, Zipf Exponent =
+
+1.0 , Batch Size: = 4,000 , Client Query Rate = 115 ,000 ops/s, Proxy Queue Capacity = 1 × Batch Size) These results highlight the role of caching in reducing end-to-end latency. 
+
+# 8 Conclusion 
+
+We presented Cloak ORAM, a trusted-proxy–based oblivious access protocol that achieves low overhead by decoupling obliviousness from uniformity. Instead of forcing server-side accesses to follow a uniform distribution, Cloak enforces a fixed, temporally skewed access pattern that better matches real-world workloads exhibiting temporal locality. This de-sign preserves access-pattern independence while signifi-cantly reducing the number of dummy requests required in practice to achieve obliviousness. Our evaluation on real-world traces shows that Cloak can achieve overheads as low as 1.1× relative to simple unencrypted storage. We believe Cloak provides a practical foundation for deploying access-pattern hiding in high-throughput settings and strikes a bal-ance between cryptographic guarantees and realistic workload behavior. Cloak can be extended to support richer query work-loads (e.g., range and join queries) and to dynamically adapt its batching interval to changing client input rate without compromising security using differential privacy. 
+
+# Acknowledgments 
+
+We gratefully acknowledge the support of National Cyber-security Consortium, the Government of Canada (CSIN) (project id 2024-1345), NSERC grants RGPIN-2023-03244, IRC-537591, the Government of Ontario and the Royal Bank of Canada for funding this research. 
+
+# Ethics Considerations. 
+
+Our work used no sensitive, private, or personally identifi-able data in designing or evaluating of Cloak. All experi-ments are conducted using synthetically generated workloads or publicly available de-identified datasets. Because of this, when cloud resources were used for evaluation, only synthetic data or publicly available data were processed, ensuring that no sensitive information is disclosed to third-party service providers. Cloak is designed to enhance access-pattern privacy by re-ducing information leakage through observable query timing and frequency. While these techniques are motivated by legiti-mate security and privacy goals, we acknowledge the potential for dual use. In particular, adversarial parties could deploy similar mechanisms to conceal undesirable or malicious be-havior from monitoring systems. However, we believe that the benefits of advancing access-pattern privacy, especially for applications handling sensitive data, outweigh the potential for misuse. Privacy-preserving data management systems play an im-portant role in mitigating harms associated with data misuse and unintended information disclosure, which disproportion-ately affect users in sensitive domains such as healthcare, fi-nance, and government services. By improving the efficiency and practicality of access-pattern hiding mechanisms, Cloak contributes to the broader goal of protecting user confidential-ity in adversarial settings. We believe that the ethical implica-tions of the project aligns with the principles outlined in the USENIX Security ethics guidelines. 
+
+# Open Science 
+
+We open-source all the implementation and experiments and are publicly available at: https://github.com/onurerena rpaci/Cloak.git 
+
+# References 
+
+[1] Gilad Asharov, Ilan Komargodski, Wei-Kai Lin, Kartik Nayak, Enoch Peserico, and Elaine Shi. Optorama: Op-timal oblivious ram. In Anne Canteaut and Yuval Ishai, editors, Advances in Cryptology – EUROCRYPT 2020 ,pages 403–432, Cham, 2020. Springer International Pub-lishing. 13 [2] Berk Atikoglu, Yuehai Xu, Eitan Frachtenberg, Song Jiang, and Mike Paleczny. Workload analysis of a large-scale key-value store. In Proceedings of the 12th ACM SIGMETRICS/PERFORMANCE joint international con-ference on Measurement and Modeling of Computer Systems , pages 53–64, 2012. [3] Vincent Bindschaedler, Muhammad Naveed, Xiaorui Pan, XiaoFeng Wang, and Yan Huang. Practicing obliv-ious access on cloud storage: the gap, the fallacy, and the new way forward. In Proceedings of the 22nd ACM SIGSAC Conference on Computer and Communications Security (CCS) , pages 837–849, 2015. [4] Nathan Bronson, Zach Amsden, George Cabrera, Prasad Chakka, Peter Dimov, Hui Ding, Jack Ferris, Anthony Giardullo, Sachin Kulkarni, Harry Li, et al. Tao: Face-book’s distributed data store for the social graph. In 
+
+2013 USENIX Annual Technical Conference (USENIX-ATC 13) , pages 49–60, 2013. [5] David Cash, Paul Grubbs, Jason Perry, and Thomas Ris-tenpart. Leakage-abuse attacks against searchable en-cryption. In Proceedings of the 22nd ACM SIGSAC Conference on Computer and Communications Security ,CCS ’15, page 668–679, New York, NY, USA, 2015. Association for Computing Machinery. [6] Anrin Chakraborti and Radu Sion. Concuroram: High-throughput stateless parallel multi-client oram, 2018. [7] Anrin Chakraborti and Radu Sion. ConcurORAM: High-throughput stateless parallel multi-client ORAM. In 
+
+26th Annual Network and Distributed System Security Symposium (NDSS) , 2019. [8] Natacha Crooks, Matthew Burke, Ethan Cecchetti, Sitar Harel, Rachit Agarwal, and Lorenzo Alvisi. Obladi: Oblivious serializable transactions in the cloud. In 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18) , pages 727–743, Carlsbad, CA, October 2018. USENIX Association. [9] Emma Dauterman, Vivian Fang, Ioannis Demertzis, Nat-acha Crooks, and Raluca Ada Popa. Snoopy: Surpass-ing the scalability bottleneck of oblivious storage. In 
+
+Proceedings of the ACM SIGOPS 28th Symposium on Operating Systems Principles , SOSP ’21, page 655–671, New York, NY, USA, 2021. Association for Computing Machinery. [10] Allen Day and Evgeny Medvedev. Ethereum in big-query: A public dataset for smart contract analytics. 
+
+https://cloud.google.com/blog/products/d ata-analytics/ethereum-bigquery-public-d ataset-smart-contract-analytics , Aug 2018. Accessed Feb 5, 2026. [11] Giuseppe DeCandia, Deniz Hastorun, Madan Jampani, Gunavardhan Kakulapati, Avinash Lakshman, Alex Pilchin, Swaminathan Sivasubramanian, Peter Vosshall, and Werner Vogels. Dynamo: amazon’s highly avail-able key-value store. ACM SIGOPS operating systems review , 41(6):205–220, 2007. [12] Ioannis Demertzis, Dimitrios Papadopoulos, Charalam-pos Papamanthou, and Saurabh Shintre. SEAL: Attack mitigation for encrypted databases via adjustable leak-age. In 29th USENIX Security Symposium (USENIX Security 20) , pages 2433–2450. USENIX Association, August 2020. [13] Ioannis Demertzis, Dimitrios Papadopoulos, Charalam-pos Papamanthou, and Saurabh Shintre. Seal: Attack mitigation for encrypted databases via adjustable leak-age. In 29th USENIX Security Symposium (USENIX Security 20) , pages 2433–2450, 2020. [14] Sky Faber, Stanislaw Jarecki, Hugo Krawczyk, Quan Nguyen, Marcel Rosu, and Michael Steiner. Rich queries on encrypted data: Beyond exact matches. In Computer Security–ESORICS 2015: 20th European Symposium on Research in Computer Security, Vienna, Austria, Septem-ber 21-25, 2015, Proceedings, Part II 20 , pages 123–145. Springer, 2015. [15] Francesca Falzon, Evangelia Anna Markatou, Zachary Espiritu, and Roberto Tamassia. Range search over en-crypted multi-attribute data. Cryptology ePrint Archive ,2022. [16] Stephen Follows and Jose Eliel Camargo-Molina. Net-flix audience behaviour - uk movies. https://www.ka ggle.com/datasets/vodclickstream/netflix-a udience-behaviour-uk-movies , 2021. Kaggle. [17] Sanjay Ghemawat, Howard Gobioff, and Shun-Tak Le-ung. The google file system. In Proceedings of the nineteenth ACM symposium on Operating systems prin-ciples , pages 29–43, 2003. [18] Oded Goldreich and Rafail Ostrovsky. Software protec-tion and simulation on oblivious rams. Journal of the ACM (JACM) , 43(3):431–473, 1996. [19] Paul Grubbs, Anurag Khandelwal, Marie-Sarah Lachar-ité, Lloyd Brown, Lucy Li, Rachit Agarwal, and Thomas Ristenpart. Pancake: Frequency smoothing for en-crypted data stores. In 29th USENIX Security Sym-posium (USENIX Security 20) , pages 2451–2468, 2020. [20] Paul Grubbs, Marie-Sarah Lacharite, Brice Minaud, and Kenneth G. Paterson. Pump up the volume: Practi-cal database reconstruction from volume leakage on range queries. In Proceedings of the 2018 ACM SIGSAC 
+
+14 Conference on Computer and Communications Security ,CCS ’18, page 315–331, New York, NY, USA, 2018. Association for Computing Machinery. [21] Paul Grubbs, Marie-Sarah Lacharite, Brice Minaud, and Kenneth G. Paterson. Learning to reconstruct: Statistical learning theory and encrypted database attacks. In 2019 IEEE Symposium on Security and Privacy (SP) , pages 1067–1083, 2019. [22] Zichen Gui, Oliver Johnson, and Bogdan Warinschi. En-crypted databases: New volume attacks against range queries. In Proceedings of the 2019 ACM SIGSAC Con-ference on Computer and Communications Security ,CCS ’19, page 361–378, New York, NY, USA, 2019. Association for Computing Machinery. [23] Mohammad Saiful Islam, Mehmet Kuzu, and Murat Kantarcioglu. Access pattern disclosure on searchable encryption: ramification, attack and mitigation. In Ndss ,volume 20, page 12. Citeseer, 2012. [24] Georgios Kellaris, George Kollios, Kobbi Nissim, and Adam O’Neill. Generic attacks on secure outsourced databases. In Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security ,CCS ’16, page 1329–1340, New York, NY, USA, 2016. Association for Computing Machinery. [25] Evgenios M. Kornaropoulos, Charalampos Papaman-thou, and Roberto Tamassia. Data recovery on encrypted databases with k-nearest neighbor query leakage. In 
+
+2019 IEEE Symposium on Security and Privacy (SP) ,pages 1033–1050, 2019. [26] Evgenios M Kornaropoulos, Charalampos Papaman-thou, and Roberto Tamassia. Response-hiding encrypted ranges: Revisiting security via parametrized leakage-abuse attacks. In 2021 IEEE Symposium on Security and Privacy (SP) , pages 1502–1519. IEEE, 2021. [27] Marie-Sarah Lacharité and Kenneth G Paterson. Anote on the optimality of frequency analysis vs. ℓ_p-optimization. Cryptology ePrint Archive , 2015. [28] Marie-Sarah Lacharité and Kenneth G Paterson. Frequency-smoothing encryption: preventing snapshot attacks on deterministically encrypted data. Cryptology ePrint Archive , 2017. [29] Marie-Sarah Lacharité, Brice Minaud, and Kenneth G. Paterson. Improved reconstruction attacks on encrypted data using range query leakage. In 2018 IEEE Sym-posium on Security and Privacy (SP) , pages 297–314, 2018. [30] Leslie Lamport. The part-time parliament. In Trans-actions on Computer Systems , pages 133–169. ACM, 1998. [31] Kasper Green Larsen and Jesper Buus Nielsen. Yes, there is an oblivious ram lower bound! In Annual International Cryptology Conference , pages 523–542. Springer, 2018. [32] Jingwei Li, Chuan Qin, Patrick P. C. Lee, and Xiaosong Zhang. Information leakage in encrypted deduplication via frequency analysis. In 2017 47th Annual IEEE/IFIP International Conference on Dependable Systems and Networks (DSN) , pages 1–12, 2017. [33] Sujaya Maiyya, Seif Ibrahim, Caitlin Scarberry, Di-vyakant Agrawal, Amr El Abbadi, Huijia Lin, Stefano Tessaro, and Victor Zakhary. QuORAM: A Quorum-Replicated fault tolerant ORAM datastore. In 31st USENIX Security Symposium (USENIX Security 22) ,pages 3665–3682, Boston, MA, August 2022. USENIX Association. [34] Sujaya Maiyya, Sharath Chandra Vemula, Divyakant Agrawal, Amr El Abbadi, and Florian Kerschbaum. Waf-fle: An online oblivious datastore for protecting data ac-cess patterns. Proceedings of the ACM on Management of Data , 1(4):1–25, 2023. [35] Evangelia Anna Markatou, Francesca Falzon, Zachary Espiritu, and Roberto Tamassia. Attacks on encrypted response-hiding range search schemes in multiple di-mensions. Proceedings on Privacy Enhancing Technolo-gies , 2023. [36] Evangelia Anna Markatou and Roberto Tamassia. Full database reconstruction with access and search pattern leakage. In International Conference on Information Security , pages 25–43. Springer, 2019. [37] Muhammad Naveed, Seny Kamara, and Charles V. Wright. Inference attacks on property-preserving en-crypted databases. In Proceedings of the 22nd ACM SIGSAC Conference on Computer and Communications Security , CCS ’15, page 644–655, New York, NY, USA, 2015. Association for Computing Machinery. [38] Simon Oya and Florian Kerschbaum. Hiding the ac-cess pattern is not enough: Exploiting search pattern leakage in searchable encryption. In 30th USENIX Secu-rity Symposium (USENIX Security 21) , pages 127–142. USENIX Association, August 2021. [39] Simon Oya and Florian Kerschbaum. IHOP: Improved statistical query recovery against searchable symmet-ric encryption through quadratic optimization. In 31st USENIX Security Symposium (USENIX Security 22) ,pages 2407–2424, Boston, MA, August 2022. USENIX Association. 15 [40] Antonis Papadimitriou, Ranjita Bhagwan, Nishanth Chandran, Ramachandran Ramjee, Andreas Haeberlen, Harmeet Singh, Abhishek Modi, and Saikrishna Badri-narayanan. Big data analytics over encrypted datasets with seabed. In OSDI , volume 16, pages 587–602, 2016. [41] Giuseppe Persiano and Kevin Yeo. Lower bounds for differentially private rams. In Advances in Cryptology– EUROCRYPT 2019: 38th Annual International Confer-ence on the Theory and Applications of Cryptographic Techniques, Darmstadt, Germany, May 19–23, 2019, Proceedings, Part I 38 , pages 404–434. Springer, 2019. [42] Rishabh Poddar, Tobias Boelter, and Raluca Ada Popa. Arx: an encrypted database using semantically secure encryption. Cryptology ePrint Archive , 2016. [43] Rishabh Poddar, Stephanie Wang, Jianan Lu, and Raluca Ada Popa. Practical volume-based attacks on en-crypted databases. In 2020 IEEE European Symposium on Security and Privacy (EuroS&P) , pages 354–369, 2020. [44] Ling Ren, Christopher Fletcher, Albert Kwon, Emil Ste-fanov, Elaine Shi, Marten van Dijk, and Srinivas De-vadas. Constants count: Practical improvements to oblivious RAM. In 24th USENIX Security Sympo-sium (USENIX Security 15) , pages 415–430, Washing-ton, D.C., August 2015. USENIX Association. [45] Cetin Sahin, Victor Zakhary, Amr El Abbadi, Huijia Lin, and Stefano Tessaro. Taostore: Overcoming asyn-chronicity in oblivious data storage. In 2016 IEEE Sym-posium on Security and Privacy (SP) , pages 198–217, 2016. [46] Amin Setayesh, Cheran Mahalingam, Emily Chen, and Sujaya Maiyya. Treebeard: A scalable and fault tolerant ORAM datastore. Cryptology ePrint Archive, Paper 2025/1082, 2025. [47] Emil Stefanov, Marten Van Dijk, Elaine Shi, T.-H. Hu-bert Chan, Christopher Fletcher, Ling Ren, Xiangyao Yu, and Srinivas Devadas. Path oram: An extremely simple oblivious ram protocol. J. ACM , 65(4), April 2018. [48] Emil Stefanov and Elaine Shi. Oblivistore: High perfor-mance oblivious cloud storage. In 2013 IEEE Sympo-sium on Security and Privacy , pages 253–267, 2013. [49] The Infrastructure Behind Twitter: Scale. https:// blog.x.com/engineering/en_us/topics/infras tructure/2021/processing-billions-of-event s-in-real-time-at-twitter-. Accessed Feb 5, 2026. [50] Xiao Wang, Hubert Chan, and Elaine Shi. Circuit oram: On tightness of the goldreich-ostrovsky lower bound. CCS ’15, page 850–861, New York, NY, USA, 2015. Association for Computing Machinery. [51] Yupeng Zhang, Jonathan Katz, and Charalampos Papa-manthou. All your queries are belong to us: The power of File-Injection attacks on searchable encryption. In 
+
+25th USENIX Security Symposium (USENIX Security 16) , pages 707–720, Austin, TX, August 2016. USENIX Association. 16

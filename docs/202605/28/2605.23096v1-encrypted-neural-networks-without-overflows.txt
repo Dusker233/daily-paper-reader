@@ -1,0 +1,1565 @@
+Title: Encrypted Neural Networks without Overflows
+
+URL Source: https://arxiv.org/pdf/2605.23096v1
+
+Published Time: Mon, 25 May 2026 00:16:06 GMT
+
+Number of Pages: 33
+
+Markdown Content:
+# Encrypted Neural Networks without Overflows 
+
+Philipp Kern 1 Lorenzo Rovida 2 Samuel Teuber 1 Edoardo Manino 3
+
+Carsten Sinz 4 Alberto Leporati 51Karlsruhe Institute of Technology, Germany 2Polytechnic University of Turin, Italy 
+
+> 3
+
+The University of Manchester, UK, 4Karlsruhe University of Applied Sciences, Germany 
+
+> 5
+
+University of Milano-Bicocca, Italy 
+
+{philipp.kern, teuber}@kit.edu lorenzo.rovida@polito.it edoardo.manino@manchester.ac.uk carsten.sinz@h-ka.de alberto.leporati@unimib.it 
+
+# Abstract 
+
+Fully homomorphic encryption (FHE) enables private inference by evaluating neural networks on encrypted data. In this way, we can delegate the computation to a third party server without ever revealing the user’s data. Currently, the CKKS scheme is the backbone of most efficient FHE implementations, but it only supports addition, multiplication, and array rotation operations, thus requiring all activation functions of the neural network to be approximated by polynomials within a certain interval, imposing strict design tolerances. In this paper, we demonstrate for the first time that this scheme is vulnerable to overflow attacks , i.e., seemingly benign inputs that can exceed such tolerances of the FHE circuit, thereby causing corrupt and unusable outputs. To avoid them, we propose a formal verification technique that computes certified bounds on the ranges of all neurons in the network. By construction, our method eliminates overflows and, in our experiments, removed observed overflows on all benchmarks, reducing failure rates from up to 47% to 0%. Moreover, our overflow-free solution is compatible with most CKKS-based frameworks, as it allows to simply substitute standard polynomials by polynomials with rigorously designed ranges. 
+
+# 1 Introduction 
+
+Private inference schemes based on fully-homomorphic encryption (FHE) are designed to delegate the bulk of the computation to a third-party, without revealing the data itself [ 1]. This is especially relevant for the so-called machine learning as a service (MLaaS) business model, where clients buy access to a machine learning model, and run it on third-party servers [ 2]. An ideal FHE private inference scheme would encrypt the client data before transmission to the server, run the full inference over encrypted data, and only decrypt the output once it is transmitted back to the client.That way, the third-party server does never access the plaintext data, which might contain personal information. 1
+
+Several FHE schemes have been designed to realise this vision, including BGV [ 3], BFV [ 4, 5], and TFHE [ 6 ]. Among them, the CKKS scheme [ 7] has emerged as the de facto standard for efficiently implementing private neural inference, as it allows to natively encode vectors of complex numbers and perform massive arithmetic operations in parallel. Recent work demonstrates that executing deep convolutional networks [ 8 ] and large language models [ 9 , 10 ] with CKKS is possible. However, the CKKS scheme imposes severe restrictions on the arithmetic operations available over the ciphertext: it 
+
+> 1The honest-but-curious threat model for the third-party server is a staple of the private inference literature.
+> arXiv:2605.23096v1 [cs.CR] 21 May 2026
+
+# { } 
+
+> c= “airplane”
+> Server: FHE inference Client: encryption
+
+Figure 1: FHE allows neural network inference on encrypted data. However, perturbed inputs can exceed expected ranges of the FHE circuit, corrupting the output. only supports addition, multiplication, and array rotation. Thus, existing CKKS inference frameworks replace non-linear activation functions in the network with (high degree) polynomials [11, 12]. In this paper, we posit the existence of a major weakness in modern CKKS designs for neural networks (NNs): adversarial input perturbations can make the CKKS network arbitrarily diverge from its refer-ence plaintext implementation. This is because the polynomial approximations of non-linear activation functions are only tight for a limited range of values [ 13 , 14 ]. Input perturbations, adversarial or not, that exceed the range of a single activation can cause a cascade of overflows through the CKKS circuit yielding unrecoverable output values. We call this phenomenon an overflow attack 2 (see Figure 1). 
+
+Contributions. To address this challenge, we introduce a framework for the certified design of FHE NNs. Our framework guarantees the absence of overflow attacks, while keeping the size of the FHE circuit as small as possible. In detail, we propose the following contributions: • We present an efficient algorithm to find inputs that exceed the expected ranges of NNs with polynomial activations. With it, we demonstrate that the modern design of CKKS NNs is vulnerable to overflows. Our empirical result shows that even a small perturbation can cause up to 47% of the tested inputs for a CIFAR10 NN to fail. • To mitigate this, we introduce a differential verification framework that can programmatically compute certified bounds on the value range of all neurons in the NN and on the approximation error of the output. The framework can handle both analytic (e.g. GELU) and non-analytic activation functions (e.g. ReLU), fully-connected and convolutional layers. • We give theoretical proofs that our bounds are sound for any possible input, i.e. not just small adversarial perturbations, and thus can be used at design time to eliminate the possibility of overflows. We also show that NNs with analytical activation functions (e.g. GELUs) yield an asymptotically smaller approximation error than NNs with non-analytical ones (e.g. ReLUs). This gives theoretical grounding to a recent empirical observation reported in [12]. • We further improve the design of CKKS NNs by allowing for the polynomial activations of different neurons in the same layer to be different, as opposed to uniform approximations in existing work. We thus generalize the Paterson-Stockmeyer algorithm [ 15 , 16 ] from evaluating (ciphertext × constant) to (ciphertext × plaintext). Our implementation shows that our design can achieve at least a 10x reduction in error compared to the established non-certified pipelines. We also provide an open-source implementation of our framework, based on OpenFHE [ 17 ], which includes construction of certified polynomials and conversion to CKKS NNs. 
+
+# 2 Background 
+
+State-of-the-art FHE NNs, especially those based on the CKKS scheme, are typically constructed in a multi-stage process, as shown in the upper part of Figure 2: A regular NN is first approximated with 
+
+> 2We understand overflow attacks similar to adversarial attacks, not in the sense of cryptographic attacks.
+
+2Modern workflow (2021–today) Data Neural Net. Ranges High-Deg. Poly CKKS Circuit        
+
+> train sample build encrypt
+> This paper (2026)
+> Bounds Certified Poly Certified Circuit
+> prove build encrypt
+
+Figure 2: Designing CKKS neural networks requires approximating activations within their expected ranges. This paper avoids overflow attacks by computing provable bounds and certified polynomials. polynomial activations, after which the corresponding FHE circuit is built. Throughout the paper we will conversely describe our approach, which is illustrated in the lower part of the same figure. 
+
+2.1 Encrypted Computation with CKKS 
+
+We will now provide a high-level description of the CKKS scheme and defer a larger overview on FHE schemes to Appendix A. 
+
+Definition 2.1 (Arithmetic Circuit) . Given a ring R, an arithmetic circuit (or simply circuit ) is a directed acyclic graph whose nodes compute additions and multiplications from inputs, constants, and other nodes. With n input nodes and m output nodes, the circuit computes a function C : Rn → Rm.
+
+The CKKS scheme. In the CKKS scheme, let N = 2 k for some integer k > 0 and let Q > 1 be a large modulus. A plaintext message x ∈ CN/ 2 is first encoded as a polynomial (using a scaled inverse Fourier transform), then a small random error is introduced to ensure security. This results in a slightly perturbed message x + eCKKS (x) ∈ CN/ 2, which is finally encrypted modulo Q.Like all standard FHE schemes, CKKS is based on the hardness of the Ring-Learning With Errors (RLWE) problem [ 18 ] that requires an injection of random noise during encryption to ensure security. With noisy inputs, each homomorphic operation introduces additional noise into the ciphertext, with multiplications contributing most significantly. To manage this, CKKS uses: (i) a scaling factor ∆,which controls the numerical precision by encrypting ∆x + e, and (ii) a modulus chain Q = Qℓi=1 qi,with qi ≈ ∆, which limits the number of sequential multiplications to reduce the scale back to ∆
+
+after a multiplication (whose result has scale ∆2). This technique implies that the depth of circuits that can be evaluated without additional techniques (such as bootstrapping [19]) is bounded. CKKS decryption requires intermediate values to remain in a bounded range. If the magnitude of the underlying plaintext exceeds half the available modulus, the ciphertext may become undecodable, leading to corrupted outputs. This makes range management a central challenge in CKKS circuit design. In CKKS, as explained above, standard non-linear activation functions such as ReLU or GELU must be replaced by polynomial approximations. The accuracy of such approximations depends critically on the input range over which they are evaluated. If intermediate values exceed the expected range, approximation errors grow rapidly (see Figure 3) and may ultimately yield arithmetic overflows. Ensuring that all intermediate values remain within certified bounds is therefore essential for reliable encrypted inference, and forms the basis of our approach. Formally, the CKKS scheme evaluates an arithmetic circuit C as follows (details on how encrypted operations are performed can be found in Appendix B): 
+
+Definition 2.2 (CKKS Circuit [ 7 ]) . Under the CKKS encryption scheme (KeyGen , Enc , Dec , Eval ), a 
+
+CKKS circuit is an arithmetic circuit C with operations ADD , MULT and ROT (for rotate), evaluated on encrypted inputs via fCKKS (x) := Dec (Eval (C, Enc (x)) . The output satisfies fCKKS (x) = C(x) + 
+
+eCKKS (x), where eCKKS (x) captures the accumulated error in the output of the circuit. 32.2 Polynomial Networks 
+
+We can interpret NNs as arithmetic circuits. As CKKS only supports additions, multiplications and array rotations, we also define polynomial NNs that approximate standard NNs: 
+
+Definition 2.3 (Feed-Forward Neural Network) . A neural network computes a function f : I → RO
+
+that maps vectors from the I-dimensional input space I ⊆ RI to an O-dimensional output space. A feed-forward architecture is a composition of layers l ∈ [1 , L ] defined as z(l) = σ(l) ˜z(l) =
+
+σ(l) W (l)z(l−1) + b(l) where σ(l) is an activation function, x = z(0) ∈ I is the network input, and 
+
+z(L) ∈ RO the network output. We denote by f (l)(x) the value of ˜z(l) at layer l for input x.
+
+Definition 2.4 (Polynomial Neural Network) . A polynomial neural network computes a function 
+
+fπ : I → RO obtained from a neural network f : I → RO by replacing the activation functions 
+
+σ(l) in Definition 2.3 by their polynomial approximation counterparts π(l) (see Sec. 4.1 for their construction). To differentiate the two networks, we rename the pre- and post-activation vectors from 
+
+z to y, i.e. y(l) = π(l) ˜y(l) = π(l) W (l)y(l−1) + b(l) with y(0) = z(0) and y(l) ≈ z(l) for all layers l > 0. We call f (l) 
+
+> π
+
+(x) the value of ˜y(l) for input x.With these approximations we can differentiate two different sources of error that influence the CKKS circuit’s output fCKKS (x) with respect to the output computed by the original neural network f (x):
+
+fCKKS (x) = fπ (x) + eCKKS (x) = f (x) + eπ (x) + eCKKS (x) . (1) Here, eπ (x) = fπ (x) − f (x) is the deterministic polynomial approximation error stemming from the approximate representation of activation functions in fπ , while the error term eCKKS (x) is stochastic in nature and stems from the cryptographic procedures of CKKS (and RLWE encryption). The polynomial approximation error eπ in Eq. (1) can be reduced by using higher-degree polynomials, at the cost of more multiplicative depth in the CKKS circuit and thus an increase in latency [11]. 
+
+2.3 Range Estimation 
+
+To construct accurate polynomial approximations for activation functions, we must bound the range of the activation’s input (i.e. its pre-activation values). Therefore, we need to identify intervals [l(l), u(l)]
+
+for each layer l such that f (l) 
+
+> π
+
+(x) ∈ [l(l), u(l)] is satisfied for all inputs x ∈ I . If there exist inputs 
+
+x where f (l) 
+
+> π
+
+(x) is not in the computed approximation interval, the approximation may result in large errors and uncontrollable growth, eventually leading to arithmetic failures. This phenomenon is visible in the GELU approximation in Figure 3 which is precise for the range [−3, 3] , but diverges outside. 
+
+Figure 3: Polynomial approximations diverge to ±∞ outside of the approximation interval. 
+
+Sampling-based design. The most common approach to compute ranges is based on observations from a dataset D sampled from the training data distribution. For intermediate layers l, bounds 
+
+l(l), u(l) are computed, such that l(l) ≤ f (l)(x) ≤ u(l) holds for all x ∈ D . Sampling-based estimates provide no guarantees outside the dataset D and may significantly underestimate the true ranges. As a result, inputs that are out-of-distribution – or perturbed – can easily violate these ranges. 4Existing countermeasures include extending sampled ranges by a factor of two [ 12 ] or choosing a constant range of [−c, c ] for a suitable constant c > 0 [ 20 ]. Others propose to reduce the impact of outliers on ranges by pre-multiplying the weights by orthogonal matrices [ 10 ]. We show that range violations due to sampling-based designs can lead to catastrophic failures in CKKS NNs. 
+
+# 3 Overflow Attacks on CKKS Networks 
+
+Computing Eval (fπ , Enc (x)) over encrypted data is a total function which always returns some value. Whether such value approximately matches the expected result is discovered only at decryption time. We say that a decryption fails if the norm of the underlying plaintext is larger than half the modulus; this induces a wrap around the modulus yielding almost randomly looking results. To emphasize the latter, we propose an extended definition of CKKS NNs which makes decryption failures explicit: 
+
+Definition 3.1 (CKKS Network with Failure Semantics) . We modify the definition of CKKS networks such that the output function’s range includes an additional value, ⊥, which indicates failure of the computation. We call the modified function f ⊥ 
+
+> CKKS
+
+: I → RO ∪ {⊥} .While the output of f ⊥
+
+> CKKS
+
+(x) is stochastic, due to the cryptographic noise eCKKS , we aim to check whether there exist inputs x ∈ I that almost always cause a corrupt output f ⊥
+
+> CKKS
+
+(x) = ⊥. We posit the existence of overflow attacks which induce failures (i.e. f ⊥ 
+
+> CKKS
+
+(x) = ⊥) with high probability: 
+
+Definition 3.2 (Attacks and Robustness) . Let fπ : I → RO be a polynomial network with expected ranges [l(l), u(l)] for all layers l. An input x ∈ I is an overflow attack on fπ iff there is a layer l where 
+
+f (l) 
+
+> π
+
+(x)̸ ∈ [l(l), u(l)]. The network fπ is overflow robust (on I) if no overflow attacks on fπ exist. As the polynomial functions used for activation function approximation are typically only well-behaved on the interval l(l), u(l) (see also Figure 3 and Section 2.3), inputs outside this range typically induce large-scale deviations between f and fπ which yield arithmetical errors. Indeed, as we show below, such inputs can easily be constructed. 
+
+Finding overflows. To uncover vulnerabilities in CKKS NNs that are not overflow robust, we leverage classic techniques from adversarial example generation: For a given input x ∈ I we generate random noise δ which we use to produce a perturbed version of the input (denoted γ(x, δ)). We then use projected gradient descent [ 21 ] to optimize δ in order to find inputs which violate the internal bound assumptions of fπ . As direct optimization on fπ is numerically instable, we optimize w.r.t. f
+
+by pushing the internal activation values (i.e. f (l) (x) for some inner layer l of the NN) outside the interval used for approximation. To this end, note that the internal activation values of f and fπ are tightly related (until the latter violates its bound) and thus act as a natural surrogate. Formally, we maximize the distance of internal activation values to the interval centre point (u(l) + l(l))/2:
+
+X
+
+> j
+
+
+
+f (l)(γ(x, δ)) 
+
+
+
+> j
+
+−
+
+
+
+u(l) 
+
+> j
+
++ l(l)
+
+> j
+
+
+
+/2
+
+> ∞
+
+.
+
+Empirical evidence. As we will show in Section 5.2, CKKS circuits constructed via sampled bounds are vulnerable to overflow attacks for realistic inputs (see examples for CIFAR in Figure 1). 
+
+# 4 Avoiding Overflows by Certified Design 
+
+Given a neural network f , we propose a method to construct robust CKKS circuits in the sense of Definition 3.2, i.e. NNs fπ without overflows, while simultaneously bounding the output difference 
+
+∥fπ (x) − f (x)∥∞. Our approach transforms f into its polynomial version fπ by iteratively rewriting its layers. For each layer l, we first compute provable bounds such that f (l) 
+
+> π
+
+(x) ∈ [l(l), u(l)] for all 
+
+x ∈ I (Section 4.1). Linear layers then remain unchanged while activation functions are substituted by a polynomial approximation, obtained on the fly for the interval [l(l), u(l)] using the Remez algorithm [ 22 ]. The algorithm relies on a bound for the maximum (local) error between the activation function and its approximation (Section 4.2) which is taken into account for the range analysis in subsequent layers. We additionally leverage differential verification via zonotopes [ 23 ] to compute bounds on the difference ∥f (l) 
+
+> π
+
+(x) − f (l)(x)∥∞ (Section 4.4). Furthermore, we provide a direct translation from the generated polynomial network fπ to a CKKS circuit (Appendix D). 54.1 Sound Range Analysis for Polynomial Networks 
+
+We construct the polynomial NN fπ from a given NN f by iteratively substituting a non-linear activation function σ(l) in layer l by its polynomial approximation π(l). We compute the latter using the Remez algorithm [ 22 ] which requires a method for computing a sound bound on |π(l)(x)−σ(l)(x)|
+
+(discussed in Section 4.2) and an approximation range [l(l), u(l)].To compute valid ranges for f (l) 
+
+> π
+
+(beyond the first polynomial layer) it is insufficient to analyse NN f
+
+in isolation, as its output bounds also depend on the polynomial approximation errors introduced in earlier layers. To this end, we follow the approach by Manino et al. [13 ]: For each activation function 
+
+σ(l) substituted by π(l) with |π(l)(x) − σ(l)(x)| ≤ ϵ(l), we augment the original NN f (x) by an input δ(l) ∈ [−ϵ(l), ϵ(l)] modelling the perturbation which yields the relaxed NN ˜f (x, δ). We then bound layer l by solving the following optimization problem over ˜f :
+
+min / max ˜y(l) s.t. 
+
+
+
+˜y(j) = W (j)y(j−1) + b(j)
+
+y(j) = σ(j) 
+
+˜y(j)
+
++ δ(j), δ(j) ∈ [−ϵ(j), ϵ(j)] for j ≤ l (2) As ˜f is a standard NN (only using activations σ(l) instead of polynomials π(l)), we can use state-of-the-art NN verifiers [ 24 ] to obtain guaranteed bounds. This approach allows us to construct fπ in a single pass over f with the soundness guarantee given in Theorem 4.1 (see proof on page 31). Below, we describe how errors on the fπ are bounded locally (Section 4.2) and globally (Section 4.4). 
+
+Theorem 4.1 (Soundness) . For any neural network f with input space I, the construction approach given in Section 4.1 yields a network fπ robust to overflow attacks on I (see Definition 3.2). 
+
+4.2 Piecewise-Polynomial Overapproximation of Activation Functions 
+
+Computing bounds on the univariate approximation error π(l)(x) − σ(l)(x) is indispensable for our approach and for the Remez algorithm [ 22 ] to fit high-quality polynomial approximations. Prior work on verified approximation of ReLU( x) = max (0 , x ) uses its piecewise linearity [ 14 ]. This allows bounding the approximation error π(x)−ReLU( x) by finding the extrema of the polynomials π(x)−0
+
+for x ≤ 0 and π(x) − x for x ≥ 0. Finding the extrema of a polynomial π(x) in Chebyshev basis reduces to finding the eigenvalues 3of the Colleague matrix associated with its derivative ddx π(x) [25 ]. We extend this approach to activation functions that are monotonically linear almost everywhere :
+
+Definition 4.1 (Monotonically Linear Almost Everywhere) . A function g : R → R is monotonically linear almost everywhere iff it has bounded total variation (see Section E.1), there are a1, a 2, b 1, b 2 ∈
+
+R with lim x→∞ (g (x) − (a1x + b1)) = lim x→−∞ (g (x) − (a2x + b2)) = 0 and there are c1, c 2 ∈
+
+R such that g (x) − (a1x + b1) (resp. g (x) − (a2x + b2)) is monotonic on (−∞ , c 1] (resp. [c2, ∞)). Many activation functions (e.g. ReLU, GELU or Sigmoid) satisfy this property (see Table 7). We propose to address functions σ(l) of this type via piecewise polynomial approximations of the form 
+
+q(x) = 1x≤d0 (x) · (a1x + b1) + 
+
+> n
+
+X
+
+> i=1
+
+1x∈(di−1,d i](x) · qi (x) + 1x>d n (x) · (a2x + b2)
+
+with known approximation error ϵq ≥ | q(x) − σ(x)| for all x ∈ R (with d0 ≤ c1, d n ≥ c2, and the indicator function 1p(x)(x) ∈ { 0, 1} being 1 for x iff p(x)). We can then use q(x) as a surrogate in the Remez algorithm to fit a polynomial π(l)(x) ≈ q(x) ≈ σ(l)(x) and bound its approximation error 
+
+|π(x) − σ(x)| ≤ | π(x) − q(x)| + |q(x) − σ(x)| ≤ ϵπ + ϵq , (3) where finding ϵπ reduces to n + 1 computations of polynomial extrema and ϵq is a known constant. We can always construct such a function q(x) given a target tolerance ϵq . To this end, we first find points d0 ≤ c1, d n ≥ c2 with |aix + bi − σ(x)| ≤ ϵq via binary search. Then, we use Chebyshev approximation to find polynomials qi(x) ≈ σ(x) over partitions of [d0, d n]. Given concrete qi(x),we use interval arithmetic [ 26 ] to check if |qi(x) − σ(x)| ≤ ϵq over the interval of interest. If the target tolerance is violated, we increase the number of sub-intervals. While this last step is expensive, it only has to be computed once for each activation function. 
+
+> 3This works assumes the correctness of numerically computed eigenvalues.
+
+64.3 Polynomial Activations and Smoothness of Functions 
+
+The smoother an activation σ : R → R is, the faster its polynomial approximation er-ror converges to zero. Trefethen et al. [ 25 ] give the following bounds for the error of degree n Chebyshev polynomial approximations πn(x) ≈ σ(x) (w.l.o.g. x ∈ [−1, 1] ): 
+
+|σ(x) − πn(x)| ≤ 4Vπν (n − ν)ν (4) |σ(x) − πn(x)| ≤ 4M ρ −n
+
+ρ − 1 (5) Equation (4) holds, if σ is ν times differentiable, n > ν and V = V[−1,1] (σ(ν)) is the total varia-tion (see Appendix E.1) of the ν-th derivative of σ. Equation (5) is applicable to activations that are analytic over [−1, 1] (their Taylor expansion converges to σ for any x ∈ [−1, 1] ). Here, con-vergence is affected by M = max x∈Eρ |σ(x)|, where a larger ρ for the Bernstein ellipse Eρ (see Appendix E.2) indicates that σ can be analytically continued further into the complex plane. V and 
+
+M are independent of n.
+
+Figure 4: Approximation error for different activation functions: Smooth functions converge faster. The first bound implies that the approximation error decays with rate O(n−ν ), i.e. faster with the number of times σ is differentiable. If σ meets the criteria of the second bound, then the error decays at an even faster rate O(ρn) depending on how far σ can be analytically continued into the complex plane. The effects of these bounds is visualised in Figure 4: The approximation error for the once-differentiable ELU activation converges faster than the error for the non-differentiable ReLU 
+
+function. The errors for the analytic functions Sigm (x) = 1 /(1 + e−x) and SiLU( x) = x · Sigm (x)
+
+converge much faster. While Sigm (x) and SiLU( x) have poles at x = ±πi , GELU( x) can be analytically continued to the entire complex plane. Therefore, we see even faster convergence for this activation functions – at least before convergence of the approximation error levels off due to limits of floating point accuracy. Consequently, SiLU and even more so GELU makes precise polynomial approximation of neural networks easier. 
+
+4.4 Differential Bounds via Differential Verification 
+
+Construction of fπ according to Section 4.1 guarantees robustness, but we also desire bounds on the deviation ∥fπ (x) − f (x)∥∞ between the polynomial and the original NN. Prior work shows that standard verifiers struggle to tightly bound the difference between two NNs [ 27 , 28 , 23 ]. However, when NNs have the same architecture and similar weights, approaches for differential verification [ 27 –29, 23] produce tighter bounds by propagating local bounds on the difference through the NN. To this end, note that the difference ˜∆(l) = ˜ y(l)1 − ˜y(l)2 between two pre-activation values can be expressed in terms of the difference ∆(l−1) = y(l−1) 1 − y(l−1) 2 between the results of the previous layer via the identity ˜∆(l) = ( W1 − W2) y2+W1∆(l−1) +( b1 − b2) . The post-activation difference can be similarly rewritten as ∆(l) = σ(l)1 (˜ y(l)1 ) − σ(l)2 (˜ y(l)2 ) = σ(l)1 (˜ y(l)1 ) − σ(l)2 (˜ y(l)1 − ˜∆(l)).7As common for NN verifiers, differential verification also leverages linear over-approximations for activation functions. While existing work provides relaxations for the bivariate non-linearity 
+
+σ(l)1 (x) − σ(l)2 (x − ∆) for σ(l)1 = σ(l)2 with bounded derivative [ 29 ], it cannot handle polynomial 
+
+σ(l)1 for σ(l)2̸ = ReLU . Building on the relaxation by Banerjee et al. [29 ], we extend the differential verification tool V ERY DIFF [ 23 ] with parallel linear relaxations for this case (see proof on page 33): 
+
+Theorem 4.2 (p-σ Relaxation) . Given bounds x ∈ [lx, u x], y ∈ [ly , u y ], ∆ ∈ [l∆, u ∆], activation function σ(x) with derivative bounds ∂l ≤ ddx σ(x) ≤ ∂u for all x ∈ [min( lx, l y ), max( ux, u y )] and polynomial p(x) with ϵ = max x∈[lx,u x] |p(x) − σ(x)|, the activation difference is bounded by 
+
+α · ∆ + βl − ϵ ≤ p(x) − σ(x − ∆) ≤ α · ∆ + βu + ϵ , (6) 
+
+where 
+
+α = 12 (αl + αu), βl =
+
+(
+
+λll∆ + ˆβl , λ l ≥ 0
+
+λlu∆ + ˆβl , λ l < 0 , βu =
+
+(
+
+λul∆ + ˆβu , λ u ≤ 0
+
+λuu∆ + ˆβu , λ u > 0 ,
+
+The αl, α u, β l, β u are the parameters of the non-parallel linear relaxations given by RAVEN [29 ] as 
+
+αl =
+
+
+
+∂l , l ∆ ≥ 0
+
+∂u , u ∆ ≤ 0 
+
+> ∂lu∆−∂ul∆
+> u∆−l∆
+
+, otw. 
+
+, αu =
+
+
+
+∂u, l∆ ≥ 0
+
+∂l, u∆ ≤ 0 
+
+> ∂uu∆−∂ll∆
+> u∆−l∆
+
+, otw. 
+
+,
+
+ˆβl = − ˆβu = (∂u−∂l)l∆u∆ 
+
+> u∆−l∆
+
+,λl = ( α − αl),λu = ( α − αu) .
+
+# 5 Experiments 
+
+Our experiments 4 are designed to (i) evaluate the impact of each contribution on the performance of our approach (Section 5.1), (ii) show the existence of overflow attacks (Section 5.2), and (iii) demonstrate that certified design yields comparable accuracy for plaintext and encrypted inference (Section 5.3). We evaluate on fully connected (FC) NNs trained on the HELOC (Home Equity Line of Credit) [ 30 ], MNIST [ 20 ] and EC (Energy Consumption) [ 31 ] datasets, as well as convolutional (Conv) NNs trained on CIFAR10 [ 32 ]. We further retrained FC NNs based on the NN4Sys benchmark [ 33 ] for learned index prediction and Conv NNs for remaining useful life prediction (Collins RUL) [ 34 ]taken from the annual NN verification competition VNNC OMP [ 35 ]. Overall, the NNs cover a wide range of sizes containing between 64 and 10300 neurons.Following prior work on certified design of polynomial NNs based on ReLU NNs [ 14 ], we trained all NNs with L1 regularization to encourage tighter pre-activation bounds. Experiments for plaintext NNs were run on Ubuntu with 4-Core Intel Xeon E5-1630v3 and 128 GiB of RAM. CKKS inference on a M5 Max CPU with 36 GiB of RAM. Additional evaluation results can be found in Appendix H. 
+
+5.1 Ablation Study 
+
+We construct polynomial NNs approximating a base NN for multiple values of the polynomial degree d and measure the verifiable and maximally observed error (w.r.t. to the respective dataset). Comparing the error metrics between different construction settings enables us to evaluate the effect of our individual contributions. To show the effects on FC and Conv NNs, we report the results for the MNIST 4 × 256 NN and the small Collins RUL NN ( [1600 , 2400 , 800 , 600 , 100] neurons per layer). 
+
+GELU vs. ReLU networks. Figure 5 clearly shows that the approximation error for GELU NNs is far smaller than for NNs with ReLU activation. This effect gets stronger with increasing d.
+
+Heterogeneous vs. uniform polynomial layers. Error values when using different polynomial activations in the same layer are significantly smaller than the uniform baseline. 
+
+Verified vs. sampled bounds. Using sampled pre-activation bounds leads to substantially smaller sampled error values. This is expected as sampled values (even if bounds are widened by a constant factor) do not suffer from overapproximation to the same extent as bounds computed using NN verification techniques. However, these polynomial NNs are prone to overflow attacks. Moreover, the above effect is only valid if we fix the activation function: When we compare the sampled error  
+
+> 4The source code is available at https://github.com/lorenzorovida/encrypted-neural-networks-without-overflows
+
+8Figure 5: Verified bound on the error |fπ (x) − f (x)| for networks with verified pre-activation bounds and error values sampled for networks constructed using sampled bounds. We show results for ReLU 
+
+and GELU networks with heterogeneous polynomials per layer vs. networks with a single uniform 
+
+polynomial per layer. for ReLU NNs with sampling-based bounds to the sampling error for GELU NNs with verified bounds, the GELU NNs achieve a better or similar approximation error already for d ≤ 40 on both MNIST and Collins RUL. The effect is even more pronounced comparing ReLU NNs with a single polynomial per layerand sampled bounds to verified GELU NNs with multiple polynomials per layer. 
+
+5.2 Vulnerability of Sampling-Based Networks 
+
+To demonstrate the vulnerability of sampling-based CKKS network construction to overflow attacks, we deploy the attack described in Section 3 on classification NNs for tabular data (HELOC [ 30 ]), handwritten digit classification (MNIST [ 20 ]), and image classification (CIFAR [ 32 ]). We compare the vulnerability of a CKKS network constructed via sampled bounds to the vulnerability of an NN constructed with our approach. In both cases, we use GeLU activation functions and heterogeneous polynomials. Table 1 provides an overview: Attacks are successful with non-zero probability on all NNs with sampled bounds. As expected, our approach is robust to the attacks. 
+
+Results. For HELOC we generate sampled bounds using the first half of the dataset and use the other half for our attack. We allow perturbations of 15% w.r.t. each feature’s range. To discretize values, our attack uses a straight-through-estimator [36]. We find three attacks on the sampled NN. For MNIST we generate sampled bounds using the original MNIST dataset. Our attack is performed using the USPS dataset [ 37 ] (same input configuration and task setting). We allow rotations of up to 
+
+23 ◦, translation by up to 20% and L∞-noise of up to ε = 5 /255 . We find our attack is successful in approx. 12.3% of cases and produces realistic inputs (see also Figure 9). For CIFAR we generate sampled bounds using the original CIFAR dataset. We perform our attack using the independent CIFAR10.1 dataset [ 38 , 39 ] (same input configuration and task setting). We allow rotations of 17 ◦ and L∞ noise of up to ε = 15 /255 (no translation due to non-black background in images). We find vulnerabilities in both the small and deep CIFAR NN. For the latter we find our attack succeeds on 46 .7% of images (see also Figure 11). 
+
+Reproduction in CKKS Circuit and Discussion. Our attack initially only searches for perturba-tions that push the polynomial NN fπ outside its bounds. As discussed in Section 3, this overflow is likely to induce arithmetic errors on the CKKS circuit. Indeed, we validated our attack on a subset of MNIST attacks where we showed that all successful attacks on fπ lead to arithmetic errors in the CKKS circuit. This underscores the importance of eliminating overflows. As shown in Table 1, our certified design eliminates overflows without major impacts on the NN’s accuracy. 
+
+5.3 Certified Design at Scale 
+
+Here, we measure the verified error, cryptographic error, and predictive accuracy of our certified design. As per Section 5.1, we select GELU NNs, compute verified pre-activation bounds and fit multiple polynomials per layer. 9Table 1: Accuracy and attack success for sampling-based and certified classification networks: Accuracy and sampled bounds are computed via “Bounds / Eval”; attacks based on “Attack” dataset.                                      
+
+> Network Size Dataset Accuracy Attack Success
+> (smaller is better)
+> Bounds / Eval Attack Sampled Certified Sampled Certified HELOC [64 ,32] HELOC (1) HELOC (2) 71.86% 71.86% 0.05% 0.0% MNIST 4x256 MNIST USPS 97.80% 97.80% 12.30% 0.0% CIFAR10 small CIFAR 10 CIFAR 10.1 69.54% 69.50% 0.10% 0.0%
+> deep CIFAR 10 CIFAR 10.1 77.28% 75.13% 46.70% 0.0%
+
+The results in Table 2 show only very minor drops in classification accuracy (HELOC, MNIST, CIFAR), mean squared error (EC, RUL), or mean absolute error (NN4Sys). Although the verified bound on the approximation error |fπ (x) − f (x)| increases with network size, it is still fairly tight for most NNs – especially when compared to their typical output ranges. We also show the maximum CKKS error |f ⊥
+
+> CKKS
+
+(x) − fπ (x)| obtained over a sample of the respective dataset. Table 2: Verified error bounds and cryptographic error of certified FHE inference. We also report accuracy (for classification NNs) and mean squared error or mean absolute error (for regression NNs) for the origial and the polynomial NNs.                                                                                   
+
+> Network Size σOutput range (sampled) Acc, MSE, MAE of f
+> Poly degree Acc, MSE, MAE of fπ
+> Verified error CKKS error HELOC [64 ,32] GELU [−4.48 ,2.87] 72 .25% 27 72 .25% 3.76e-6 10 −9
+> MNIST 4×256 GELU [−18 .87 ,25 .03] 98 .93% 119 98 .93% 3.08e-4 10 −7
+> CIFAR10 small GELU [−13 .93 ,17 .21] 69 .56% 247 69 .50% 0.93 10 −4
+> large GELU [−14 .67 ,20 .28] 77 .28% 247 75 .13% 18 .64 10 −4
+> EC 1×64 GELU [0 .21 ,1.96] 0.0844 27 0.0844 3.64e-7 10 −6
+> NN4Sys 5×128 GELU [0 .00 ,1.00] 2.93 e-4 59 2.93 e-4 1.15e-5 10 −10
+> Collins RUL small GELU [0 .96 ,634 .80] 527 .89 119 527 .93 3.87 10 −1
+> large GELU [0 .38 ,615 .81] 699 .21 119 686 .50 9.28 10 −4
+
+More details about how the CKKS experiments have been performed are given in Appendix D. Additionally, as discussed in Section C, our design has a positive impact over the IND-CPA D security of the whole solution — which can be seen as a contribution of independent interest. 
+
+# 6 Conclusions and Directions for Future Work 
+
+In this paper, we demonstrate for the first time the vulnerability of current CKKS-based neural networks to overflow attacks. To solve this, we provide a framework to design certified neural networks. By construction, our approach yields networks that are provably overflow robust on the full input space, without sacrificing predictive performance. 
+
+Limitations and future work. We see this work as a starting point for more robust FHE inference. Precise modelling of the CKKS noise like in [ 40 , 41 ] could strengthen our bounds to include eCKKS .Extending our certified design to arbitrary depth networks is possible in theory but requires the inclusion of bootstrapping and co-design of convolution layers [ 42 ] to reduce the CKKS noise. Finally, our method may occasionally generate polynomials with ill-scaled coefficients, which cause a reduction on the CKKS precision. 
+
+# Acknowledgments and Disclosure of Funding 
+
+L. Rovida was partially supported by project SERICS (PE00000014) under the MUR National Recovery and Resilience Plan funded by the European Union — NextGenerationEU. S. Teuber was supported by funding from the pilot program Core-Informatics of the Helmholtz Association (HGF). 10 This work is also supported by the Helmholtz Association Initiative and Networking Fund on the HAICORE@KIT partition. 
+
+# References 
+
+[1] Bernardo Pulido-Gaytan, Andrei Tchernykh, Jorge M Cortés-Mendoza, Mikhail Babenko, Gleb Radchenko, Arutyun Avetisyan, and Alexander Yu Drozdov. Privacy-preserving neural networks with homomorphic encryption: C hallenges and opportunities. Peer-to-Peer Networking and Applications , 14(3):1666–1691, 2021. [2] Mauro Ribeiro, Katarina Grolinger, and Miriam A.M. Capretz. Mlaas: Machine learning as a service. In 2015 IEEE 14th International Conference on Machine Learning and Applications (ICMLA) , pages 896–902, 2015. doi: 10.1109/ICMLA.2015.152. [3] Zvika Brakerski, Craig Gentry, and Vinod Vaikuntanathan. (leveled) fully homomorphic en-cryption without bootstrapping. In Proceedings of the 3rd Innovations in Theoretical Computer Science Conference , ITCS ’12, pages 309–325, 2012. [4] Zvika Brakerski. Fully homomorphic encryption without modulus switching from classical gapsvp. In Advances in Cryptology – CRYPTO 2012 , CRYPTO ’12, pages 868–886, 2012. [5] Junfeng Fan and Frederik Vercauteren. Somewhat practical fully homomorphic encryption. Cryptology ePrint Archive, Paper 2012/144, 2012. [6] Ilaria Chillotti, Nicolas Gama, Mariya Georgieva, and Malika Izabachène. Faster fully ho-momorphic encryption: Bootstrapping in less than 0.1 seconds. In Advances in Cryptology – ASIACRYPT 2016 , pages 3–33, 2016. [7] Jung Hee Cheon, Andrey Kim, Miran Kim, and Yongsoo Song. Homomorphic encryption for arithmetic of approximate numbers. In Advances in Cryptology – ASIACRYPT 2017 , pages 409–437, 2017. [8] Junghyun Lee, Eunsang Lee, Joon-Woo Lee, Yongjune Kim, Young-Sik Kim, and Jong-Seon No. Precise approximation of convolutional neural networks for homomorphically encrypted data. IEEE Access , 11:62062–62076, 2023. doi: 10.1109/ACCESS.2023.3287564. [9] Lorenzo Rovida and Alberto Leporati. Transformer-based language models and homomorphic encryption: An intersection with bert-tiny. In Proceedings of the 10th ACM International Workshop on Security and Privacy Analytics , pages 3–13, 2024. [10] Jaiyoung Park, Sejin Park, Jai Hyun Park, Jung Ho Ahn, Jung Hee Cheon, Guillaume Hanrot, Jung Woo Kim, Minje Park, and Damien Stehlé. Scaling up privacy-preserving ML: A CKKS implementation of Llama-2-7B, 2026. [11] Eunsang Lee, Joon-Woo Lee, Jong-Seon No, and Young-Sik Kim. Minimax approximation of sign function by composite polynomial for homomorphic comparison. IEEE Transactions on Dependable and Secure Computing , 19(6):3711–3727, 2022. doi: 10.1109/TDSC.2021. 3105111. [12] Austin Ebel, Karthik Garimella, and Brandon Reagen. Orion: A fully homomorphic encryption framework for deep learning. In Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 ,ASPLOS ’25, page 734–749, New York, NY, USA, 2025. Association for Computing Machinery. ISBN 9798400710797. doi: 10.1145/3676641.3716008. URL https://doi.org/10.1145/ 3676641.3716008 .[13] Edoardo Manino, Bernardo Magri, Mustafa A Mustafa, and Lucas C Cordeiro. Certified private inference on neural networks via lipschitz-guided abstraction refinement. In 6th Workshop on Formal Methods for ML-Enabled Autonomous Systems (FoMLAS 2023), July 17-18, 2023, Paris, France , 2023. [14] Philipp Kern, Edoardo Manino, and Carsten Sinz. Certified error analysis of homomorphically encrypted neural networks. In Mirco Giacobbe and Anna Lukina, editors, AI Verification , pages 156–179, Cham, 2026. Springer Nature Switzerland. ISBN 978-3-031-99991-8. 11 [15] Michael S Paterson and Larry J Stockmeyer. On the number of nonscalar multiplications necessary to evaluate polynomials. SIAM Journal on Computing , 2(1):60–66, 1973. [16] Hao Chen, Ilaria Chillotti, and Yongsoo Song. Improved bootstrapping for approximate homomorphic encryption. In Advances in Cryptology – EUROCRYPT 2019 , pages 34–54, 2019. [17] Ahmad Al Badawi, Jack Bates, Flavio Bergamaschi, David Bruce Cousins, Saroja Erabelli, Nicholas Genise, Shai Halevi, Hamish Hunt, Andrey Kim, Yongwoo Lee, Zeyu Liu, Daniele Micciancio, Ian Quah, Yuriy Polyakov, Saraswathy R.V., Kurt Rohloff, Jonathan Saylor, Dmitriy Suponitsky, Matthew Triplett, Vinod Vaikuntanathan, and Vincent Zucca. Openfhe: Open-source fully homomorphic encryption library. In Proceedings of the 10th Workshop on Encrypted Computing & Applied Homomorphic Cryptography , WAHC’22, page 53–63, 2022. [18] Vadim Lyubashevsky, Chris Peikert, and Oded Regev. On ideal lattices and learning with errors over rings. In Advances in Cryptology – EUROCRYPT 2010 , pages 1–23, 2010. [19] Jung Hee Cheon, Kyoohyung Han, Andrey Kim, Miran Kim, and Yongsoo Song. Bootstrapping for approximate homomorphic encryption. In Advances in Cryptology – EUROCRYPT 2018 ,pages 360–384, 2018. [20] Joon-Woo Lee, Hyungchul Kang, Yongwoo Lee, Woosuk Choi, Jieun Eom, Maxim Deryabin, Eunsang Lee, Junghyun Lee, Donghoon Yoo, Young-Sik Kim, and Jong-Seon No. Privacy-preserving machine learning with fully homomorphic encryption for deep neural network. IEEE Access , 10:30039–30054, 2022. doi: 10.1109/ACCESS.2022.3159694. [21] Aleksander Madry, Aleksandar Makelov, Ludwig Schmidt, Dimitris Tsipras, and Adrian Vladu. Towards deep learning models resistant to adversarial attacks. In 6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May 3, 2018, Conference Track Proceedings . OpenReview.net, 2018. URL https://openreview.net/ forum?id=rJzIBfZAb .[22] Eugene Remes. Sur un procédé convergent d’approximations successives pour déterminer les polynômes d’approximation. CR Acad. Sci. Paris , 198:2063–2065, 1934. [23] Samuel Teuber, Philipp Kern, Marvin Janzen, and Bernhard Beckert. Revisiting differential verification: Equivalence verification with confidence. In Arie Gurfinkel and Marijn Heule, editors, Tools and Algorithms for the Construction and Analysis of Systems - 31st International Conference, TACAS 2025, Held as Part of the International Joint Conferences on Theory and Practice of Software, ETAPS 2025, Hamilton, ON, Canada, May 3-8, 2025, Proceedings, Part II , Lecture Notes in Computer Science, pages 257–278. Springer, 2025. doi: 10.1007/ 978-3-031-90653-4\_13. URL https://doi.org/10.1007/978-3-031-90653-4_13 .[24] Kaidi Xu, Huan Zhang, Shiqi Wang, Yihan Wang, Suman Jana, Xue Lin, and Cho-Jui Hsieh. Fast and complete: Enabling complete neural network verification with rapid and massively parallel incomplete verifiers. In Proc. of the 9th International Conference on Learning Repre-sentations(ICLR’21), Virtual Event, Austria, May 3-7, 2021 . OpenReview.net, 2021. [25] Lloyd N. Trefethen. Approximation Theory and Approximation Practice . SIAM, 2019. URL 
+
+https://epubs.siam.org/doi/book/10.1137/1.9781611975949 .[26] Ramon E. Moore. Interval Analysis . Prentice-Hall, Englewood Cliffs, NJ, 1966. [27] Brandon Paulsen, Jingbo Wang, and Chao Wang. ReluDiff: differential verification of deep neural networks. In Gregg Rothermel and Doo-Hwan Bae, editors, ICSE ’20: 42nd International Conference on Software Engineering, Seoul, South Korea, 27 June - 19 July, 2020 , pages 714– 726. ACM, 2020. doi: 10.1145/3377811.3380337. [28] Brandon Paulsen, Jingbo Wang, Jiawei Wang, and Chao Wang. NeuroDiff: scalable differential verification of neural networks using fine-grained approximation. In 35th IEEE/ACM Inter-national Conference on Automated Software Engineering, ASE 2020, Melbourne, Australia, September 21-25, 2020 , pages 784–796. IEEE, 2020. doi: 10.1145/3324884.3416560. 12 [29] Debangshu Banerjee, Changming Xu, and Gagandeep Singh. Input-relational verification of deep neural networks. Proc. ACM Program. Lang. , 8(PLDI):1–27, 2024. doi: 10.1145/3656377. URL https://doi.org/10.1145/3656377 .[30] FICO. Fico explainable machine learning challenge, 2018. URL https://community.fico. com/s/explainable-machinelearning-challenge .[31] Commission for Energy Regulation. Electricity smart metering customer behaviour trials (cbt) findings report, 2011. [32] Alex Krizhevsky and Geoffrey Hinton. Learning multiple layers of features from tiny images. Technical Report 0, University of Toronto, Toronto, Ontario, 2009. URL https://www.cs. toronto.edu/~kriz/learning-features-2009-TR.pdf .[33] Shuyi Lin, Haoyu He, Tianhao Wei, Kaidi Xu, Huan Zhang, Gagandeep Singh, Changliu Liu, and Cheng Tan. Nn4sysbench: Characterizing neural network verification for computer systems. In Amir Globersons, Lester Mackey, Danielle Belgrave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng Zhang, editors, Advances in Neural Information Processing Systems 38: Annual Conference on Neural Information Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December 10 - 15, 2024 , 2024. URL http://papers.nips.cc/paper_files/ paper/2024/hash/a652ef11196e949d079e2818574e7e3d-Abstract-Datasets_and_ Benchmarks_Track.html .[34] Dmitrii Kirov, Simone Fulvio Rollini, Luigi Di Guglielmo, and Darren D. Cofer. Formal verification of a neural network based prognostics system for aircraft equipment. In Bernhard Steffen, editor, Bridging the Gap Between AI and Reality - First International Conference, AISoLA 2023, Crete, Greece, October 23-28, 2023, Proceedings , Lecture Notes in Computer Science, pages 225–240. Springer, 2023. doi: 10.1007/978-3-031-46002-9\_13. URL https: //doi.org/10.1007/978-3-031-46002-9_13 .[35] Konstantin Kaulen, Tobias Ladner, Stanley Bak, Christopher Brix, Hai Duong, Thomas Flinkow, Taylor T. Johnson, Lukas Koller, Edoardo Manino, ThanhVu H. Nguyen, and Haoze Wu. The 6th international verification of neural networks competition (VNN-COMP 2025): Summary and results. CoRR , abs/2512.19007, 2025. doi: 10.48550/ARXIV.2512.19007. URL https: //doi.org/10.48550/arXiv.2512.19007 .[36] Yoshua Bengio, Nicholas Léonard, and Aaron C. Courville. Estimating or propagating gradients through stochastic neurons for conditional computation. CoRR , abs/1308.3432, 2013. URL 
+
+http://arxiv.org/abs/1308.3432 .[37] Jonathan J. Hull. A database for handwritten text recognition research. IEEE Trans. Pattern Anal. Mach. Intell. , 16(5):550–554, 1994. doi: 10.1109/34.291440. URL https://doi.org/ 10.1109/34.291440 .[38] Antonio Torralba, Rob Fergus, and William T. Freeman. 80 million tiny images: A large data set for nonparametric object and scene recognition. IEEE Transactions on Pattern Analysis and Machine Intelligence , 30(11):1958–1970, 2008. [39] Benjamin Recht, Rebecca Roelofs, Ludwig Schmidt, and Vaishaal Shankar. Do cifar-10 classifiers generalize to cifar-10? 2018. https://arxiv.org/abs/1806.00451 .[40] Anamaria Costache, Benjamin R. Curtis, Erin Hales, Sean Murphy, Tabitha Ogilvie, and Rachel Player. On the precision loss in approximate homomorphic encryption. In Selected Areas in Cryptography – SAC 2023: 30th International Conference, Fredericton, Canada, August 14–18, 2023, Revised Selected Papers , pages 325–345, 2023. [41] Jean-Philippe Bossuat, Anamaria Costache, Christian Mouchet, Lea Nürnberger, and Juan Ramón Troncoso-Pastoriza. Accurate and composable noise estimates for CKKS with application to exact HE computation. IACR Communications in Cryptology , 2(2), 2025. [42] Jae Hyung Ju, Jaiyoung Park, Jongmin Kim, Minsik Kang, Donghwan Kim, Jung Hee Cheon, and Jung Ho Ahn. Neujeans: Private neural network inference with joint optimization of convolution and fhe bootstrapping. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security , CCS ’24, pages 4361–4375, 2024. 13 [43] R L Rivest, L Adleman, and M L Dertouzos. On data banks and privacy homomorphisms. 
+
+Foundations of Secure Computation, Academia Press , pages 169–179, 1978. [44] Craig Gentry. Fully homomorphic encryption using ideal lattices. In Proceedings of the Forty-First Annual ACM Symposium on Theory of Computing , STOC ’09, pages 169–178, 2009. [45] Oded Regev. On lattices, learning with errors, random linear codes, and cryptography. J. ACM ,56(6), September 2009. [46] Léo Ducas and Daniele Micciancio. Fhew: Bootstrapping homomorphic encryption in less than a second. In Advances in Cryptology – EUROCRYPT 2015 , pages 617–640, 2015. [47] Craig Gentry, Amit Sahai, and Brent Waters. Homomorphic encryption from learning with errors: Conceptually-simpler, asymptotically-faster, attribute-based. In Advances in Cryptology – CRYPTO 2013 , pages 75–92, 2013. [48] Adrien Benamira, Tristan Guérand, Thomas Peyrin, and Sayandeep Saha. TT-TFHE: a torus fully homomorphic encryption-friendly neural network architecture. Transactions on Machine Learning Research , 2025. [49] N. P. Smart and F. Vercauteren. Fully homomorphic simd operations. Design, Codes and Cryptography , 71(1):57–81, 4 2014. [50] Pierre-Emmanuel Clet, Oana Stan, and Martin Zuber. Bfv, ckks, tfhe: Which one is the best for a secure neural network evaluation in the cloud? In Applied Cryptography and Network Security Workshops , pages 279–300, 2021. [51] Hao Chen, Kim Laine, Rachel Player, and Yuhou Xia. High-precision arithmetic in homomor-phic encryption. In Topics in Cryptology – CT-RSA 2018 , pages 116–136, 2018. [52] Jung Hee Cheon, Wonhee Cho, Jaehyung Kim, and Damien Stehlé. Homomorphic multiple precision multiplication for ckks and reduced modulus consumption. In Proceedings of the 2023 ACM SIGSAC Conference on Computer and Communications Security , pages 696–710, 2023. [53] Robin Geelen and Frederik Vercauteren. Fully homomorphic encryption for cyclotomic prime moduli. In Advances in Cryptology – EUROCRYPT 2025 , EUROCRYPT ’25, page 366–397, 2025. [54] Dan Boneh and Jaehyung Kim. Homomorphic encryption for large integers from nested residue number systems. In Advances in Cryptology – CRYPTO 2025 , 2025. [55] Jaehyung Kim. Faster homomorphic integer computer. Cryptology ePrint Archive, Paper 2025/1440, 2025. URL https://eprint.iacr.org/2025/1440 .[56] Lorenzo Rovida. A flexible and polynomial framework for integer arithmetic in CKKS. Cryp-tology ePrint Archive, Paper 2026/450, 2026. [57] Hyunho Cha, Intak Hwang, Seonhong Min, Jinyeong Seo, and Yongsoo Song. Matrigear: Accelerating authenticated matrix triple generation with scalable prime fields via optimized he packing. In 2025 IEEE Symposium on Security and Privacy (S&P) , pages 2453–2471, 2025. [58] Chris Peikert, Doron Zarchy, and Guy Zyskind. High-precision exact FHE made simple, general, and fast. Cryptology ePrint Archive, Paper 2025/2321, 2025. [59] Loris Bergerat, Ilaria Chillotti, Damien Ligier, Jean-Baptiste Orfila, and Samuel Tap. Tfhe gets real: an efficient and flexible homomorphic floating-point arithmetic. IACR Transactions on Cryptographic Hardware and Embedded Systems , 2025(2):126–162, Mar. 2025. [60] Andrey Kim, Antonis Papadimitriou, and Yuriy Polyakov. Approximate homomorphic encryp-tion with reduced approximation error. In Topics in Cryptology – CT-RSA 2022: Cryptographers’ Track at the RSA Conference 2022, Virtual Event, March 1–2, 2022, Proceedings , pages 120– 144, 2022. 14 [61] Nir Drucker, Guy Moshkowich, Tomer Pelleg, and Hayim Shaul. Bleach: Cleaning errors in discrete computations over ckks. J. Cryptol. , 37(1), 11 2023. ISSN 0933-2790. doi: 10.1007/s00145-023-09483-1. [62] Baiyu Li and Daniele Micciancio. On the security of homomorphic encryption on approxi-mate numbers. In Advances in Cryptology – EUROCRYPT 2021: 40th Annual International Conference on the Theory and Applications of Cryptographic Techniques , page 648–677, 2021. [63] Jung Hee Cheon, Hyeongmin Choe, Alain Passelègue, Damien Stehlé, and Elias Suvanto. Attacks against the ind-cpad security of exact fhe schemes. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security , CCS ’24, page 2505–2519, 2024. doi: 10.1145/3658644.3690341. [64] Leo de Castro, Daniel Escudero, Adya Agrawal, Antigoni Polychroniadou, and Manuela Veloso. EncryptedLLM: Privacy-preserving large language model inference via GPU-accelerated fully homomorphic encryption. In Forty-second International Conference on Machine Learning ,2025. URL https://openreview.net/forum?id=PGNff6H1TV .[65] Lorenzo Rovida and Alberto Leporati. Encrypted image classification with low memory footprint using fully homomorphic encryption. International Journal of Neural Systems , 34 (05):2450025, 2024. doi: 10.1142/S0129065724500254. URL https://doi.org/10.1142/ S0129065724500254 . PMID: 38516871. [66] Nges Brian Njungle and Michel A. Kinsy. Activate me!: Designing efficient activation functions for privacy-preserving machine learning with fully homomorphic encryption. In Progress in Cryptology - AFRICACRYPT 2025 , pages 51–73, 2026. [67] Jean-Philippe Bossuat, Rosario Cammarota, Ilaria Chillotti, Benjamin R. Curtis, Wei Dai, Huijing Gong, Erin Hales, Duhyeong Kim, Bryan Kumara, Changmin Lee, Xianhui Lu, Carsten Maple, Alberto Pedrouzo-Ulloa, Rachel Player, Yuriy Polyakov, Luis Antonio Ruiz Lopez, Yongsoo Song, and Donggeon Yhee. Security guidelines for implementing homomorphic encryption. IACR Communications in Cryptology , 1(4), 2025. ISSN 3006-5496. doi: 10.62056/ anxra69p1. [68] Craig Gentry, Shai Halevi, and Nigel P. Smart. Better bootstrapping in fully homomorphic encryption. In Public Key Cryptography – PKC 2012 , pages 1–16, 2012. [69] Jürgen Appell, Józef Banas, and Nelson José Merentes Díaz. Bounded Variation and Around .De Gruyter, Berlin, Boston, 2014. ISBN 978-3-11-026511-8. doi: doi:10.1515/9783110265118. URL https://doi.org/10.1515/9783110265118 .[70] Haiyong Wang and Lun Zhang. Jacobi polynomials on the bernstein ellipse. J. Sci. Comput. ,75(1):457–477, April 2018. ISSN 0885-7474. doi: 10.1007/s10915-017-0542-4. URL 
+
+https://doi.org/10.1007/s10915-017-0542-4 .[71] Zhouxing Shi, Qirui Jin, Zico Kolter, Suman Jana, Cho-Jui Hsieh, and Huan Zhang. Neural network verification with branch-and-bound for general nonlinearities. In Arie Gurfinkel and Marijn Heule, editors, Tools and Algorithms for the Construction and Analysis of Systems - 31st International Conference, TACAS 2025, Held as Part of the International Joint Conferences on Theory and Practice of Software, ETAPS 2025, Hamilton, ON, Canada, May 3-8, 2025, Proceedings, Part I , Lecture Notes in Computer Science, pages 315–335. Springer, 2025. doi: 10. 1007/978-3-031-90643-5\_17. URL https://doi.org/10.1007/978-3-031-90643-5_ 17 .[72] Yuriy Biktairov and Jyotirmoy Deshmukh. SOL: sampling-based optimal linear bounding of arbitrary scalar functions. In Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023 (NeurIPS’23), New Orleans, LA, USA, December 10 - 16, 2023 , 2023. [73] Jeff Bezanson, Alan Edelman, Stefan Karpinski, and Viral B Shah. Julia: A fresh approach to numerical computing. SIAM review , 59(1):65–98, 2017. URL https://doi.org/10.1137/ 141000671 .15 [74] Y. Lecun, L. Bottou, Y. Bengio, and P. Haffner. Gradient-based learning applied to document recognition. Proceedings of the IEEE , 86(11):2278–2324, 1998. doi: 10.1109/5.726791. [75] Joppe W. Bos, Wouter Castryck, Ilia Iliashenko, and Frederik Vercauteren. Privacy-friendly fore-casting for the smart grid using homomorphic encryption and the group method of data handling. In Marc Joye and Abderrahmane Nitaj, editors, Progress in Cryptology - AFRICACRYPT 2017 ,pages 184–201, Cham, 2017. Springer International Publishing. ISBN 978-3-319-57339-7. [76] Andreas Veit, Christoph Goebel, Rohit Tidke, Christoph Doblander, and Hans-Arno Jacobsen. Household electricity demand forecasting: benchmarking state-of-the-art methods. In Proceed-ings of the 5th International Conference on Future Energy Systems , e-Energy ’14, page 233–234, New York, NY, USA, 2014. Association for Computing Machinery. ISBN 9781450328197. doi: 10.1145/2602044.2602082. URL https://doi.org/10.1145/2602044.2602082 .[77] Vladimír Kunc and Jiˇ rí Kléma. Three decades of activations: A comprehensive survey of 400 activation functions for neural networks, 2024. 
+
+# A A general overview of FHE schemes 
+
+Fully homomorphic encryption (FHE) is an advanced cryptographic primitive that, extending standard encryption, allows operations to be performed on encrypted data, without having access to the secret key. It was firstly theorized by Rivest, Adleman and Dertouzos in [ 43 ], and made possible by Gentry in its seminal work [44]. 
+
+Some modern FHE schemes. A few years after Gentry’s work, it is possible to find different approaches to build a FHE scheme from the (ring)-Learning with errors [ 45 , 18 ] hard problem, and we can group them in two categories. The first performs very fast operations but on a single integer value at a time, has an easy programming model and lighter parameters. Originally introduced by Ducas and Micciancio in FHEW [ 46 , 47 ], the reference scheme for this category is nowadays TFHE, introduced by Chillotti, Gama, Georgieva and Izabachène [ 6]. While TFHE allows one to compute arbitrary activation functions via (relatively small) lookup tables, it requires strong quantisation and lacks parallelism, which hampers its overall performance [48]. On the other hand, the second group includes schemes that allow operating on many values at the same time, following a single instruction, multiple data (SIMD) approach. The main reference schemes for this category are BGV/BFV [ 3– 5] and CKKS [ 7]. The former operate on a plaintext space of the shape Zp for some (modestly large) plaintext modulus p ∈ Z>0, and allow encoding many values in the same ciphertext [ 49 ] — thus enabling SIMD operations. We may refer to this category as exact-FHE . To see how the accumulated error can be removed during decryption, let us consider the case of BGV. There, a message m ∈ Zp is encoded as m + p · e for some small error term e. Hence, by simply evaluating a modular reduction by p, one can remove the final error. Unfortunately, this introduces a limit over the amount of values that can be encoded, namely values smaller than p. Moreover, BGV and BFV are generally considered less suitable for deep FHE neural networks as they lack an efficient way to evaluate activation functions — only additions and multiplications in Zp are available. In contrast, CKKS [ 7 ], which we may call approximate-FHE , has as its plaintext space the complex space C, and natively encodes vectors of complex numbers. It allows for approximate computations by considering the noise, naturally present for security reasons, as part of the message. Furthermore, it offers efficient primitives to compute vector operations such as element-wise additions, multiplications and rotations. For this reason, it is one of the preferred schemes for executing deep FHE neural networks [ 50 ].Currently, all the available FHE schemes are based on the hardness of the Ring-Learning With Errors (RLWE) problem [ 18 ], and, as every other lattice-based cryptography primitive, require injecting random noise during encryption process to ensure security. 
+
+Some fresh approaches. Nowadays, we can find more exotic approaches to FHE, based on the classic schemes introduced in the previous paragraph. In particular, more recent schemes focus on improving the error growth in deep circuits and on the ability to represent large plaintext rings [ 51 –56]. In particular we refer the interested reader to, e.g., GBFV [53, 57], dBFV [58], discrete-CKKS [54–56], tuple-CKKS [52]. 16 B The CKKS scheme 
+
+The Cheon-Kim-Kim-Song (CKKS) scheme, originally introduced in [ 7], currently represents the only framework to efficiently handle complex (and real) arithmetic in FHE 5. As other FHE schemes, it is lattice-based and it has a security reduction to the hardness of the ring-Learning with Errors (RLWE) problem [ 18 ]. This is a structured version of the original Learning with errors (LWE) introduced for efficiency reasons. 
+
+Definition B.1 (Ring learning with errors (RLWE) [ 18 ]) . Let χs, χ e be distributions over R := 
+
+Z[X]/(XN + 1) . The goal of the RLWE problem is to distinguish (a, x) from (a, as + e) for uniformly random a, x ∈ R Q, e ← χe, and s ← χs. The RLWE N,Q,χ e,χ e assumption is that solving the RLWE N,Q,χ e,χ e problem is unfeasible. In this work, we employ an optimized version of the CKKS scheme which uses the double Chinese Remainder Theorem (DCRT) representation of polynomials [ 60 ], implemented in the OpenFHE library [17]. 
+
+Basics of CKKS. Let N = 2 k for some integer k > 0 and Q > 0 being some large modulus. Let DFT : R[X]/(XN + 1) → CN/ 2 be a discrete Fourier transform (DFT) defined as m(X) 7 →
+
+(m(ζ5i
+
+)) 0≤i<N/ 2, and let iDFT : CN/ 2 → R[X]/(XN + 1) be its inverse, with ζ being a 2N -th primitive root of unity. The cleartext space of CKKS is CN/ 2, the plaintext space (i.e., after the encoding) is R := Z[X]/(XN + 1) , and the ciphertext space is R2
+
+> Q
+
+. In order to make the cleartext space compatible with RLWE encryption (which takes a message in R, and returns a ciphertext in 
+
+R2 
+
+> q
+
+), the CKKS scheme uses (the inverse of) a discrete Fourier transform encoding that moves a plaintext from CN/ 2 to R as follows: 
+
+CN/ 2
+
+| {z } 
+
+> Cleartext iDFT
+
+−−−−−→ R[X]/(XN + 1) 
+
+| {z }
+
+> Plaintext Rounding
+
+−−−−−−−→ Z[X]/(XN + 1) 
+
+| {z }
+
+> Plaintext Encryption
+
+−−−−−−−−→ R2
+
+> Q
+
+|{z} 
+
+> Ciphertext
+
+,
+
+where the rounding follows ideas from [ 18 , Section 2]. As it will be shown later, this rounding operation implies that we are required to scale the message by some large factor ∆ > 0 to preserve the most significant digits. In practice, numbers behave similarly to a fixed-point system, where precision is uniform across all values regardless of their size. The scaling factor ∆ is the key parameter governing computational precision: increasing it yields greater accuracy but comes at the cost of (i) making computations more expensive and (ii) requiring a larger modulus Q — which impacts the security. Additionally, given the homomorphisms induced by the (i)DFT: 
+
+a + b = DFT(iDFT( a) + iDFT( b)) and a ⊙ b = DFT(iDFT( a) · iDFT( b)) ,
+
+where ⊙ is the slot-wise multiplication, this naturally induces a SIMD computational paradigm on the plaintext space by simply multiplying ciphertexts in the iDFT domain. We can summarize the main operations of the scheme as follows. • CKKS.Setup (1 λ, N, L ). Given a security parameter λ, a ring dimension N , and a multi-plicative circuit depth L, choose a modulus chain Q = Qℓi=1 qi, a secret key distribution χs,an error distribution χe, and a scaling factor ∆ ∈ Z>0. Output the public parameter tuple 
+
+t :=  N, ∆, Q, χ s, χ e
+
+.
+
+• CKKS.Keygen (t). Given the public parameter tuple t, sample s ∼ χs from R, a ← R QL
+
+uniformly, and e ∼ χe. Output the secret and public keys 
+
+sk := s, pk :=  −a · s + e, a =: ( pk 0, pk 1) ∈ R 2 
+
+> QL
+
+.
+
+Note that pk 0 + pk 1 · s = e ≈ 0, so the public key is a noisy encryption of zero under s. 
+
+> 5An exception is given in [ 59 ], where the authors present an approach to handle float numbers in TFHE. That method, however, poorly fits neural network operations as it allows one to handle a single value at the time, while CKKS has a significant parallelization
+
+17 • CKKS.Encode (m). Given a cleartext vector m ∈ CN/ 2, apply an inverse DFT and scale by 
+
+∆. Output the plaintext ring element 
+
+∆ · iDFT (m) ∈ R .
+
+• CKKS.Decode (p). Given a plaintext p ∈ R , apply a DFT and rescale by 1/∆. Output the approximate cleartext vector 
+
+1∆ · DFT (p) ∈ CN/ 2.
+
+• CKKS.Encrypt (p). Given a plaintext p ∈ R QL and the public key pk , sample an ephemeral mask u ∼ χs and noise terms e0, e1 ∼ χe. Output the ciphertext 
+
+ [pk 0 u + e0 + p]QL , [pk 1 u + e1]QL
+
+ ∈ R 2 
+
+> QL
+
+.
+
+• CKKS.Decrypt (c). Given a ciphertext c = ( c0, c 1) ∈ R 2 
+
+> QL
+
+and the secret key s, compute the inner product c0 + c1 s. Output the approximate plaintext 
+
+c0 + c1 s =  pk 0 u + e0 + p +  pk 1 u + e1
+
+s
+
+=  −as + eu + e0 + p + a u s + e1 s
+
+= e · u + e0 + e1 s
+
+| {z }
+
+> small noise
+
++p ≈ p ∈ R QL .
+
+Encryption and decryption follow from standard RLWE encryption [ 18 ]. Notice that the CKKS noise is given by two factors: the rounding performed in the encoding and the error inject during encryption. 
+
+Homomorphic operations. The CKKS scheme enables different homomorphic operations, we report in the following some of them: • CKKS.Add (c, c′). Given two ciphertexts c, c′ ∈ R 2 
+
+> Qℓ
+
+, output the component-wise sum 
+
+cadd := c + c′ = ( c0 + c′
+
+> 0
+
+, c 1 + c′
+
+> 1
+
+) ∈ R 2 
+
+> Qℓ
+
+,
+
+which satisfies Decrypt (cadd ) ≈ Decrypt (c) + Decrypt (c′).• CKKS.Mul (c, c′). Given two ciphertexts c, c′ ∈ R 2 
+
+> Qℓ
+
+, compute the degree-2 tensor product 
+
+(c0c′
+
+> 0
+
+, c 0c′ 
+
+> 1
+
++ c1c′
+
+> 0
+
+, c 1c′
+
+> 1
+
+) ∈ R 3 
+
+> Qℓ
+
+,
+
+and apply KeySwitch ( · , sk 2 → sk ) to reduce back to two components. Output 
+
+cmul ∈ R 2 
+
+> Qℓ
+
+,
+
+which satisfies Decrypt (cmul ) ≈ Decrypt (c) · Decrypt (c′). Note that the resulting scaling factor is ∆2; a subsequent call to Rescale is typically needed to restore it to ∆.• CKKS.KeySwitch (c, evk ). Given a ciphertext c = ( c0, c 1, c 2) ∈ R 3 
+
+> Qℓ
+
+encrypted under sk 2
+
+and an evaluation key evk — a public encryption of sk 2 under sk — decompose c2 into a base-P representation c2 = P 
+
+> j
+
+c(j)2 P j and absorb it into the first two components using 
+
+evk . Output the key-switched ciphertext 
+
+ c0 + P 
+
+> j
+
+c(j)2 evk (j)0 , c 1 + P 
+
+> j
+
+c(j)2 evk (j)1
+
+ ∈ R 2 
+
+> Qℓ
+
+,
+
+which encrypts the same plaintext under sk with a controlled increase in noise. • CKKS.Rescale (c). Given a ciphertext c ∈ R 2 
+
+> Qℓ
+
+with scaling factor ∆2, drop the last modulus qℓ from the chain and divide. Output 
+
+∆−1 · c ∈ R 2 
+
+> Qℓ−1
+
+,
+
+which restores the scaling factor to ∆ at the cost of consuming one level of the modulus chain. • CKKS.Rotate (c, i ). Given a ciphertext c ∈ R 2 
+
+> Qℓ
+
+and a rotation index i ∈ Z, apply the Galois automorphism σi : X 7 → X5i mod 2 N component-wise to obtain σi(c) ∈ R 2 
+
+> Qℓ
+
+, and apply KeySwitch ( · , σ i(sk ) → sk ) using the corresponding rotation key. Output 
+
+crot ∈ R 2 
+
+> Qℓ
+
+,
+
+which satisfies Decrypt (crot ) ≈ ρi(Decrypt (c)) , where ρi denotes a cyclic shift of the plaintext slot vector by i positions. 18 C About the security of CKKS–based machine learning. 
+
+Remark that, in the (approximate) CKKS scheme, the encrypted message m ∈ CN/ 2 is added with some noise eckks ∈ CN/ 2 for security reasons. One peculiar point of CKKS is that the encrypted message is m + eckks , and the error can not be separated from the message 6. Li and Micciancio showed [ 62 ] that an adversary with access to the decryption error of a CKKS ciphertext through a decryption oracle can mount passive key-recovery attack. Such attack is captured by the so-called IND-CPA D model [ 62 , Def. 2], and all countermeasures known to date require the user to compute a bound on the decryption error. The threat model in this setting as follows: an attacker can have access to decryptions of CKKS ciphertexts — which in real world scenarios can be a very common setup — and she wants to recover information about the secret key. The attacker then asks for a decryption of zero, thus obtaining eckks .Remark that decryption is performed as [⟨sk, c ⟩]q , so the noise directly depends on sk , and this can be exploited to mount a key–recovery attack. We refer to [62, 63] for further info. We believe that this work can serve as an improvement in terms of security with respect to the IND-CPA D model. In fact, the strongest countermeasures require the final CKKS error to be bounded to apply some procedure before decryption (e.g., converting the results to discrete-CKKS [ 61 ], noise flooding, and so on). In particular, our work allows one to precisely identify the CKKS error as follows. Typical neural networks based on CKKS output the result in the form 
+
+m + eckks + eapprox ,
+
+where eckks is the CKKS error and eapprox is the error naturally introduced by the fact that polynomial approximations of the activation functions are used. Note that eapprox is defined with respect to the result of the plain version of the network. On the other hand, our output will be in the form 
+
+m + eckks ,
+
+as we implement exactly the same network in the plain and in the encrypted worlds (i.e., we do not perform approximations in the encrypted domain). Therefore, our result will not be corrupted by 
+
+eapprox . For instance, one could combine our work with [ 41 ], to have a strong theoretical foundation on error growth during the evaluation of the circuit; namely it is possible to define somewhat tight bounds on eckks and to take countermeasures. On the other hand, bounding eapprox is much harder task and implies very large bounds, especially in deep networks. We are not aware of any previous work that allows one to identify with a good precision the CKKS error in a neural network output. 
+
+On the role of error in standard CKKS neural networks vs in our work It is very common to observe performance degradation (e.g., accuracy) in CKKS–based neural networks [ 20 , 64 –66 ]. In practice, this means that the performance of the plain and the encrypted networks do not coincide. This is usually tackled by using larger degrees for the polynomials approximating the activation functions, although it can quickly become unpractical — especially for deep circuits. On the other hand, since our networks are constructed natively using polynomials, the output logits contain no approximation error in the classical sense, but will only contain the CKKS error. Notice that we can immediately identify the CKKS error as L∞(y − yCKKS ). As discussed above, it is possible to reduce it simply by increasing the values of qi and ∆. This is not possible in other works as it gets mixed with the polynomial approximation error, meaning that, by using our solution, improving the precision of the result is as natural as increasing the magnitude of the two parameters that control the fixed-point accuracy of CKKS. 
+
+# D From a certified network to a CKKS program 
+
+As an additional contribution, to evaluate our encrypted circuits, we designed a compiler that, given a network (defined as a list of layers), generates a JSON file that follows the grammar defined in Figure 6. In particular, our OpenFHE implementation takes as input a JSON file containing the network      
+
+> 6For the sake of completeness, there are cases, e.g., discrete-CKKS [ 61 ], where the error can be removed. This implies an assumption over the plaintext space of CKKS, from Cto some discrete set of it, e.g., {0,1}. Note that discrete-CKKS is typically not employed for privacy–preserving machine learning
+
+19 ⟨root ⟩ ::= [ ⟨layer-list ⟩ ]
+
+⟨layer-list ⟩ ::= ⟨layer ⟩ ⟨ layer-rest ⟩ | ε
+
+⟨layer-rest ⟩ ::= , ⟨layer ⟩ ⟨ layer-rest ⟩ | ε
+
+⟨layer ⟩ ::= ⟨linear-layer ⟩ | ⟨ chebyshev-layer ⟩ | ⟨ conv-layer ⟩⟨linear-layer ⟩ ::= [ "linear", ⟨num-array ⟩, ⟨num-array ⟩, ⟨shape ⟩ ]
+
+⟨chebyshev-layer ⟩ ::= [ "chebyshev", ⟨num-array ⟩, ⟨num-array ⟩, ⟨num-array ⟩, ⟨shape ⟩ ]
+
+⟨conv-layer ⟩ ::= [ "conv", ⟨shape ⟩, ⟨integer ⟩, ⟨integer ⟩,
+
+⟨num-array ⟩, ⟨num-array ⟩, ⟨shape ⟩, ⟨shape2 ⟩ ]
+
+⟨num-array ⟩ ::= [ ⟨number-list ⟩ ] | [] 
+
+⟨number-list ⟩ ::= ⟨number ⟩ | ⟨ number ⟩ , ⟨number-list ⟩⟨shape ⟩ ::= [ ⟨number ⟩, ⟨number ⟩ ]
+
+⟨shape2 ⟩ ::= [ ⟨number ⟩, ⟨number ⟩, ⟨number ⟩, ⟨number ⟩ ]
+
+⟨number ⟩ ::= ⟨integer ⟩ | ⟨ float ⟩⟨integer ⟩ ::= ⟨digits ⟩ | - ⟨digits ⟩⟨float ⟩ ::= ⟨digits ⟩ . ⟨digits ⟩ | - ⟨digits ⟩ . ⟨digits ⟩⟨digits ⟩ ::= ⟨digit ⟩ | ⟨ digit ⟩ ⟨ digits ⟩⟨digit ⟩ ::= 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+
+Figure 6: Grammar used in our Julia → OpenFHE compiler definition and automatically evaluates the network. In practice, we implemented methods to evaluate the ⟨linear-layer ⟩ and ⟨chebyshev-layer ⟩ tuples automatically 7.
+
+Automatic evaluation of linear layers. We implemented simple algorithms to evaluate linear layers. We first define the following encodings. 
+
+Definition D.1 (Repeated encoding) . Given a vector v ∈ Rn, its repeated encoding is a vector 
+
+v′ ∈ Rn2
+
+where v is repeated n times. Visually: 
+
+v′ := ( v1, v 2, . . . , v n | v1, v 2, . . . , v n | . . . ) ∈ Rn2
+
+.
+
+Definition D.2 (Expanded encoding) . Given a vector v ∈ Rn, its expanded encoding is a vector 
+
+v′ ∈ Rn2
+
+where each component vi of v is repeated n times. Visually: 
+
+v′ := ( v1, v 1, . . . , v 1 | v2, v 2, . . . , v 2 | . . . ) ∈ Rn2
+
+.
+
+We use two different input encodings as we employ two different algorithms to evaluate the typical 
+
+W x + b transformation, depending on how the input is encoded (Algorithm 1 and 2). 
+
+Automatic evaluation of Chebyshev layers. The evaluation of Chebyshev polynomials follows the footprint firsly introduced in [ 16 ] — which in turn implements a version of the Paterson-Stockmeyer algorithm [ 15 ] adapted for Chebyshev bases — however our approach is slightly more general as in [16 ] they assume to evaluate a single polynomial in all the slots of a ciphertext. On the other hand, in our construction we require to evaluate a different polynomial for each slot. Luckily, we can use the  
+
+> 7For convolutions, we used ad-hoc source codes as their evaluation is harder to automate. However, our framework is flexible enough to allow for the automatic evaluation of convolutions by simply defining a function that handles the
+> ⟨conv-layer ⟩tuple
+
+20 Algorithm 1 Linear layer with expanded input 
+
+Require: Expanded ciphertext c ∈ Rn2
+
+, column-wise weight matrix w ∈ Rn2
+
+, repeated bias 
+
+b ∈ Rn2
+
+, dimension n
+
+Ensure: Repeated encoding of W x + b ∈ Rn2 
+
+> 1:
+
+r := c ⊙ w ▷ Component-wise multiplication  
+
+> 2:
+
+for i = 0 , 1, . . . , ⌊log 2 n⌋ − 1 do  
+
+> 3:
+
+r := r + rot( r, n · 2i) 
+
+> 4:
+
+end for  
+
+> 5:
+
+return r + b
+
+Algorithm 2 Linear layer with repeated input 
+
+Require: Repeated ciphertext c ∈ Rn2
+
+, row-wise weight matrix w ∈ Rn2
+
+, expanded bias b ∈ Rn2
+
+,dimension n
+
+Ensure: Expanded encoding of W x + b ∈ Rn2 
+
+> 1:
+
+r ← c ⊙ w 
+
+> 2:
+
+for i = 0 , 1, . . . , ⌊log 2 n⌋ − 1 do  
+
+> 3:
+
+r ← r + rot( r, 2i) 
+
+> 4:
+
+end for  
+
+> 5:
+
+m ← (1 , 0, . . . , 0
+
+| {z }
+
+> n−1
+
+, 1, 0, . . . , 0
+
+| {z }
+
+> n−1
+
+, . . . ) ∈ Rn2
+
+▷ Mask correct slots  
+
+> 6:
+
+r ← r ⊙ m 
+
+> 7:
+
+for i = 0 , 1, . . . , ⌊log 2 n⌋ − 1 do ▷ Repeat along empty slots  
+
+> 8:
+
+r ← r + rot( r, −2i) 
+
+> 9:
+
+end for  
+
+> 10:
+
+return r + b
+
+strategy described in [ 16 , Section 3.1] and replace the usage of constants coefficents ci to packed coefficients in a plaintext as ci. The following corollary easily follows. 
+
+Corollary D.1 ( generalizes [16, Theorem 1] ). There exists an algorithm in CKKS to evaluate d
+
+polynomials of degree n given in Chebyshev base with √2n + O(log( n)) non-scalar multiplications and O(n) scalar multiplications, with d being the number of available slots in a CKKS ciphertext. 
+
+We remark that the cost of evaluating a single polynomial in all slots or a different polynomial, one for each slot, is the same as constants are typically encoded in plaintexts in order to be com-patible with the CKKS multiplication 8. We therefore used such algorithm to allow for the evalu-ation of different polynomials in different slots. Since the original OpenFHE implementation of CKKS does not provide such an algorithm, we used a custom fork that enables the usage of the 
+
+EvalChebyshevSeriesPSBatch .
+
+Automatic parameters selection. Given a JSON network, the program adapts the choice of the underlying CKKS scheme by first computing the required multiplicative depth. In practice, Algorithm 1 requires 1 multiplications and Algorithm 2 requires 2. On the other hand, the depth required by the evaluation of Chebyshev polynomials (Corollary D.1) depends on the degree as shown in Table 3. We designed our software in such a way that the FHE parameters are automatically chosen to support the minimum multiplicative depth required by the network and at the same time to support λ > 128 
+
+bits of (classical) security according to [ 67 ]. We present the sets of parameters, one for each network, in Table 4. We remark that N controls the size of the ring Z[X]/(XN + 1) , and as a side effects it also controls the maximum amount of values that can be encoded into a ciphertext (i.e., a power of two ≤ N/ 2 due to the DFT encoding, see Appendix B). On the other hand, the modulus Q = Qℓi=1 qi controls the maximum amount of multiplications, followed by a rescaling, that can be performed over a ciphertext, namely ℓ − 1. In practice, the final modulus is defined as QP , where P is an additional modulus 
+
+> 8Minor differences might occur in practice depending on how the multiplication algorithms are implemented for constants vs. plaintexts, but we ignore them
+
+21 Table 3: Multiplicative depth by degree using the Paterson-Stockmeyer algorithm [15, 16] 
+
+Degree Multiplicative Depth 
+
+3–5 46–13 514–27 628–59 760–119 8120–247 9required to reduce the amount of error introduced by multiplications (refer to [ 68 ]). In turn, the magnitude of P depends on dnum : larger values correspond to smaller moduli P .We refer the interested reader to [ 60 ] — which describes the actual CKKS implementation used in our work — for an extensive discussion about the impact of each parameter. 
+
+On the IND-CPA security of our solution. We use CKKS in leveled mode and do not resort to bootstrapping [ 19 ]. This allows us to use a more conservative choice in terms of secret key, we will indeed use a uniform ternary distribution , where entries are chosen uniformly at random from 
+
+{− 1, 0, 1}. This means that, in practice, in order to obtain λ > 128 bits of security, for N = 2 16 we require QP < 21747 and for N = 2 17 , QP < 23523 (refer to [67, Table 5.2]). Table 4: The CKKS parameters for each network. N is the ring size, QP is the modulus size. Depth refers to the multiplicative depth of the circuit. The (max) CKKS error is computed as 
+
+|f ⊥
+
+> CKKS
+
+(x) − fπ (x)| obtained over a sample of the respective dataset. Runtimes are in seconds and have been measured on a M5 Max CPU with 36GB of memory. Moduli with ∗ are reported although their security is slightly smaller than 128-bits 
+
+size N QP qi ∆ dnum Poly deg. Depth CKKS error Runtime 
+
+MNIST 4 × 256 217 22291 30 40 2 119 49 10 −3 31 
+
+4 × 256 217 22746 ∗ 45 60 2 119 49 10 −7 39 
+
+6 × 256 217 23341 30 40 2 119 72 10 −3 60 
+
+6 × 256 217 23841 ∗ 45 60 7 119 72 10 −7 74 HELOC [64 , 32] 216 21031 30 40 2 27 21 10 −5 1
+
+[64 , 32] 216 21306 45 60 2 27 21 10 −9 1EC 1 × 64 215 2641 30 40 2 27 12 10 −4 0.3 
+
+1 × 64 215 2781 45 60 2 27 12 10 −6 0.5 NN4Sys small 216 21661 30 40 2 59 34 10 −5 4small 217 22431 45 60 2 59 34 10 −9 6deep 217 22591 30 40 2 59 55 10 −5 17 deep 217 23136 45 60 2 59 55 10 −9 22 Collins RUL small 217 22741 30 40 2 119 61 10 −1 81 small 217 23511 45 60 5 119 61 10 −1 91 deep 217 22741 30 40 2 119 61 10 −1 130 deep 217 23511 45 60 5 119 61 10 −4 158 CIFAR-10 small 217 22921 30 40 2 119 62 10 1 78 small 217 23511 45 60 5 119 62 10 −4 95 small 217 23101 30 40 2 247 66 10 −1 98 small 217 23511 45 60 7 247 66 10 −4 119 deep 217 22921 30 40 2 119 62 10 1 135 deep 217 23511 45 60 5 119 62 10 −4 167 deep 217 23101 30 40 2 247 66 10 −1 155 deep 217 23511 45 60 7 247 66 10 −4 191 
+
+22 E Additional Background on Polynomial Approximation and Smoothness         
+
+> (a) Approximation error for polynomial approxima-tions of the ReLU and GELU activation functions for different intervals of size [−r, r ].
+> (b) Boundary of Bernstein ellipses Eρfor different values of ρ.
+
+Figure 7: Polynomial approximation error for approximation intervals of different sizes and Bernstein ellipses of different sizes. Section 4.3 showed that the polynomial approximation error for a fixed approximation interval 
+
+converges significantly faster, the smoother the function is. The bounds presented in Equation (4) and Equation (5) used the concepts of total variation and Bernstein ellipses , for which we provide background in Subsections E.1 and E.2, respectively. Additionally, we show in Figure 7a, how increases in width of the approximation interval affect the precision of polynomial approximations of fixed degree - both for the ReLU and the GELU function. We can see that for smaller radii r of the approximation interval [−r, r ], the GELU approximation is much better than ReLU . However, as the radius increases, quality of the approximations becomes similar. The Figure further illustrates, the benefits of fitting polynomial approximations using the Remez algorithm [ 22 ] as opposed to standard Chebyshev interpolation. High-quality polynomial approximations computed by the Remez algorithm are roughly twice as precise as Chebyshev approximations. 
+
+E.1 Total Variation 
+
+For a more extensive treatment of total variation, we refer the reader to Appell et al. [69 ]. Let 
+
+f : R → R be a function and τ a partition of the interval [l, u ] into m subintervals with boundary points t0 = l < t 1 < t 2 < ... < t m = u. Then the total variation of f over the interval [l, u ]
+
+V[l,u ](f ) = sup 
+
+> τm−1
+
+X
+
+> i=0
+
+|f (ti+1 ) − f (ti)| (7) is defined as the supremum of the above sum over all possible partitions. If V[l,u ](f ) < ∞, then f is of bounded total variation over [l, u ].In some cases, there are easier formulas to compute total variation. If f is monotonic over [l, u ], then 
+
+f is of bounded total variation over [l, u ] and 
+
+V[l,u ](f ) = |f (u) − f (l)| . (8) If f is continuously differentiable over [l, u ], then 
+
+V[l,u ](f ) = 
+
+Z ul
+
+|f ′(x)| dx . (9) 
+
+E.2 Bernstein Ellipse 
+
+The further a function f can be continued into the complex plane, the faster the rate of convergence for the polynomial approximation error. The bound given in Equation (5) uses the largest parameter 
+
+ρ, s.t. f can be analytically continued to the interior of the Bernstein ellipse 
+
+Eρ =
+
+
+
+z ∈ C z = u + u−1
+
+2 , u = ρe iθ , ρ ≥ 1, 0 ≤ θ < 2π
+
+
+
+(10) 23 as a measurement for how far into the complex plane f can be extended (definition of Eρ taken from Wang et al. [70]). Bernstein ellipses for varius choices of ρ are illustrated in Figure 7b. If f is entire (i.e. it can be analytically continued to all C), then, one can choose any parameter ρ for the Bernstein ellipse that leads to a favourable value of M = max x∈Eρ |f (x)| in Equation (5). 
+
+# F Improved GELU Relaxation                    
+
+> u≤ − √2
+> concave left u≤ √2
+> l≥ − √2
+> convex middle GELU ′(l)≤
+> GELU( u)−GELU( l)
+> u−l
+> non-convex mid-dle increasing
+> GELU ′(u)≤
+> GELU( u)−GELU( l)
+> u−l
+> non-convex mid-dle decreasing II
+> non-convex mid-dle decreasing I
+> l≥ √2
+> concave right GELU ′(u)≥
+> GELU( u)−GELU( l)
+> u−l
+> outer GELU ′(l)≥
+> GELU( u)−GELU( l)
+> u−l
+> non-convex positive II
+> non-convex positive I
+> yes no
+> yes
+> yes no
+> yes no
+> yes no
+> no
+> yes no
+> yes no
+> yes no
+
+Figure 8: Case distinction for improved GELU relaxation. In an attempt to compute tighter bounds for Equation (2) for the GELU activation, we tried to improve upon the parameterized GELU relaxation given by Shi et al. [71 ] used in α-CROWN [ 24 ]. While our relaxation achieves bounds that are significantly tighter at parameter initialization, the difference to the relaxation by Shi et al. after parameter optimization is minimal. Since we used our relaxation in our code, we nevertheless give a brief overview over its construction. At a high level, we provide linear over- and underapproximations 
+
+a(α1, l, u )x + b(α1, l, u ) ≤ GELU( x) ≤ a(α2, α 3, l, u ) + b(α2, α 3, l, u ) ∀x ∈ [l, u ] , (11) where our relaxation is parameterized by a lower tangent point α1, an upper left tangent point α2 and an upper right tangent point α3. We then use the case distinction shown in Figure 8 to select if one of the tangents or a secant line is a valid lower or upper bound. The GELU function is concave for x ∈ (−∞ , −√2] and x ∈ [√2, ∞). This relates to the cases 
+
+concave left and concave right in Figure 8. If [l, u ] is completely within these regions, the secant is always the best linear lower bound and the tangent at any point x ∈ [l, u ] is a valid linear upper bound. For initialization, we set the tangent point (either α2 or α3) to t = 1 /2 · (l + u). This choice leads to an area-optimal overapproximation [72]. Since GELU is convex for x ∈ [−√2, √2] , we can use the secant as an upper bound and set α1
+
+similarly as above. 24 In the cases non-convex middle increasing and outer , we can use the secant as a valid upper bound and the tangent at t ∈ [l′, u ′] for some l ≤ l′, u ′ ≤ u as a valid lower bound. We employ the same procedure as Shi et al. [71] for finding l′, u ′ and clamp the value of α1 to these bounds if necessary. For the cases middle decreasing II and non-convex positive II , the secant is a valid lower bound and the tangent at t ∈ [l, u ′], respectively the tangent at t ∈ [l′, u ] is a valid upper bound. In these cases, we initialize α2 or α3 by computing 1/2 · (l + u) and clamping to the valid bounds. Finally, for middle decreasing I and non-convex positive I , the tangent at t ∈ [l′, u ′] is a valid lower bound and the tangent at t ∈ [l, u ′′ ] or respectively t ∈ [l′′ , u ] is a valid upper bound. As initialization for α1, α 2 and α3, we choose again the mid-point of the interval [l, u ] clamped to the valid tangent point ranges. 
+
+# G Additional Information on Differential Verification for Neural Networks 
+
+In this section, we provide information for how to instantiate the differential relaxation presented in Theorem 4.2 for the GELU function and report an optimization used to tighten the verified differential bounds. But first, we provide helpful derivations for expressing differences at the current layer by differences in the preceding layer. 
+
+G.1 Additional Derivations 
+
+As stated in Section 4.4, approaches for differential verification of neural networks [ 27 – 29 , 23 ]use that neuron-wise differences between networks N 1 and N 2 can be expressed in terms of the neuron-wise differences of previous layers. In this section, we give a brief derivation of these expressions. The difference ˜∆(l) = ˜ y(l)1 − ˜y(l)2 between two pre-activation values can be partially expressed in terms of the difference ∆(l−1) = y(l−1) 1 − y(l−1) 2 between the post activation values of the previous layer as 
+
+˜∆(l) = ˜ y1 − ˜y2 =
+
+
+
+W1y(l−1) 1 + b1
+
+
+
+−
+
+
+
+W2y(l−1) 2 + b2
+
+
+
+(12) 
+
+=
+
+
+
+W1
+
+
+
+y(l−1) 1 − y(l−1) 2
+
+
+
++ y(l−1) 2 + b1
+
+
+
+−
+
+
+
+W2y(l−1) 2 + b2
+
+
+
+(13) 
+
+= ( W1 − W2) y(l−1) 2 + W1
+
+
+
+y(l−1) 1 − y(l−1) 2
+
+
+
++ ( b1 − b2) (14) 
+
+= ( W1 − W2) y(l−1) 2 + W1∆(l−1) + ( b1 − b2) . (15) Rewriting the difference to partially depend on y(l−1) 1 is also possible. A similar relation can be derived for the difference between activation values ∆(l) = y(l)1 − y(l)2
+
+using 
+
+∆(l) = y(l)1 − y(l)2 = f
+
+
+
+˜y(l)1
+
+
+
+− g
+
+
+
+˜y(l)2
+
+
+
+(16) 
+
+= f
+
+
+
+˜y(l)1
+
+
+
+− g
+
+
+
+˜y(l)1 −
+
+
+
+˜y(l)1 − ˜y(l)2
+
+ 
+
+= f
+
+
+
+˜y(l)1
+
+
+
+− g
+
+
+
+˜y(l)1 − ˜∆(l)
+
+. (17) 
+
+G.2 Bounds on the Derivative of GELU 
+
+Instantiating the differential relaxation for p(x) − σ(x − ∆) as described in Theorem 4.2 for σ =GELU , requires computing bounds on the derivative GELU ′(x) of the GELU function over an interval x ∈ [l, u ].Since GELU( x) is concave for D1 = ( −∞ , −√2] , convex for D2 = [ −√2, √2] and concave for 
+
+D3 = [ √2, ∞), its derivative is monotonically decreasing, monotonically increasing and monotoni-25 cally decreasing over the respective domains. Therefore, we can just set 
+
+∂l = min GELU ′(x) | x ∈ [li, u i], [li, u i] = Di ∩ [l, u ], i ∈ { 1, 2, 3} (18) 
+
+∂u = max GELU ′(x) | x ∈ [li, u i], [li, u i] = Di ∩ [l, u ], i ∈ { 1, 2, 3} . (19) 
+
+G.3 Increased Precision using Construction-time Verified Ranges 
+
+Note that the formulas to compute the neuron-wise differences (Equations (15) , (17) ) still partially depend on the values y(l−1)  
+
+> i
+
+and ˜y(l) 
+
+> i
+
+of neurons in the individual networks N 1 and N 2. Our differential verification approach extends V ERY DIFF [23], which computes neuron ranges based on zonotope propagation and is thus limited to linear relaxations with parallel slopes. State-of-the-art NN verifiers like α-CROWN [ 24 ] are known to compute tighter bounds for ranges in single neural networks. If such a NN verifier was used to compute the verified pre-activation bounds of the polynomial network, we can use the tightened lower and upper bounds 
+
+l = max {lzono , l p}, u = min {uzono , u p} , (20) where [lzono , u zono ] are the ranges computed by V ERY DIFF and [lp, u p] are the verified ranges for the polynomial network. 
+
+# H Additional Evaluation Results 
+
+In this appendix, we provide a more detailed description of our benchmarks and base neural networks. Furthermore, we present additional evalation results. 
+
+H.1 Experiment Settings 
+
+We implemented our approach for certified design of polynomial neural networks in Julia [ 73 ] on top of the differential verification framework V ERY DIFF [23 ]. Execution of the polynomial networks under CKKS is based on OpenFHE [17]. To compute verified pre-activation ranges, we leverage the state-of-the-art NN verifier α-CROWN [24]. We use a piecewise-polynomial overapproximation q(x) for the GELU activation function with verified error |q(x) − GELU( x)| ≤ 10 −10 . The overapproximation uses 6 polynomial pieces of degree 15 in addition to the linear asymptotes. 
+
+H.2 Benchmarks 
+
+We give a brief description of each dataset, the associated machine learning task and the training procedure of the neural networks for this benchmark. The network architectures for each benchmark are summarized in Table 5. All of the networks listed in this table are later used as base networks that are approximated by polynomial networks. As prior work [ 14 ] has already shown that training the base networks with L1-regularization significantly reduces the polynomial approximation error, we only consider networks trained with L1-penalty. Note that we use two networks for each listed architecture: One with ReLU activation and one with GELU activation function. We run our approach on benchmarks related to classification tasks to evaluate the difference in accuracy between base and polynomial network, and also evaluate on regression tasks, where the verified error bounds are a more meaningful measure for comparison between the base and the polynomial network. 
+
+H.2.1 Classification Benchmarks HELOC. The home equity line of credit dataset [ 30 ] contains 23 features used to predict if a person is credit-worthy. Following the procedure of prior work on certified construction of polynomial networks [ 14 ], we normalized the features to [0 , 1] . We also use the ReLU neural networks provided by them. Neural networks with GELU activation are obtained by training directly on the HELOC dataset. 26 Table 5: Architecture of base neural networks. Some networks are fully connected (FC) while others have a convolutional (Conv) architecture. We also indicate the weight of the L1 regularization used to train the networks. The same configurations were used for both ReLU and GELU variants. base network abbreviation type L1 penalty # inputs # neurons per layer HELOC − FC 2 × 10 −5 23 [64 , 32] 
+
+MNIST − FC 10 −4 784 4 × 256 
+
+− FC 10 −4 784 6 × 256 
+
+CIFAR10 small Conv 10 −4 3072 [900 , 392 , 144 , 256] 
+
+large Conv 10 −4 3072 [1800 , 784 , 288 , 256] 
+
+EC − FC − 51 1 × 64 
+
+NN4Sys − FC 5 × 10 −7 1 3 × 128 
+
+− FC 5 × 10 −7 1 5 × 128 
+
+Collins RUL small Conv 10 −3 400 [1600 , 2400 , 800 , 600 , 100] 
+
+large Conv 10 −3 400 [3200 , 4800 , 1600 , 600 , 100] 
+
+MNIST. Neural networks trained on the MNIST dataset [ 74 ] aim to correctly classify the handwritten digit shown on 28 × 28 pixel grayscale images. Pixel values are normalized to [0 , 1] . Since Kern 
+
+et al. [ 14 ] also evaluated on MNIST, we simply reuse their ReLU networks. Additionally, we train networks of the same architecture with GELU activation on the MNIST dataset to obtain base networks with this activation function. 
+
+CIFAR10. The task associated with the CIFAR10 dataset [ 32 ] is to assign the correct labels to images represented by inputs of dimension 3 × 32 × 32 , where each dimension can attain values in [0 , 1] .The dataset is a popular benchmark used to evaluate FHE neural networks [65, 12]. However, those approaches rely on sampled pre-activation bounds. To achieve good accuracy of the polynomial networks – despite wide verified bounds due to overapproximation incurred for large networks by NN verifiers – we train two convolutional networks of different sizes ourselves. The difference in performance between the small and the large network can then be used to judge scalability of our verified approach. 
+
+H.2.2 Regression Benchmarks Residential Electricity Forecasting (EC). Prior research on FHE used electricity demand forecasting as a use case [ 75 ]. In such setting, the smart meter associated to a residential building would send encrypted consumption data to a centralised server and get a short-term (half-hour) prediction of the future load. Similar to [ 75 ], we train a network that receives the past 24 hours of consumption data as input (averaged across 10 homes), and predicts the next half-hour consumption. Additional input features include day of the year, day of the week, and time of the day. The dataset is real-world consumption data from a large-scale study from 2011, Ireland [ 31 ]. As discovered by [ 76 ], a small fully-connected network with a single hidden layer suffice to maximise predictive accuracy; we choose a width of 64 neurons. 
+
+NN4Sys. We use the learned index models from the NN4Sys benchmark [ 33 ] used in the annual neural network verification competition VNNC OMP [ 35 ]. The associated task is, to map a key (a scalar in [0 , 1] ) to an index (also a scalar in [0 , 1] ) in a database. Since the available networks are not trained using L1 regularization, we extract a training dataset from the input-output specifications that were used in the competition to train relu and gelu neural networks from scratch. We use the same architecture as the non-L1 regularized networks in the original NN4Sys benchmark. 
+
+Collins RUL. The Collins RUL benchmark [ 34 ] was also used in the competition VNNC OMP [35 ]. It consists of convolutional networks that process multivariate time series data (windows of 20 
+
+time steps for 20 sensors) to predict the remaining useful life of aircraft components. Since the original networks provided by the benchmark are, again, not trained using L1 regularization, we train ReLU and GELU networks of the same structure ourselves. However, as the benchmark is only accompanied by a small test dataset, we train our networks to minimize the mean squared error 
+
+(N L1 (x) − N (x)) 2 to the original network over random data (while monitoring the loss over the test dataset). 27 H.3 Additional Examples for Overflow Attacks 
+
+Figure 9: Realistic perturbations of MNIST images which lead to overflow attacks Four examples of inputs triggering overflows in the polynomial CIFAR10 network constructed using sampling-based bounds, were already shown in Figure 1. Here, we show additional examples of such inputs for the CIFAR10 network are shown in Figure 11. Examples for the MNIST case can be found in Figure 9. 
+
+H.4 Extended Ablation Results  
+
+> (a) Runtime for certified design of the Collins RUL networks. (b) Ablation results for the Collins RUL (large) network.
+
+Figure 10: Runtime of certified design and additional ablation results for Collins RUL. As shown in Figure 10a, runtime increases for larger polynomial degrees as computation of roots is more expensive. However, there is a large fixed cost related to the runtime of the NN verifier which scales in the size of the network. 
+
+H.5 Extended Results for Certified Design at Scale 
+
+In Table 6, we provide an extended version of Table 2 shown in Section 5.3. We additionally compare to base networks with ReLU activation and their polynomial approximations. Furthermore, we report results on a wider range of network architectures. It is evident that the verified bound on the approximation error is much smaller for the base networks with GELU activation than for the ReLU networks. While classification performance is not affected (and is even better for for the large ReLU CIFAR10 network than the GELU network at degree 119 ), the MSE loss for the NN4Sys benchmark is significantly worse for the ReLU networks. It is also worth pointing out that the verified bounds on the approximation error are very tight for the HELOC, MNIST, EC and NN4Sys GELU networks and still useful for even the large Collins RUL 
+
+GELU network – considering its wide sampled output range over the dataset. 28 Table 6: Verified error bounds and comparison of performance metrics between base networks and their polynomial approximations using verified pre-activation bounds. The correct number of digits (matching results for fπ and f ⊥ 
+
+> CKKS
+
+) are computed as L∞|eCKKS |, where eCKKS is final CKKS error. 
+
+Network Size σ Output range (sampled) Acc, MSE, MAE of f
+
+Poly degree Acc, MSE, MAE of fπ
+
+Verified error CKKS error 
+
+HELOC [64 , 32] ReLU [−5.28 , 3.55] 73 .31% 27 73 .24% 0.75 10 −9
+
+GELU [−4.48 , 2.87] 72 .25% 27 72 .25% 3.76 e − 6 10 −9
+
+MNIST 4 × 256 ReLU [−32 .02 , 19 .65] 98 .64% 119 98 .64% 2.93 10 −7
+
+GELU [−18 .87 , 25 .03] 98 .93% 119 98 .93% 3.08 e − 4 10 −7
+
+6 × 256 ReLU [−39 .37 , 25 .17] 99 .12% 119 99 .09% 9.34 10 −7
+
+GELU [−40 .33 , 16 .74] 98 .94% 119 98 .93% 0.046 10 −7
+
+CIFAR10 small ReLU [−16 .22 , 14 .71] 67 .24% 119 66 .18% 102 .47 10 1
+
+ReLU 247 67 .57% 49 .08 10 −4
+
+GELU [−13 .93 , 17 .21] 69 .56% 119 68 .70% 26 .98 10 1
+
+GELU 247 69 .50% 0.93 10 −4
+
+large ReLU [−13 .33 , 16 .36] 76 .30% 119 72 .35% 232 .48 10 1
+
+ReLU 247 76 .31% 111 .40 10 −4
+
+GELU [−14 .67 , 20 .28] 77 .28% 119 65 .20% 85 .58 10 1
+
+GELU 247 75 .13% 18 .64 10 −4
+
+EC 1 × 64 ReLU [0 .18 , 1.95] 0.0839 27 0.0839 0.11 10 −6
+
+GELU [0 .21 , 1.96] 0.0844 27 0.0844 3.64 e − 7 10 −6
+
+NN4Sys 3 × 128 ReLU [0 .00 , 1.01] 4.56 e − 4 59 4.83 e − 3 0.089 10 −9
+
+GELU [0 .00 , 1.01] 3.57 e − 4 59 3.57 e-4 1.75 e − 6 10 −9
+
+5 × 128 ReLU [0 .00 , 1.01] 5.75 e − 4 59 3.10 e − 3 0.11 10 −10 
+
+GELU [0 .00 , 1.00] 2.93 e − 4 59 2.93 e − 4 1.15 e − 5 10 −10 
+
+Collins RUL small ReLU [0 .42 , 648 .10] 457 .00 119 456 .91 40 .43 10 −1
+
+GELU [0 .96 , 634 .80] 527 .89 119 527 .93 3.87 10 −1
+
+large ReLU [−8.58 , 644 .74] 512 .60 119 518 .46 68 .99 10 −4
+
+GELU [0 .38 , 615 .81] 699 .21 119 686 .50 9.28 10 −4
+
+29 Figure 11: Perturbed CIFAR 10.1 images on which the large CIFAR NN is vulnerable to an overflow attack 30 I Proofs 
+
+Theorem 4.1 (Soundness) . For any neural network f with input space I, the construction approach given in Section 4.1 yields a network fπ robust to overflow attacks on I (see Definition 3.2). Proof of Theorem 4.1. A neural network fπ is robust to overflow attacks iff for all layers l it holds that its polynomials π(l) are designed for an interval [l(l), u(l)] such that for all x ∈ I it holds that 
+
+f (l) 
+
+> π
+
+(x) ∈ [l(l), u(l)].Note that our approach computes the intervals [l(l), u(l)] by solving the maximization problem in equation (2). To prove that our approach generates certified neural networks fπ we must thus prove that at the time of polynomial construction the optimization problem in equation (2) correctly over-approximates the behaviour of f (l) 
+
+> π
+
+. Before we do so below, observe that this property suffices to guarantee certified network construction: Every time an activation function is substituted by its polynomial approximation, we then compute valid bounds for f (l) 
+
+> π
+
+using equation (2) and construct an appropriate polynomial using the Remez algorithm for the sound range estimate. Formally, proving that equation (2) correctly over-approximates the behaviour of f (l) 
+
+> π
+
+amounts to showing that for any x ∈ I and any 1 ≤ l ≤ L it holds that there exist assignments to the optimization problem in equation (2) such that ˜y(l) = f (l) 
+
+> π
+
+(x).We prove the latter inductively: First, observe that for l = 1 equation (2) exactly represents the behaviour of f (1)  
+
+> π
+
+. As f (1)  
+
+> π
+
+= f (1) , ˜y(l) and f (l) 
+
+> π
+
+(x) naturally coincide for all x ∈ I .For our induction step ( l + 1 ), we assume that we have shown the over-approximation property for layer l. Due to this, we know that the Remez algorithm computes a polynomial approximation π(l) for 
+
+σ(l) on the sound range [l(l), u(l)] for which we know that for all x ∈ I we have f (l) (x) ∈ [l(l), u(l)].Since we assume correct local bound computation (see Section 4.2 for detailed approach), we also know that π(l)  f (l) (x) − σ(l)  f (l) (x) ≤ ϵ(l) for any x ∈ I .For any x ∈ I, we now consider some concrete assignment of the variables in equation (2) such that ˜y(l) = f (l) (x) (exists due to induction hypothesis). We can then set δ(l) to 
+
+π(l)
+
+
+
+˜y(l)
+
+− σ(l)
+
+
+
+˜y(l)
+
+= π(l)  f (l) (x) − σ(l)  f (l) (x) which we know to satisfy the con-straint δ(l) ∈ [−ϵ(l), ϵ(l)]. Consequently, we can assign y(l) to π(l)
+
+
+
+˜y(l)
+
+(as σ(l)
+
+
+
+˜y(l)
+
++
+
+
+
+π(l)
+
+
+
+˜y(l)
+
+− σ(l)
+
+
+
+˜y(l) 
+
+= π(l)
+
+
+
+˜y(l)
+
+). Finally, we assign ˜y(l+1) to W (l+1) y(l) + b(l+1) .First, note that both of these assignments satisfy all constraints of equation (2). Second, observe that by definition of fπ , if ˜y(l) = f (l) (x) then now it also holds that ˜y(l+1) = f (l+1) (x). This concludes our induction step of the over-approximation property. In principle, our approach is applicable to functions which are linear almost everywhere 
+
+Definition I.1 (Linear Almost Everywhere) . A function g : R → R is linear almost everywhere 
+
+(LAE) if it has bounded total variation (see Section E.1) and there exist a1, a 2, b 1, b 2 ∈ R such that 
+
+lim x→∞ (g (x) − (a1x + b1)) = lim x→−∞ (g (x) − (a2x + b2)) = 0 .If a function is LAE, this enables us to approximate its outermost regions with the linear functions representing the asymptotes (see Proposition I.1). In this work, we focus on monotonically LAE functions which enables us to easily identify the region where g is not adequately represented by its asymptotes. Functions which are LAE admit linear approximation with arbitrary precision ϵ∗ for the intervals approaching infinity: 
+
+Proposition I.1 (Arbitrarily Precise Linear Approximation) . If a function is LAE, then for any ϵ∗
+
+there exists a δ < 0 (resp. δ > 0) such that |g (x) − (aix + bi)| ≤ ϵ∗ for all x ∈ (−∞ , δ ] for i = 1 
+
+(resp. for all x ∈ [δ, ∞) for i = 2 ). Proof. This result follows directly from the definition of function limits which states g (x) − aix + bi
+
+has limit 0 iff the following formula is valid: 
+
+∀ϵ > 0 ∃c > 0 ∀x x > c → | (g (x) − aix + bi) − 0| < ϵ. 
+
+31 Activation Function a1 b1 a2 b2 MLAE Sigmoid [77, 3.2] 0 0 0 1 yes Tanh [77, 3.2] 0 −1 0 1 yes ReLU [77, 3.6] 0 0 1 0 yes Leaky ReLU [77, 3.6.2] 1/α 0 1 0 yes GeLU [77, 3.3.1] 1 0 0 0 yes SiLU [77, 3.3] 1 0 0 0 yes ELU [77, 3.6.48] 1 0 0 −1 yes Table 7: Overview on linear almost everywhere For any given ϵ∗ we thus choose δ as the c from the formula above. 
+
+Lemma I.1 (GeLU is MLAE) . The function GELU ( x) = x · Φ (x) (for Φ (x) being the gaussian error function) is monotonically linear almost everywhere. Proof. We know that 0 ≤ Φ (x) ≤ 1 and therefore 0 ≤ 1 − Φ (x) ≤ 1.Additionally it is easily derivable that: 
+
+1 − Φ (x) = 
+
+Z ∞
+
+> x
+
+ϕ (u) du =
+
+Z ∞
+
+> x
+
+uu ϕ (u) du ≤
+
+Z ∞
+
+> x
+
+ux ϕ (u) du = 1
+
+x
+
+Z ∞
+
+> x
+
+uϕ (u) du = ϕ (x)
+
+x
+
+Regarding the last step, since ϕ′(x) = −x · ϕ(x) this can be simplified to 1 
+
+> x
+
+[−ϕ(u)] ∞ 
+
+> x
+
+which yields  
+
+> ϕ(x)
+> x
+
+as ϕ’s limit is 0 for x → ±∞ .We then know that for x < 0 it holds that |GELU ( x)| = |x · Φ (x)| = ( −x) · (1 − Φ (−x)) ≤
+
+(−x) ϕ(−x) 
+
+> −x
+
+= ϕ (−x) → 0 (for x → −∞ ). As we also know that GELU ( x) < 0 for x < 0, this yields the limit for −∞ via squeezing. We can also show that GELU ( x) − x = x (Φ (x) − 1) = −x (1 − Φ (x)) ≥ (−x) ϕ(x) 
+
+> x
+
+= −ϕ (x).Since −x(1 − Φ (x)) ≤ 0 for x ≥ 0 and −ϕ (x) → 0 ( for x → ∞) this yields that 
+
+lim x→∞ GELU ( x) − x = 0 via squeezing. Also, let 0 > x ∗ = arg min x∈R GELU( x), then for x ∈ (−∞ , x ∗], GELU( x) is monotonically decreasing. Additionally, we have 
+
+GELU( −x) = ( −x) · Φ( −x) (21) 
+
+= ( −x) · (1 − Φ( x)) (point symmetry of Φ( x)) (22) 
+
+= GELU( x) − x . (23) Therefore, GELU( x) ≤ x for x ∈ [0 , ∞) and GELU( x) − x is monotonically decreasing for 
+
+x ∈ [−x∗, ∞).
+
+Theorem 4.2 (p-σ Relaxation) . Given bounds x ∈ [lx, u x], y ∈ [ly , u y ], ∆ ∈ [l∆, u ∆], activation function σ(x) with derivative bounds ∂l ≤ ddx σ(x) ≤ ∂u for all x ∈ [min( lx, l y ), max( ux, u y )] and polynomial p(x) with ϵ = max x∈[lx,u x] |p(x) − σ(x)|, the activation difference is bounded by 
+
+α · ∆ + βl − ϵ ≤ p(x) − σ(x − ∆) ≤ α · ∆ + βu + ϵ , (6) 
+
+where 
+
+α = 12 (αl + αu), βl =
+
+(
+
+λll∆ + ˆβl , λ l ≥ 0
+
+λlu∆ + ˆβl , λ l < 0 , βu =
+
+(
+
+λul∆ + ˆβu , λ u ≤ 0
+
+λuu∆ + ˆβu , λ u > 0 ,
+
+The αl, α u, β l, β u are the parameters of the non-parallel linear relaxations given by RAVEN [29 ] as 
+
+αl =
+
+
+
+∂l , l ∆ ≥ 0
+
+∂u , u ∆ ≤ 0 
+
+> ∂lu∆−∂ul∆
+> u∆−l∆
+
+, otw. 
+
+, αu =
+
+
+
+∂u, l∆ ≥ 0
+
+∂l, u∆ ≤ 0 
+
+> ∂uu∆−∂ll∆
+> u∆−l∆
+
+, otw. 
+
+,
+
+ˆβl = − ˆβu = (∂u−∂l)l∆u∆ 
+
+> u∆−l∆
+
+,λl = ( α − αl),λu = ( α − αu) .
+
+32 Soundness of our linear relaxation depends on the relaxation for activation functions with bounded derivative given by R AVEN. We restate their soundness result here: 
+
+Lemma I.2 (Correctness of R AVEN Relaxation [ 29 ]) . Given bounds x ∈ [lx, u x], y ∈ [ly , u y ], ∆ ∈
+
+[l∆, u ∆] and ∂l ≤ ddx σ(x) ≤ ∂u ∀x ∈ [min( lx, l y ), max( ux, u y )] , then 
+
+αl · ∆ + βl ≤ σ(x) − σ(x − ∆) ≤ αu · ∆ + βu , (24) 
+
+where 
+
+αl =
+
+
+
+∂l , l ∆ ≥ 0
+
+∂u , u ∆ ≤ 0 
+
+> ∂lu∆−∂ul∆
+> u∆−l∆
+
+, otw. 
+
+, αu =
+
+
+
+∂u, l∆ ≥ 0
+
+∂l, u∆ ≤ 0 
+
+> ∂uu∆−∂ll∆
+> u∆−l∆
+
+, otw. 
+
+, βl = −βu = (∂u − ∂l)l∆u∆
+
+u∆ − l∆
+
+.
+
+We extend the relaxation introduced by Banerjee et al. [29 ] to a differential transformer for p(x) −
+
+σ(x − ∆) for polynomial p and activation function σ using a verified bound on the approximation error ϵ ≥ max x∈[l,u ] |p(x) − σ(x)|. Given this information, we can overapproximate their difference by 
+
+σ(x) − σ(x − ∆) − ϵ ≤ p(x) − σ(x − ∆) ≤ σ(x) − σ(x − ∆) + ϵ (25) and if σ has bounded derivative, we can therefore apply the corresponding relaxation for f = g = σ
+
+given in R AVEN [29]. However, since V ERY DIFF [ 23 ] requires parallel linear relaxations, we have to slightly adjust the non-parallel R AVEN-relaxation. 
+
+Proof of Theorem 4.2. We construct parallel lower and upper linear relaxations for σ(x) − σ(x − ∆) 
+
+by slightly modifying the non-parallel R AVEN relaxation (Lemma I.2) 
+
+αl · ∆ + ˆβl ≤ σ(x) − σ(x − ∆) ≤ αu · ∆ + ˆβu . (26) We first compute the mean slope 
+
+α = 12 (αl + αu) (27) of the non-parallel linear lower and upper relaxations. Then we compute upward and downward shifts for the linear function α · ∆ s.t. it is larger than R AVEN’s upper relaxation αu · ∆ + βu and smaller than R AVEN’s lower relaxation αl · ∆ + βl. Finally, we apply Equation 25 to lift the correctness result from σ(x) − σ(x − ∆) to a result for p(x) − σ(x − ∆) .For the upward shift, we compute 
+
+βu = max  
+
+> ∆∈[l∆,u ∆]
+
+α∆ − (αu∆ + ˆβu) = max 
+
+> ∆∈[l∆,u ∆]
+
+(α − αu)∆ + ˆβu (28) 
+
+=
+
+(
+
+(α − αu)l∆ + ˆβu , α − αu ≤ 0(α − αu)u∆ + ˆβu , α − αu > 0 , (29) where the case distinction is due to changing monotonicity of (α − αu)∆ + ˆβu.Similarly, we compute the shift for the lower bound as 
+
+βl = min  
+
+> ∆∈[l∆,u ∆]
+
+α∆ − (αl∆ + ˆβl) = min 
+
+> ∆∈[l∆,u ∆]
+
+(α − αl)∆ + ˆβl (30) 
+
+=
+
+(
+
+(α − αl)l∆ + ˆβl , α − αl ≥ 0(α − αl)u∆ + ˆβl , α − αl < 0 (31) With the above steps, we obtain 
+
+α∆ + βl ≤ σ(x) − σ(x − ∆) ≤ α∆ + βu (32) over the domain of interest. Applying Equation 25, we obtain our final statement 
+
+α∆ + βl − ϵ ≤ p(x) − σ(x − ∆) ≤ α∆ + βu + ϵ . (33) 33
