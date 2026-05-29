@@ -1,0 +1,968 @@
+Title: Metropolis-Scale Resilient and Trustworthy Traffic Flow Inference Using Multi-Source Data
+
+URL Source: https://arxiv.org/pdf/2605.25004v1
+
+Published Time: Tue, 26 May 2026 01:14:21 GMT
+
+Number of Pages: 25
+
+Markdown Content:
+# Metropolis-Scale Resilient and Trustworthy Traffic Flow Inference Using Multi-Source Data 
+
+## Qishen Zhou a,d , Yifan Zhang b, Michail A. Makridis c, Anastasios Kouvelas c, Yibing Wang d and Simon Hu e,∗
+
+> a
+
+School of Transportation, Jilin University, Changchun, 130022, China 
+
+> b
+
+Department of Computer Science, City University of Hong Kong (Dongguan), Dongguan, 523808, China 
+
+> c
+
+Institute for Transport Planning and Systems, ETH Zurich, Zurich, 8093, Switzerland 
+
+> d
+
+Institute of Intelligent Transportation Systems, College of Civil Engineering and Architecture, Zhejiang University, Hangzhou, 310058, China 
+
+> e
+
+ZJU-UIUC Institute, Zhejiang University, Haining, 314400, China 
+
+A R T I C L E I N F O 
+
+Keywords :state estimation traffic prediction uncertainty quantification floating car data meta-learning information fusion 
+
+A B S T R A C T 
+
+Inferring network-wide traffic states from sparse observations with high accuracy and trustwor-thy uncertainty quantification is essential for intelligent transportation systems, yet it remains challenging due to the underdetermined nature of the problem, multifaceted disturbances in sensing networks, and the inherent conflicts among multiple inference sub-tasks when modeled jointly. We propose the Task-Aware Attentive Neural Process (TA-ANP), a unified probabilistic framework for resilient and trustworthy global traffic state inference (GTSI) by fusing floating car data (FCD) with sparse fixed-detector measurements. By casting GTSI as a stochastic process, TA-ANP leverages the meta-learning properties of neural processes to adapt rapidly to changes in sensing configurations without retraining. A task-aware multi-query attention module with distinct spatiotemporal inductive biases is introduced to jointly handle three GTSI sub-tasks—real-time estimation at unobserved locations, forecasting at both observed and unobserved locations—while mitigating cross-task interference. For uncertainty quantification, we combine neural processes with Monte Carlo Dropout to capture both aleatoric and epistemic uncertainty. To support metropolis-scale evaluation, we construct the Metropolitan Multi-Source Traffic Dataset (MMTD), integrating fixed-loop sensor measurements, FCD statistics, and OpenStreetMap road-network data over an urban network of 2,371 road segments. Experiments on MMTD show that TA-ANP achieves state-of-the-art performance across all sub-tasks under deterministic and probabilistic metrics. The resulting well-calibrated uncertainties enable more efficient fixed-sensor placement with fewer sensor deployments. Under a Damage–Repair– Addition sensing lifecycle, TA-ANP demonstrates superior resilience in terms of disturbance absorption, performance recovery, and adaptability to unseen sensing configurations. 
+
+## 1. Introduction 
+
+Accurate, real-time, and predictive traffic state information is fundamental to network-wide monitoring and control in intelligent transportation systems (ITS). However, the high costs of procuring, installing, and maintaining fixed detectors typically limit deployments to a sparse subset of the network, leaving substantial spatial blind spots. In this context, global traffic state inference (GTSI) plays a pivotal role by inferring current and future traffic states over the entire road network, including unobserved segments, from sparse observations. In recent years, deep learning has made significant advances in modeling traffic-flow dynamics. Particularly, graph neural networks (Yu et al., 2018; Li et al., 2018; Wu et al., 2020; Song et al., 2020; Zhao et al., 2020; Wang et al., 2022) and transformer-style learners (Do et al., 2019; Liu et al., 2023, 2024b) have markedly improved forecast accuracy at observed locations. Moreover, research is shifting from point-wise prediction at observed sensors to global state estimation (Liu et al., 2019; Xu et al., 2023; Mei et al., 2023; Zhou et al., 2025b; Xu et al., 2025) and forecasting (Yang et al., 2023, 2024; Zhou et al., 2025a). Despite these advances, several challenges remain. 
+
+> ∗
+
+Corresponding author 
+
+qishenzhou@jlu.edu.cn (Q. Zhou); yifan.zhang@cityu-dg.edu.cn (Y. Zhang); michail.makridis@ivt.baug.ethz.ch 
+
+(M.A. Makridis); kouvelas@ethz.ch (A. Kouvelas); wangyibing@zju.edu.cn (Y. Wang); simonhu@zju.edu.cn (S. Hu) 
+
+> ORCID
+
+(s): 0000-0001-8074-4111 (Q. Zhou); 0000-0001-8882-4327 (Y. Zhang); 0000-0001-7462-4674 (M.A. Makridis); 
+
+0000-0003-4571-2530 (A. Kouvelas); 0000-0002-9832-6679 (S. Hu) 
+
+Zhou et al.: Preprint submitted to Elsevier Page 1 of 25 
+
+> arXiv:2605.25004v1 [cs.LG] 24 May 2026 Resilient and Trustworthy Traffic Flow Inference
+
+First, real-world sensing networks are subject to multifaceted disturbances. In the short term, communication outages and environmental interference cause temporary data loss. In the long term, detectors may fail permanently and new sensors could be deployed, leading to structural changes in the sensing network. In practice, these disturbances do not occur in isolation but coexist and evolve continuously, posing a fundamental challenge to the resilience of traffic sensing systems. Although resilience has been extensively studied for transportation infrastructure under natural disasters and sudden incidents, with emphasis on capacity degradation and post-disruption recovery (Yao et al., 2025; Li et al., 2025), much less attention has been paid to the cyber-physical resilience of ITS, the ability of the state-inference layer to remain dependable and functional amidst physical disruptions to fixed sensing infrastructure (Liu and Chen, 2026). This gap is particularly pronounced for traffic sensing networks operating under such multifaceted and evolving disturbances. From a modeling perspective, most existing work targets the imputation of transient missing data (Liang et al., 2022), whereas the structural changes of sensing networks remains underexplored (Zhou et al., 2025a). Furthermore, many existing approaches are transductive (Bahadori et al., 2014; Zhang et al., 2020; Nie et al., 2023a). Consequently, changes in sensing topology can invalidate the learned model and necessitate costly retraining, underscoring limited resilience to multifaceted disturbances in the sensing environment. Second, large-scale GTSI is inherently an underdetermined inverse problem with multiple sources of uncertainty. Unmeasured latent factors introduce intrinsic stochasticity, while spatially sparse measurements permit multiple plausible solutions consistent with the observations. The interplay of these factors leads to complex uncertainty in inferred traffic states. Reliable quantification of this uncertainty is a prerequisite for trustworthy inference, as it enables decision-makers to assess the confidence of inferred states and act accordingly. However, existing work on uncertainty quantification (UQ) for traffic inference primarily targets forecasting at observed locations (Cheng et al., 2024), whereas UQ for inferring states on uninstrumented segments remains limited. Furthermore, incorporating mobile sensing alongside sparse fixed detectors could provide additional observational constraints and potentially reduce underdetermination; yet large-scale empirical evidence for such multi-source fusion in GTSI remains scarce. Third, GTSI can be naturally decomposed into three closely related sub-tasks: (1) real-time state estimation on unobserved segments, (2) forecasting at observed locations, and (3) forecasting on unobserved segments. A unified framework for these sub-tasks is attractive, as it can improve computational efficiency and avoid maintaining separate models. However, the three sub-tasks operate under different information regimes and therefore favor heterogeneous, and sometimes conflicting, spatiotemporal modeling assumptions. Prior work (Zhou et al., 2025a) suggests that this heterogeneity can induce a seesaw effect across sub-tasks, where improving one sub-task comes at the expense of another, making joint modeling non-trivial and still largely underexplored. To address these challenges, we synergistically leverage floating car data (FCD) and sparse fixed detectors, formulate GTSI as a stochastic process, and propose the Task-Aware Attentive Neural Process (TA-ANP) for resilient and trustworthy inference of global traffic volume. The key contributions of this work are fourfold. 
+
+• We formulate each fixed-sensor configuration induced by multifaceted disturbances as a distinct inference context, and develop a context-conditioned meta-learning neural process that adapts to sensing-topology changes without expensive retraining. Experiments under compounded disturbances demonstrate resilience in disturbance absorption, performance recovery, and adaptation to unseen sensing configurations. 
+
+• We propose operational definitions of aleatoric and epistemic uncertainties in the context of GTSI and integrate neural processes with Monte Carlo (MC) Dropout to jointly capture both types of uncertainty. We further verify that the estimated uncertainty is well-calibrated with inference errors and effectively supports subsequent decision-making, such as fixed-sensor placement in multi-source data environments. 
+
+• We propose a cross-attention mechanism with task-specific query projections that enables adaptive aggregation of context information with differentiated spatiotemporal inductive biases for each sub-task. This design effectively mitigates cross-task interference in the unified attention space, alleviating the seesaw effect across the three GTSI sub-tasks. 
+
+• We construct a metropolis-scale multi-source urban traffic dataset and benchmark TA-ANP against six repre-sentative baselines. TA-ANP achieves state-of-the-art (SOTA) performance under both deterministic accuracy metrics and probabilistic scoring rules. For reproducibility, we have released the processed datasets (Zhou, 2026a) and will make the implementation of TA-ANP and the data processing code publicly available upon publication.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 2 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+The remainder of the paper is organized as follows: Section 2 presents a review of the related literature. Section 3 provides the formalization of the problem. Section 4 details the proposed TA-ANP. Section 5 reports on the performance and ablation results of the proposed method. Section 6 concludes the paper. 
+
+## 2. Literature review 
+
+2.1. Global traffic state inference (GTSI) 
+
+The core challenge of GTSI lies in recovering network-wide traffic states from spatially sparse observations, which usually renders the problem undetermined. In practice, this calls for introducing additional constraints to narrow the feasible solution space. Depending on how such constraints are imposed, existing approaches can be broadly grouped into three categories: (1) imposing explicit mathematical structure into optimization modeling, (2) embedding spatiotemporal modeling assumptions or physical knowledge into the neural network design, and (3) incorporating side information to provide complementary observational constraints. Tensor completion, as a representative of the first category, formulates state recovery as an optimization problem based on low-rank assumptions and further incorporates spatiotemporal regularization, such as graph Laplacian-based spatial smoothness and temporal autoregressive constraints, to narrow the solution space (Yu et al., 2016; Song et al., 2019; Zhang et al., 2020; Lei et al., 2022; Nie et al., 2023a). However, these methods remain transductive, meaning any structural change in the sensing network requires re-optimization from scratch. Furthermore, incorporating additional data sources such as FCD typically necessitates non-trivial reformulation of the optimization problem structure. Within the second strategy, Graph neural networks (GNNs) implicitly constrain through architectural inductive biases, introducing spatial similarity assumptions between neighboring nodes that allow observations at instrumented nodes to constrain the estimation at unobserved ones (Wu et al., 2021; Nie et al., 2023b; Xu et al., 2025; Zhou et al., 2025a,b). Physics-informed machine learning (PIML) methods go further by explicitly embedding traffic flow models as learnable components into differentiable computational graphs (Zhan et al., 2017; Yuan et al., 2022; Shi et al., 2021; Wang and Yang, 2024; Guarda et al., 2024). This explicit modeling comes with a strong dependence on detailed network specification (e.g., complex entry /exit structures ) (Ma et al., 2020), and such methods may generalize poorly beyond the spatiotemporal range of the training data (Kim et al., 2021). Compared to optimization-based approaches, the expressive power of deep learning better captures complex nonlinear spatiotemporal dependencies. However, under extremely sparse observations, even with architectural inductive biases and physical constraints the problem may be made technically well-posed, but the resulting estimates can remain low-fidelity and highly uncertain, motivating the incorporation of richer data sources. Within the third strategy, a variety of auxiliary data have been leveraged, including FCD (Meng et al., 2017; Tang et al., 2019; Zhang et al., 2020; Xu et al., 2024; Chen et al., 2026), social media check-in data (Shao and Chen, 2018), turning rate (Xu et al., 2023), and population information (Laraki et al., 2022), each offering a distinct dimension of constraint on the inference problem. Among these, FCD is particularly valuable as it directly captures traffic information and its availability has grown substantially with the proliferation of connected vehicles and mobile sensing. Nevertheless, FCD remains spatially sparse and temporally irregular, and the lack of publicly available large-scale datasets pairing FCD with fixed detector records has left large-scale empirical validation of multi-source fusion in GTSI nearly absent. Orthogonal to the above constraint strategies, another gap in the literature is that the aforementioned studies predominantly focus on real-time state estimation on unobserved segments, whereas relatively few simultaneously address future state forecasting at both observed and unobserved locations (Zhou et al., 2025a; Roth and Liebig, 2022; Mei et al., 2023), and studies that jointly model all three GTSI sub-tasks remain rare. 
+
+2.2. Resilience of cyber-physical traffic sensing systems 
+
+In this work, we focus on the resilience of cyber-physical traffic sensing systems, i.e., the ability of the learning-based inference layer to remain dependable when the sensing configuration and data availability evolve due to disruptions in the physical sensing infrastructure. Drawing on a lifecycle view of resilience in learning-enabled systems (Moskalenko et al., 2023), we characterize resilience here in terms of disturbance absorption, recovery, and adaptation under evolving operating conditions. From this perspective, a resilient model should (i) limit performance degradation under disruptions, (ii) recover as sensing capability is restored, and (iii) generalize to previously unseen sensor configurations without costly retraining. This framing motivates a closer look at modeling paradigms that explicitly support topology generalization and rapid adaptation.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 3 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+Two methodological threads are particularly relevant to building resilient traffic sensing systems. Inductive GNNs, via sample-and-aggregate mechanisms, can generalize to unseen nodes and varying graph structures, providing a structural basis for accommodating topology changes (Wu et al., 2021; Xu et al., 2025; Zhou et al., 2025a). Meta-learning approaches, exemplified by neural processes, learn priors over inference functions from different contexts, enabling rapid adaptation to new sensing configurations without full retraining (Garnelo et al., 2018b; Xu et al., 2023).Although initial applications in GTSI, neither line has been systematically evaluated under compounded, multi-stage disturbances (e.g., damage, repair, and network expansion occurring in sequence), and their relative resilience has not been explicitly benchmarked under a unified experimental setting. 
+
+2.3. Uncertainty quantification for traffic state inference 
+
+Incorporating Uncertainty Quantification (UQ) into data-driven traffic state inference can support risk-aware decision-making in ITS (Cheng et al., 2024). In active control, UQ helps prioritize interventions for potential congestion with high confidence (Zechin and Cybis, 2023); in vehicle routing, it enables users to trade off “fastest on average” against “most reliable travel time” (Olivier et al., 2023). For the GTSI considered in this work, UQ provides an additional benefit: by producing uncertainty maps, it can guide active sensing (Mei et al., 2023), providing support for optimizing the placement of fixed-sensors and dynamically scheduling mobile sensing resources (Maljkovic and Geroliminis, 2025; Xiong et al., 2025). In the deep learning literature, uncertainty is commonly decomposed into Aleatoric Uncertainty (AU) and Epistemic Uncertainty (EU). AU captures irreducible randomness arising from inherent stochasticity and measurement noise, whereas EU reflects reducible uncertainty attributable to limited data and model knowledge gaps; for compre-hensive methodological taxonomies we refer readers to established surveys (Abdar et al., 2021; Gawlikowski et al., 2023). In recent years, UQ has attracted increasing attention in data-driven TSI (Cheng et al., 2024). Existing studies mainly incorporate UQ through several technical routes, including Monte Carlo dropout (Sengupta et al., 2024), deep ensembles (Qian et al., 2023), and model designs that directly output prediction distributions (Li et al., 2022; Xiong et al., 2026). A closer look, however, reveals that most UQ efforts are concentrated on forecasting at observed locations, whereas UQ efforts in global inference settings involving state estimation and forecasting on unobserved segments remain underexplored. For example, some works employ inherently probabilistic mechanisms, such as generative adversarial networks (Xu et al., 2020) or KL-divergence-based objectives (Liu et al., 2024a), yet do not report or evaluate the resulting uncertainty estimates. To date, only a limited number of studies explicitly investigate UQ in global inference (Lei et al., 2022, 2024; Xu et al., 2023; Mei et al., 2023; Wang et al., 2026; Ding et al., 2025). To our knowledge, even fewer works explicitly model and quantify EU Mei et al. (2023); Ding et al. (2025).This gap is critical for GTSI because it requires inferring states on many unobserved road segments, and the underlying state distributions can differ substantially across locations. If EU is not used to characterize what the model does not know in these unseen regions, the model can become overconfident and make erroneous inferences. Moreover, recent surveys emphasize the need for deep probabilistic models in ITS that can update predictions and reassess uncertainty as new data arrive (Cheng et al., 2024). This requirement for dynamic UQ capability also resonates with the resilience-related challenges discussed in the last subsection. 
+
+## 3. Problem formulation 
+
+We study Global Traffic State Inference (GTSI) in a road network with a road-segment set  over a historical window ℎ = {1 , … , 𝑇 } and a future window 𝑓 = { 𝑇 + 1 , … , 𝑇 + 𝐻 }. We denote the full spatiotemporal domain as  =  × ( ℎ ∪ 𝑓 ). Each spatiotemporal point (𝜈, 𝑡 ) is represented by an identity vector 𝐱 (𝜈, 𝑡 ) that concatenates (i) temporal features, (ii) static road attributes 𝐬 𝜈 (e.g., road class, number of lanes) and (iii) dynamic features derived from FCD 𝐠 (𝜈, 𝑡 ) (e.g., volume and median speed of floating cars), with the associated traffic state 𝑦 (𝜈, 𝑡 ) ∈ ℝ+. Observations are available only on  = 𝑜 × ℎ, where 𝑜 ⊊  denotes road segments equipped with fixed sensors, forming the context set  = {( 𝐱 (𝜈, 𝑡 ), 𝑦 (𝜈, 𝑡 )) ∣ ( 𝜈, 𝑡 ) ∈  }. The target set  includes all remaining points in , covering (1) spatial imputation at time 𝑡 ≤ 𝑇 (estimation at unobserved locations), (2) forecasting at observed locations and (3) forecasting at unobserved locations. Our primary objective is to approximate the conditional distribution 𝑝 (𝑌  ∣ 𝑋  , ).To achieve this, we view traffic states as realizations from a stochastic process evaluated at 𝐱 (𝜈, 𝑡 ):
+
+𝑦 (𝜈, 𝑡 ) = 𝑓 (𝐱 (𝜈, 𝑡 )) + 𝜖, 𝜖 ∼  (0 , 𝜎 2), (1) where 𝑓 is a random function (i.e., a sample path) drawn from the process prior and 𝜖 represents the combined effect of sensor measurement noise and unmodeled intrinsic systemic randomness. Although we adopt a Gaussian assumption           
+
+> Zhou et al.: Preprint submitted to Elsevier Page 4 of 25 Resilient and Trustworthy Traffic Flow Inference ...
+> ...
+> ...
+> Encoder
+> Cross Attention
+> Decoder
+> ~
+> Encoder
+> ...
+> ... ...
+> Context Points Target Points
+> ...
+> Split Identity vector
+> Latent path
+> ... sTask-Aware Multi-Query cKey Value Linear Linear Linear
+> Linear
+> Determine representation
+> Mean Traf fi c state
+> ～Sample
+> Sampled latent variable cConcat Determine path
+> Figure 1: The overview of Task-Aware Attentive Neural Process (TA-ANP).
+
+(𝜖 ∼  (0 , 𝜎 2)) for mathematical tractability, this noise distribution can be refined to domain-specific forms based on the characteristics of the real-world network and observation in future extensions. 
+
+## 4. Methodology 
+
+A natural Bayesian instantiation of the above stochastic-process view is the Gaussian Process (GP). The fun-damental premise of a GP lies in encoding prior knowledge about correlations between different locations via a covariance function (i.e., kernel function) 𝑘 (𝐱 , 𝐱 ′). Leveraging these correlations, the GP performs an optimal weighted combination of observed information from the context set to infer the state of any target point. This characteristic allows GP to flexibly fit complex dynamic traffic patterns. Furthermore, the analytic posterior distribution provided by its Bayesian framework inherently supports uncertainty quantification, aligning perfectly with the objectives of this work. However, these benefits come at a prohibitive computational cost: exact GP inference scales as (( 𝑛 + 𝑚 )3) in the total number of inputs, where 𝑛 and 𝑚 denote the sizes of the context (observed) set and the target (query) set, respectively. This cubic scaling makes global inference on large-scale urban road networks impractical. To address this, we adopt Neural Processes (NPs) (Garnelo et al., 2018b) as our foundational framework. Through amortized inference with neural networks, NPs reduce the per-episode computational complexity to (𝑛 +𝑚 ). To better capture the multi-task nature of global traffic inference, we further propose Task-Aware Attentive Neural Processes (TA-ANP), built on the NP architecture. An overview of TA-ANP is shown in Figure 1. We first introduce the NP backbone and then describe how attention and a task-aware multi-query design improve performance. 
+
+4.1. Stochastic process modeling via Neural Processes 
+
+The Neural Process (NP) family is commonly instantiated as Conditional Neural Processes (CNP) (Garnelo et al., 2018a) and Latent Neural Processes (LNP) (Garnelo et al., 2018b). Given a context set  = {( 𝐱 𝑖 , 𝑦 𝑖 )} 𝑛 𝑖 =1 and target inputs 𝐱  , both variants share three building blocks: 
+
+• Encoder : maps each context pair (𝐱 𝑖 , 𝑦 𝑖 ) ∈  to a representation 𝐫 𝑖 , i.e., 𝐫 𝑖 = ℎ𝜃 (𝐱 𝑖 , 𝑦 𝑖 ).
+
+• Aggregator : combines {𝐫 𝑖 }𝑛 𝑖 =1 into a single global summary 𝐑 using a permutation-invariant operator (e.g., mean pooling), i.e., 𝐑 = AGG({ 𝐫 𝑖 }) .
+
+• Decoder : conditions on 𝐱  and the aggregated representation to parameterize the predictive distribution at targets, i.e., 𝑝 (𝑦  ∣ 𝐱  , 𝐑 ).The key difference lies in how the prior function is represented. The CNP is purely deterministic and decodes directly from the aggregated representation 𝐑 . In contrast, LNP introduces a stochastic latent path by using 𝐑 to   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 5 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+parameterize 𝑝 (𝐳 ∣ ) and marginalizing over 𝐳 at prediction time, i.e., 𝑝 (𝑦  ∣ 𝐱  , ) = ∫ 𝑝 (𝑦  ∣ 𝐱  , 𝐳 ) 𝑝 (𝐳 ∣ ) 𝑑 𝐳 .This stochasticity improves uncertainty modeling and enables diverse function samples. Despite this difference, both CNP and LNP typically compress the entire context set into a fixed-dimensional vector, creating an information bottleneck that obscures the heterogeneous contributions of individual context points. For traffic fields with strong local spatial autocorrelation and for GTSI scenarios that couple multiple prediction sub-tasks, such indiscriminate compression can wash out critical local signals and blur task-specific cues, degrading predictive performance. 
+
+4.2. Task-aware attentive neural process 
+
+To alleviate the global-summary bottleneck of CNP/LNP, this study adopts Attentive Neural Processes (ANP) (Kim et al., 2019) as the backbone architecture, which augments the LNP-style latent path with an attention-based deterministic path implemented by multi-head cross-attention. In this mechanism, the target point identifier vector serves as the query ( 𝐐 ), while the context point identifier vectors and traffic states serve as keys ( 𝐊 ) and values ( 𝐕 ), respectively. By computing attention weights, the mechanism adaptively aggregates context information 𝐫  to generate a target-specific representation 𝐫  . The decoder simultaneously receives the latent variable 𝐳 from the latent path and 
+
+𝐫  from the deterministic path, thereby enhancing the representation of local autocorrelation. As previously discussed, global inference essentially encompasses three sub-tasks. From a signal processing perspective, these three tasks exhibit fundamentally different dependencies on spatiotemporal frequency domain features: 
+
+• Real-time estimation at unobserved locations : Lacking historical priors for specific nodes, the model must interpolate values for unobserved locations based on spatial homogeneity. The inference accuracy relies on extracting spatial low-frequency components (i.e., global trends and smooth evolution). In this context, excessive spatial high-frequency details not only fail to aid inference but can lead to overfitting. Therefore, the mechanism design must prioritize spatial smoothing and the capture of common features. 
+
+• Forecasting at observed locations : This task possesses complete historical observation sequences for the target nodes. To achieve high-fidelity forecasting, the model must retain spatial high-frequency components to accurately characterize the local fluctuations unique to the node, distinguishing it from its neighborhood. Temporally, the model relies on temporal low-frequency components to capture robust evolutionary trends. 
+
+• Forecasting for unobserved locations : As the most challenging task, it lacks historical references and requires the capture of robust temporal trends. This demands that the model focus on extracting dual spatiotemporal low-frequency components. The inference process must filter out high-frequency interference to achieve robust generalized deduction. Standard ANP employs a single shared linear projection 𝐖 𝑄 to generate query vectors for all tasks (i.e., 𝐐 ′ =
+
+𝐐𝐖 𝑄 ). This parameter-sharing mechanism forces the model to trade off conflicting generalization requirements (e.g., spatial low-frequency vs. spatial high-frequency) within a unified feature space, making it prone to feature interference and negative transfer between tasks. To address these challenges, this study proposes a Task-Aware Multi-Query Mechanism (TAMQM). While maintaining shared projections for keys ( 𝐊 ) and values ( 𝐕 ), this mechanism defines independent linear projection matrices for the three sub-tasks: 
+
+𝐐 ′task = 𝐐 task 𝐖 𝑄  
+
+> task
+
+, where 𝐖 𝑄  
+
+> task
+
+∈ { 𝐖 𝑄  
+
+> s
+
+, 𝐖 𝑄  
+
+> t
+
+, 𝐖 𝑄  
+
+> st
+
+} (2) Through this design, the model can implicitly learn differentiated attention strategies for specific tasks, satisfying the distinct spatiotemporal frequency signal requirements of each sub-task. 
+
+4.3. Uncertainty modeling in global traffic inference 
+
+Uncertainty is commonly decomposed into Epistemic Uncertainty (EU) and Aleatoric Uncertainty (AU). EU reflects uncertainty due to limited knowledge and is, in principle, reducible, whereas AU accounts for variability that is typically treated as irreducible (e.g., inherent randomness and observation noise) (Hüllermeier and Waegeman, 2021). Distinguishing and modeling these two components is important for achieving well-calibrated predictions and supporting safety-critical downstream decisions.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 6 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+At the same time, the philosophical boundary between EU and AU is not absolute. Under idealized assumptions of complete knowledge and unlimited resources, one may argue that even uncertainty often regarded as aleatoric could be reduced and thus subsumed into EU (Vrouwenvelder, 2003; Faber, 2005). Such a view, however, is of limited practical value: it would imply arbitrarily complex models and make the EU/AU distinction dependent on the decision-maker’s information state. Therefore, following the pragmatic framework of Kiureghian and Ditlevsen (2009), we adopt the following operational definitions of EU and AU tailored to the GTSI setting: 
+
+• AU refers to the uncertainty induced by observation noise and unmodeled factors that perturb system dynamics and are difficult or intentionally not eliminated from the outset. 
+
+• EU refers to uncertainty caused by limited knowledge, including the non-uniqueness of plausible solutions under sparse sensing and potential model misspecification under data distribution shifts. In principle, EU can be reduced by acquiring additional observations. These definitions provide an operational basis for allocating sensing resources and guiding model improvement. Next, we describe how TA-ANP models these two uncertainty components. TA-ANP models AU through its probabilistic decoder, which outputs the parameters of a Gaussian predictive distribution, i.e., 𝑝 (𝑦  ∣ 𝐫  , 𝐳 ) =  (𝜇  , 𝜎 2 
+
+> 
+
+). The predicted variance 𝜎 2 
+
+> 
+
+directly captures the aleatoric component attributable to observation noise and unmodeled factors (Kendall and Gal, 2017). TA-ANP captures EU by sampling multiple prediction functions from the global latent posterior 𝐳 ∼ 𝑞 (𝐳 ∣ )
+
+that are consistent with the available context observations. The resulting dispersion in function space reflects solution non-uniqueness under sparse sensing, thereby characterizing EU due to sensor sparsity. However, because TA-ANP uses fixed model parameters, it cannot represent EU arising from model misspecification under distribution shifts. As a result, in out-of-distribution scenarios, the model may fail to communicate its knowledge gaps and produce overconfident predictions. To improve EU quantification, we further cast TA-ANP in a Bayesian neural network framework. As exact Bayesian inference is intractable, we follow Gal and Ghahramani (2016) and employ Monte Carlo Dropout (MC Dropout) to obtain an approximate variational posterior over model parameters. Concretely, we insert dropout layers into the encoder and decoder and perform 𝐾 stochastic forward passes at inference time, generating a set of predictive samples 
+
+{( 𝜇 𝑖 , 𝜎 2 
+
+> 𝑖
+
+)} 𝐾 𝑖 =1 . Using the law of total variance (Kendall and Gal, 2017; Valdenegro-Toro and Mori, 2022), the predictive variance at a target point is decomposed as 
+
+Var( 𝑦 ∗) ≈ 1
+
+𝐾 
+
+> 𝐾
+
+∑
+
+> 𝑖 =1
+
+𝜎 2
+
+> 𝑖
+
+⏟⏞⏟⏞⏟ 
+
+> AU
+
++ 1
+
+𝐾 
+
+> 𝐾
+
+∑
+
+> 𝑖 =1
+
+(𝜇 𝑖 −̄𝜇 ) 2
+
+⏟⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏟ 
+
+> EU
+
+, (3) where ̄ 𝜇 = 1
+
+> 𝐾
+
+∑𝐾 𝑖 =1 𝜇 𝑖 is the predictive mean of the ensemble. The first term estimates AU by averaging predictive variances, whereas the second term estimates EU via the dispersion of predictive means. 
+
+4.4. Model training 
+
+The model is trained by maximizing the log-likelihood of the target observations 𝐲  conditioned on the context set 
+
+. Because the model contains continuous latent variables 𝐳 , the marginal likelihood involves an intractable integral. We therefore maximize the evidence lower bound (ELBO), and equivalently minimize the negative-ELBO objective 
+
+(𝜃, 𝜙 ) = NLL + 𝛽 KL , (4) where 𝜃 and 𝜙 denote the parameters of the encoder and decoder, respectively, and 𝛽 controls the strength of the latent-space regularization. The first term, NLL , corresponds to the predictive negative log-likelihood. Assuming an independent Gaussian predictive distribution 𝑝 (𝑦 𝑖 ∣ 𝐱 𝑖 , 𝐳 , ) =  (𝜇 𝑖 , 𝜎 2 
+
+> 𝑖
+
+), we have 
+
+NLL = − 𝔼 𝑞 (𝐳 ∣)
+
+⎡⎢⎢⎣∑
+
+> (𝐱 𝑖 ,𝑦 𝑖 )∈ 
+
+log  (𝑦 𝑖 ∣ 𝜇 𝑖 , 𝜎 2 
+
+> 𝑖
+
+)
+
+⎤⎥⎥⎦
+
+≈ ∑
+
+> (𝐱 𝑖 ,𝑦 𝑖 )∈ 
+
+( (𝑦 𝑖 − 𝜇 𝑖 )2
+
+2𝜎 2
+
+> 𝑖
+
++ log 𝜎 𝑖 
+
+)
+
++ const . (5)               
+
+> Zhou et al.: Preprint submitted to Elsevier Page 7 of 25 Resilient and Trustworthy Traffic Flow Inference
+> Table 1
+> Summary statistics of the urban-road subset used in this paper.
+> Item Value
+> Study area (Madrid urban) above 200 km 2
+> Road segments ( 𝑁 )26,166 Number of fixed sensors 2,371 Target variable Fixed-sensor flow Fixed-sensor data missing rate 9.76% TomTom penetration rate 2%-10% Time resolution 15 min Study period Aug.1st 2024 - Aug.30th 2024 Attributes Fixed-sensor flow, FCD flow, FCD speed, static road attributes (OSM-derived), betweenness and closeness centrality (segment level)
+> (a) Spatial distribution of fixed sensors in MMTD. (b) TomTom data coverage in MMTD.
+> Figure 2: Map view of MMTD
+
+This term encourages accurate fitting while penalizing overconfident predictions through the variance-dependent weighting. The second term, KL , is a Kullback–Leibler (KL) regularizer that aligns the variational posterior inferred from the context with that inferred from a larger target set. Following the NP training procedure summarized by Le et al. (2018), we randomly sample a batch-specific target set  ′ from the observations and then subsample a context set 
+
+′ ⊂  ′. The KL term is defined as 
+
+KL = 𝐷 KL 
+
+(𝑞 (𝐳 ∣ ′) ‖ 𝑞 (𝐳 ∣  ′)). (6) 
+
+## 5. Numerical experiments 
+
+This section evaluates TA-ANP for metropolis-scale GTSI on an urban road network at the road-segment level. To support this evaluation, we constructed the Metropolitan Multi-Source Traffic Dataset (MMTD) by integrating (i)fixed-loop sensor measurements released by the Madrid City Council (Ayuntamiento de Madrid, 2026b), (ii) floating-car traffic statistics provided by TomTom (TomTom, 2026), (iii) an OpenStreetMap (OSM) road network (Boeing, 2025), (iv) and lane-count annotations released by the Madrid City Council (Ayuntamiento de Madrid, 2026a). MMTD is produced through a preprocessing pipeline that aligns heterogeneous data layers with physical road segments, normalizes segment granularity, consolidates co-located sensors, and cleans raw measurements. The resulting observations are aggregated at a 15 min resolution. We focus on traffic volume inference in the urban-road subset. Fixed-loop sensors provide supervision in terms of traffic flow. TomTom statistics and OSM-derived road attributes, such as road class and segment length, as well as graph-based network measures, serve as auxiliary observations. Dataset details are reported in Table 1, and the spatial coverage of fixed sensors and FCD is illustrated   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 8 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+in Fig. 2a and Fig. 2b, respectively. For reproducibility, we release the processed fixed-sensor data together with the road-network files and node features (Zhou, 2026a). We also provide code for integrating TomTom data and loading multi-source observations, while TomTom data cannot be redistributed due to licensing constraints (Zhou, 2026b). A set of experiments is conducted to answer the following questions. 
+
+• Q1: Overall performance. (Subsection 5.2) Across the three GTSI subtasks, how does TA-ANP compare with representative baselines in terms of point accuracy and UQ quality? To what extent do the estimated uncertainties align with the inference errors? 
+
+• Q2: Uncertainty-guided sensor placement. (Subsection 5.3) Can the state inference uncertainty quantified by TA-ANP effectively guide fixed sensor placement in multi-source sensing (fixed sensors and probe-vehicle data), thereby reducing greater state inference errors with fewer sensor inputs? 
+
+• Q3: Resilience under multifaceted sensing disturbances. (Subsection 5.4) How resilient is TA-ANP to sensing disturbances induced by network damage, repair, and incremental deployment? 
+
+• Q4: Impact of fixed sensor deployment density. (Subsection 5.5) As the availability of fixed sensors decreases, how do the predictive accuracy and UQ performance of TA-ANP’s evolve and how does its degradation curve differ from those of the baselines? 
+
+• Q5: Gains from FCD and penetration effects. (Subsection 5.6) How do different information components in FCD contribute to GTSI performance? How do probe-vehicle penetration rate and inherent spatiotemporal heterogeneity influence TA-ANP’s inference performance? 
+
+• Q6: Ablation of the core components of TA-ANP’s. (Subsection 5.7) To what extent do TAMQM and MC Dropout contribute to the overall performance and UQ quality of TA-ANP, and are they essential components of the model? 
+
+5.1. Experimental setup 
+
+Baseline methods. In benchmarking our approach, we selected seven representative models categorized into spatiotemporal GNNs—AGCRN (Bai et al., 2020), STCAGCN (Nie et al., 2023b), DGAE (Zhou et al., 2025b), and MoGERNN (Zhou et al., 2025a)—and uncertainty-aware models—UIGNN (Mei et al., 2023), DeepSTUQ (Qian et al., 2023), and DistPred (Liang, 2025). To ensure a fair comparison while preserving the core design principles of each baseline method, we have made the necessary extensions to their feature-processing modules, enabling them to leverage the multi-source information provided by the MMTD dataset. 
+
+Evaluation metrics. To comprehensively assess model performance, we establish evaluation metrics from two dimensions: deterministic prediction and probabilistic prediction. For all metrics, the original missing values in the dataset are excluded from the calculations. To evaluate the accuracy of deterministic predictions, we employ five widely used metrics, including Mean Absolute Error (MAE), Root Mean Square Error (RMSE), Symmetric Mean Absolute Percentage Error (SMAPE), Relative Root Mean Square Error (RRMSE) and the Coefficient of Determination ( 𝑅 2). Furthermore, probabilistic calibration quality is assessed via Continuous Ranked Probability Score (CRPS) (Matheson and Winkler, 1976), Prediction Interval Coverage Probability (PICP) and Quantile Interval Calibration Error (QICE) (Han et al., 2022). Standard deterministic metrics (MAE, RMSE, and 𝑅 2) follow their conventional definitions and are omitted for brevity; the definitions of SMAPE, RRMSE, CRPS, PICP, and QICE are provided in Section A. 
+
+Implementation details. The proposed TA-ANP model is implemented based on the PyTorch 2.6.0 framework and is deployed and trained on a NVIDIA RTX 4090 GPU. Both the input history length and the prediction length are set to 4 time steps (i.e., 1 hour). The training process utilizes the AdamW optimizer for parameter updates. Throughout the temporal dimension, the entire dataset is partitioned into training and test sets in a 6:4 ratio. To avoid overfitting, a portion of the data is randomly sampled from the time periods corresponding to the training set to form a validation set, which is used in conjunction with an early stopping strategy. During the sample construction phase, a sliding window with a step of 1 is applied to extract the time series. Unless otherwise specified, experiments default to treating 40% of fixed sensors in the dataset (949 in total) as physical sensors on observed road segments, while the remaining 60% of fixed sensors (1422 in total) are considered virtual sensors on unobserved road segments. The data from virtual sensors do not participate in model training or validation and are used solely for evaluation purposes.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 9 of 25
+
+Resilient and Trustworthy Traffic Flow Inference 
+
+Table 2 
+
+Comparison of Traffic Flow Inference Performance Across Different Models. Bold and underlined text indicate the best and second-best results, respectively. The Improvement column quantifies the gain of TA-ANP over the best baseline, computed from unrounded values. Metrics marked with ↓ indicate that lower values correspond to better model performance, while those marked with ↑ indicate the opposite. The PICP metric, marked with an asterisk (*), is considered better the closer it is to the ideal coverage interval of 95%. 
+
+Model AGCRN STCA GCN DGAE MoGE RNN UIGNN Deep STUQ DistPred TA-ANP Improve 
+
+> Estimation for Unobserved Location
+
+MAE ↓ 31.81 34.18 31.43 30.72 31.68 30.84 36.39 25.63 +16.57 
+
+RMSE ↓ 45.66 48.08 44.37 42.04 44.40 42.89 51.41 36.99 +12.01 
+
+SMAPE ↓ 37.16 38.92 35.51 36.61 37.12 36.42 41.67 29.80 +16.08 
+
+RRMSE ↓ 46.58 49.05 45.26 42.88 45.29 43.76 52.44 37.73 +12.01 
+
+R2 ↑ 0.54 0.49 0.56 0.61 0.56 0.59 0.41 0.70 +14.75 
+
+CRPS ↓ / / / / 23.51 22.39 78.45 18.51 +17.33 
+
+PICP ∗ / / / / 0.85 0.89 0.24 0.94 /
+
+QICE ↓ / / / / 0.011 0.011 0.076 0.007 +38.39 
+
+> Forecasting at Unobserved Location
+
+MAE ↓ 34.44 37.43 33.04 29.97 34.81 32.89 39.06 26.24 +12.45 
+
+RMSE ↓ 49.11 52.51 46.54 41.05 48.07 45.34 54.23 37.6 +8.4 
+
+SMAPE ↓ 39.99 42.73 37.57 35.36 41.06 39.6 44.31 30.56 +13.57 
+
+RRMSE ↓ 50.18 53.66 47.56 41.95 49.12 46.33 55.41 38.42 +8.41 
+
+R2 ↑ 0.46 0.39 0.52 0.63 0.49 0.54 0.35 0.69 +9.52 
+
+CRPS ↓ / / / / 25.72 23.94 75.2 18.93 +20.93 
+
+PICP ∗ / / / / 0.90 0.90 0.32 0.94 /
+
+QICE ↓ / / / / 0.009 0.011 0.071 0.007 +25.00 
+
+> Forecasting at Observed Location
+
+MAE ↓ 19.36 18.83 20.37 17.19 18.42 19.17 17.54 15.57 +9.42 
+
+RMSE ↓ 27.70 27.07 28.53 24.24 26.28 26.73 24.55 22.09 +8.87 
+
+SMAPE ↓ 23.43 25.19 26.36 22.62 23.54 25.76 22.55 19.99 +11.35 
+
+RRMSE ↓ 28.70 28.05 29.56 25.12 27.23 27.70 25.44 22.88 +8.92 
+
+R2↑ 0.83 0.84 0.82 0.87 0.85 0.84 0.87 0.89 +2.3 
+
+CRPS ↓ / / / / 13.35 13.71 69.54 11.18 +16.27 
+
+PICP ∗ / / / / 0.94 0.94 0.12 0.96 /
+
+QICE ↓ / / / / 0.008 0.007 0.010 0.007 0.00 
+
+5.2. Overall performance evaluation for global traffic flow inference (Q1) 
+
+As summarized in Table 2, TA-ANP achieves state-of-the-art (SOTA) performance across all inference tasks. Among deterministic baselines, MoGERNN is the strongest competitor, whereas DeepSTUQ performs best among probabilistic forecasting baselines. Notably, although DistPred performs well for point-wise traffic forecasting (Liang, 2025), its PICP in global inference involving unobserved locations drops well below the nominal level of 0.95, indicating poorly calibrated uncertainty estimates. For estimation at unobserved locations, TA-ANP outperforms all baselines by a large margin on every metric. For deterministic prediction, TA-ANP consistently achieves the lowest errors and the highest 𝑅 2; compared with the best baseline, it reduces prediction errors by 12.01%–16.57% and improves 𝑅 2 by 14.75%. For uncertainty quantification, relative to the strongest baseline (DeepSTUQ), TA-ANP reduces CRPS and QICE by 17.33% and 38.39%, respectively, while maintaining a high PICP of 0.94, demonstrating clear advantages in distributional inference. For the more challenging task of forecasting at unobserved locations, MoGERNN remains the best deterministic baseline, achieving an 𝑅 2 of 0.63 and substantially outperforming the other baseline methods. TA-ANP further improves deterministic performance, reducing errors by approximately 8–13% relative to MoGERNN and increasing 
+
+𝑅 2 to 0.69. At the probabilistic level, TA-ANP maintains excellent calibration (QICE = 0 .007 ) and interval coverage (PICP = 0 .94 ), while reducing CRPS by 20.93% compared with the best external baseline, DeepSTUQ. For forecasting at observed locations, all models perform strongly. MoGERNN and DistPred tie for second best with 𝑅 2 = 0 .87 , while TA-ANP increases 𝑅 2 to 0.89 and remains the top performer across all error metrics. For 
+
+Zhou et al.: Preprint submitted to Elsevier Page 10 of 25 Resilient and Trustworthy Traffic Flow Inference 20        
+
+> 40
+> MAE
+> TA-ANP MoGERNN DeepSTUQ UIGNN
+> 20
+> 40
+> 60
+> RMSE
+> 06:00
+> 10:00
+> 14:00
+> 18:00
+> 22:00
+> 20
+> 40
+> 60
+> SMAPE (%)
+> 06:00
+> 10:00
+> 14:00
+> 18:00
+> 22:00
+> 06:00
+> 10:00
+> 14:00
+> 18:00
+> 22:00
+> 06:00
+> 10:00
+> 14:00
+> 18:00
+> 22:00
+> 15min-ahead 30min-ahead 45min-ahead 60min-ahead
+> Figure 3: Diurnal evolution of network-wide prediction errors (averaged over all 2,371 locations). Columns correspond to TA-ANP and three baselines (MoGERNN, DeepSTUQ, and UIGNN); rows report MAE, RMSE, and SMAPE. Curves show forecast horizons from 15 to 60 minutes.
+
+distributional forecasting, TA-ANP reduces CRPS by 16.27% relative to the best baseline (UIGNN), with PICP close to the nominal confidence level and QICE matching the best calibrated baseline. Overall, these results substantiate the effectiveness of TA-ANP across diverse settings, with particularly pronounced gains in UQ for state inference at unobserved locations. TA-ANP therefore provides a more accurate and reliable solution for GTSI. Next, we present visualization analyses of the deterministic and distributional predictions. 
+
+5.2.1. Deterministic prediction performance of TA-ANP 
+
+To assess performance under complex diurnal traffic dynamics, Fig. 3 summarizes network-wide error profiles across the day for forecast horizons from 15 to 60 minutes. As the horizon increases, the errors of DeepSTUQ and UIGNN grow rapidly, whereas TA-ANP and MoGERNN remain comparatively stable. Notably, TA-ANP at the 60-minute horizon achieves MAE and RMSE that are lower than those of several baselines even at the 30-minute horizon, highlighting its robustness for longer-term prediction. Fig. 4 further compares models in terms of their spatial error patterns for 1-hour-ahead prediction. TA-ANP exhibits a markedly more favorable error distribution, with most SMAPE values below 30%, compared with below 40% for MoGERNN and substantial mass in the 40%–50% range for DeepSTUQ and UIGNN. Spatially, TA-ANP mitigates clusters of high-error regions in the urban core, which is critical given the greater complexity of traffic and the demand for control in downtown areas. Errors are generally higher near the network boundary, likely due to sparse fixed sensors and limited probe-vehicle coverage, which reduces the available information for inference in these regions. 
+
+5.2.2. Predictive performance of TA-ANP in terms of predictive distributions 
+
+This section evaluates whether uncertainty quantified by TA-ANP is well calibrated to its prediction errors. We consider global inference results with a prediction of 1 hour in advance for all locations and examine the relationship between the predictive coefficient of variation (PCV) and RRMSE. PCV is defined as   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 11 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+40.35 
+
+40.40 
+
+40.45 
+
+40.50 
+
+(a) TA-ANP 
+
+10 30 50 
+
+(b) MoGERNN 
+
+10 30 50 
+
+3.8 3.7 3.6 
+
+40.35 
+
+40.40 
+
+40.45 
+
+40.50 
+
+(c) DeepSTUQ 
+
+10 30 50 
+
+3.8 3.7 3.6 
+
+(d) UIGNN 
+
+10 30 50 
+
+0 10 20 30 40 50 
+
+SMAPE ( 50% truncated) for 1-hour Predictions Across the Entire Road Network  
+
+> Figure 4: Spatial distribution and histogram of SMAPE(%) for 1-hour-ahead prediction over the entire road network. Each subfigure reports the SMAPE histogram (top; values above 50% are truncated) and the corresponding spatial heatmap (bottom; green to red indicates low to high error).
+
+𝑃 𝐶𝑉 =̂ 𝜎̂ 𝜇 × 100% (7) where ̂𝜎 and ̂𝜇 denote the standard deviation and mean of the predictive distribution, respectively. Fig. 5 relates the predictive coefficient of variation (PCV) to RRMSE for both unobserved and observed road segments. Overall, the results suggest strong consistency between uncertainty and error. For unobserved segments, roughly 80% of samples lie in the PCV range of 22%–55%, and the median RRMSE exhibits a stable positive association with PCV. For observed segments, which benefit from richer historical observations, the PCV–RRMSE relationship   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 12 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+> RRMSE (%)
+
+(a) Unobserved segments 
+
+Median 
+
+> 22.1-25.0
+> 31.1-34.1
+> 40.2-43.2
+> 49.2-52.2
+> 58.3-61.2
+> 67.4-70.1
+> 76.7-78.5
+> 86.0-88.2
+> 95.0-97.4
+
+Predictive Coefficient of Variation (%) 
+
+0
+
+210 
+
+> Num. of
+> Samples
+
+25 
+
+75 
+
+125 
+
+175 (b) Observed segments 
+
+Median 
+
+> 17.7-20.1
+> 24.9-27.2
+> 32.0-34.4
+> 39.1-41.5
+> 46.6-48.6
+> 53.4-55.5
+> 60.8-62.7
+> 68.9-68.9
+> 77.2-77.2
+
+Predictive Coefficient of Variation (%) 
+
+0
+
+125  
+
+> Figure 5: Relationship between the predictive coefficient of variation (PCV, %) and relative root mean square error (RRMSE, %) for TA-ANP (1-hour-ahead global inference). Panels correspond to (a) unobserved and (b) observed road segments. In each panel, the upper plot shows the distribution of RRMSE within each PCV bin (box plots) with the median connected by a line, and the lower plot reports the corresponding sample counts.
+
+is approximately linear for PCV < 50% . Although the association becomes weak for very high PCV ( > 60% ), this regime contains only a negligible fraction of samples and therefore has little impact on aggregate performance. From an operational perspective, PCV can serve as a practical proxy for prediction reliability. For example, signal control can adjust the conservativeness of control parameters based on predicted uncertainty, and routing algorithms can prioritize links with higher certainty to improve robustness and efficiency. To further assess whether uncertainty can be used to screen out high-risk cases, Fig. 6 reports error–rejection curves based on the predictive coefficient of variation (PCV). TA-ANP consistently yields the lowest RRMSE across all scenarios, with a smoothly decreasing error curve as the rejection rate increases, indicating that its uncertainty estimates effectively prioritize high-error samples. In the real-time estimation task for unobserved segments (subfigure (b)), the performance gap between TA-ANP and the baselines widens as more uncertain samples are removed, underscoring TA-ANP’s advantage in probabilistic inference for unobserved nodes. Overall, TA-ANP delivers not only accurate point predictions, but also highly informative uncertainty estimates for risk-aware screening. 
+
+5.3. Active sensor placement guided by estimated uncertainty (Q2) 
+
+Optimizing sensor placement under budget constraints has long been a core issue in ITS. Most prior work assumes a single-source setting dominated by fixed detectors, and typically (i) enforces network observability via algebraic flow-conservation constraints or (ii) relies on coverage-driven heuristics (e.g., maximum coverage) to rank candidate locations (Owais, 2022). With the advent of FCD, however, the logic of fixed-sensor deployment shifts: fixed detectors should be sited to optimally complement mobile observations whose coverage is extensive yet sparse and spatiotemporal heterogeneous. Accordingly, this section investigates whether the overall uncertainty quantified by TA-ANP can serve as an informative criterion for fixed-sensor site selection in a multi-source fusion setting. We consider an incremental deployment scenario with 60% initially unobserved road segments. The number of fixed sensors increases from 948 to 2348, reducing the unobserved proportion to 1% at the end. We compare five placement strategies: (1) uncertainty-descending (ours), which prioritizes segments with higher TA-ANP uncertainty; (2) uncertainty-ascending , used as a negative control; (3) betweenness-centrality-descending ; (4) closeness-centrality-descending ; and (5) random placement as an uninformed baseline. Fig. 7 shows that TA-ANP’s uncertainty provides clear guidance for sensor placement: uncertainty-descending consistently achieves the best performance per deployed sensor, whereas uncertainty-ascending performs worst, confirming a strong association between this uncertainty metric and inference error. The advantage is most pronounced in the early, resource-limited stage: to reach 𝑅 2 = 0 .825 , uncertainty-descending requires only about 400 sensors, saving approximately 20% ( 100 sensors ) relative to the best-performing baseline (betweenness centrality) and about                       
+
+> Zhou et al.: Preprint submitted to Elsevier Page 13 of 25 Resilient and Trustworthy Traffic Flow Inference 19 25 31 37 43 49 RRMSE (%)
+> (a) All ST inference 24 30 36 42 48 (b) Unobs. estimation 25 31 37 43 49
+> (c) Unobs. 30-min forecast 020 40 60 80 25 32 39 46 53 RRMSE (%)
+> (d) Unobs. 1-h forecast 020 40 60 80 13 17 21 25 29 (e) Obs. 30-min forecast 020 40 60 80 14 19 24 29 34 (f) Obs. 1-h forecast TA-ANP DeepSTUQ UIGNN
+> Rejection Rate (%) Rejection Rate (%) Rejection Rate (%)
+> Figure 6: Error–rejection curves showing RRMSE(%) versus rejection rate(%) when discarding samples with the highest uncertainty. (a) All spatiotemporal (ST) points inference. (b) Unobserved (Unobs.) estimation. (c) Unobs. 30-min forecast. (d) Unobs. 1-h forecast. (e) Observed (Obs.) 30-min forecast. (f) Obs. 1-h forecast.
+
+43% ( 300 sensors ) relative to random placement. These results indicate that, in multi-source fusion scenarios, uncertainty-guided deployment can allocate limited sensing resources more efficiently and accelerate improvements in network-level inference accuracy. 
+
+5.4. Model resilience under multifaceted sensing disturbances (Q3) 
+
+In this case study, we assess the resilience of TA-ANP to multifaceted sensing disturbances by simulating a 
+
+Damage–Repair—Addition lifecycle in the fixed-sensor network. Starting from a 60% initially unobserved ratio, we perturb the network over three stages: (i) damage (days 3–6), where 100 sensors are removed per day; (ii) repair (days 6–9), where 100 previously damaged sensors are restored per day following a first-damaged-first-repaired (FIFO) rule; and (iii) addition (days 9–12), where 100 new sensors are deployed per day. Damaged and newly added sensors are selected uniformly at random. To allow fair comparison across stages with different effective network sizes, we report a performance retention ratio in Fig. 8. The results show that TA-ANP outperforms the baselines along three key dimensions of resilience: 
+
+• Disturbance absorption : TA-ANP exhibits the strongest disturbance absorption during the damage stage (days 3–6). At the most severe damage point, DeepSTUQ and MoGERNN drop to about 0.90 in retention ratio, whereas TA-ANP remains at 0.97, indicating that it can better exploit the remaining spatial dependencies to mitigate performance loss. 
+
+• Recovery : During the repair stage (days 6–9), TA-ANP recovers steadily toward the disturbance-free baseline, suggesting that it can promptly incorporate restored data streams and re-establish disrupted spatiotemporal dependencies. 
+
+• Adaptability to network expansion : In the addition stage (days 9–12), all methods surpass the benchmark (𝑦 > 1.0) and enter a positive-gain regime. Although TA-ANP shows a smaller relative slope due to its stronger baseline, it still achieves the lowest final error, reaching an RRMSE of 30.73% on day 12.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 14 of 25
+
+Resilient and Trustworthy Traffic Flow Inference 0.78 0.80 0.82 0.84 0.86 0.88 
+
+R2
+
+246810 12 14 
+
+(a)24 26 28 30 32 RMSE 246810 12 14 
+
+(b) 
+
+uncertainty-descending uncertainty-ascending random betweenness-centrality-descending closeness-centrality-descending Number of Newly Deployed Sensors (×100) 
+
+Figure 7: Fixed-sensor placement efficiency under different proxy metrics in an incremental deployment setting. The y-axis indicates the number of newly deployed sensors ( ×100 ). Panels report prediction performance versus deployment cost in terms of (a) 𝑅 2 and (b) RMSE. Curves correspond to uncertainty-guided deployment (descending/ascending), graph-centrality heuristics (betweenness/closeness), and random placement. 0 2 4 6 8 10 12 
+
+0.85 0.90 0.95 1.00 1.05 1.10 1.15 TA-ANP 
+
+RNN MoGE 
+
+STUQ Deep 
+
+daptation AyRecover sorption bATime (days) Damage pair New addition 
+
+> Performance  Retention  Ratio
+
+(Final RRMSE: 30.73%) 
+
+RMSE: 32. %) 78 (Final R RMSE: 34 .93%) 
+
+Re 
+
+(Final R 
+
+Figure 8: Resilience of flow inference under a Damage–Repair–Addition lifecycle of the fixed-sensor network. The y-axis reports the performance retention ratio, defined as (1∕RRMSE)∕(1∕RRMSE base ); thus 𝑦 = 1 indicates the disturbance-free baseline. Vertical dashed lines separate the three stages. Legends report final RRMSE values at day 12. 
+
+Overall, TA-ANP maintains high accuracy under sensor loss, recovers rapidly as sensors are repaired, and continues to benefit from incremental deployments, demonstrating robust adaptability to previously unseen sensing configurations. 
+
+5.5. Impact of fixed sensor deployment density (Q4) 
+
+To examine how fixed-sensor deployment density affects inference quality, we simulate a spectrum of sensing regimes by varying the proportion of unobserved locations from 10% to 90% and conduct systematic comparisons. For 
+
+Zhou et al.: Preprint submitted to Elsevier Page 15 of 25 Resilient and Trustworthy Traffic Flow Inference 20 30 40 50 50 MAE (a) Unobs. estimation                 
+
+> 20 30 40 50 50 (b) Unobs. forecast
+> 15 18 21 24 (c) Obs. forecast
+> 25 35 45 55 65 SMAPE
+> 25 35 45 55 65
+> 18 22 26 30
+> 10 30 50 70 90 Unobs. Ratio (%) 15 25 35 45 CRPS
+> 10 30 50 70 90 Unobs. Ratio (%) 15 25 35 45
+> 10 30 50 70 90 Unobs. Ratio (%) 10 13 16
+> TA-ANP UIGNN DeepSTUQ MoGERNN
+> Figure 9: Comparison of model performance under different unobserved ratios (Unobs. Ratio, %). Columns correspond to (a) Unobs. estimation, (b) Unobs. forecasting, and (c) Obs. forecasting, where forecasting results are averaged over multiple prediction horizons. Rows report MAE, SMAPE, and CRPS.
+
+clarity, we report results for three representative baselines (DeepSTUQ, MoGERNN, and UIGNN), which show strong overall performance in Table 2. Fig. 9 summarizes the results across tasks. Overall, TA-ANP yields lower errors than the baselines in nearly all settings; below we focus on the more practically relevant tasks of estimation and forecasting at unobserved locations. For estimation and forecasting at unobserved locations (Fig. 9a–b), we observe a clear transition around a 50%– 60% unobserved ratio: beyond this range, most methods degrade more rapidly, with DeepSTUQ exhibiting the steepest deterioration. Before this transition, MoGERNN and DeepSTUQ are the strongest baselines among deterministic and probabilistic models, respectively; at higher missing ratios, UIGNN becomes competitive and overtakes DeepSTUQ. Quantitatively, in estimation at unobserved locations, increasing the unobserved ratio from 10% to 90% raises TA-ANP’s MAE by 7.00, whereas the best baseline (MoGERNN) increases by 12.27 (about 1.75× larger), indicating stronger robustness to sparse sensing. This robustness translates into improved deployment cost-effectiveness. For example, in multi-step forecasting at unobserved locations (averaged over all prediction horizons), with MAE=30 as an acceptable threshold, TA-ANP maintains performance up to 80% unobserved, while MoGERNN exceeds the threshold at 60%, implying that comparable accuracy can be achieved with roughly 20% fewer fixed sensors (474 sensors in our setup). A similar pattern holds for probabilistic inference: with CRPS=20 as the target, TA-ANP remains below the threshold up to 70% unobserved, whereas DeepSTUQ reaches CRPS=21.60 already at 50% unobserved, again suggesting an approximate 20% reduction in required deployments. Taken together, these results highlight TA-ANP’s superior robustness and cost-effectiveness for both deterministic prediction and UQ under sparse fixed sensing. 
+
+5.6. Gains from FCD and penetration effects (Q5) 
+
+To quantify the benefit of FCD for network-wide traffic flow inference, we conducted controlled experiments with 60% of road segments treated as unobserved. As shown in Fig. 10, we remove FCD speed, FCD flow, or both and compare the resulting changes across tasks. Two main observations emerge.                         
+
+> Zhou et al.: Preprint submitted to Elsevier Page 16 of 25 Resilient and Trustworthy Traffic Flow Inference MAE SMAPE CRPS
+> 10
+> 17
+> 24
+> 31
+> 38 (a) All ST inference
+> MAE SMAPE CRPS
+> 10
+> 18
+> 26
+> 34
+> 42 (b) Unobs. estimation
+> MAE SMAPE CRPS
+> 10
+> 18
+> 26
+> 34
+> 42 (c) Unobs. 30-min forecast
+> MAE SMAPE CRPS
+> 10
+> 18
+> 26
+> 34
+> 42 (d) Unobs. 1-h forecast
+> MAE SMAPE CRPS
+> 10
+> 14
+> 18
+> 22 (e) Obs. 30-min forecast
+> MAE SMAPE CRPS
+> 10
+> 14
+> 18
+> 22
+> 26 (f) Obs. 1-h forecast
+> TA-ANP w/o FCD speed w/o FCD flow w/o FCD speed and flow
+> Figure 10: Ablation on the contribution of floating-car data (FCD) in network-wide flow inference. Subplots (a)–(f) follow the same six scenarios as Fig. 6. Each subplot reports MAE, SMAPE, and CRPS for TA-ANP and variants removing FCD speed and/or flow.
+
+First, FCD flow contributes substantially more than speed. For real-time estimation on unobserved segments (Fig. 10b), removing speed only slightly increases MAE (25.38 → 25.95). By contrast, removing flow increases MAE to 35.16, a relative performance degradation of 38.5%. This trend is consistent across all tasks, indicating that FCD flow is the dominant driver of performance gains. Second, the reliance on FCD differs markedly between observed and unobserved segments. For segments with historical fixed-sensor observations (subfigures e and f), removing FCD leads to a modest increase in MAE ( <15%). In contrast, for inference on unobserved segments, the MAE can increase by up to 35.7% (subfigure d). This highlights the indispensable role of FCD in covering the blind spots of sparse fixed sensors. Additional comparisons further show that, with FCD, using only 10% fixed-sensor coverage can outperform the setting without FCD even when fixed-sensor coverage reaches 90%, underscoring the importance of FCD for inferring states on unobserved segments. In our dataset, FCD mainly comes from commercial vehicles, resulting in low penetration and pronounced spatial heterogeneity, which can challenge GTSI. We therefore evaluate robustness under different penetration levels by stratifying segments into penetration-rate bins (Fig. 11). Note that the penetration rate is a segment-wise time average induced by data aggregation, rather than a controlled experimental variable. As shown in Fig. 11, across the penetration range 2.3%–9.5% (about 92% of segment samples), the model remains stable: the median RRMSE stays within 20%–26%, and the mean within 30%–35%. These results suggest that the proposed method is effective under low penetration and is robust to spatiotemporal variations in penetration. The larger volatility at higher penetration levels is mainly attributable to the small sample size in those bins (sample imbalance), rather than a reduced benefit of higher penetration for network-wide state inference. 
+
+5.7. Ablation study (Q6) 
+
+To systematically assess the contributions of the Task-Aware Multi-Query Mechanism (TAMQM) and Monte Carlo (MC) Dropout in TA-ANP, we conduct three controlled ablations: (1) removing TAMQM (w/o TAMQM); (2) removing MC Dropout (w/o MC Dropout); and (3) replacing MC Dropout with standard dropout (MC Dropout →Dropout). As   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 17 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+25 
+
+50 
+
+75 
+
+100 
+
+150 
+
+200 
+
+> RRMSE (%)
+
+Median 
+
+> 1.17-1.49
+> 2.31-2.60
+> 3.32-3.67
+> 4.40-4.76
+> 5.48-5.83
+> 6.55-6.91
+> 7.63-7.98
+> 8.74-9.04
+> 9.79-10.12
+> 10.86-11.05
+> 12.05-12.10
+> 13.12-13.13
+> 14.17-14.44
+
+Penetration Rate (%) 
+
+0
+
+300  
+
+> Num. of
+> Samples
+> Figure 11: Variation in network-wide flow forecasting error (RRMSE, %) across floating-car data (FCD) penetration-rate bins (1-hour horizon). The upper panel shows the distribution of RRMSE within each bin (box plots) with the median connected by a line, and the lower panel reports the corresponding sample counts.
+
+reported in Table 3, both TAMQM and MC Dropout are critical components of TA-ANP. We analyze their effects below. 
+
+5.7.1. Effect of the TAMQM 
+
+TAMQM is designed to mitigate the trade-off among the three spatiotemporal inference subtasks in GTSI. For deterministic forecasting, removing TAMQM leads to substantial degradation across all tasks. For example, on the unobserved road-segment inference task, MAE increases by 8.93%, SMAPE increases by 8.26%, and 𝑅 2 decreases by 10.00%. These results highlight the importance of TAMQM for balancing multiple task objectives. Moreover, TAMQM also benefits probabilistic forecasting: without it, uncertainty-related metrics deteriorate markedly, indicating poorer UQ. 
+
+5.7.2. Effect of MC Dropout 
+
+As the key mechanism for uncertainty modeling, MC Dropout has the greatest impact on the unobserved road-segment inference task. For probabilistic prediction, removing MC Dropout increases CRPS by 22.69% on unobserved segments, and the prediction interval coverage probability (PICP) drops from 0.94 to 0.78, far below the nominal 0.95. This suggests that MC Dropout effectively captures epistemic uncertainty via repeated stochastic forward passes, improving the quality of uncertainty estimates. In contrast, disabling MC Dropout has a smaller effect on segments with rich historical observations, where epistemic uncertainty is inherently lower. Replacing MC Dropout with standard dropout also reduces performance, and we observe a clear task-dependent behavior. Compared with w/o MC Dropout (i.e., no dropout), standard dropout (active only during training) improves inference on unobserved segments but can slightly degrade prediction accuracy on observed segments. This difference is intuitive: unobserved-segment inference involves spatial extrapolation and relies heavily on generalization, where dropout regularization helps prevent overfitting; observed-segment prediction, however, is supported by sufficient historical data and favors stronger data fitting capacity, which can be weakened by dropout-induced randomness. These findings motivate future work on adaptive or task-specific dropout strategies. To further illustrate the effect of MC Dropout on uncertainty calibration, we evaluated probability integral transform (PIT) histograms. A PIT value is computed by inserting the ground-truth observation into the predicted   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 18 of 25
+
+Resilient and Trustworthy Traffic Flow Inference 
+
+Table 3 
+
+Results of the ablation experiment on key modules of TA-ANP.Values in parentheses indicate the percentage change in performance relative to the full TA-ANP model, where negative values indicate degraded performance. 
+
+Model MAE ↓ SMAPE ↓ R2↑ CRPS ↓ PICP ∗ QICE ↓
+
+> Estimation for Unobserved Location
+
+TA-ANP 25.63 29.80 0.70 18.51 0.94 0.007 
+
+w/o TAMQM 27.92 (-8.93%) 32.26 (-8.26%) 0.63 (-10.00%) 20.82 (-12.48%) 0.84 0.012 (-71.43%) w/o MC Dropout 29.73 (-16.00%) 34.71 (-16.48%) 0.59 (-15.71%) 22.71 (-22.69%) 0.78 0.019 (-171.43%) MC Dropout → Dropout 27.32 (-6.59%) 31.41 (-5.40%) 0.66 (-5.71%) 19.73 (-6.59%) 0.90 0.012 (-71.43%) Forecasting at Unobserved Location  TA-ANP 26.24 30.56 0.69 18.93 0.94 0.007 
+
+w/o TAMQM 28.85 (-9.95%) 33.39 (-9.26%) 0.61 (-11.59%) 21.46 (-13.37%) 0.85 0.011 (-57.14%) w/o MC 30.26 (-15.32%) 35.31 (-15.54%) 0.58 (-15.94%) 23.13 (-22.19%) 0.78 0.019 (-171.43%) MC Dropout → Dropout 27.79 (-5.91%) 32.16 (-5.24%) 0.66 (-4.35%) 20.06 (-5.97%) 0.90 0.011 (-57.14%) Forecasting at Observed Location  TA-ANP 15.57 19.99 0.89 11.18 0.96 0.007 
+
+w/o TAMQM 17.29 (-11.05%) 22.01 (-10.11%) 0.87 (-2.25%) 12.40 (-10.91%) 0.93 0.006 (+14.29%) w/o MC Dropout 15.76 (-1.22%) 20.24 (-1.25%) 0.89 (0.00%) 11.85 (-5.99%) 0.97 0.006 (+14.29%) MC Dropout → Dropout 21.52 (-38.21%) 25.19 (-26.01%) 0.79 (-11.24%) 15.60 (-39.53%) 0.88 0.008 (-14.29%) 
+
+cumulative distribution function. A perfectly calibrated probabilistic model yields PIT values that are uniformly distributed in [0 , 1] . As shown in Fig. 12, with a single sample, PIT values cluster at high quantiles, indicating overconfidence with bias. 1 Increasing the number of stochastic forward passes randomizes the model parameters during inference and produces diverse predictions in regions with high epistemic uncertainty, which broadens the predictive distribution and mitigates the overconfidence induced by single-sample inference. While 30 samples exhibit a slight underconfidence tendency, this is often preferable in downstream decision-making, as it provides more conservative and safer uncertainty bounds. By sweeping the number of samples from 1 to 50, we find that using 10 samples offers a good trade-off between computational cost (0.03 seconds per sample), predictive accuracy, and calibration in our setting. Overall, the ablation results confirm the effectiveness and complementarity of the two core components in TA-ANP: TAMQM consistently improves all tasks by coordinating task-specific reliance on frequency-domain features, whereas MC Dropout is particularly important in high-uncertainty scenarios such as unobserved road segments. Their combination enables accurate and reliable global traffic status inference in complex traffic environments. 
+
+> 1When the predictive distribution is overly concentrated (overconfident), realizations from the true data-generating process fall into the predictive tails more frequently than expected, producing excess PIT mass near 0 and 1. If the predictive distribution is also biased (e.g., shifted left relative to the truth), PIT values become systematically large, leading to a right-skewed PIT histogram.
+
+Zhou et al.: Preprint submitted to Elsevier Page 19 of 25 Resilient and Trustworthy Traffic Flow Inference 1.0 
+
+1.5 
+
+> Density
+> QICE=0.009
+> QICE=0.008
+
+(a) All ST inference 
+
+> QICE=0.010
+> QICE=0.009
+
+(b) Unobs. estimation 
+
+> QICE=0.010
+> QICE=0.008
+
+(c) Unobs. 30-min forecast 
+
+0.0 0.5 1.0 
+
+PIT 
+
+1.0 
+
+1.5 
+
+> Density
+> QICE=0.010
+> QICE=0.009
+
+(d) Unobs. 1-h forecast 
+
+0.0 0.5 1.0 
+
+PIT 
+
+> QICE=0.008
+> QICE=0.011
+
+(e) Obs. 30-min forecast 
+
+Single-sampling Multi-sampling Ideal density 
+
+0.0 0.5 1.0 
+
+PIT 
+
+> QICE=0.008
+> QICE=0.009
+
+(f) Obs. 1-h forecast  
+
+> Figure 12: Probability integral transform (PIT) histograms comparing uncertainty calibration obtained with single-sampling (one stochastic forward pass; red) and multi-sampling (30 Monte Carlo dropout samples; blue) across six settings: (a) All spatiotemporal (ST) points inference. (b) Unobserved (Unobs.) estimation. (c) Unobs. 30-min forecast. (d) Unobs. 1-h forecast. (e) Observed (Obs.) 30-min forecast. (f) Obs. 1-h forecast. The dashed line indicates the ideal uniform density; QICE is reported in each panel (lower is better).
+
+## 6. Conclusion 
+
+This paper tackles three interrelated challenges in global traffic state inference (GTSI). These challenges include resilience to multifaceted sensing disturbances, uncertainty quantification for trustworthy inference, and joint modeling of the three GTSI subtasks within a unified framework. To this end, we propose TA-ANP, which fuses floating car data with sparse fixed detectors, casts GTSI as a stochastic process, and introduces task-aware attention with differentiated spatiotemporal inductive biases. Experiments on the metropolis-scale MMTD dataset lead to four main findings. First, TA-ANP achieves state-of-the-art performance on all three GTSI subtasks under both deterministic and probabilistic metrics. The gains are especially pronounced for uncertainty quantification when inferring states at unobserved locations, where TA-ANP reduces CRPS and QICE by up to 20.93% and 38.39% relative to the best baseline. Second, uncertainty quantified by TA-ANP is well calibrated against realized inference errors and provides actionable guidance for fixed-sensor placement in multi-source sensing settings. In particular, it requires about 20% fewer sensors to reach comparable inference accuracy compared with graph-centrality heuristics. Third, TA-ANP remains robust under a compounded Damage–Repair–Addition lifecycle, achieving a performance retention ratio of 0.97 at peak disturbance compared with 0.90 for the strongest baselines, and it continues to benefit from incremental sensor deployments. Fourth, ablation results show that both TAMQM and MC Dropout are necessary. TAMQM mitigates the seesaw effect across subtasks, whereas MC Dropout is crucial for capturing epistemic uncertainty in high-uncertainty cases such as unobserved road segments.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 20 of 25 Resilient and Trustworthy Traffic Flow Inference
+
+Several limitations suggest promising directions for future work. First, the evaluation is performed on a single city; cross-city generalization therefore remains untested due to limited data, despite the neural process framework’s theoretical ability to facilitate transfer. Second, the metrics used here capture numerical prediction error but do not directly measure downstream benefits for traffic control and management. Third, the resilience demonstrated in this study is largely passive. The model adapts to disturbances as they arise but does not actively leverage them. Looking ahead, future research could incorporate Taleb’s concept of “antifragility” (Taleb, 2012) to move beyond passive resilience toward architectures that enable continual learning and improve through stochasticity and real-world perturbations (Axenie et al., 2024; Sun et al., 2026), ultimately supporting self-improving cyber-physical systems in the ITS context. 
+
+## CRediT authorship contribution statement 
+
+Qishen Zhou: Conceptualization, Methodology, Software, Investigation, Formal analysis, Writing – original draft. 
+
+Yifan Zhang: Conceptualization, Methodology, Writing – review & editing. Michail A. Makridis: Supervision, Writing – review & editing. Anastasios Kouvelas: Supervision, Writing – review & editing. Yibing Wang: 
+
+Supervision, Writing – review & editing. Simon Hu: Funding acquisition, Resources, Supervision, Writing – review & editing. 
+
+## Acknowledgements 
+
+This work was supported in part by the National Key R&D Program of China (2023YFB4302600), the National Natural Science Foundation of China (52131202, 72350710798, 52272315), the Provincial Key R&D Program of Zhejiang (2024C01180, 2022C01129), State Key Laboratory (SKL) of Biobased Transportation Fuel Technology, ZJU-YST joint research center for fundamental science, and Zhejiang University Global Partnership Fund. 
+
+## A. Definition of evaluation metrics 
+
+This appendix summarizes the evaluation metrics used in this study for completeness and reproducibility. All metrics are computed by excluding entries that are originally missing in the dataset. Let {( 𝑦 𝑖 ,̂𝑦 𝑖 )} 𝑀 𝑖 =1 denote the ground-truth and point prediction pairs over the 𝑀 valid (non-missing) samples. 
+
+• Relative Root Mean Square Error (RRMSE): 
+
+RRMSE = 
+
+√ 1
+
+> 𝑀
+
+∑𝑀 𝑖 =1 (𝑦 𝑖 −̂𝑦 𝑖 )21
+
+> 𝑀
+
+∑𝑀 𝑖 =1 𝑦 𝑖 
+
+(8) 
+
+• Symmetric Mean Absolute Percentage Error (SMAPE): 
+
+SMAPE = 100% 
+
+𝑀 
+
+> 𝑀
+
+∑
+
+> 𝑖 =1
+
+|𝑦 𝑖 −̂𝑦 𝑖 |
+
+(|𝑦 𝑖 | + |̂𝑦 𝑖 |)∕2 (9) 
+
+• Continuous Ranked Probability Score (CRPS) (Matheson and Winkler, 1976): CRPS simultaneously assesses the accuracy (deviation from observations) and sharpness (concentration of the distribution) of the predictive distribution, and is widely used for evaluating probabilistic forecasts. A lower CRPS indicates higher quality of the predictive distribution. It is defined as: 
+
+CRPS( 𝐹 , 𝑦 ) = ∫
+
+> ∞−∞
+
+(𝐹 (𝑥 ) − 𝕀 (𝑥 ≥ 𝑦 )) 2𝑑𝑥 (10) where 𝐹 is the Cumulative Distribution Function (CDF) predicted by the model, 𝑦 is the true observed value, and 𝕀 (⋅) is the indicator function.   
+
+> Zhou et al.: Preprint submitted to Elsevier Page 21 of 25
+
+Resilient and Trustworthy Traffic Flow Inference 
+
+• Prediction Interval Coverage Probability (PICP) : This metric evaluates the coverage of prediction intervals for the true values and is defined as: 
+
+PICP = 1
+
+𝑀 
+
+> 𝑀
+
+∑
+
+> 𝑖 =1
+
+𝕀 (𝑞 𝛼 ∕2 ≤ 𝑦 𝑖 ≤ 𝑞 1− 𝛼 ∕2 ) (11) where 𝛼 is the significance level, and 𝑞 𝛼 ∕2 and 𝑞 1− 𝛼 ∕2 represent the 𝛼 ∕2 and (1 − 𝛼 ∕2) quantiles of the predictive distribution at the (1 − 𝛼 ) confidence level, respectively. Ideally, PICP should be close to the confidence level 
+
+(1 − 𝛼 ) of the prediction interval. In this study, we set 𝛼 = 0 .05 .
+
+• Quantile Interval Calibration Error (QICE) (Han et al., 2022): Compared to PICP, QICE comprehensively assesses the calibration between the predictive distribution and the true distribution by integrating the coverage deviations across all quantile intervals. It is defined as: 
+
+QICE = 1
+
+𝑁 
+
+> 𝑁
+
+∑
+
+> 𝑛 =1
+
+||||𝑟 𝑛 − 1
+
+𝑁 
+
+|||| , (12) where 𝑁 is the number of quantile intervals, and 𝑟 𝑛 denotes the actual coverage of the 𝑛 -th quantile interval, calculated as: 
+
+𝑟 𝑛 = 1
+
+𝑀 𝑛 𝑀 𝑛 ∑
+
+> 𝑖 =1
+
+𝕀 (𝑦 𝑖 ≥̂𝑦 𝑛 
+
+> low
+
+) ⋅ 𝕀 (𝑦 𝑖 ≤̂𝑦 𝑛 
+
+> high
+
+), (13) where 𝑀 𝑛 is the number of samples in the 𝑛 -th partition, 𝑦 𝑖 is the observed value of the 𝑖 -th sample, and ̂𝑦 𝑛 
+
+> low
+
+and ̂𝑦 𝑛  
+
+> high
+
+are the lower and upper boundaries corresponding to the 𝑛 -th quantile interval, respectively. Ideally, the QICE value should be close to 0, indicating that the actual coverage of different quantile intervals is perfectly consistent with the theoretical target coverage. 
+
+## References 
+
+Abdar, M., Pourpanah, F., Hussain, S., Rezazadegan, D., Liu, L., Ghavamzadeh, M., Fieguth, P., Cao, X., Khosravi, A., Acharya, U.R., Makarenkov, V., Nahavandi, S., 2021. A review of uncertainty quantification in deep learning: Techniques, applications and challenges. Information Fusion 76, 243–297. Axenie, C., López-Corona, O., Makridis, M.A., Akbarzadeh, M., Saveriano, M., Stancu, A., West, J., 2024. Antifragility in complex dynamical systems. npj Complexity 1, 12. doi: 10.1038/s44260-024-00014-y .Ayuntamiento de Madrid, 2026a. Número de carriles por calles. Open data portal dataset. URL: https://datos.madrid.es/dataset/ 300723-0-carriles-mapas . accessed: 2025-08. Ayuntamiento de Madrid, 2026b. Tráfico. histórico de datos del tráfico desde 2013. Open data portal dataset. URL: https://datos.madrid. es/dataset/208627-0-transporte-ptomedida-historico . accessed: 2025-08. Bahadori, M.T., Yu, Q.R., Liu, Y., 2014. Fast multivariate spatio-temporal analysis via low rank tensor learning, in: Ghahramani, Z., Welling, M., Cortes, C., Lawrence, N., Weinberger, K. (Eds.), Advances in Neural Information Processing Systems, Curran Associates, Inc. Bai, L., Yao, L., Li, C., Wang, X., Wang, C., 2020. Adaptive graph convolutional recurrent network for traffic forecasting, in: Proceedings of the 34th International Conference on Neural Information Processing Systems, Curran Associates Inc., Red Hook, NY, USA. Boeing, G., 2025. Modeling and Analyzing Urban Networks and Amenities With OSMnx. Geographical Analysis n/a. Chen, P., Guo, Y., Wang, Z., Dong, S., Wei, L., 2026. Dynamic od estimation using spatio-temporal hybrid graph convolutional network with asynchronous multi-source data. IEEE Transactions on Intelligent Transportation Systems , 1–15doi: 10.1109/TITS.2026.3675623 .Cheng, L., Lei, D., Tao, S., 2024. Recent advances in deep learning for traffic probabilistic prediction. Transport Reviews 44, 1129–1135. Ding, C., Song, Y., Zhang, H., Wang, T., 2025. Uncertainty quantification in Bayesian physics-informed deep learning-based traffic state prediction. Computer-Aided Civil and Infrastructure Engineering , n/a–n/a. Do, L.N., Vu, H.L., Vo, B.Q., Liu, Z., Phung, D., 2019. An effective spatial-temporal attention based neural network for traffic flow prediction. Transportation Research Part C: Emerging Technologies 108, 12–28. Faber, M.H., 2005. On the Treatment of Uncertainties and Probabilities in Engineering Decision Analysis. Journal of Offshore Mechanics and Arctic Engineering 127, 243–248. Gal, Y., Ghahramani, Z., 2016. Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning, in: Proceedings of The 33rd International Conference on Machine Learning, PMLR. pp. 1050–1059. Garnelo, M., Rosenbaum, D., Maddison, C., Ramalho, T., Saxton, D., Shanahan, M., Teh, Y.W., Rezende, D., Eslami, S.M.A., 2018a. Conditional Neural Processes, in: Proceedings of the 35th International Conference on Machine Learning, PMLR. pp. 1704–1713. Garnelo, M., Schwarz, J., Rosenbaum, D., Viola, F., Rezende, D.J., Eslami, S.M.A., Teh, Y.W., 2018b. Neural Processes, in: ICML Workshop on Theoretical Foundations and Applications of Deep Generative Models. arXiv:1807.01622 .
+
+Zhou et al.: Preprint submitted to Elsevier Page 22 of 25 Resilient and Trustworthy Traffic Flow Inference 
+
+Gawlikowski, J., Tassi, C.R.N., Ali, M., Lee, J., Humt, M., Feng, J., Kruspe, A., Triebel, R., Jung, P., Roscher, R., Shahzad, M., Yang, W., Bamler, R., Zhu, X.X., 2023. A survey of uncertainty in deep neural networks. Artificial Intelligence Review 56, 1513–1589. Guarda, P., Battifarano, M., Qian, S., 2024. Estimating network flow and travel behavior using day-to-day system-level data: A computational graph approach. Transportation Research Part C: Emerging Technologies 158, 104409. Han, X., Zheng, H., Zhou, M., 2022. Card: classification and regression diffusion models, in: Proceedings of the 36th International Conference on Neural Information Processing Systems, Curran Associates Inc., Red Hook, NY, USA. Hüllermeier, E., Waegeman, W., 2021. Aleatoric and epistemic uncertainty in machine learning: An introduction to concepts and methods. Machine Learning 110, 457–506. Kendall, A., Gal, Y., 2017. What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?, in: Advances in Neural Information Processing Systems, Curran Associates, Inc. Kim, H., Mnih, A., Schwarz, J., Garnelo, M., Eslami, A., Rosenbaum, D., Vinyals, O., Teh, Y.W., 2019. Attentive Neural Processes, in: International Conference on Learning Representations. Kim, J., Lee, K., Lee, D., Jhin, S.Y., Park, N., 2021. Dpm: A novel training method for physics-informed neural networks in extrapolation. Proceedings of the AAAI Conference on Artificial Intelligence 35, 8146–8154. Kiureghian, A.D., Ditlevsen, O., 2009. Aleatory or epistemic? Does it matter? Structural Safety 31, 105–112. Laraki, M., De Nunzio, G., Othman, B., 2022. A Large-Scale and Data-Based Road Traffic Flow Estimation Method Leveraging Topography Information and Population Statistics, in: 2022 IEEE 25th International Conference on Intelligent Transportation Systems (ITSC), pp. 2343– 2349. Le, T.A., Kim, H., Garnelo, M., Rosenbaum, D., Schwarz, J., Teh, Y.W., 2018. Empirical evaluation of neural process objectives, in: NeurIPS workshop on Bayesian Deep Learning. Lei, D., Xu, M., Wang, S., 2024. A conditional diffusion model for probabilistic estimation of traffic states at sensor-free locations. Transportation Research Part C: Emerging Technologies 166, 104798. Lei, M., Labbe, A., Wu, Y., Sun, L., 2022. Bayesian kernelized matrix factorization for spatiotemporal traffic data imputation and kriging. IEEE Transactions on Intelligent Transportation Systems 23, 18962–18974. Li, C., Wang, W., Solé-Ribalta, A., Borge-Holthoefer, J., Jia, B., Liu, Z., Yu, B., Gao, Z., Gao, J., 2025. Adaptive capacity for multimodal transport network resilience to extreme floods. Nature Sustainability 8, 741–752. Li, Y., Chai, S., Wang, G., Zhang, X., Qiu, J., 2022. Quantifying the uncertainty in long-term traffic prediction based on pi-convlstm network. IEEE Transactions on Intelligent Transportation Systems 23, 20429–20441. Li, Y., Yu, R., Shahabi, C., Liu, Y., 2018. Diffusion convolutional recurrent neural network: Data-driven traffic forecasting, in: International Conference on Learning Representations (ICLR ’18). Liang, D., 2025. Distpred: A distribution-free probabilistic inference method for regression and forecasting, in: Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V.1, Association for Computing Machinery, New York, NY, USA. p. 753–764. Liang, Y., Zhao, Z., Sun, L., 2022. Memory-augmented dynamic graph convolution networks for traffic data imputation with diverse missing patterns. Transportation Research Part C: Emerging Technologies 143, 103826. Liu, H., Dong, Z., Jiang, R., Deng, J., Deng, J., Chen, Q., Song, X., 2023. Spatio-temporal adaptive embedding makes vanilla transformer sota for traffic forecasting, in: Proceedings of the 32nd ACM International Conference on Information and Knowledge Management, Association for Computing Machinery, New York, NY, USA. p. 4125–4129. Liu, S.J., Lam, W.H.K., Lam Tam, M., Fu, H., Ho, H.W., Ma, W., 2024a. Network-wide speed–flow estimation considering uncertain traffic conditions and sparse multi-type detectors: A KL divergence-based optimization approach. Transportation Research Part C: Emerging Technologies 169, 104858. Liu, Y., Chen, S., 2026. Quantifying predictive resilience: A fault-tolerant forecasting framework with operational boundaries for natural hazards. Reliability Engineering & System Safety 274, 112424. doi: 10.1016/j.ress.2026.112424 .Liu, Y., Hu, T., Zhang, H., Wu, H., Wang, S., Ma, L., Long, M., 2024b. itransformer: Inverted transformers are effective for time series forecasting, in: The Twelfth International Conference on Learning Representations. Liu, Z., Liu, Y., Meng, Q., Cheng, Q., 2019. A tailored machine learning approach for urban transport network flow estimation. Transportation Research Part C: Emerging Technologies 108, 130–150. Ma, W., Pi, X., Qian, S., 2020. Estimating multi-class dynamic origin-destination demand through a forward-backward algorithm on computational graphs. Transportation Research Part C: Emerging Technologies 119, 102747. Maljkovic, M., Geroliminis, N., 2025. On learning-based traffic monitoring with a swarm of drones, in: 2025 European Control Conference (ECC), pp. 1842–1847. doi: 10.23919/ECC65951.2025.11186821 .Matheson, J.E., Winkler, R.L., 1976. Scoring Rules for Continuous Probability Distributions. Management Science 22, 1087–1096. Mei, H., Li, J., Liang, Z., Zheng, G., Shi, B., Wei, H., 2023. Uncertainty-aware traffic prediction under missing data, in: 2023 IEEE International Conference on Data Mining (ICDM), pp. 1223–1228. Meng, C., Yi, X., Su, L., Gao, J., Zheng, Y., 2017. City-wide Traffic Volume Inference with Loop Detector Data and Taxi Trajectories, in: Proceedings of the 25th ACM SIGSPATIAL International Conference on Advances in Geographic Information Systems, ACM, Redondo Beach CA USA. pp. 1–10. Moskalenko, V., Kharchenko, V., Moskalenko, A., Kuzikov, B., 2023. Resilience and Resilient Systems of Artificial Intelligence: Taxonomy, Models and Methods. Algorithms 16, 165. Nie, T., Qin, G., Wang, Y., Sun, J., 2023a. Correlating sparse sensing for large-scale traffic speed estimation: A Laplacian-enhanced low-rank tensor kriging approach. Transportation Research Part C: Emerging Technologies 152, 104190. Nie, T., Qin, G., Wang, Y., Sun, J., 2023b. Towards better traffic volume estimation: Jointly addressing the underdetermination and nonequilibrium problems with correlation-adaptive gnns. Transportation Research Part C: Emerging Technologies 157, 104402. 
+
+Zhou et al.: Preprint submitted to Elsevier Page 23 of 25 Resilient and Trustworthy Traffic Flow Inference 
+
+Olivier, A., Mohammadi, S., Smyth, A.W., Adams, M., 2023. Bayesian neural networks with physics-aware regularization for probabilistic travel time modeling. Computer-Aided Civil and Infrastructure Engineering 38, 2614–2631. Owais, M., 2022. Traffic sensor location problem: Three decades of research. Expert Systems with Applications 208, 118134. Qian, W., Zhang, D., Zhao, Y., Zheng, K., Yu, J.J., 2023. Uncertainty Quantification for Traffic Forecasting: A Unified Approach, in: 2023 IEEE 39th International Conference on Data Engineering (ICDE), pp. 992–1004. Roth, A., Liebig, T., 2022. Forecasting unobserved node states with spatio-temporal graph neural networks, in: 2022 IEEE International Conference on Data Mining Workshops (ICDMW), pp. 740–747. Sengupta, A., Mondal, S., Das, A., Guler, S.I., 2024. A Bayesian approach to quantifying uncertainties and improving generalizability in traffic prediction models. Transportation Research Part C: Emerging Technologies 162, 104585. Shao, W., Chen, L., 2018. License Plate Recognition Data-Based Traffic Volume Estimation Using Collaborative Tensor Decomposition. IEEE Transactions on Intelligent Transportation Systems 19, 3439–3448. Shi, R., Mo, Z., Di, X., 2021. Physics-informed deep learning for traffic state estimation: A hybrid paradigm informed by second-order traffic models. Proceedings of the AAAI Conference on Artificial Intelligence 35, 540–547. Song, C., Lin, Y., Guo, S., Wan, H., 2020. Spatial-temporal synchronous graph convolutional networks: A new framework for spatial-temporal network data forecasting. Proceedings of the AAAI Conference on Artificial Intelligence 34, 914–921. Song, Q., Ge, H., Caverlee, J., Hu, X., 2019. Tensor Completion Algorithms in Big Data Analytics. ACM Trans. Knowl. Discov. Data 13, 6:1–6:48. Sun, L., Zhang, Y., Axenie, C., Grossi, M., Kouvelas, A., Makridis, M.A., 2026. The fragile nature of road transportation networks. Transportation Research Part B: Methodological 205, 103386. doi: 10.1016/j.trb.2025.103386 .Taleb, N.N., 2012. Antifragile: Things that gain from disorder. Penguin UK. Tang, X., Gong, B., Yu, Y., Yao, H., Li, Y., Xie, H., Wang, X., 2019. Joint Modeling of Dense and Incomplete Trajectories for Citywide Traffic Volume Inference, in: The World Wide Web Conference, ACM, San Francisco CA USA. pp. 1806–1817. TomTom, 2026. Tomtom move: Traffic stats — introduction. Developer documentation. URL: https://developer.tomtom.com/ move-portal/guides/traffic-stats/introduction . accessed: 2025-08. Valdenegro-Toro, M., Mori, D.S., 2022. A Deeper Look into Aleatoric and Epistemic Uncertainty Disentanglement, in: 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW), pp. 1508–1516. Vrouwenvelder, ACWM., 2003. Keynote lecture: Uncertainty analysis for flood defence systems in the Netherlands: Esrel 2003. Safety & reliability - esrel 2003 - , 11–18. Wang, H., Zhang, R., Cheng, X., Yang, L., 2022. Hierarchical traffic flow prediction based on spatial-temporal graph convolutional network. IEEE Transactions on Intelligent Transportation Systems 23, 16137–16147. Wang, Q., Yang, K., 2024. Privacy-preserving data fusion for traffic state estimation: A vertical federated learning approach. Transportation Research Part C: Emerging Technologies , 104743. Wang, T., Li, Y., Cheng, R., Zou, G., Dantsuji, T., Ngoduy, D., 2026. Knowledge-data fusion oriented traffic state estimation: A stochastic physics-informed deep learning approach. Transportation Research Part C: Emerging Technologies 182, 105422. Wu, Y., Zhuang, D., Labbe, A., Sun, L., 2021. Inductive graph neural networks for spatiotemporal kriging, in: Proceedings of the AAAI Conference on Artificial Intelligence, pp. 4478–4485. Wu, Z., Pan, S., Long, G., Jiang, J., Chang, X., Zhang, C., 2020. Connecting the dots: Multivariate time series forecasting with graph neural networks, in: Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining, Association for Computing Machinery, New York, NY, USA. p. 753–763. Xiong, W., Fonod, R., Alahi, A., Geroliminis, N., 2025. Multi-source urban traffic flow forecasting with drone and loop detector data. IEEE Transactions on Intelligent Transportation Systems 26, 18637–18652. doi: 10.1109/TITS.2025.3605014 .Xiong, W., Fonod, R., Geroliminis, N., 2026. Unveiling Stochasticity: Universal Multi-modal Probabilistic Modeling for Traffic Forecasting. doi: 10.48550/arXiv.2604.16084 , arXiv:2604.16084 .Xu, D., Tang, Y., Peng, H., Guo, H., Xuan, Q., 2024. Traffic state estimation of road sections without detectors based on multi-source causal interpretation graph. IEEE Internet of Things Journal , 1–1. Xu, D., Wei, C., Peng, P., Xuan, Q., Guo, H., 2020. GE-GAN: A novel deep learning framework for road traffic state estimation. Transportation Research Part C-Emerging Technologies 117, 102635. Xu, M., Di, Y., Ding, H., Zhu, Z., Chen, X., Yang, H., 2023. AGNP: Network-wide short-term probabilistic traffic speed prediction and imputation. Communications in Transportation Research 3, 100099. Xu, Q., Long, C., Li, Z., Ruan, S., Zhao, R., Li, Z., 2025. Kits: Inductive spatio-temporal kriging with increment training strategy, in: Proceedings of the AAAI Conference on Artificial Intelligence, pp. 12945–12953. Yang, H., Du, L., Zhang, G., Ma, T., 2023. A traffic flow dependency and dynamics based deep learning aided approach for network-wide traffic speed propagation prediction. Transportation Research Part B: Methodological 167, 99–117. Yang, H., Yu, W., Zhang, G., Du, L., 2024. Network-wide traffic flow dynamics prediction leveraging macroscopic traffic flow model and deep neural networks. IEEE Transactions on Intelligent Transportation Systems 25, 4443–4457. Yao, K., Chen, L., Chen, S., 2025. Time-evolving traffic resilience performance forecasting during hazardous weather toward proactive intervention. Reliability Engineering & System Safety 253, 110521. Yu, B., Yin, H., Zhu, Z., 2018. Spatio-temporal graph convolutional networks: A deep learning framework for traffic forecasting, in: Proceedings of the 27th International Joint Conference on Artificial Intelligence (IJCAI). Yu, H.F., Rao, N., Dhillon, I.S., 2016. Temporal Regularized Matrix Factorization for High-dimensional Time Series Prediction, in: Advances in Neural Information Processing Systems, Curran Associates, Inc. Yuan, Y., Wang, Q., Yang, X.T., 2022. Traffic flow modeling with gradual physics regularized learning. IEEE Transactions on Intelligent Transportation Systems 23, 14649–14660. 
+
+Zhou et al.: Preprint submitted to Elsevier Page 24 of 25 Resilient and Trustworthy Traffic Flow Inference 
+
+Zechin, D., Cybis, H.B.B., 2023. Probabilistic traffic breakdown forecasting through Bayesian approximation using variational LSTMs. Transportmetrica B: Transport Dynamics 11, 1026–1044. Zhan, X., Zheng, Y., Yi, X., Ukkusuri, S.V., 2017. Citywide Traffic Volume Estimation Using Trajectory Data. IEEE Transactions on Knowledge and Data Engineering 29, 272–285. Zhang, Z., Li, M., Lin, X., Wang, Y., 2020. Network-wide traffic flow estimation with insufficient volume detection and crowdsourcing data. Transportation Research Part C: Emerging Technologies 121, 102870. Zhao, L., Song, Y., Zhang, C., Liu, Y., Wang, P., Lin, T., Deng, M., Li, H., 2020. T-gcn: A temporal graph convolutional network for traffic prediction. IEEE Transactions on Intelligent Transportation Systems 21, 3848–3858. Zhou, Q., 2026a. MMTD: Madrid fixed-sensor traffic data (processed sample for reproducible research). URL: https://doi.org/10.5281/ zenodo.18781181 , doi: 10.5281/zenodo.18781181 .Zhou, Q., 2026b. MMTD: Metropolitan Multi-source Traffic Data. URL: https://github.com/qishenzhou/MMTD .Zhou, Q., Zhang, Y., Makridis, M.A., Kouvelas, A., Wang, Y., Hu, S., 2025a. MoGERNN: An inductive traffic predictor for unobserved locations. Transportation Research Part C: Emerging Technologies 174, 105080. doi: 10.1016/j.trc.2025.105080 .Zhou, Q., Zhang, Y., Makridis, M.A., Kouvelas, A., Wang, Y., Hu, S., 2025b. Network-Wide Freeway Traffic Estimation Using Sparse Sensor Data: A Dirichlet Graph Auto-Encoder Approach. IEEE Transactions on Intelligent Transportation Systems 26, 22161–22177. doi: 10.1109/TITS. 2025.3610911 .
+
+Zhou et al.: Preprint submitted to Elsevier Page 25 of 25
