@@ -1,0 +1,482 @@
+Title: Diffusion Large Language Models for Visual Speech Recognition
+
+URL Source: https://arxiv.org/pdf/2605.28456v1
+
+Published Time: Thu, 28 May 2026 01:17:34 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# Diffusion Large Language Models for Visual Speech Recognition 
+
+Jeong Hun Yeo Chae Won Kim Hyeongseop Rha Yong Man Ro †
+
+Integrated Vision Language Lab, KAIST, South Korea 
+
+{sedne246, ymro}@kaist.ac.kr 
+
+Abstract 
+
+Existing Visual Speech Recognition (VSR) sys-tems commonly rely on left-to-right autoregres-sive decoding, which can force premature deci-sions on visually ambiguous tokens before suf-ficient context is available. We propose DLLM-VSR, to the best of our knowledge, the first Dif-fusion Large Language Model (DLLM)-based VSR framework, formulating transcription as iterative masked denoising with flexible-order decoding. With confidence-based unmasking, DLLM-VSR commits high-confidence posi-tions early and uses the committed tokens as bidirectional context to refine ambiguous ones. To adapt DLLMs to VSR, we introduce a two-stage masked-denoising training strategy that separates visual-to-text content alignment from length modeling. We further observe a perfor-mance gap with oracle-length decoding, which assumes access to the true transcript length, in-dicating that reducing target-length uncertainty can improve DLLM-based VSR. To reduce this gap, we develop length-guided candidate de-coding, which uses video duration to construct plausible transcript-length hypotheses, decodes under multiple hypotheses, and reranks candi-dates using length plausibility and decoding confidence. The proposed method achieves a state-of-the-art WER of 19.5% on LRS3 us-ing only its labeled training data. The code is available at https://bit.ly/DLLM-VSR .
+
+1 Introduction 
+
+Visual Speech Recognition (VSR) (Afouras et al., 2018a; Ma et al., 2023), also known as lip reading, aims to transcribe spoken utterances into text using only visual cues from a speaker’s mouth move-ments. As a visual-only speech interface, VSR can provide deaf and hard-of-hearing users with visual access to spoken language and enable silent communication in situations where audio input is 
+
+> †
+
+Corresponding Author. (a) AR Decoding 
+
+> (b) Ours
+> Left-to-right decoding: early errors cannot be revised
+> Masked denoising: uncertain tokens are resolved later
+> Later context (e.g., “bags”, “trip”) cannot revise BACK to PACK
+> Later context (e.g., “bags”, “trip”) resolves the ambiguity as PACK
+
+✓ 
+
+> Step 3
+> Final
+
+✗                                     
+
+> IBACK MY
+> IBACK MY BAGS FOR THE TRIP
+> …
+> [M] [M] [M] [M] [M] [M] [M]
+> [M] [M] BAGS [M]
+> IPACK MY BAGS FOR THE TRIP
+> …
+> Step 1
+> Step 2
+> Final
+> [M] [M] [M]
+> [M] [M] [M] Step 3 [M] [M] TRIP BAGS
+> Step 1
+> Step 2
+> I
+> IBACK
+> BACK
+> PACK
+> MACK
+> 0.42 ✓selected
+> 0.39
+> 0.15
+> I[M] MY BAGS FOR THE TRIP Step 6
+
+Figure 1: Conceptual comparison between autoregres-sive decoding and the proposed method. 
+
+impractical or undesirable. Despite these promis-ing applications, VSR remains a challenging task due to the inherent phonetic ambiguity of lip move-ments. Although spoken English contains approxi-mately 40 distinct phonemes, these phonemes col-lapse into only about 10–13 visually distinguish-able units, commonly referred to as visemes (Cap-pelletta and Harte, 2012; Bear and Harvey, 2016). As a result, multiple phonemes may belong to the same viseme group ( e.g., /p/, /b/, and /m/), making them nearly indistinguishable from visual evidence alone. To mitigate this ambiguity, recent VSR systems have improved through advances in both visual encoders and text decoders. On the encoder side, attention-based Transformer architectures have en-abled long-range temporal modeling of lip move-ment sequences, while self-supervised pretrain-ing has improved visual speech representations 
+
+> arXiv:2605.28456v1 [cs.AI] 27 May 2026
+
+by leveraging large-scale unlabeled audio-visual data (Shi et al., 2022; Haliassos et al., 2023). On the decoder side, autoregressive decoders have become a common choice, generating transcripts token by token in a fixed left-to-right order (Afouras et al., 2018a; Ma et al., 2023). More recently, Large Lan-guage Model (LLM)-based decoders (Grattafiori et al., 2024; Yang et al., 2024) have further im-proved performance by injecting stronger linguistic priors into the decoding process (Yeo et al., 2024c; Cappellazzo et al., 2025). However, despite these gains, current LLM-based VSR systems remain constrained by the fixed left-to-right token generation order of autore-gressive decoding. While suitable for sequential transcription, this rigid order can be suboptimal for VSR, where visual evidence is highly uneven across output positions. Due to viseme ambigu-ity and weak visual cues, some tokens may re-main highly uncertain, whereas others can be pre-dicted with relatively high confidence from visual evidence or contextual constraints. Consequently, strict left-to-right generation can force the model to commit to ambiguous early positions before easier, high-confidence positions become available as con-textual anchors. This motivates a strategy that first commits high-confidence positions and progres-sively uses the committed tokens to disambiguate uncertain ones, as illustrated in Figure 1. In this paper, we propose DLLM-VSR, to the best of our knowledge, the first Diffusion Large Language Model (DLLM)-based framework for VSR. Unlike autoregressive decoders, DLLMs start from a fixed-length canvas initialized with mask tokens and iteratively denoise masked positions into text tokens, enabling flexible-order genera-tion (Nie et al., 2026; Ye et al., 2025). To determine which positions to unmask and commit at each iteration, we adopt confidence-based unmasking, a common DLLM decoding strategy that priori-tizes high-confidence positions (Yu et al., 2025). This naturally matches VSR by operationalizing the high-confidence-first decoding strategy: reli-able positions are unmasked early, and through bidi-rectional refinement, the committed tokens guide visually ambiguous positions. To train the model, a standard DLLM for-mulation represents each target sequence on a fixed-length masked canvas with transcript tokens followed by EOS and padding tokens, enabling variable-length transcripts to be trained under a uni-fied denoising objective. A direct instantiation for DLLM-VSR would therefore supervise transcript positions with text tokens and positions beyond EOS with padding tokens. However, this can lead to padding-heavy supervision, as shorter transcripts leave many canvas positions assigned to padding prediction. Recent observations suggest that exces-sive padding loss can reduce sample efficiency and cause generation instability in DLLMs (Xie et al., 2025). Inspired by this observation, we propose a two-stage masked-denoising training strategy tai-lored to VSR, which separates content learning from length modeling: the first stage predicts only transcript tokens and the immediately following EOS token, while the second additionally predicts padding tokens beyond EOS for length modeling. After two-stage training, DLLM-VSR outper-forms recent LLM-based VSR systems, demon-strating that committing high-confidence tokens first is effective for VSR. Furthermore, to inves-tigate its performance upper bound, we evaluate the proposed method in an oracle setting where the ground-truth transcript length is given and used to fix EOS and padding positions in advance. The sub-stantial error reduction in this setting indicates that reducing uncertainty in EOS and padding place-ment could further improve decoding. Motivated by this observation, we introduce length-guided candidate decoding, which leverages video dura-tion to construct plausible transcript-length hy-potheses, decodes candidates for each hypothe-sis, and selects the final transcript by reranking them using length plausibility and decoding confi-dence. Together, our training and decoding strate-gies achieve a 19.5% word error rate (WER) on LRS3, establishing a new state of the art under the LRS3-only training setting. 
+
+2 Related Work 
+
+2.1 Visual Speech Recognition 
+
+VSR aims to transcribe silent lip movement videos into text. Modern VSR systems typically fol-low an encoder–decoder paradigm, where a vi-sual encoder extracts visual speech representations from lip movements and a text decoder converts them into text tokens. On the encoder side, prior work has improved representations through visual front-ends (Stafylakis and Tzimiropoulos, 2017), Transformer- and Conformer-based temporal mod-eling (Afouras et al., 2018a; Ma et al., 2021), audio-guided multimodal self-supervised learning (Shi et al., 2022; Haliassos et al., 2023), and data scal-ing with ASR-generated pseudo labels (Yeo et al., 2024b; Ma et al., 2023). While these advances have strengthened encoder-side representations, this work focuses on the decoding stage, which remains crucial for resolving visual ambiguity. Early VSR decoders were built on Connection-ist Temporal Classification (CTC) (Assael et al., 2016), which offers efficient non-autoregressive decoding but relies on a conditional independence assumption that limits the modeling of dependen-cies among output tokens. Autoregressive de-coders (Afouras et al., 2018a) address this lim-itation by incorporating language modeling into decoding, where each token is predicted condi-tioned on visual representations and previously gen-erated tokens. Recent work has further leveraged abundant audio and audio-text data to strengthen decoder-side linguistic priors. Examples include transferring knowledge from pretrained ASR mod-els (Zhao et al., 2020; Ren et al., 2021), leveraging paired audio-text data for decoder pretraining (Kim et al., 2023; Yeo et al., 2024a), and aligning vi-sual representations with intermediate representa-tions of strong speech models such as Whisper (Pra-jwal et al., 2024). More recently, LLM-based de-coders (Yeo et al., 2024c; Cappellazzo et al., 2025) have been introduced to exploit even stronger lin-guistic priors for resolving visual ambiguity in VSR. However, most of these approaches still re-tain the standard left-to-right generation order, de-spite the highly ambiguous and uneven nature of visual speech evidence. In line with this decoder-centric direction, our work improves VSR not by strengthening linguistic priors alone, but by revisit-ing the token generation order itself. 
+
+2.2 Diffusion Large Language Models 
+
+DLLMs have recently attracted increasing attention for enabling parallel decoding with bidirectional attention, offering a promising direction for im-proving LLM inference efficiency. Early scaling efforts such as LLaDA (Nie et al., 2026) demon-strated that diffusion-based language modeling can be trained from scratch at the 8B scale and achieve performance competitive with strong autoregres-sive LLMs. Another line of work adapts pretrained autoregressive LLMs into diffusion language mod-els, from earlier efforts such as DiffuLLaMA and DiffuGPT (Gong et al., 2025) to recent models such as Dream (Ye et al., 2025), which builds on Qwen2.5 (Yang et al., 2024) and shows strong per-formance on general language, mathematical rea-soning, and code generation tasks. More recently, multimodal DLLMs such as LLaDA-V (You et al., 2025), LaViDa (Li et al., 2026b), and Dimple (Yu et al., 2025) have extended diffusion-style decoding to visual inputs through visual instruction tuning or adaptation from pretrained vision-language models. These advances suggest that DLLMs are evolving from text-only generators into general-purpose de-coders for multimodal conditional generation. Despite this progress, DLLMs face a fundamen-tal challenge in variable-length generation due to their fixed-length canvas. Unlike autoregressive models, which terminate by emitting an EOS to-ken, DLLMs must commit to a canvas size be-fore denoising. A too-short canvas may truncate the output, whereas an overly long canvas wastes computation on redundant EOS or padding posi-tions and can degrade generation quality. Existing approaches address this issue through three main directions: training-based length control, such as DreamOn’s [expand]/[delete] operations (Yang et al., 2025; Wu et al., 2026); training-free can-vas adaptation based on inference-time signals, such as DAEDAL’s EOS-confidence criterion (Li et al., 2026a; Cheng et al., 2026); and semi-autoregressive block-wise decoding, as in Block Diffusion (Arriola et al., 2025). Our approach fol-lows the training-free direction, but differs in how the target length is estimated. Instead of relying solely on model-internal signals to search for an adequate canvas size, we exploit a task-specific property of VSR: transcript length is strongly cor-related with input video duration. 
+
+3 Method 
+
+Our model is illustrated in Figure 2. Given a lip movement video and a masked transcript canvas, the model generates a transcript by iteratively de-noising masked positions, where high-confidence positions are committed and their tokens serve as textual context for resolving visually ambigu-ous ones. We first describe the visual-conditioned DLLM architecture, then introduce our two-stage masked-denoising training strategy and length-guided candidate decoding. 
+
+3.1 Architecture 
+
+Following recent LLM-based VSR systems (Yeo et al., 2024c; Cappellazzo et al., 2025), we retain the visual encoder and projection interface but re-place the left-to-right autoregressive decoder with Lip Movement Video 
+
+(a) Overall Architecture 
+
+> Visual Encoder
+> Length Adapter
+> FC Projection
+
+DLLM Decoder        
+
+> Masked Canvas
+> [M] [M] [M] [M] [M] [M] [M] [M]
+> ⋮
+> Visual Speech Tokens
+> ⋮
+
+(b) Confidence-based Unmasking Strategy 
+
+(c) Two-Stage Masked-Denoising Training                   
+
+> Stage 1:
+> Visual-to-Text Content Alignment
+> Mask transcript + EOS only
+> Stage 2:
+> Length-Aware Sequence Completion
+> Mask transcript + EOS + PAD
+> 1) Target Sequence (with padding)
+> 2) Random Masking (ratio: 𝑡𝑡 ∼ 𝒰𝒰 0,1 )
+> 3) Reconstruction Loss on Masked Positions
+> [M] [M] [M] [M] [M] [M] [M] [M]
+> Step 1: Fully Masked
+> IPACK MY BAGS FOR THE TRIP [EOS]
+> Final: Ambiguity Resolved
+
+(d) Length-Guided Candidate Decoding                                   
+
+> 1) Length Prediction
+> ⋮ Visual
+> Encoder
+> Length Predictor
+> 2) Candidate Decoding
+> Predicted length window
+> {𝐾𝐾 pred − 𝑅𝑅 , … , 𝐾𝐾 pred +𝑅𝑅 }
+> Lip Movement Video
+> 𝑘𝑘 =𝐾𝐾 pred − 𝑅𝑅
+> 𝑘𝑘 =𝐾𝐾 pred
+> 𝑘𝑘 =𝐾𝐾 pred +𝑅𝑅
+> 2) Random Masking (ratio: 𝑡𝑡 ∼ 𝒰𝒰 0,1 )
+> 3) Reconstruction Loss on Masked Positions
+> 1) Target Sequence (no padding)
+> Step 2: High-Confidence Positions Committed
+> [M] [M] [M] [M] [M] [M] BAGS TRIP
+> 0.95 0.91
+> Committed Tokens
+> Masked Tokens
+> Special Tokens
+> IMY BAGS FOR THE TRIP [EOS] [M]
+> 0.93 0.94 0.96 0.92 0.88
+> Step 3: Context Emerges
+
+✓ select candidate 
+
+> with best score
+
+Iterative Refinement                                      
+
+> IPACK MY BAGS FOR THE TRIP [EOS]
+> ⋮
+> ⋮
+> Candidates
+> [PAD] [PAD] [EOS] [M] [M] [PAD] [M]
+> ⋮
+> [EOS] [PAD] [M] [M] [M] [PAD] [M]
+> ⋮
+> [M] [EOS] [M] [M] [M] [PAD] [M]
+> ⋮
+> IPACK FOR THE TRIP [EOS]
+> ⋮
+> I[M] FOR [M] [M] TRIP
+> ⋮ ⋮
+> [PAD] [PAD] IPACK FOR THE TRIP [EOS]
+> ⋮
+> ⋮
+> [M] [PAD] [M] PACK [M] [M] TRIP [M]
+> ⋮
+> ⋮
+> ⋮
+> ⋮
+
+Figure 2: Overview of DLLM-VSR. (a) Overall architecture with a frozen visual encoder, a length adapter, FC projection layers, and a LoRA-adapted DLLM decoder. (b) Confidence-based unmasking, where high-confidence positions are committed first and the committed tokens are used as bidirectional textual context. (c) Two-stage masked-denoising training for visual-to-text content alignment and length-aware sequence completion. (d) Length-guided candidate decoding with multiple length hypotheses and joint candidate reranking. 
+
+a DLLM decoder. Given a lip movement video 
+
+V = {f1, . . . , f N } of N frames, our goal is to gen-erate the transcript x0 = {x10, . . . , x K
+
+0 } of length 
+
+K. The architecture consists of a pretrained visual encoder (Shi et al., 2022; Haliassos et al., 2026), a length adapter, two projection layers that map visual features into the language embedding space, and a DLLM decoder conditioned on the resulting visual speech tokens v.A DLLM models the transcript on a fixed-length canvas of T token positions, where T is chosen to accommodate the longest training transcript in-cluding EOS. Starting from a fully masked canvas, the DLLM iteratively predicts token distributions for all masked positions conditioned on the visual speech tokens v and the currently unmasked tokens. Following confidence-based unmasking (Yu et al., 2025), we commit positions whose confidence ex-ceeds a fixed threshold, or the most confident po-sition if none exceeds the threshold. Once a posi-tion is committed, its predicted token is kept fixed and used as bidirectional context for the remaining masked positions. To train the DLLM decoder, we follow the masked diffusion formulation (Nie et al., 2026). Given a target sequence x0 on the canvas, we sam-ple a masking ratio t ∼ U (0 , 1) and replace se-lected tokens with the mask token M to obtain xt.Let M = {i : xit = M } denote the masked po-sitions. Conditioned on the visual speech tokens 
+
+v and the unmasked tokens in xt, the model re-constructs the original tokens at masked positions using the following loss: 
+
+L = −Et,v,x 0,x t
+
+"
+
+1
+
+t
+
+X
+
+i∈M 
+
+log pθ(xi
+
+0 | v, x t)
+
+#
+
+, (1) where θ denotes the trainable parameters. Our two-stage strategy below uses the same objective but differs in the target canvas and the set of positions included in M.
+
+3.2 Two-Stage Masked-Denoising Training 
+
+A straightforward way to train the DLLM decoder is to apply the diffusion objective directly over the full canvas containing transcript, EOS, and padding tokens. However, when the canvas is much longer than the transcript, padding tokens occupy a large fraction of supervised positions and can dominate the loss. We therefore decompose training into two stages: the first learns content prediction using only transcript and EOS positions, while the second ex-tends denoising to the full canvas to learn padding completion beyond EOS. Since the EOS token is attached directly after the transcript, the first stage still exposes the model to transcript termination without requiring it to model a long non-content suffix. 
+
+3.2.1 Stage 1: Visual-to-Text Content Alignment 
+
+In the first stage, we exclude padding positions and train on the transcript followed by a single EOS to-ken. Given x0 = {x10, . . . , x K 
+
+> 0
+
+, EOS }, we sample a masking ratio t ∼ U (0 , 1) and mask its tokens to obtain xt, so that M spans only the transcript tokens and the immediately following EOS token. Training with Eq. 1 over this restricted M encour-ages visual-to-text content alignment and transcript termination without being dominated by padding prediction. 
+
+3.2.2 Stage 2: Length-Aware Sequence Completion 
+
+Building on Stage 1, the second stage extends each sequence to the canvas length T by filling positions after the EOS token with padding tokens. We then apply masked reconstruction over the entire canvas, so that M spans transcript, EOS, and padding posi-tions. Training with Eq. (1) over this full-canvas M
+
+teaches the model to preserve transcript and EOS prediction while completing the remaining canvas with padding tokens, enabling variable-length gen-eration within a fixed-length canvas. 
+
+3.3 Length-Guided Candidate Decoding 
+
+A DLLM generates a transcript by denoising a fixed-length canvas of T positions, where the tran-script occupies a prefix and the remaining positions are filled with EOS and padding tokens. Thus, the transcript length K determines the partition between content and non-content positions. Infer-ring K implicitly during denoising can be subop-timal for VSR: over-estimated lengths introduce spurious content positions, while under-estimated lengths truncate the transcript. We therefore pro-pose length-guided candidate decoding, which pre-dicts plausible transcript lengths from the input video and decodes candidates under multiple length hypotheses. 
+
+Length prediction. We attach a lightweight length predictor on top of the frozen visual encoder to esti-mate the transcript length K from the visual feature sequence. Since the visual features are produced at a fixed temporal rate, their sequence length reflects the input video duration and provides a useful cue for transcript length. The predictor pools the visual features with a learnable query token and classi-fies over candidate lengths, yielding P (K | v). It is trained independently using cross-entropy loss against the ground-truth transcript length. 
+
+Candidate decoding under length hypotheses. 
+
+Rather than relying on a single predicted length, we decode a local window around the top-1 pre-diction, K = {Kpred − R, . . . , K pred + R}, where 
+
+Kpred = arg max k P (k | v). This window covers likely transcript lengths while keeping the number of decoded candidates small. For each k ∈ K ,we initialize the first k positions as mask tokens, pin an EOS token at position k + 1 , and fill the re-maining positions with padding tokens. The pinned EOS and padding tokens are kept fixed throughout decoding, and confidence-based unmasking is ap-plied only to the first k transcript positions. For ef-ficiency, we batch the candidates corresponding to all k ∈ K and perform denoising in parallel. Since confidence-based unmasking with a fixed threshold may commit different numbers of positions at each step, each candidate can require a different number of denoising iterations. This yields one candidate transcript per length hypothesis, along with token confidence values and the required number of itera-tions. 
+
+Joint reranking. We select the final transcript by reranking candidates with a combined score: 
+
+s(k) = 
+
+> k
+
+X
+
+> i=1
+
+log ci + λ log pk − βn k, (2) where ci is the confidence at the i-th committed transcript position, pk = P (k | v) is the predicted probability of length k, nk is the number of denois-ing iterations required for candidate length k, and 
+
+λ, β are balancing weights. The three terms respec-tively measure decoder confidence, length plausibil-ity, and decoding efficiency under threshold-based unmasking. The final transcript is obtained from the best-scoring length. 
+
+k∗ = arg max  
+
+> k∈K
+
+s(k). (3) 
+
+4 Experimental Setup 
+
+4.1 Dataset 
+
+We evaluate DLLM-VSR on two sentence-level English VSR benchmarks: Lip Reading Sentences 3 (LRS3) (Afouras et al., 2018b) and Lip Read-ing Sentences 2 (LRS2) (Afouras et al., 2018a). LRS3 contains 433 hours of audio-visual speech from TED and TEDx talks and is used as our pri-mary benchmark under the LRS3-only training set-ting. LRS2 contains 223 hours of transcribed audio-visual speech from BBC television programs and is used as a complementary benchmark to assess cross-dataset robustness. 
+
+4.2 Implementation Details 
+
+We use frozen USR 2.0 Huge (Haliassos et al., 2026) as the visual encoder and frozen Dream-7B (Ye et al., 2025) as the DLLM decoder. Vi-sual features are downsampled from 25 to 12.5 fps by a Conv1d adapter and mapped to Dream-7B’s 3584-dimensional hidden space by a 2-layer pro-jector. LoRA is applied to all linear layers with rank r = 16 and α = 32 . Length-guided candidate decoding uses a lightweight 2-layer Transformer length predictor with roughly 4M trainable param-eters. DLLM-VSR is trained in two stages on LRS3: 42k steps at a learning rate of 10 −4, followed by 4k steps at 5 × 10 −5. We report word error rate (WER). At inference, we use a canvas length of T = 32 , decode candidate lengths within ra-dius R = 5 around Kpred , and commit positions whose confidence exceeds 0.9, or the most confi-dent position if none exceeds the threshold. Rerank-ing weights (λ, β ) are selected by validation grid search over [0 , 1] × [0 , 1] with step size 0.1, yield-ing (0 .9, 0.7) for AV-HuBERT/LRS3, (0 .9, 0.6) for USR 2.0/LRS3, and (1 .0, 0.9) for USR 2.0/LRS2. Further implementation details are provided in Ap-pendix A. 
+
+5 Experimental Results 
+
+5.1 Comparison with the State-of-the-Art Methods 
+
+Table 1 compares DLLM-VSR with state-of-the-art VSR methods on LRS3 across fully super-vised, self-supervised, and LLM-based settings. Since our method builds on a self-supervised pre-trained visual encoder, we first compare it with self-supervised encoder-based VSR models to assess the effect of replacing the autoregressive decoder with our DLLM-based framework. AV-HuBERT with a Transformer decoder reaches 28.6% WER when trained on LRS3 alone. Coupling the same AV-HuBERT encoder with an LLM brings a sub-stantial gain; in particular, Cappellazzo et al. (2026) combine AV-HuBERT with a Qwen2.5-7B autore-gressive LLM decoder and achieve 24.9% WER un-der the same LRS3-only setting. Our AV-HuBERT-based variant is directly comparable to this baseline, as Dream-7B is initialized from Qwen2.5-7B and further trained with masked denoising. By replac-ing the left-to-right autoregressive LLM decoder with a DLLM decoder, our method achieves 21.9% WER, improving over Cappellazzo et al. (2026) by 3.0 percentage points. We further evaluate our method with the stronger USR 2.0 encoder. Since no prior work reports USR 2.0 trained on LRS3 alone, we reproduce it with the encoder frozen, obtaining 25.8% WER, which already improves over AV-HuBERT by 2.8 percentage points. Integrating this encoder into our framework yields 19.5% WER, a 6.3-point im-provement over the reproduced baseline. Notably, this approaches the 19.1% WER of Auto-AVSR, which is trained on 3,448 hours of labeled data, while our model uses only the 433-hour LRS3 train-ing set. 
+
+5.2 Effect of Token Commitment Order 
+
+Table 2 analyzes token commitment order by first isolating the effect of bidirectional attention and then evaluating block-based variants, where de-coding proceeds left to right across blocks but confidence-based commitment is applied within each block. Compared with the autoregressive baseline (Cap-pellazzo et al., 2026), our autoregressive variant reduces WER from 24.9% to 24.3% under the same left-to-right commitment order, showing that bidi-rectional attention is beneficial even without relax-ing the autoregressive order. As the block size in-creases, confidence-based commitment is applied over a larger set of positions within each left-to-right block, reducing the granularity of the left-to-right constraint and allowing richer bidirectional in-teraction among candidate positions. Full-parallel decoding applies confidence-based commitment over the entire canvas and performs best, reaching 23.1% WER with AV-HuBERT and 20.5% WER with USR 2.0. 
+
+5.3 Ablation Study 
+
+Table 3 analyzes the effect of the two-stage training strategy and length-guided candidate decoding on LRS3. We first examine the necessity of Stage 2 by evaluating a Stage-1-only model. When the ground-truth transcript length is given, the Stage-1-only model achieves reasonable WERs of 21.9% with AV-HuBERT and 17.8% with USR 2.0. However, under implicit-length decoding, its WER drasti-cally increases to 188.0% and 275.0%, respectively. Method Pub. Encoder Decoder Encoder Pretraining Data (h) Labeled Data (h) WER (%) ↓
+
+Fully Supervised 
+
+Afouras et al. (2018a) TPAMI’18 Transformer Transformer – 1,519 58.9 Makino et al. (2019) ASRU’19 BiLSTM RNN-T – 31,000 33.6 Prajwal et al. (2022) CVPR’22 Transformer Transformer – 2,676 30.7 Ma et al. (2023) ICASSP’23 Conformer Transformer – 3,448 19.1 Serdyuk et al. (2022) Interspeech’22 ViT3D RNN-T – 90,000 17.0 Chang et al. (2024) ICASSP’24 Conformer RNN-T – 100,000 12.8 
+
+Self-Supervised 
+
+Shi et al. (2022) ICLR’22 AV-HuBERT Transformer 1,759 433 28.6 Zhu et al. (2023) TMM’23 VATLM Transformer 1,759 433 28.4 Haliassos et al. (2023) ICLR’23 RAVEn Transformer 1,759 433 27.8 Haliassos et al. (2026) ICLR’26 USR 2.0 Transformer 3,305 433 ‡ 25.8 
+
+LLM-Augmented 
+
+Yeo et al. (2024c) EMNLP’24 AV-HuBERT Llama2-7B 1,759 433 25.4 Cappellazzo et al. (2025) ICASSP’25 AV-HuBERT Llama3-8B 1,759 433 25.3 Cappellazzo et al. (2026) ICASSP’26 AV-HuBERT Qwen2.5-7B 1,759 433 24.9 Yuan et al. (2025) ICCV’25 AV-HuBERT Llama3-8B 1,759 433 † 22.0 
+
+DLLM-Augmented 
+
+Ours – AV-HuBERT Dream-7B 1,759 433 21.9 
+
+Ours – USR 2.0 Dream-7B 3,305 433 19.5 
+
+Table 1: Comparison with state-of-the-art VSR methods on LRS3. † indicates the use of additional video-level metadata, such as title, description, and speaker name. ‡ indicates our reproduction trained using only LRS3.                             
+
+> Method Decoding Bi-dir. Attn. Block Size WER (%) ↓
+> AV-HuBERT USR 2.0
+> Cappellazzo et al. (2026) AR ✗124.9 –Ours AR ✓124.3 22.2 Block
+> ✓223.8 21.6
+> ✓423.5 21.1
+> ✓823.3 20.7
+> ✓16 23.2 20.6 Parallel ✓32 23.1 20.5
+
+Table 2: Effect of token generation order and bidirec-tional attention on the LRS3 dataset. 
+
+This shows that Stage 2 is essential for stable im-plicit length prediction and full-canvas generation with EOS and padding tokens. We then evaluate length-guided candidate de-coding after two-stage training. Oracle-length decoding, with ground-truth length and fixed EOS/padding positions, serves as an upper bound. Oracle-length decoding achieves 20.2% WER with AV-HuBERT and 17.7% WER with USR 2.0, while implicit-length decoding obtains 23.1% and 20.5% WER, respectively. This gap shows that uncertainty over the content/non-content partition remains a source of error even after full-canvas training. Length-guided candidate decoding reduces this gap by decoding multiple length hypotheses and                               
+
+> #Decoding Strategy WER (%) ↓
+> AV-HuBERT USR 2.0
+> Stage-1-only training
+> 1Stage 1 only + oracle length 21.9 17.8 2Stage 1 only + implicit length 188.0 275.0
+> Oracle: ground-truth length given (upper bound)
+> 3Decode with oracle length 20.2 17.7
+> Practical: length unknown at test time
+> 4Implicit length (no length guidance) 23.1 20.5 5+ Length-guided rerank ( Plog ci+λlog pk)22.7 20.2 6+ Iteration penalty −βn k(Full )21.9 19.5
+
+Table 3: Effect of two-stage training and length-guided decoding under oracle and practical length settings. 
+
+reranking them. Length-guided reranking improves WER from 23.1% to 22.7% with AV-HuBERT and from 20.5% to 20.2% with USR 2.0. Adding the iteration penalty further improves WER to 21.9% and 19.5%, respectively, indicating that length plau-sibility, decoder confidence, and hypothesis stabil-ity provide complementary signals for selecting better candidates. 
+
+5.4 Generalization to LRS2 
+
+We evaluate DLLM-VSR on LRS2 to assess gen-eralization beyond LRS3 and inference efficiency. For a controlled comparison, all entries in Table 4 are reproduced by us on the same LRS2 dataset. # Model / Decoding Strategy LRS2 WER (%) ↓ RTF ↓                  
+
+> Autoregressive baselines
+> 1USR 2.0 + Transformer decoder (greedy) 24.7 0.09 2USR 2.0 + Qwen2.5-7B AR decoder (greedy) 21.9 0.27 3USR 2.0 + Qwen2.5-7B AR decoder (beam=5) 20.5 0.34
+> Oracle: ground-truth length given (upper bound)
+> 4DLLM-VSR with oracle length 14.7 0.12
+> Practical: length unknown at test time
+> 5DLLM-VSR with implicit length 17.8 0.14 6DLLM-VSR with length-guided decoding (Full) 16.8 1.53
+
+Table 4: Generalization and decoding efficiency on LRS2. Real time factor (RTF) is defined as decoding time divided by video duration and is measured on 50 samples with batch size 1 on a single GPU, excluding 5 warmup samples.                
+
+> Encoder Acc@0 Acc@1 Acc@3 Acc@5 MAE ↓
+> AV-HuBERT 43.70 88.00 99.40 99.92 0.710 USR 2.0 44.21 87.59 99.42 99.92 0.715
+
+Table 5: Length predictor performance on LRS3. Acc@ N denotes the percentage of samples satisfying 
+
+| ˆK − K| ≤ N , and mean absolute error (MAE) is mea-sured in tokens. 
+
+The autoregressive Transformer decoder is fast but less accurate, obtaining 24.7% WER with an RTF of 0.09. Replacing it with a Qwen2.5-7B autore-gressive decoder improves WER to 21.9% with greedy decoding and 20.5% with beam search, but increases RTF due to left-to-right LLM generation. In contrast, DLLM-VSR performs masked de-noising instead of left-to-right decoding. Oracle-length decoding achieves 14.7% WER with an RTF of 0.12, while implicit-length decoding ob-tains 17.8% WER with an RTF of 0.14, outper-forming autoregressive baselines with low decod-ing cost. Length-guided candidate decoding fur-ther reduces WER to 16.8%, but increases RTF to 1.53 because it evaluates 11 length candidates. Thus, implicit-length decoding provides a favorable speed–accuracy trade-off, whereas length-guided decoding prioritizes accuracy at higher inference cost. 
+
+5.5 Length Prediction Accuracy 
+
+Table 5 evaluates the length predictor on the LRS3 test set. The predictor performs consistently across encoder choices, with Acc@0 around 44%, Acc@1 around 88%, Acc@3 around 99.4%, and Acc@5 reaching 99.92% with an MAE of about 0.7 tokens. These results confirm that the input video provides a reliable cue for transcript length and support our design choice of decoding only a small local win-
+
+Step / Type Generated transcript 
+
+Success case: different generation orders Strict left-to-right order 
+
+Step 2 sage vision 
+
+Step 6 sage vision is one of 
+
+Step 11 sage vision is one of the greatest and most effective 
+
+Step 16 sage vision is one of the greatest and most effective forms of political writing 
+
+Full-parallel order 
+
+Step 1 _ _ _ _ _ _ _ and _ _ _ _ _ _ 
+
+Step 2 _ _ is one of the greatest and most effective forms of political writing 
+
+Step 3 _ fiction is one of the greatest and most effective forms of political writing 
+
+Step 4 science fiction is one of the greatest and most effective forms of political writing 
+
+Failure cases 
+
+Case 1 GT: harvest contaminated tobacco 
+
+Pred: harvested contaminated tobacco 
+
+(harvest → harvested )Case 2 GT: and remember we had experience with this 
+
+Pred: and i remembered we had experience with this (remember →
+
+remembered )
+
+Table 6: Qualitative success and failure cases. 
+
+dow around the predicted length. 
+
+5.6 Qualitative Analysis 
+
+Table 6 shows qualitative success and failure cases. In the success case, left-to-right decoding commits the erroneous prefix sage vision , whereas full-parallel decoding first reveals reliable later context and recovers science fiction . This shows that flexible-order decoding can provide useful seman-tic constraints for ambiguous positions. The fail-ure cases show that high-confidence errors remain when ground-truth and predicted phrases are both fluent and visually plausible, such as harvest ver-sus harvested or remember versus remembered .
+
+6 Conclusion 
+
+We presented DLLM-VSR, a diffusion large lan-guage model-based framework that revisits token commitment order for visual speech recognition. By replacing left-to-right autoregressive decoding with flexible-order masked denoising, DLLM-VSR allows confident tokens to serve as contextual an-chors for resolving visually ambiguous positions. We further introduced two-stage masked-denoising training and length-guided candidate decoding to address fixed-canvas training and length uncer-tainty in DLLM-based VSR. Experiments on LRS3 and LRS2 demonstrate consistent improvements over autoregressive baselines, with DLLM-VSR achieving 19.5% WER on LRS3 under the LRS3-only training setting. 
+
+Limitations 
+
+We find that controlling token generation order sub-stantially benefits DLLM-based VSR, and oracle-length decoding reveals the upper bound achiev-able when the transcript length is known. While our length-guided candidate decoding narrows the gap to this oracle setting, a gap remains, indicat-ing that length modeling can be further improved. Moreover, evaluating multiple length hypotheses increases inference time, so reducing the compu-tational overhead of length-guided decoding is an important direction for future work. 
+
+Ethical Considerations 
+
+VSR systems can improve accessibility for deaf and hard-of-hearing users and enable silent com-munication, but they may raise privacy concerns because spoken content could be inferred from silent videos without speaker consent. Such sys-tems should therefore be used only with appropriate consent and safeguards. We use existing datasets and pretrained models only for VSR research, in ac-cordance with their licenses, access conditions, and intended use. Since performance may vary across speakers, recording conditions, accents, and demo-graphic groups, we do not recommend deployment in high-stakes settings without careful validation and human oversight. 
+
+References 
+
+Triantafyllos Afouras, Joon Son Chung, Andrew Se-nior, Oriol Vinyals, and Andrew Zisserman. 2018a. Deep audio-visual speech recognition. IEEE trans-actions on pattern analysis and machine intelligence ,44(12):8717–8727. Triantafyllos Afouras, Joon Son Chung, and An-drew Zisserman. 2018b. Lrs3-ted: a large-scale dataset for visual speech recognition. arXiv preprint arXiv:1809.00496 .Marianne Arriola, Aaron Gokaslan, Justin Chiu, Zhihan Yang, Zhixuan Qi, Jiaqi Han, Subham Sahoo, and Volodymyr Kuleshov. 2025. Block diffusion: Interpo-lating between autoregressive and diffusion language models. In International Conference on Learning Representations , volume 2025, pages 50726–50753. Yannis M Assael, Brendan Shillingford, Shimon White-son, and Nando De Freitas. 2016. Lipnet: End-to-end sentence-level lipreading. arXiv preprint arXiv:1611.01599 .Helen L Bear and Richard Harvey. 2016. Decoding visemes: Improving machine lip-reading. In 2016 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) , pages 2009–2013. IEEE. Umberto Cappellazzo, Minsu Kim, Honglie Chen, Pingchuan Ma, Stavros Petridis, Daniele Falavigna, Alessio Brutti, and Maja Pantic. 2025. Large lan-guage models are strong audio-visual speech recog-nition learners. In ICASSP 2025-2025 IEEE Interna-tional Conference on Acoustics, Speech and Signal Processing (ICASSP) , pages 1–5. IEEE. Umberto Cappellazzo, Xubo Liu, Pingchuan Ma, Stavros Petridis, and Maja Pantic. 2026. Omni-avsr: Towards unified multimodal speech recognition with large language models. In ICASSP 2026-2026 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) , pages 17772–17776. IEEE. Luca Cappelletta and Naomi Harte. 2012. Phoneme-to-viseme mapping for visual speech recognition. In 
+
+International Conference on Pattern Recognition Ap-plications and Methods , volume 2, pages 322–329. SciTePress. Oscar Chang, Hank Liao, Dmitriy Serdyuk, Ankit Shah, and Olivier Siohan. 2024. Conformer is all you need for visual speech recognition. In ICASSP 2024-2024 IEEE International Conference on Acous-tics, Speech and Signal Processing (ICASSP) , pages 10136–10140. IEEE. Zicong Cheng, Ruixuan Jia, Jia Li, Guo-Wei Yang, Meng-Hao Guo, and Shi-Min Hu. 2026. Improv-ing variable-length generation in diffusion language models via length regularization. arXiv preprint arXiv:2602.07546 .Shansan Gong, Shivam Agarwal, Yizhe Zhang, Jiacheng Ye, Lin Zheng, Mukai Li, Chenxin An, Peilin Zhao, Wei Bi, Jiawei Han, and 1 others. 2025. Scaling diffusion language models via adaptation from au-toregressive models. In International Conference on Learning Representations , volume 2025, pages 5046–5073. Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Alex Vaughan, and 1 others. 2024. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 .Alexandros Haliassos, Pingchuan Ma, Rodrigo Mira, Stavros Petridis, and Maja Pantic. 2023. Jointly learn-ing visual and auditory speech representations from raw data. In The Eleventh International Conference on Learning Representations .Alexandros Haliassos, Rodrigo Mira, and Stavros Petridis. 2026. Pay attention to CTC: Fast and robust pseudo-labelling for unified speech recognition. In 
+
+The Fourteenth International Conference on Learn-ing Representations .Minsu Kim, Jeong Hun Yeo, Jeongsoo Choi, and Yong Man Ro. 2023. Lip reading for low-resource languages by learning and combining general speech knowledge and language-specific knowledge. In Pro-ceedings of the IEEE/CVF international conference on computer vision , pages 15359–15371. Jinsong Li, Xiaoyi Dong, Yuhang Zang, Yuhang Cao, Jiaqi Wang, and Dahua Lin. 2026a. Beyond fixed: Training-free variable-length denoising for diffusion large language models. In The Fourteenth Interna-tional Conference on Learning Representations .Shufan Li, Konstantinos Kallidromitis, Hritik Bansal, Akash Gokul, Yusuke Kato, Kazuki Kozuka, Jason Kuen, Zhe Lin, Kai-Wei Chang, and Aditya Grover. 2026b. Lavida: A large diffusion language model for multimodal understanding. Advances in Neural Information Processing Systems , 38:105101–105134. Pingchuan Ma, Alexandros Haliassos, Adriana Fernandez-Lopez, Honglie Chen, Stavros Petridis, and Maja Pantic. 2023. Auto-avsr: Audio-visual speech recognition with automatic labels. In ICASSP 2023-2023 IEEE International Conference on Acous-tics, Speech and Signal Processing (ICASSP) , pages 1–5. IEEE. Pingchuan Ma, Stavros Petridis, and Maja Pantic. 2021. End-to-end audio-visual speech recognition with con-formers. In ICASSP 2021-2021 IEEE International Conference on Acoustics, Speech and Signal Process-ing (ICASSP) , pages 7613–7617. IEEE. Takaki Makino, Hank Liao, Yannis Assael, Brendan Shillingford, Basilio Garcia, Otavio Braga, and Olivier Siohan. 2019. Recurrent neural network transducer for audio-visual speech recognition. In 
+
+2019 IEEE automatic speech recognition and under-standing workshop (ASRU) , pages 905–912. IEEE. Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. 2026. Large language dif-fusion models. Advances in Neural Information Pro-cessing Systems , 38:50608–50646. KR Prajwal, Triantafyllos Afouras, and Andrew Zisser-man. 2022. Sub-word level lip reading with visual attention. In Proceedings of the IEEE/CVF confer-ence on Computer Vision and Pattern Recognition ,pages 5162–5172. KR Prajwal, Triantafyllos Afouras, and Andrew Zisser-man. 2024. Speech recognition models are strong lip-readers. In Proc. Interspeech 2024 , pages 2425– 2429. Sucheng Ren, Yong Du, Jianming Lv, Guoqiang Han, and Shengfeng He. 2021. Learning from the master: Distilling cross-modal advanced knowledge for lip reading. In Proceedings of the IEEE/CVF Confer-ence on Computer Vision and Pattern Recognition ,pages 13325–13333. Dmitriy Serdyuk, Otavio Braga, and Olivier Siohan. 2022. Transformer-based video front-ends for audio-visual speech recognition for single and multi-person video. arXiv preprint arXiv:2201.10439 .Bowen Shi, Wei-Ning Hsu, Kushal Lakhotia, and Ab-delrahman Mohamed. 2022. Learning audio-visual speech representation by masked multimodal cluster prediction. arXiv preprint arXiv:2201.02184 .Themos Stafylakis and Georgios Tzimiropoulos. 2017. Combining residual networks with lstms for lipread-ing. In Proc. Interspeech .Zirui Wu, Lin Zheng, Zhihui Xie, Jiacheng Ye, Jiahui Gao, Shansan Gong, Yansong Feng, Zhenguo Li, Wei Bi, Guorui Zhou, and Lingpeng Kong. 2026. Drea-mon: Diffusion language models for code infilling beyond fixed-size canvas. In The Fourteenth Interna-tional Conference on Learning Representations .Zhihui Xie, Jiacheng Ye, Lin Zheng, Jiahui Gao, Jing-wei Dong, Zirui Wu, Xueliang Zhao, Shansan Gong, Xin Jiang, Zhenguo Li, and 1 others. 2025. Dream-coder 7b: An open diffusion language model for code. 
+
+arXiv preprint arXiv:2509.01142 .Qwen An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Guanting Dong, Hao-ran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxin Yang, Jingren Zhou, Jun-yang Lin, and 25 others. 2024. Qwen2.5 technical report. ArXiv , abs/2412.15115. Yicun Yang, Cong Wang, Shaobo Wang, Zichen Wen, Biqing Qi, Hanlin Xu, and Linfeng Zhang. 2025. Diffusion llm with native variable genera-tion lengths: Let [eos] lead the way. arXiv preprint arXiv:2510.24605 .Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Lingpeng Kong. 2025. Dream 7b: Diffusion large language models. 
+
+arXiv preprint arXiv:2508.15487 .Jeong Hun Yeo, Minsu Kim, Jeongsoo Choi, Dae Hoe Kim, and Yong Man Ro. 2024a. Akvsr: Audio knowledge empowered visual speech recognition by compressing audio knowledge of a pretrained model. 
+
+IEEE Transactions on Multimedia , 26:6462–6474. Jeong Hun Yeo, Minsu Kim, Shinji Watanabe, and Yong Man Ro. 2024b. Visual speech recognition for languages with limited labeled data using automatic labels from whisper. In ICASSP 2024-2024 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) , pages 10471–10475. IEEE. Jeonghun Yeo, Seunghee Han, Minsu Kim, and Yong Man Ro. 2024c. Where visual speech meets lan-guage: Vsp-llm framework for efficient and context-aware visual speech processing. In Findings of the Association for Computational Linguistics: EMNLP 2024 , pages 11391–11406. Zebin You, Shen Nie, Xiaolu Zhang, Jun Hu, Jun Zhou, Zhiwu Lu, Ji-Rong Wen, and Chongxuan Li. 2025. Llada-v: Large language diffusion models with visual instruction tuning. arXiv preprint arXiv:2505.16933 .Runpeng Yu, Xinyin Ma, and Xinchao Wang. 2025. Dimple: Discrete diffusion multimodal large lan-guage model with parallel decoding. arXiv preprint arXiv:2505.16990 .Zhaoxin Yuan, Shuang Yang, Shiguang Shan, and Xilin Chen. 2025. Not only vision: Evolve visual speech recognition via peripheral information. In Proceed-ings of the IEEE/CVF International Conference on Computer Vision (ICCV) , pages 3091–3100. Ya Zhao, Rui Xu, Xinchao Wang, Peng Hou, Haihong Tang, and Mingli Song. 2020. Hearing lips: Improv-ing lip reading by distilling speech recognizers. In 
+
+Proceedings of the AAAI Conference on Artificial Intelligence , volume 34, pages 6917–6924. Qiushi Zhu, Long Zhou, Ziqiang Zhang, Shujie Liu, Binxing Jiao, Jie Zhang, Lirong Dai, Daxin Jiang, Jinyu Li, and Furu Wei. 2023. Vatlm: Visual-audio-text pre-training with unified masked prediction for speech representation learning. IEEE Transactions on Multimedia .A Implementation Details 
+
+Pre-processing. We follow the standard VSR pre-processing protocol for LRS3 and LRS2. Video inputs are converted to greyscale mouth ROIs of size 88 × 88 , using random cropping during train-ing and center cropping during evaluation. Frames are sampled at 25 fps and normalized with mean 0.421 and standard deviation 0.165. During train-ing, we apply temporal masking with a window of 10 frames and stride of 25 frames. 
+
+Tokenization. LLaDA-based experiments use a 126K SentencePiece tokenizer, with 
+
+<|reserved_token_2|> repurposed as the PAD token. Dream-7B and Qwen2.5-based experiments use the 152K Qwen2 tokenizer, with <|im_end|> 
+
+as EOS and <|image_pad|> as PAD. Inputs are formatted with the standard Hugging Face 
+
+apply_chat_template using one user turn with the instruction: “You are given a silent video of a speaker. Infer the spoken content from the lip movements and generate the corresponding transcription.” 
+
+Architecture. The frozen visual encoder is either USR 2.0 Huge or AV-HuBERT. USR 2.0 Huge has 32 layers with a 1280-dimensional hidden size, while AV-HuBERT has 24 layers with a 1024-dimensional hidden size. Visual features are passed through a 1D convolutional temporal downsam-pler with kernel size 2 and stride 2, followed by a two-layer projector that maps them to the 3584-dimensional LLM hidden space. Dream-7B re-mains frozen, and LoRA is applied to all linear layers with rank r = 16 , α = 32 , and dropout 0.05. 
+
+Training. Both stages use AdamW with β1 = 0 .9,
+
+β2 = 0 .999 , weight decay 0.01, and gradient clip-ping with maximum norm 1.0. Training uses bf16 mixed precision, DeepSpeed ZeRO-2 on 8 RTX 3090 GPUs, and dynamic batching with a maxi-mum batch size of 32. Stage 1 is trained for 42K steps with a learning rate of 1e −4, and Stage 2 is fine-tuned from Stage 1 for 4K steps with a learn-ing rate of 5e −5. We use a cosine scheduler with a minimum learning-rate scale of 0.1. Due to com-putational cost, each configuration is trained once, and all reported WER results are from a single run unless otherwise stated. 
+
+Length predictor. The length predictor uses the same frozen visual encoder as the main model. It consists of a two-layer Transformer encoder with hidden dimension 384, 6 attention heads, feed-                 
+
+> Component Setting
+> Visual encoder USR 2.0 Huge / AV-HuBERT, frozen Temporal adapter Conv1d, kernel size 2, stride 2 Projector 2-layer MLP to 3584-dim LLM space LLM decoder Dream-7B, frozen LoRA r= 16 ,α= 32 , dropout 0.05, all linear layers Canvas length T= 32
+> Block size 32 Commit threshold 0.9 Length window R= 5 around Kpred
+> Table 7: Main implementation settings for DLLM-VSR.
+
+forward dimension 1536, and dropout 0.1. A learn-able [LEN] token is prepended to the visual feature sequence, and its output is classified over candi-date transcript lengths. The maximum length is set to 150 for LRS3 and 80 for LRS2. The pre-dictor has approximately 4M trainable parameters and is trained independently for 20K steps using cross-entropy loss on the target transcript length. 
+
+Decoding and reranking. At inference, we use a fixed canvas length of T = 32 and block size 32. We decode candidate lengths within Kpred ± 5,resulting in up to 11 candidates. During denois-ing, positions whose confidence exceeds 0.9 are committed; if no position exceeds the threshold, the most confident position is committed. For length-guided decoding, all length candidates are batched and decoded in parallel. The final tran-script is selected using the joint reranking score in Eq. 2. Reranking weights (λ, β ) are selected by grid search over [0 , 1] × [0 , 1] with a step size of 0.1 on the validation set. The selected values are (0 .9, 0.7) for AV-HuBERT/LRS3, (0 .9, 0.6) for USR 2.0/LRS3, and (1 .0, 0.9) for USR 2.0/LRS2. 
+
+LRS2 evaluation. For LRS2, we use the same canvas length T = 32 and block size 32, and de-code candidate lengths within Kpred ± 5. Real time factor (RTF) is measured on a single RTX 3090 GPU with batch size 1. We time 50 samples, ex-clude the first 5 warmup samples, and compute RTF as decoding time divided by video duration. Autoregressive baselines use the default Hugging Face KV cache, while DLLM-VSR disables KV caching to preserve bidirectional attention. 
+
+B Reranking Weight Sensitivity 
+
+We analyze the sensitivity of the length-guided reranking score to the balancing weights λ and β.Recall that λ controls the contribution of the length predictor probability, while β penalizes candidates LRS3 AV-HuBERT validation set 
+
+λ\β 0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0 15.76 15.24 15.24 15.53 15.78 15.78 15.91 16.06 16.26 16.45 16.55 0.1 13.28 13.30 13.34 13.72 13.94 14.33 14.63 14.80 15.03 15.09 15.18 0.2 12.63 12.45 12.74 12.84 13.13 13.48 13.64 13.92 14.05 14.16 14.42 0.3 12.38 12.16 12.22 12.37 12.65 12.71 12.91 13.21 13.32 13.54 13.64 0.4 12.38 11.96 12.02 12.12 12.29 12.39 12.60 12.78 12.86 13.02 13.15 0.5 12.38 11.92 11.93 11.99 12.02 12.15 12.24 12.39 12.67 12.77 12.80 0.6 12.50 12.06 11.94 11.91 11.93 11.92 12.04 12.13 12.27 12.53 12.65 0.7 12.49 12.02 11.84 11.80 11.84 11.83 11.91 11.90 11.96 12.13 12.35 0.8 12.50 12.08 11.88 11.85 11.78 11.74 11.77 11.78 11.81 11.94 12.12 0.9 12.56 12.17 11.89 11.87 11.79 11.76 11.77 11.73 11.77 11.82 11.95 1.0 12.64 12.30 12.06 11.92 11.80 11.77 11.78 11.77 11.85 11.82 11.91 
+
+Table 8: Validation WER (%) of length-guided reranking weights on LRS3 with AV-HuBERT. The best validation setting is (λ, β ) = (0 .9, 0.7) , yielding 11.73% validation WER and 21.89% test WER. 
+
+LRS3 USR 2.0 validation set 
+
+λ\β 0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0 19.57 19.24 19.63 19.87 19.96 20.38 20.85 21.01 21.16 21.31 21.55 0.1 17.23 16.86 16.95 17.43 17.92 18.16 18.48 18.79 19.16 19.27 19.57 0.2 16.92 16.51 16.60 16.63 17.01 17.24 17.73 17.86 18.18 18.37 18.55 0.3 16.76 16.52 16.48 16.52 16.63 16.61 16.95 17.40 17.62 17.90 18.08 0.4 16.85 16.34 16.27 16.29 16.41 16.44 16.61 16.73 17.16 17.40 17.57 0.5 16.97 16.41 16.09 16.20 16.18 16.33 16.39 16.48 16.62 16.95 17.24 0.6 17.06 16.47 16.24 16.17 16.16 16.19 16.27 16.34 16.45 16.55 16.71 0.7 17.22 16.63 16.30 16.17 16.14 16.12 16.19 16.28 16.29 16.36 16.53 0.8 17.31 16.70 16.42 16.15 16.11 16.15 16.18 16.22 16.29 16.28 16.40 0.9 17.46 16.76 16.55 16.17 16.11 16.08 16.04 16.20 16.28 16.39 16.38 1.0 17.43 16.94 16.55 16.20 16.11 16.11 16.05 16.09 16.32 16.32 16.37 
+
+Table 9: Validation WER (%) of length-guided reranking weights on LRS3 with USR 2.0. The best validation setting is (λ, β ) = (0 .9, 0.6) , yielding 16.04% validation WER and 19.50% test WER. 
+
+LRS2 USR 2.0 validation set 
+
+λ\β 0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0 30.29 30.64 31.49 32.23 33.35 33.89 34.67 35.42 35.65 35.95 36.12 0.1 24.80 24.78 25.65 26.51 26.89 27.97 28.68 29.24 30.42 30.98 31.63 0.2 24.03 23.62 23.84 24.33 24.75 25.21 25.73 26.43 27.19 27.98 28.57 0.3 23.75 23.35 23.19 23.46 23.74 23.85 24.40 24.90 25.17 25.64 26.28 0.4 23.89 23.44 23.15 23.16 23.21 23.33 23.53 23.96 24.40 24.50 24.89 0.5 23.98 23.42 23.29 23.16 23.20 23.09 23.12 23.46 23.66 23.98 24.13 0.6 23.90 23.49 23.24 23.07 23.07 23.06 23.07 23.15 23.21 23.40 23.71 0.7 23.90 23.61 23.35 23.24 23.07 22.96 23.01 23.05 23.10 23.09 23.20 0.8 23.99 23.58 23.34 23.19 23.20 22.93 22.85 22.96 23.02 22.92 22.96 0.9 24.08 23.66 23.47 23.24 23.18 23.09 23.00 22.97 22.87 22.92 22.87 1.0 24.15 23.76 23.54 23.37 23.18 23.15 23.01 22.98 22.88 22.83 22.91 
+
+Table 10: Validation WER (%) of length-guided reranking weights on LRS2 with USR 2.0. The best validation setting is (λ, β ) = (1 .0, 0.9) , yielding 22.83% validation WER and 16.83% test WER. 
+
+that require more denoising iterations. We select 
+
+(λ, β ) by grid search over [0 , 1] × [0 , 1] with a step size of 0.1 on the validation set. Tables 8–10 report the full validation grids for the three evaluated settings. The selected values are (0 .9, 0.7) for AV-HuBERT/LRS3, (0 .9, 0.6) for USR 2.0/LRS3, and (1 .0, 0.9) for USR 2.0/LRS2. Across backbones and datasets, the selected values lie in a narrow range, with λ ∈ [0 .9, 1.0] and β ∈
+
+[0 .6, 0.9] , indicating that the reranking objective is relatively stable across settings. Overall, the selected configurations use both the length prior and the iteration penalty, suggesting that length plausibility and denoising stability pro-vide complementary signals for candidate selec-tion.
