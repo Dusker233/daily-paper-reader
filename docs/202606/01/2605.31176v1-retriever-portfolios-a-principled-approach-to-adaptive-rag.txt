@@ -1,0 +1,1254 @@
+Title: Retriever Portfolios: A Principled Approach to Adaptive RAG
+
+URL Source: https://arxiv.org/pdf/2605.31176v1
+
+Published Time: Mon, 01 Jun 2026 01:06:39 GMT
+
+Number of Pages: 21
+
+Markdown Content:
+# Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Miltiadis Stouras 1 Vincent Cohen-Addad 2 Silvio Lattanzi 2 Ola Svensson 1
+
+# Abstract 
+
+Retrieval-augmented generation (RAG) systems typically rely on a single retriever and a single set of hyperparameters, despite facing highly het-erogeneous queries that range from simple fac-toid questions to complex multi-hop reasoning. We propose a method that automatically selects a small, diverse subset of retrievers (a portfolio) from a large pool of candidates, to cover differ-ent regions of the target query distribution. We formalize this setting via an expected best-of-k
+
+objective over the query distribution and show that it admits an efficient portfolio construction algorithm with near-optimal guarantees. Across multiple QA benchmarks, our learned portfolios and router pipeline consistently outperform single-retriever and naive multi-retriever baselines on both retrieval metrics and answer quality. In addi-tion, compared to inference-time hyperparameter tuning approaches, fixed portfolios enable paral-lel retrieval and LLM calls, achieving compara-ble (and sometimes better) accuracy with substan-tially lower latency and token cost. 
+
+# 1. Introduction 
+
+Retrieval-augmented generation (RAG) has emerged as a standard paradigm for grounding large language models (LLMs) in external knowledge sources. By retrieving doc-uments from a corpus and conditioning generation on the retrieved evidence, RAG can improve factual accuracy and reduce hallucinations across a range of tasks, including open-domain QA and knowledge-intensive dialogue (Lewis et al., 2020; Izacard & Grave, 2021; Shuster et al., 2021). In this setup, a retriever maps a user query to a ranked list of documents, and the LLM produces an answer conditioned on both the query and the retrieved context. Despite sub-stantial progress on retrieval models and architectures, the current practice in RAG systems is overwhelmingly to select a single retriever (and a single set of hyperparameters) and        
+
+> 1EPFL 2Google Research. Correspondence to: Miltiadis Stouras <miltiadis.stouras@epfl.ch >.
+> Proceedings of the 43 rd International Conference on Machine Learning , Seoul, South Korea. PMLR 306, 2026. Copyright 2026 by the author(s).
+
+deploy it uniformly for all queries. However, the query distributions faced by RAG systems are highly heterogeneous. Some questions are simple fac-toid queries that can be answered from a single, lexically similar passage, while others require multi-hop reasoning over multiple documents, aggregation of semantically di-verse evidence, or domain-specific terminology. Therefore, different retrieval configurations tend to specialize in dif-ferent regimes (Karpukhin et al., 2020; Jeong et al., 2024). Even for a fixed retriever, recent work shows that it can be beneficial to adapt its hyperparameters at inference time to better suit each query (Rezaei & Dieng, 2025). As a result, there is growing evidence that no single retriever is optimal for all queries, and that fixing a single retrieval strategy can leave substantial performance on the table across diverse information needs (Kalra et al., 2025a). To address this limitation several recent works explicitly aim to adapt their retrieval strategy to the query. Adaptive-RAG (Jeong et al., 2024) trains a classifier to predict the “complex-ity level” of the given query and then chooses among a small, fixed menu of strategies (no retrieval, single-step retrieval, or iterative multi-hop retrieval) based on this prediction. Vendi-RAG (Rezaei & Dieng, 2025) instead focuses on a parametric retriever and iteratively tunes its hyperparameter at inference time: for each query, it generates candidate answers under different settings and employs an LLM judge to steer the retriever towards a better relevance–diversity trade-off. While these approaches validate the benefits of adapting retrieval, they either operate over a very small, hand-designed set of strategies or perform expensive per-query search in a hyperparameter space. In contrast, we propose a principled approach for selecting a small portfolio of retrievers with complementary behavior, from a large candidate pool, that is provably near-optimal for the underlying query distribution. We tackle this problem by explicitly modeling the fact that different retrievers may be best for different questions. We view each query q as a sample from an underlying distri-bution, and each retriever r (including its architecture and hyperparameters) as a candidate tool for answering that query. For every query-retriever pair (q, r ), we define a score s(q, r ) that measures how suitable r is for q, for ex-ample in terms of retrieval quality or end-to-end answer correctness. Rather than searching for a single retriever that performs best on average, we instead choose a small set S
+
+1
+
+> arXiv:2605.31176v1 [cs.LG] 29 May 2026
+
+Retriever Portfolios: A Principled Approach to Adaptive RAG Candidate Retrievers Pool R       
+
+> (DS, Vendi, etc.)
+> Query Distribution D
+> (HotpotQA, TriviaQA, etc.)
+> Algorithm 1
+> Retriever Portfolio Selection
+> max |S|≤ kEq[max r∈Ss(q, r )]
+> Learned Portfolio
+> S={r1, . . . , r k}
+
+Figure 1. Offline Portfolio Optimization: Selecting a diverse subset of size k from a large pool of size m to cover the query distribution. 
+
+of k retrievers and evaluate this set by asking: for a random query q, how good is the best retriever in S? Formally, we measure the quality of S by the expected “best-of-k” score 
+
+Eq [max r∈S s(q, r )] over the query distribution. This objec-tive encourages portfolios whose members specialize on different regions of the query space, since redundant retriev-ers that behave similarly contribute little to the maximum. In the rest of the paper we analyze this objective and de-sign algorithms that, given a finite sample of queries and a large candidate pool of retrievers, efficiently construct small portfolios with provable guarantees and strong empirical performance. 
+
+Our contributions We introduce the new problem, RAG portfolio optimization, and analyze it theoretically and prac-tically. More formally: • Formulation & Theory. Given a large pool of can-didate retrievers, we formalize an expected best-of-k
+
+objective over the query distribution that measures how well a portfolio of k retrievers covers heterogeneous information needs. Furthermore, we prove that one can efficiently obtain a near-optimal portfolio of retrievers. • Methods. We propose a pipeline that learns a static portfolio of complementary retrievers offline (Algo-rithm 1) and trains a lightweight router to dynamically select the best retriever per query (Figure 2). This approach amortizes the cost of adaptation, avoiding expensive iterative search at inference time. • Empirical evaluation. We evaluate our approach on diverse open-domain and multi-hop QA bench-marks (HotpotQA, 2WikiMultihopQA, TriviaQA, and MusiQue). Our method consistently yields better re-trieval recall and answer accuracy compared to single-retriever baselines and inference-time tuning methods like Vendi-RAG, while significantly reducing latency and token usage. 
+
+Related Work There are three main areas that are closely related to our work: retrieval augmented generation, adap-tive retrieval approaches (including mixture of retrievers and routing pipelines) and portfolio optimization. 
+
+Retrieval Augmented Generation. Retrieval-augmented gen-eration (RAG) has become a standard approach for ground-ing large language models (LLMs) in external knowledge. Instead of relying solely on parametric memory, a RAG system retrieves a small set of relevant documents from a large corpus and conditions generation on both the query and the retrieved context, which improves factual accuracy and knowledge coverage on open-domain and knowledge-intensive tasks (Lewis et al., 2020; Izacard & Grave, 2021; Shuster et al., 2021). Early work combined neural retriev-ers with sequence-to-sequence generators for open-domain QA (Karpukhin et al., 2020; Lewis et al., 2020), and sub-sequent work has extended this paradigm to more complex settings, including multi-hop reasoning and conversational agents (Shuster et al., 2021). Across these systems, the re-triever is a key component: it is usually chosen once, tuned on a development set, and then fixed for all queries, despite the diversity of retrieval behaviors that different questions may require. 
+
+Adaptive Retrieval. Recent work challenges the ”one-size-fits-all” retrieval paradigm. Approaches like Adaptive-RAG (Jeong et al., 2024) classify query complexity to select among fixed strategies (e.g., no retrieval vs. multi-step re-trieval). Vendi-RAG (Rezaei & Dieng, 2025) adopts a more granular approach, iteratively tuning a diversity-relevance hyperparameter at inference time to optimize the retrieved set. Other methods, such as Self-RAG (Asai et al., 2023), introduce retrieval tokens to dynamically decide when to re-trieve or critique retrieved passages. Unlike these methods, which often incur high inference latency through iterative generation or search, our approach shifts the optimization burden offline by learning a fixed portfolio of complemen-tary retrievers that can be routed to efficiently. 
+
+Mixtures of Retrievers and Query Routing. Recent work exploits complementary retrieval signals either by mixing re-trievers or routing queries to different experts. MoR (Kalra et al., 2025b) proposes a zero-shot mixture of retrievers that assigns per-query weights to heterogeneous retrievers using pre- and post-retrieval signals, then fuses their scores to produce a single ranked list. While MoR validates the ben-efits of leveraging multiple retrieval signals, it focuses on score-level fusion over a given set of retrievers. In contrast, our goal is to select a small retriever portfolio from a large candidate pool with provable near-optimal coverage under an expected best-of-k objective, and to route each query to only a small number of portfolio members, enabling pre-dictable and parallelizable inference cost when downstream LLM calls are expensive. On the routing side, RouterDC (Chen et al., 2024) stud-ies query-based routing for assembling multiple expert LLMs via dual contrastive learning, explicitly handling cases where multiple experts perform well for the same query. Our setting is analogous, we route queries to retriev-ers rather than generators, but our main contribution lies in the portfolio construction problem and its guarantees; 2Retriever Portfolios: A Principled Approach to Adaptive RAG   
+
+> Query text
+> q
+> Encoder (T5+MPNet/E5) Enc (q)
+> Router s1
+> s2
+> s3
+> sk
+> ...
+> Similarities with retrievers’ learned embeddings
+> top-ℓ
+> filtering
+
+## ✓
+
+## ×
+
+## ✓
+
+> ...
+
+## ×       
+
+> qr1Answer LLM
+> qrℓAnswer LLM
+> ...
+> Parallel Retrieval & Answering
+> a1
+> ...
+> aℓ
+> Selector LLM
+> Final answer
+> Figure 2. Adaptive Inference Pipeline: The router encodes query qand identifies best portfolio members. Selected components execute in parallel to minimize latency, followed by selector aggregation.
+
+RouterDC-style router training is complementary and can be incorporated into our pipeline. 
+
+Algorithm Selection and Solution Portfolios. Arising from catalog optimization and data mining, portfolio optimization has been studied extensively in algorithmic literature. In the Segmentation Problems, initially introduced by Klein-berg, Papadimitriou and Raghavan (Kleinberg et al., 2004), for any combinatorial optimization problem and a set S of different cost vectors for this problem, the segmentation problem asks to partition the set S into several segments 
+
+and pick a separate solution for each segment, so that the total cost is minimized. In an alternative version of this problem Gupta, Moondra and Singh (Gupta et al., 2025) studied a variant where the objective is to identify a small set of solutions that guarantees a good approximation for each one of the cost vectors of interest. In portfolio opti-mization (Drygala et al., 2025), one is given a combinatorial problem, a set of value functions over the solutions of the problem, and a distribution over the value, and the goal is to select k solutions that maximize or minimize the expected value of the best of those solutions. Our work instantiates this theoretical framework for RAG, treating retrievers as candidate algorithms and queries as problem instances. 
+
+# 2. Problem Formulation 
+
+We formalize the retrieval process in RAG as a portfolio selection problem. At a high level, we are given a large pool of candidate retrievers and a distribution over queries. Our goal is to select a small subset (a portfolio ) such that, in expectation, performance is high when, for each query, we are allowed to use the best-performing retriever from the portfolio. 
+
+2.1. Setting and Notation 
+
+Let Q denote the set of questions, and let D be an unknown distribution over Q. Let also R = {r1, r 2, . . . , r m} be the set of candidate retrievers. Each retriever r ∈ R is a black-box procedure that, given a query q ∈ Q , returns a ranked list of documents. We do not assume any particular retrieval algorithm or parameterization; different retrievers may cor-respond to different models, strategies, or hyperparameters. We equip the space of query–retriever pairs with a bounded 
+
+score function 
+
+s : Q × R → [0 , 1] ,
+
+where s(q, r ) quantifies how suitable retriever r is for an-swering query q within a given RAG pipeline. The definition of s(q, r ) is intentionally abstract here; in later sections we instantiate it with retrieval metrics and end-to-end answer quality. 
+
+2.2. Portfolio Objective 
+
+A portfolio is a subset S ⊆ R of retrievers. We fix a budget 
+
+k ∈ N and restrict our attention to portfolios with |S| ≤ k.Intuitively, k captures the maximum number of distinct retrievers one is willing to maintain and potentially deploy in a system. Given a portfolio S and a query q, we define the score of the portfolio on q as the score of its best retriever: 
+
+score( q, S ) = max  
+
+> r∈S
+
+s(q, r ).
+
+In words, a portfolio performs well on a query if at least one of its members does. The quality of a portfolio S with respect to the query distri-bution D is then measured by the following objective 
+
+F (S) = Eq∼D 
+
+ max  
+
+> r∈S
+
+s(q, r ) = Eq∼D 
+
+score( q, S ).
+
+The function F (S) is the expected score of the portfolio on a random query. A portfolio is good when, for most queries sampled from D, at least one retriever in S performs well; in other words, F (S) captures how well S covers the het-erogeneous behaviors required across the query distribution. Our goal is to find a portfolio of size at most k that maxi-mizes F :
+
+max  
+
+> S⊆R :|S|≤ k
+
+F (S).
+
+This is exactly a data-driven solution portfolio problem (Drygala et al., 2025), and closely related to the catalogue problem (Kleinberg et al., 2004), with retrievers playing the role of candidate solutions and queries acting as problem instances. 3Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+# 3. Selecting Retriever Portfolios from Data 
+
+In this section we present an algorithm (Algorithm 1) for computing a near-optimal portfolio, given access to a distri-bution of queries. Recall from Section 2 that, given a candidate pool of retriev-ers R and a query distribution D, we seek a portfolio S ⊆ R 
+
+of size at most k maximizing the distributional best-of-k
+
+objective 
+
+F (S) := Eq∼D 
+
+h
+
+max  
+
+> r∈S
+
+s(q, r )
+
+i
+
+, (1) where s(q, r ) ∈ [0 , 1] denotes the quality of retriever r on query q.Algorithm 1 implements a sample-based greedy procedure. It first draws N i.i.d. queries Q = {q1, . . . , q N } ∼ D N
+
+and replaces the population objective (1) with the empirical estimate 
+
+bFQ(S) := 1
+
+N
+
+X
+
+> q∈Q
+
+max  
+
+> r∈S
+
+s(q, r ). (2) The algorithm then constructs S iteratively: at each step it chooses the retriever r that maximizes the empirical 
+
+marginal gain bFQ(S ∪ { r}) − bFQ(S) and adds it to the portfolio. To compute marginal gains efficiently, the algorithm main-tains a memoized vector V [q] = max r′∈S s(q, r ′) over sam-pled queries. The marginal gain of adding r can then be written as 
+
+bFQ(S ∪ { r}) − bFQ(S) = 1
+
+N
+
+X
+
+> q∈Q
+
+max  0, s (q, r ) − V [q],
+
+so we only need to compare each candidate against the current best score per query. 
+
+Running time. Overall, the implementation runs in 
+
+O(k |R| N ) = O
+
+
+
+k |R| · k log |R| +log(1 /δ )
+
+> ϵ2
+
+
+
+score evalua-tions (given access to s(q, r )) and O(N ) additional memory. It is important to note that this is independent of the sup-port/complexity of the query distribution which may be very large. 
+
+Approximation guarantee. The function S 7 →
+
+max r∈S s(q, r ) is non-negative, monotone and submodular for every fixed q, and therefore both F (·) and bFQ(·)
+
+are non-negative monotone submodular set functions (this was similarly observed in the theoretical studies (Kleinberg et al., 2004; Drygala et al., 2025)) 1. As a consequence, the classical greedy algorithm achieves a                                                 
+
+> 1A set function f: 2 V→Ris non-negative if f(S)≥0. It is
+> monotone if f(A)≤f(B)for all A⊆B⊆V. It is submodular
+> if it satisfies the diminishing returns property, i.e., for all A⊆B⊆
+> Vand x∈V\B,f(A∪ { x})−f(A)≥f(B∪ { x})−f(B).
+
+Algorithm 1 Greedy Portfolio Selection 
+
+Input: Candidate pool R, distribution D, budget k, error 
+
+ϵ, failure probability δ
+
+1. Sample Complexity: 
+
+Sample N queries Q = {q1, . . . , q N } independently from D, where N = O
+
+ k log |R| +log(1 /δ )
+
+> ϵ2
+
+
+
+2. Initialization: 
+
+S ← ∅ 
+
+V [q] ← 0 for all q ∈ Q
+
+3. Greedy Selection: for i = 1 to k do 
+
+r∗ ← arg max r∈R\ S
+
+P 
+
+> q∈Q
+
+max(0 , s (q, r ) − V [q]) 
+
+S ← S ∪ { r∗}
+
+for all q ∈ Q do 
+
+V [q] ← max( V [q], s (q, r ∗)) 
+
+end for end for Output: Near-optimal portfolio S
+
+(1 − 1/e )-approximation to the empirical optimum under a cardinality constraint (Nemhauser et al., 1978). It remains to relate the empirical objective (2) to the popula-tion objective (1) . There are at most  |R| 
+
+> k
+
+ portfolios of size 
+
+k (and at most Pkj=0 
+
+ |R| 
+
+> j
+
+ of size ≤ k). By Hoeffding/Ch-ernoff bounds and a union bound over this family, it suffices to take 
+
+N = O
+
+ k log |R| + log(1 /δ )
+
+ϵ2
+
+
+
+(3) samples to ensure uniform concentration of bFQ(S) around 
+
+F (S) for all |S| ≤ k with probability at least 1 − δ.Putting these pieces together (see Section C for detailed arguments) yields the following near-optimality guarantee (where we assume score evaluations take time O(1) ): 
+
+Theorem 3.1. Algorithm 1 runs in time 
+
+O
+
+
+
+k |R| · k log |R| +log(1 /δ )
+
+> ϵ2
+
+
+
+and returns a solution S such that with probability at least 1−δ, F (S) ≥ (1 − 1 
+
+> e
+
+)OPT −ϵ, 
+
+where OPT = max |T |≤ k F (T ).
+
+In words, Algorithm 1 attains the approximation guarantee of (1 − 1/e ) up to an additional ϵ statistical error term. We remark that the (1 − 1/e ) guarantee is tight, as with no further assumptions, our model can express any coverage function: it is well-known that, for coverage functions, the 
+
+1 − 1/e guarantee is tight for polynomial-time algorithms both in the value-oracle model (Wolsey, 1982) and if P̸ =NP (Feige, 1998). 
+
+# 4. Pipeline & Experimental Setup 
+
+We evaluate retriever portfolios on four open-domain QA benchmarks and report both retrieval-only coverage met-4Retriever Portfolios: A Principled Approach to Adaptive RAG                      
+
+> Table 1. Dataset statistics. “Train” and “Test” columns correspond to the number of train and test questions in each dataset. The “Cor-pus” column presents the number of text chunks in the document corpus used for this dataset. “Avg. Supp.” is the average number of supporting documents per question.
+> Dataset Train Test Corpus Avg. Supp.
+> HotpotQA 88,066 9,786 5,233,329 2.00 MusiQue 19,938 2,417 101,962 2.37 TriviaQA 60,413 8,837 856,435 11.86 2WikiMultiHopQA 167,454 12,576 384,857 2.42
+
+rics and end-to-end answer accuracy. All experiments are run locally on NVIDIA A100 80GB GPUs. Additional im-plementation details (exact hyperparameter grids, retriever pseudocode, router training settings, and prompt templates) are provided in Section B. 
+
+4.1. Routing and inference-time selection 
+
+At inference time, a learned contrastive router represents the query q using its raw text together with cached MPNet and E5 query embeddings. A frozen Flan-T5-Large encoder (Chung et al., 2022) produces a contextual text representa-tion, which is fused with the two backbone-specific dense embeddings (see Section B.9 for more details). The router scores each of the k portfolio retrievers by similarity to a learned retriever embedding and executes the top-ℓ of the portfolio. This pipeline is visualized in Figure 2. The router is trained from retrieval supervision with a multi-positive contrastive objective, following the approach of Chen et al. (2024), where positives are the retrievers that achieve the best Recall@ k for each training query. The router train-ing details (loss, tie handling, optimization schedule, and hyperparameters) are deferred to Section B.9. 
+
+4.2. Answer and judge models 
+
+We use open-weight instruction-tuned LLMs as answerers in the RAG pipeline and as selectors for selecting among candidate answers. In our main experiments, we report end-to-end results with G EMMA -3-27B-I T (Team, 2025) and LLAMA -3.1-70B-I NSTRUCT (Team, 2024) as answer mod-els. For fairness, we keep the answer-generating procedure fixed across all portfolio and baseline methods and use the same prompt formats for all evaluated retrievers. Prompt templates are provided in Section B.7. 
+
+4.3. Datasets 
+
+We follow the benchmark suite used by Adaptive-RAG (Jeong et al., 2024) and evaluate on: HotpotQA (Yang et al., 2018), 2WikiMultiHopQA (Ho et al., 2020), Trivi-aQA (Joshi et al., 2017), and MusiQue (Trivedi et al., 2022). These datasets span factoid and multi-hop questions and include gold supporting documents for retrieval evaluation. Table 1 summarizes the train/test sizes and corpus statistics. 
+
+4.4. Corpus processing and dense indexing 
+
+All retrieval methods operate over a shared chunked corpus, but dense retrieval artifacts are maintained separately for each embedding backbone. We split each corpus document into overlapping text chunks (512 tokens with 50-token over-lap) and treat each chunk as a retrieval unit. We build one dense index per dataset and backbone. For MPNet-based retrievers we use the MPNet chunk/query embeddings; for E5-based retrievers we use the corresponding E5 embed-dings. All embeddings are ℓ2-normalized, so inner product corresponds to cosine similarity, and each dense index is implemented as a FAISS inner-product index (Douze et al., 2025). To make evaluation over large retriever pools tractable, we use cached candidate generation. For each query and dense backbone we first prefilter a fixed candidate set of M text chunks via the matching FAISS index (we use M = 1000 
+
+in all main experiments). Dense candidate retrievers then re-rank / re-select from this backbone-specific candidate set and output a fixed number of chunks n (we use n = 4 ) that are passed to the answer model. Candidate retrieval outputs are cached per backbone and reused across all retriever configurations; see Section B.1. 
+
+4.5. Candidate retriever pools 
+
+We instantiate the abstract candidate set R as a heteroge-neous union of multiple retriever families and multiple em-bedding backbones. Each family/backbone/hyperparameter configuration is treated as a distinct candidate retriever in the portfolio-selection problem. The portfolio objective and Algorithm 1 are retriever-agnostic: they only require the training-query score matrix over candidates. 
+
+Dense baselines. For each dense backbone, we include the standard top-n dense retriever that simply returns the highest-scoring FAISS neighbors with no diversification. In our implementation this is the DS configuration with hy-perparameters γ = 0 and r = 1 , so the dense baselines participate directly in the same candidate pool as the diver-sified DS variants. 
+
+DiscountedSimilarity (DS). The DS retriever begins by ranking the backbone-specific candidate chunks according to their similarity scores with the question. It then iteratively selects n chunks while down-weighting candidates that are too similar to already-selected chunks. It is parameterized by a discount strength parameter γ and a similarity threshold 
+
+r. For each of MPNet and E5, the DS pool contains 140 (γ, r ) settings plus the dense baseline, giving 141 candidates per backbone embedding. In Section B.2 we provide a pseudocode implementation of the DS retriever as well as the exact hyperparameter pool and other implementation details. 5Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Vendi retriever. Vendi (Rezaei & Dieng, 2025) selects chunks by trading off query relevance and intra-set diversity using a Vendi-score-based objective, with trade-off parame-ter s ∈ [0 , 1] . We instantiate Vendi separately over MPNet and E5 and sweep s in increments of 0.05 (21 configurations per backbone). In Section B.3 we provide a pseudocode implementation of the Vendi retriever and other implemen-tation details. 
+
+Graph-dense retrievers. We also include graph-based dense retrieval variants, inspired by (Han et al., 2025). For each dataset, we build an entity-chunk graph from the chun-ked corpus, by identifying the entities that exist in a specific document chunk. The indexed graph is simply a bipartite graph where an entity has an edge with a chunk if it appears in that chunk. At query time, we identify the entities of the query and do a breadth-first search on the indexed graph to gather related document chunks. The fetched chunks are then reranked with MPNet or E5 dense similarity. The graph-dense pool sweeps the re-ranking backbone, the maxi-mum number of graph-expansion hops, the maximum entity document frequency, and maximum graph candidates (see Section B.5), yielding 36 graph-based candidates. Overall, all the retriever pools contain 360 retrievers to-gether: DS (including dense baselines) over MPNet/E5, Vendi over MPNet/E5, and graph-dense variants over MP-Net/E5. 
+
+4.6. Portfolio construction 
+
+Portfolios are constructed offline using Algorithm 1 with the best-of-k objective. Concretely, we compute a score matrix s(q, r ) which represents the performance of all can-didate retrievers across a representative sample of training queries. The score function s(q, r ) is instantiated to retrieval Recall@ k and is calculated using the supporting documents of each question in the training set. For the all-pool ex-periment, we concatenate the score matrices for all fami-ly/backbone pools along the retriever dimension and run the greedy objective over the resulting union. This computation is accelerated by per-backbone caches and batched retriever implementations (for more details see Section B.6). Given the score matrix, we greedily select a portfolio S of size k maximizing Eq [max r∈S s(q, r )] . Our main portfolio is union-trained : we pool training queries across all datasets and select from the full heterogeneous candidate set. We compare this portfolio against average-best retriever selec-tion, which chooses candidates by their mean training score, and against controls that retrieve more documents with a single retriever. 
+
+4.7. Metrics 
+
+We evaluate retrieval quality via Support Recall@ k and 
+
+F1@ k based on ground-truth documents of the datasets. Downstream QA is assessed using Exact Match (EM) 
+
+scores alongside generation token counts and wall-clock            
+
+> Table 2. Members of the size-5 portfolio used in Figure 3. The portfolio is selected greedily on the union of training queries.
+> Rank Retriever Avg. Score Hyperparameters 1 GraphDense / E5 0.6058 hops=1, df=500 2 Vendi / E5 0.5421 s= 0 .05
+> 3 GraphDense / E5 0.5532 hops=3, df=100 4 GraphDense / MPNet 0.4985 hops=3, df=100 5 Vendi / E5 0.5223 s= 0 .20
+
+latency to characterize efficiency-accuracy trade-offs. We additionally report “retrieve more documents” controls to distinguish portfolio complementarity from simply increas-ing the context budget. See Section B.8 for formal defini-tions, normalization procedures, and efficiency benchmark-ing details. 
+
+# 5. Results 
+
+We evaluate retriever portfolios on four QA benchmarks (HotpotQA, 2WikiMultiHopQA, TriviaQA, and MusiQue) using two answer models (Gemma-3-27B-It and Llama-3.1-70B-Instruct). Our results address three questions: (1) do learned portfolios provide better retrieval coverage as the portfolio size k grows (2) do these retrieval gains translate into end-to-end QA improvements beyond “retrieving more documents,” and (3) how do fixed portfolios compare to inference-time adaptation in terms of accuracy–cost trade-offs. 
+
+5.1. Portfolios improve retrieval coverage 
+
+We first measure retrieval performance in isolation, indepen-dent of the answer model. Following our formulation, we evaluate a size-k portfolio by its best-of-k retrieval score: for each query, we take the maximum support-document score achieved by any member of the portfolio. This isolates portfolio coverage from the downstream router and answer model, which are evaluated in the next subsection. Figure 3 reports support recall and support F1 for various portfolio sizes selected from the full heterogeneous candidate pool: DS and Vendi retrievers with MPNet and E5 backbones, together with GraphDense retrievers, for 360 candidates in total. The portfolio is trained once on the pooled training queries from all four benchmarks and then evaluated on the corresponding test sets. 
+
+Portfolio selection is not equivalent to picking the best retrievers on average. A natural alternative to portfo-lio optimization is to perform a grid search over retriever configurations, rank candidates by their average training performance, and keep the top k. Figure 3 evaluates exactly this baseline by taking the best-of-k score over the top-k
+
+candidates by average training score. The baseline is nearly flat: at k = 5 , it reaches only 0.492 support recall and 0.432 support F1, while the learned portfolio reaches 0.594 and 0.500, respectively. The reason is visible in the selected portfolio. After the strongest average retriever, the greedy 6Retriever Portfolios: A Principled Approach to Adaptive RAG            
+
+> (a) Support Recall (b) Support F1
+> Figure 3. Retrieval coverage of the union-trained all-pool portfolio. Curves are averaged over HotpotQA, MusiQue, TriviaQA, and 2WikiMultiHopQA. The all-pool curve evaluates greedy portfolio prefixes by best-of-ksupport score. The top-kaverage baseline selects the kretrievers with highest mean training score. The k×document baselines run one best retriever from a family while increasing its document budget from 4 to 4k.
+
+objective adds lower-average but complementary Vendi and GraphDense variants (Table 2) because they cover queries missed by earlier members. In contrast, the top-k average list is dominated by closely related GraphDense/E5 configu-rations, so additional members add little new coverage. 
+
+Gains are not explained by retrieving more documents. 
+
+Another possible explanation for the improved recall scores could be that a portfolio simply fetches more context. The 
+
+k× document baselines in Figure 3 test this directly: they run the single best retriever from each family while increas-ing the number of returned documents from 4 to 4 · k.As we can see, a portfolio with 2 members significantly outperforms even fetching 20 documents with the single best retriever. Inflating the number of fetched documents can increase recall, but does so by admitting many more non-support documents. Their support F1 therefore drops sharply as k grows (for DS and Vendi, from about 0.32 at 
+
+k = 1 to about 0.11 at k = 5 ; for GraphDense, from 0.43 to 0.37). The pool portfolio shows the opposite pattern: sup-port recall rises from 0.491 to 0.594, and support F1 rises from 0.431 to 0.500. Thus the gains come from selecting retrievers with complementary failure modes, not merely from increasing the number of retrieved passages. 
+
+The portfolio captures most of the available support signal. The red horizontal line in Figure 3 is the recall of a method that picks the best retriever in the full candidate pool for every query. It is, of course, not a deployable method, since it assumes knowing which retriever will work for each query, but it indicates the maximum support score available in the pool. By k = 5 , the learned portfolio closes most of this gap on both metrics, while using only five fixed retriever configurations that can be routed or run under a bounded inference budget. 
+
+5.2. End-to-end QA accuracy with routed portfolios 
+
+We now evaluate end-to-end Exact Match (EM), where a retrieved context is fed to the answer LLM. Table 3 sum-marizes EM for no retrieval, nearest-neighbor retrieval, the best single retriever from each family, Vendi-RAG inference-time adaptation, a Vendi-only routed portfolio, and routed all-pool portfolios. The single-family rows choose the best configuration by average performance. For the routed portfo-lio rows, we report average-best operating points from their sweeps: Vendi-only (k=5 , ℓ =2) , and all-pool (k=4 , ℓ =2) 
+
+and (k=4 , ℓ =3) .
+
+All-pool portfolios dominate the fixed-budget compari-son. The strongest entry in every dataset/model column comes from a full-pool portfolio. For Gemma-3-27B-It, the all-pool (k=4 , ℓ =3) configuration has the best average EM, 
+
+0.464 , while (k=4 , ℓ =2) is close at 0.456 . Both exceed the best single-family retrievers selected by average per-formance (DS: 0.423 , Vendi: 0.424 , GraphDense: 0.397 )and nearest-neighbor retrieval ( 0.356 ). For Llama-3.1-70B-Instruct, the same pattern holds: all-pool (k=4 , ℓ =3) 
+
+reaches average EM 0.474 , with (k=4 , ℓ =2) essentially tied at 0.473 , above nearest-neighbor retrieval ( 0.403 ) and Vendi-RAG with T = 20 (0.421 ). 
+
+Heterogeneity matters. The family-best DS, Vendi, and GraphDense baselines are strong single-retriever controls: each selects the best configuration within a retriever family by average EM. However, their performance varies sub-stantially across datasets and answer models, so no single retriever family provides the best choice for all queries. The all-pool portfolio is designed to exploit this variation 7Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Table 3. Answer Exact-Match (EM) across datasets and retrieval strategies for Gemma-3-27B-It and Llama-3.1-70B-Instruct. Best DS, Vendi, and GraphDense rows select the best single retriever by average performance. The reported Vendi-only portfolio point, (k=5 , ℓ =2) ,and all-pool operating points, (k=4 , ℓ =2) and (k=4 , ℓ =3) , are selected from their routed sweeps by average EM. Bold denotes the best value in each dataset/model column.                                                                                                   
+
+> Model: Gemma-3-27B-It Model: Llama-3.1-70B-Instruct Method HotpotQA MusiQue TriviaQA 2Wiki-MultiHopQA HotpotQA MusiQue TriviaQA 2Wiki-MultiHopQA
+> No retrieval 0.3256 0.0608 0.6530 0.2264 0.3483 0.0588 0.6947 0.1920 Nearest-neighbor retrieval (MPNet) 0.3945 0.1291 0.6592 0.2408 0.4763 0.1394 0.7022 0.2921 Best DS Retriever 0.5128 0.1394 0.6867 0.3544 0.4345 0.1092 0.6318 0.2443 Best Vendi Retriever 0.5111 0.1427 0.6868 0.3562 0.4331 0.1121 0.6249 0.2445 Best GraphDense Retriever 0.4628 0.1134 0.6704 0.3407 0.3978 0.0873 0.5961 0.2387 Vendi-RAG Adaptive ( T=10) (MPNet) 0.2813 0.1253 0.6720 0.2590 0.4860 0.1990 0.7030 0.2890 Vendi-RAG Adaptive ( T=20) (MPNet) 0.2853 0.1307 0.6727 0.2560 0.4830 0.2060 0.7040 0.2900 Vendi-Portfolio ( k= 5 ,ℓ= 2 ) (MPNet) 0.3927 0.1262 0.6720 0.2341 0.4825 0.1427 0.6956 0.3080 All-pool Portfolio ( k= 4 ,ℓ= 2 )0.5523 0.1725 0.6937 0.4052 0.5897 0.1820 0.7073 0.4139 All-pool Portfolio ( k= 4 ,ℓ= 3 )0.5579 0.1949 0.6898 0.4142 0.5827 0.2089 0.6859 0.4187
+
+by selecting from the union of dense, diversity-based, and graph-based retrievers and routing each query to a small sub-set of portfolio members. Its consistent average gains over the family-best rows are therefore consistent with cross-family complementarity rather than merely better tuning within one family. This mirrors the retrieval-only result in Figure 3: average-best retriever selection identifies strong in-dividual configurations, while the portfolio objective favors candidates that cover different query subpopulations. 
+
+Routing budget is a cost-accuracy knob. The two re-ported all-pool rows differ only in the number of routed portfolio members executed per query. Increasing from 
+
+ℓ = 2 to ℓ = 3 gives the best average EM for both answer models, especially on MusiQue and 2WikiMultiHopQA, while ℓ = 2 is competitive and wins some columns such as TriviaQA. In deployment, this exposes a simple trade-off: 
+
+(k=4 , ℓ =3) is the highest-accuracy operating point in the table, while (k=4 , ℓ =2) preserves most of the gain with fewer answer generations and judge comparisons. 
+
+5.3. Efficiency-accuracy trade-offs 
+
+Accuracy alone is insufficient for deployable RAG systems; adaptation must also be efficient. For this comparison, we intentionally do not use the heterogeneous all-pool portfo-lios from Figure 3. Instead, to make the comparison with Vendi-RAG as direct as possible, we isolate a single em-bedding backbone (MPNet) and a single retriever family (Vendi). The portfolio pool contains only Vendi retrievers that differ in the diversity parameter s. This is exactly the one-dimensional hyperparameter that Vendi-RAG attempts to tune adaptively at inference time. Thus Figure 4 should be read as an apples-to-apples comparison between two ways of using the same Vendi search space: selecting a small fixed portfolio of s values offline versus searching over s sequentially at inference time. It is not intended as a full comparison between Vendi-RAG and our largest heterogeneous portfolios. 
+
+Offline Vendi portfolios are more efficient in the con-trolled comparison. Under this restricted MPNet/Vendi setting, fixed Vendi portfolios occupy a better region of the cost-accuracy space: they achieve comparable EM to Vendi-RAG in the low-to-moderate cost regime while us-ing substantially fewer tokens and lower wall-clock time (Figure 4). On Gemma, the portfolio is strictly preferable in this comparison, achieving higher EM at lower cost. On Llama, Vendi-RAG can reach slightly higher EM, but only after paying a large increase in tokens and latency. 
+
+Why portfolios are cheaper. The search space is the same in this comparison; the difference is when and how it is searched. Vendi-RAG performs sequential per-query search over s: it iterates retrieval, generation and judging, and 
+
+each step depends on the previous step’s judged output . In contrast, portfolio learning amortizes the search offline by choosing a small set of complementary s values. At infer-ence time, routing over the fixed Vendi portfolio requires only a bounded number of retrievals and LLM calls, and these calls can be parallelized across the selected portfolio members. This yields more predictable serving costs and en-ables practical deployment under latency/token constraints. 
+
+Summary. Taken together, Figure 3 shows that portfolio learning yields complementary retrievers that better cover heterogeneous queries, Table 3 shows that these gains trans-late into improved end-to-end QA (especially for Gemma), and Figure 4 shows that, in the controlled Vendi-only set-ting, offline portfolios provide a substantially better cost– accuracy trade-off than inference-time tuning over the same 
+
+s grid. 
+
+# Impact Statement 
+
+This work presents a principled framework for query-adaptive information retrieval, advancing the field of Retrieval-Augmented Generation (RAG). No specific mali-cious use of this technology is expected beyond the general 8Retriever Portfolios: A Principled Approach to Adaptive RAG        
+
+> (a) Tokens vs. EM (Gemma27B) (b) Tokens vs. EM (Llama70B)
+> (c) Time vs. EM (Gemma27B) (d) Time vs. EM (Llama70B)
+> Figure 4. Efficiency–accuracy trade-offs. Row 1: total generated tokens vs. EM. Row 2: wall-clock time vs. EM. Columns correspond to Gemma-3-27B-It and Llama-3.1-70B-Instruct.
+
+risks associated with the deployment of large-scale genera-tive models. 
+
+# Acknowledgements 
+
+Miltiadis Stouras and Ola Svensson are supported by the Swiss State Secretariat for Education, Research and Innova-tion (SERI) under contract number MB22.00054. 
+
+# References 
+
+Asai, A., Wu, Z., Wang, Y., Sil, A., and Hajishirzi, H. Self-rag: Learning to retrieve, generate, and critique through self-reflection, 2023. URL https://arxiv.org/ abs/2310.11511 .Chen, S., Jiang, W., Lin, B., Kwok, J., and Zhang, Y. Rou-terdc: Query-based router by dual contrastive learning for assembling large language models. Advances in Neural Information Processing Systems , 37:66305–66328, 2024. Chung, H. W., Hou, L., Longpre, S., Zoph, B., Tay, Y., Fedus, W., Li, Y., Wang, X., Dehghani, M., Brahma, S., Webson, A., Gu, S. S., Dai, Z., Suzgun, M., Chen, X., Chowdhery, A., Castro-Ros, A., Pellat, M., Robinson, K., Valter, D., Narang, S., Mishra, G., Yu, A., Zhao, V., Huang, Y., Dai, A., Yu, H., Petrov, S., Chi, E. H., Dean, J., Devlin, J., Roberts, A., Zhou, D., Le, Q. V., and Wei, J. Scaling instruction-finetuned language models, 2022. URL https://arxiv.org/abs/2210.11416 .Douze, M., Guzhva, A., Deng, C., Johnson, J., Szilvasy, G., Mazar ´e, P.-E., Lomeli, M., Hosseini, L., and J ´egou, H. The faiss library, 2025. URL https://arxiv.org/ abs/2401.08281 .Drygala, M., Lattanzi, S., Maggiori, A., Stouras, M., Svens-son, O., and Vassilvitskii, S. Data-driven solution portfo-lios. In 16th Innovations in Theoretical Computer Science Conference (ITCS 2025) , pp. 46–1. Schloss Dagstuhl– Leibniz-Zentrum f¨ ur Informatik, 2025. Feige, U. A threshold of ln n for approximating set cover. J. ACM , 45(4):634–652, 1998. Gupta, S., Moondra, J., and Singh, M. Balancing notions of equity: Trade-offs between fair portfolio sizes and achievable guarantees. In Proceedings of the 2025 Annual 
+
+9Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+ACM-SIAM Symposium on Discrete Algorithms (SODA) ,pp. 1136–1165. SIAM, 2025. Han, H., Wang, Y., Shomer, H., Guo, K., Ding, J., Lei, Y., Halappanavar, M., Rossi, R. A., Mukherjee, S., Tang, X., He, Q., Hua, Z., Long, B., Zhao, T., Shah, N., Javari, A., Xia, Y., and Tang, J. Retrieval-augmented generation with graphs (graphrag), 2025. URL https://arxiv. org/abs/2501.00309 .Ho, X., Nguyen, A.-K. D., Sugawara, S., and Aizawa, A. Constructing a multi-hop qa dataset for comprehensive evaluation of reasoning steps. In Proceedings of the 28th International Conference on Computational Linguistics ,pp. 6609–6625, 2020. Izacard, G. and Grave, E. Leveraging passage retrieval with generative models for open domain question answering. In Proceedings of the 16th conference of the european chapter of the association for computational linguistics: main volume , pp. 874–880, 2021. Jeong, S., Baek, J., Cho, S., Hwang, S. J., and Park, J. C. Adaptive-rag: Learning to adapt retrieval-augmented large language models through question complexity. In 
+
+Proceedings of the 2024 Conference of the North Amer-ican Chapter of the Association for Computational Lin-guistics: Human Language Technologies (Volume 1: Long Papers) , pp. 7029–7043, 2024. Joshi, M., Choi, E., Weld, D. S., and Zettlemoyer, L. Trivi-aqa: A large scale distantly supervised challenge dataset for reading comprehension. In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 1601–1611, 2017. Kalra, J. S., Zhao, X., Kim, T. E., Cai, F., Diaz, F., and Wu, T. Mor: Better handling diverse queries with a mixture of sparse, dense, and human retrievers. arXiv preprint arXiv:2506.15862 , 2025a. Kalra, J. S., Zhao, X., Kim, T. E., Cai, F., Diaz, F., and Wu, T. MoR: Better handling diverse queries with a mixture of sparse, dense, and human retrievers. In Christodoulopoulos, C., Chakraborty, T., Rose, C., and Peng, V. (eds.), Proceedings of the 2025 Conference on Empirical Methods in Natural Language Process-ing , pp. 11971–11990, Suzhou, China, November 2025b. Association for Computational Linguistics. ISBN 979-8-89176-332-6. doi: 10.18653/v1/2025.emnlp-main. 601. URL https://aclanthology.org/2025. emnlp-main.601/ .Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D., and Yih, W.-t. Dense passage retrieval for open-domain question answering. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pp. 6769–6781, 2020. Kleinberg, J., Papadimitriou, C., and Raghavan, P. Seg-mentation problems. Journal of the ACM (JACM) , 51(2): 263–280, 2004. Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., K ¨uttler, H., Lewis, M., Yih, W.-t., Rockt ¨aschel, T., Riedel, S., and Kiela, D. Retrieval-augmented gener-ation for knowledge-intensive nlp tasks. In Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., and Lin, H. (eds.), Advances in Neural Information Processing Sys-tems , volume 33, pp. 9459–9474. Curran Associates, Inc., 2020. Nemhauser, G. L., Wolsey, L. A., and Fisher, M. L. An analysis of approximations for maximizing submodular set functions - I. Math. Program. , 14(1):265–294, 1978. Rezaei, M. R. and Dieng, A. B. Vendi-rag: Adaptively trading-off diversity and quality significantly improves retrieval augmented generation with llms. arXiv preprint arXiv:2502.11228 , 2025. Shuster, K., Poff, S., Chen, M., Kiela, D., and Weston, J. Retrieval augmentation reduces hallucination in conver-sation. arXiv preprint arXiv:2104.07567 , 2021. Team, G. Gemma 3 technical report, 2025. URL https: //arxiv.org/abs/2503.19786 .Team, L. The llama 3 herd of models. CoRR ,abs/2407.21783, 2024. doi: 10.48550/ARXIV.2407. 21783. URL https://doi.org/10.48550/ arXiv.2407.21783 .Trivedi, H., Balasubramanian, N., Khot, T., and Sabharwal, A. Musique: Multihop questions via single-hop ques-tion composition. Transactions of the Association for Computational Linguistics , 10:539–554, 2022. Wolsey, L. A. Maximising real-valued submodular func-tions: Primal and dual heuristics for location problems. 
+
+Math. Oper. Res. , 7(3):410–425, 1982. Yang, Z., Qi, P., Zhang, S., Bengio, Y., Cohen, W. W., Salakhutdinov, R., and Manning, C. D. HotpotQA: A dataset for diverse, explainable multi-hop question an-swering. In Conference on Empirical Methods in Natural Language Processing (EMNLP) , 2018. 10 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+# A. Router Ablations 
+
+We ablate the learned router on the all-pool portfolio by comparing its ranked predictions against three references: a random portfolio member, the first portfolio member, and the oracle maximum over the portfolio. The first member is the size-one portfolio selected by the greedy objective, and therefore corresponds to the strongest single-retriever operating point within this portfolio prefix. The recall curve is shared across answer models; the EM curves use the corresponding answer model.        
+
+> (a) Support recall, common to both answer models.
+> (b) Exact match with Gemma-3-27B-It. (c) Exact match with Llama-3.1-70B-Instruct.
+> Figure 5. Router ablations for the all-pool portfolio with 4documents per portfolio member. Curves are averaged over HotpotQA, MusiQue, TriviaQA, and 2WikiMultiHopQA. The shared legend applies to all panels.
+
+The router clearly improves over random selection from the portfolio. In the recall panel, random selection becomes worse as the portfolio grows because it often chooses a member that is not suitable for the current query. The learned router avoids this failure mode: even its top-1 prediction stays well above the random-member baseline for all nontrivial portfolio sizes, and the same pattern appears in both EM panels. The top-1 router prediction also consistently improves over the single best retriever once k > 1. This shows that the router is not merely defaulting to the best average member. It uses the query to select different retrievers for different instances, yielding higher support recall and higher downstream EM than always using the first portfolio member. Finally, the top-2 and top-3 curves are close to the oracle maximum over the portfolio. This indicates that the router often assigns high mass to the retrievers that are correct for the query, even when its first prediction is not the best one. This motivates the final selection layer: by executing the top ℓ routed members and using the selector LLM to choose among their answers, the pipeline can exploit the router’s calibrated short list rather than relying only on a single argmax decision. 11 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+# B. Implementation Details 
+
+This appendix provides additional implementation details needed to reproduce our retriever-portfolio experiments (Section 4). Unless stated otherwise, all experiments use dot-product similarity on ℓ2-normalized embeddings, so dot product coincides with cosine similarity. 
+
+B.1. Corpus preprocessing and FAISS indexing Chunking. For each dataset, we build a retrieval corpus by collecting all documents available in the dataset release (typically the union of train and test contexts). We split each document into overlapping chunks (“text units”) using a token-based sliding window with chunk size 512 and overlap 50 tokens. Each text unit stores its doc id , chunk id, and text; dense embeddings are attached when building the corresponding backbone-specific index. 
+
+Embeddings. We use two dense embedding backbones: MPNet ( sentence-transformers/all-mpnet-base-v2 )and E5 ( intfloat/e5-large-v2 ). For each backbone, we embed both text units and queries with the corresponding SentenceTransformers encoder and ℓ2-normalize their embeddings. For E5, we use the standard role prefixes: query: for questions and passage: for chunks. 
+
+FAISS indices. We build one FAISS IndexFlatIP (Douze et al., 2025) (exact maximum inner-product search) per dataset and dense backbone. For MPNet-based retrievers we search the MPNet index with MPNet query embeddings; for E5-based retrievers we search the E5 index with E5 query embeddings. Given a query/backbone pair, we first retrieve a prefiltered candidate set of size M (we use M = 1000 in all main experiments), then apply the retriever-specific selection rule over these candidates to return the final top K chunks (we use K = 4 throughout). 
+
+Graph sidecar. Graph-dense retrievers are a simple graph-retriever variant inspired by (Han et al., 2025). They use the same chunk identifiers as the dense indices, but candidate generation is driven by a dataset-level entity–chunk graph rather than by FAISS prefiltering. The graph sidecar stores entity-to-chunk and chunk-to-entity adjacency lists and can attach chunk embeddings from either dense backbone for final dense reranking. 
+
+Caching. To amortize evaluation over large retriever pools, we cache: (i) query embeddings separately for each split and backbone, (ii) for each query/backbone pair, its top-M FAISS candidates (including the candidate embeddings), and (iii) graph query-entity lists for graph-dense retrieval. Candidate retrieval outputs and score matrices are cached per family/backbone pool and reused across all retriever configurations. 
+
+B.2. DiscountedSimilarity retriever 
+
+DiscountedSimilarity (DS) is a greedy diversification heuristic that starts from standard query-chunk similarity, but down-weights candidates that are too similar to already-selected chunks. We instantiate DS separately for each dense backbone; the query embedding, candidate embeddings, and prefiltered candidate set always come from the same backbone-specific cache. Let C = {x1, . . . , x M } be the prefiltered candidate embeddings for a query q, and let initial scores be si ← q⊤xi. DS iteratively constructs a set S of size k. After selecting a chunk xi⋆ , it computes similarities σj ← x⊤ 
+
+> j
+
+xi⋆ for remaining candidates and applies a multiplicative discount to those above a threshold r:
+
+sj ← sj · exp( −γ σ j ) for all j with σj ≥ r, 
+
+where γ ≥ 0 controls discount strength and r ∈ [0 , 1] controls which candidates are considered “too similar”. 
+
+Naive baseline. For each backbone, the DS pool includes a “naive” configuration (γ = 0 , r = 1) , which reduces to standard top-k dense retrieval by similarity (no discounting in practice). 
+
+B.3. Vendi retriever 
+
+The Vendi retriever trades off query relevance with intra-set diversity via a Vendi-score objective (Rezaei & Dieng, 2025). Given a set of n selected normalized embeddings XS ∈ Rn×d, define the kernel KS = XS X⊤ 
+
+> S
+
+and let λ1, . . . , λ n be eigenvalues of KS /n . Define normalized weights wi = λi/ P 
+
+> j
+
+λj and their entropy H(w) = − P 
+
+> i
+
+wi log wi. The Vendi score is Vendi (S) = exp (H(w)) .
+
+Intuitively, Vendi (S) behaves like an “effective number of distinct items”, ranging from 1 (highly redundant) to |S|
+
+(maximally diverse). 12 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Algorithm 2 DiscountedSimilarity retrieval (DS)  
+
+> 1:
+
+Input: query embedding q, candidate embeddings {xi}Mi=1 , parameters (γ, r ), output size K 
+
+> 2:
+
+Initialize scores si ← q⊤xi for all i; S ← [ ]  
+
+> 3:
+
+for t = 1 to K do  
+
+> 4:
+
+i⋆ ← arg max i si 
+
+> 5:
+
+Append i⋆ to S 
+
+> 6:
+
+For each remaining j, compute σj ← x⊤ 
+
+> j
+
+xi⋆ 
+
+> 7:
+
+For each remaining j with σj ≥ r, update sj ← sj · exp( −γσ j ) 
+
+> 8:
+
+Set si⋆ ← −∞ (remove selected item)  
+
+> 9:
+
+end for  
+
+> 10:
+
+Return: indices S
+
+Algorithm 3 Vendi retrieval (greedy)  
+
+> 1:
+
+Input: query embedding q, candidate embeddings {xi}Mi=1 (normalized), trade-off s ∈ [0 , 1] , output size K 
+
+> 2:
+
+Compute relevance scores ai ← q⊤xi 
+
+> 3:
+
+i1 ← arg max i ai; S ← [i1]; A ← ai1 
+
+> 4:
+
+for t = 2 to K do  
+
+> 5:
+
+For each remaining candidate i, compute obj (i) = s · Vendi (S ∪ { i}) + (1 − s) · (A + ai) 
+
+> 6:
+
+i⋆ ← arg max i obj (i); append i⋆ to S 
+
+> 7:
+
+A ← A + ai⋆ 
+
+> 8:
+
+end for  
+
+> 9:
+
+Return: indices S
+
+Greedy selection with trade-off s. For a query q and trade-off parameter s ∈ [0 , 1] , we greedily construct S by selecting, at each step, the candidate that maximizes: obj (x) = s · Vendi (S ∪ { x}) + (1 − s) · X
+
+> y∈S∪{ x}
+
+q⊤y. 
+
+Thus larger s emphasizes diversity, while smaller s emphasizes dense relevance. In our batched implementation (Section B.6), the first choice is the most relevant item because Vendi ({x}) is constant over singleton sets and the prefiltered candidate order is relevance-sorted. Subsequent steps follow the objective above. 
+
+B.4. Graph-dense retriever 
+
+The graph-dense retriever is a simple graph-retriever variant inspired by (Han et al., 2025). It uses a dataset-level entity–chunk graph for candidate generation and a dense encoder only for the final reranking step. 
+
+Graph construction. For each dataset, we run entity extraction on document titles and corpus chunks. Entities are normalized by lowercasing, collapsing whitespace, and stripping surrounding punctuation. The graph sidecar stores two adjacency maps: (i) entity to chunk keys , which maps each normalized entity to the ordered list of chunks that mention it, and (ii) chunk to entities , which maps each chunk key (doc id , chunk id ) to its normalized entities. Title entities are merged into every chunk from the same document. The sidecar also stores MPNet and E5 chunk-embedding matrices aligned to the same chunk-key order. 
+
+Query-time retrieval. For each train/test split, query entities are extracted once and cached in question order. At retrieval time, the graph-dense retriever starts from the cached query entities, alternates entity and chunk frontiers, filters overly frequent entities, caps the number of graph candidates, and reranks the resulting chunks by dense similarity under the selected backbone. 
+
+Hyperparameters. The graph-dense family has four hyperparameters: embedder selects the dense reranking backbone, either MPNet or E5; max hops (H) is the graph-expansion depth, where odd hops add chunks from the current entity frontier and even hops discover new entities from the current chunk frontier; max entity df (D) is a document-frequency filter that skips entities appearing in more than D chunks; and max candidates (C) is the maximum number of graph candidate chunks kept before dense reranking. If no query entities or no graph candidates are available, the retriever returns no chunks in our graph-dense pool evaluation. 13 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Algorithm 4 Graph-dense retrieval  
+
+> 1:
+
+Input: q, E0, graph G, backbone b, limits (H, D, C ), output size K 
+
+> 2:
+
+E ← normalized unique entities from E0; A ← [ ]  
+
+> 3:
+
+VE , V C ← ∅ visited entities and chunks  
+
+> 4:
+
+for odd hop h ≤ H do  
+
+> 5:
+
+B ← [ ] new chunks reached in this hop  
+
+> 6:
+
+for entity e in E with e / ∈ VE and 1 ≤ df( e) ≤ D do  
+
+> 7:
+
+Add e to VE 
+
+> 8:
+
+for chunk c mentioning e, in graph order do  
+
+> 9:
+
+if c / ∈ VC then  
+
+> 10:
+
+Append c to B and A; add c to VC 
+
+> 11:
+
+end if  
+
+> 12:
+
+if |A| = C then  
+
+> 13:
+
+break  
+
+> 14:
+
+end if  
+
+> 15:
+
+end for  
+
+> 16:
+
+if |A| = C then  
+
+> 17:
+
+break  
+
+> 18:
+
+end if  
+
+> 19:
+
+end for  
+
+> 20:
+
+if |A| = C or h = H then  
+
+> 21:
+
+break  
+
+> 22:
+
+end if  
+
+> 23:
+
+Set E to the normalized, unique, unvisited entities in B with 1 ≤ df( e) ≤ D 
+
+> 24:
+
+if E is empty then  
+
+> 25:
+
+break  
+
+> 26:
+
+end if  
+
+> 27:
+
+end for  
+
+> 28:
+
+if A is empty then  
+
+> 29:
+
+return [ ]  
+
+> 30:
+
+end if  
+
+> 31:
+
+Embed q with backbone b and load backbone-b embeddings for chunks in A 
+
+> 32:
+
+Rank c ∈ A by inner product x(b)⊤ 
+
+> c
+
+q(b) 
+
+> 33:
+
+Return: the top-K ranked chunks 
+
+B.5. Candidate retriever pools 
+
+We form structured candidate pools by sweeping hyperparameters and embedding backbones. The main all-pool portfolio concatenates the catalogued pools ds@mpnet , ds@e5 , vendi@mpnet , vendi@e5 , and graph dense@mixed .
+
+DS pools. For each of MPNet and E5, we sweep γ ∈ { 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 4, 6, 8, 10 } and r ∈{0.0, 0.1, . . . , 0.9}, yielding 14 × 10 = 140 diversified DS configurations. We add the naive setting (0 , 1) for each backbone, for a total of 141 DS retrievers per backbone. 
+
+Vendi pools. For each of MPNet and E5, we sweep s ∈ { 0.0, 0.05 , 0.10 , . . . , 0.95 , 1.0}, giving 21 Vendi retrievers per backbone. 
+
+Graph-dense pool. Graph-dense candidates use the retriever in Section B.4. We sweep the reranking backbone in 
+
+{MPNet , E5 },
+
+max hops ∈ { 1, 3, 5}, max entity df ∈ { 100 , 300 , 500 }, max candidates ∈ { 1000 , 2000 }.
+
+This gives 2 × 3 × 3 × 2 = 36 graph-dense variants. The pool is stored under a mixed graph-dense artifact key because one graph family contains both MPNet-reranked and E5-reranked variants. Individual variants are named 
+
+{embedder } h{max hops } df {max entity df } c{max candidates }.Altogether, the all-pool candidate set contains 360 retrievers. 14 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+B.6. Efficient batched evaluation over retriever pools 
+
+Evaluating all retriever configurations for all queries can be dominated by repeated reranking and greedy selection. We therefore batch computation within each family/backbone pool and reuse cached artifacts whenever possible. 
+
+Backbone-specific prefiltering. For each query and dense backbone, we run FAISS once to obtain top-M candidates and reuse this fixed set across all DS and Vendi configurations that use that backbone. This eliminates repeated nearest-neighbor search when sweeping hyperparameters while keeping MPNet and E5 artifacts separate. 
+
+BatchDiscountedSimilarity. Given a fixed candidate set, we precompute the candidate embedding matrix X ∈ RM ×d
+
+and the base similarity vector a = Xq once. For a batch of B DS configurations {(γb, r b)}Bb=1 , we maintain a score matrix 
+
+S ∈ RB×M initialized as Sb,i = ai, and update all B rows in parallel when discounting around each selected item. These matrix operations are highly parallelizable and can be significantly accelerated via GPU kernels, providing a large speedup when B is large (e.g., 141 DS configurations per backbone). 
+
+BatchVendiRetriever. For a batch of B Vendi configurations (different s values), we share: (i) relevance scores ai = q⊤xi,and (ii) the candidate-candidate similarity kernel K = XX ⊤. Since k is small ( M = 1000 ) and we only ever compute the Vendi score on subsets of size up to k = 4 , the incremental cost is dominated by eigendecompositions of 3 × 3 and 4 × 4
+
+matrices, which is negligible compared to FAISS and LLM calls. 
+
+BatchGraphDenseRetriever. For graph-dense retrieval, we cache query entities and expand the graph once per query up to the maximum hop, entity-frequency, and candidate-count limits used by the pool. Each graph-dense hyperparameter setting is then evaluated by filtering this shared expansion context and reranking its candidate chunks with the requested dense backbone. When both MPNet and E5 variants are present, the query embeddings are loaded as a dictionary keyed by backbone and the same graph candidate set is reranked with the matching chunk-embedding matrix. 
+
+B.7. LLM prompting and answer selection 
+
+We use the same prompt templates across methods to ensure fair comparison. 
+
+Answer prompt (Answer LLM). Given a question and the retrieved passages, the answerer is instructed to be evidence-first and to output a short final answer inside an <answer>...</answer> tag, along with a brief structured explanation indicating whether the answer is supported by the passages ( mode=evidence ) or a fallback guess ( mode=guess ). This structured output is used by the judge during selection. The exact system & user prompts that we are using are the following. Answer Prompt (System)                                                                                                                                                                
+
+> You are ahelpful question-answering assistant. Your objective is to produce the best SHORT answer. Core rules: 1) Evidence-first: If the passages contain explicit evidence that entails the answer, use it. Prefer statements that are specific and unambiguous; favor answers supported by multiple passages. 2) No evidence -> best-guess: If the passages are irrelevant, too vague, or do not entail an answer, give your best-guess from your general knowledge, but mark mode=’ guess’. 3) Never contradict the passages: If any passage clearly contradicts your prior knowledge, trust the passages unless they are clearly off-topic (irrelevant to the question). Do not invent unsupported details. 4) Be concise: The answer must be asingle word, name, date, number, or very short phrase. 5) Always put the final answer inside <answer>...</answer> tags. Conflict handling: -If passages disagree, pick the answer with the strongest explicit support (more passages, clearer wording). -If the evidence is ambiguous, output your best guess but mark the mode as ’guess’ and explicitly mention this in your explanation. -If multi-hop reasoning is needed, combine facts across passages explicitly.
+
+15 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Output format (exactly these two blocks, in this order): <explanation mode="evidence|guess" used_passages="[comma-separated indices]"> Brief 1-2 sentence justification referencing passage indices (e.g., ’P2 states X; P4 confirms Y’). </explanation> <answer>YOUR SHORT ANSWER</answer></final> 
+
+Answer Prompt (User) 
+
+Here are a few examples of valid outputs: Example question: In what year was Google founded? Example answer (evidence mode): <explanation mode="evidence" used_passages="[1,3]"> P1 names the founder; P3 gives the company’s founding year. </explanation> <answer>1998</answer></final> Example question: Is Saturn larger than Jupiter? Example answer (guess mode, no usable evidence in passages): <explanation mode="guess" used_passages="[]"> No passage compares the sizes; providing best-guess from general knowledge. </explanation> <answer>No</answer></final> Example question: Is Kyoto the capital of Japan? Example answer (evidence mode): <explanation mode="evidence" used_passages="[0]"> P0 states that Tokyo is Japan’s capital city, so the answer is no. </explanation> <answer>No</answer></final> Example question: Who has scored the most points in NBA history? Example answer (evidence mode): <explanation mode="evidence" used_passages="[1]"> P1 explicitly states that LeBron James is the NBA’s all-time leading scorer. </explanation> <answer>LeBron James</answer></final> Example question: Which is larger, Saturn or Jupiter? Example answer (guess mode, no usable evidence in passages): <explanation mode="guess" used_passages="[]"> No passage compares sizes; providing best-guess from general knowledge. </explanation> <answer>Jupiter</answer></final> ======== Now answer the following question. Question: {QUESTION} Context Passages: Passage 0: {PASSAGE_0} Passage 1: {PASSAGE_1} ... (repeat Passage blocks as needed) ... ======== Your task: - Read the passages and determine whether they explicitly support an answer. - If yes, answer in EVIDENCE mode and cite the passage indices you used. - If no, answer in GUESS mode (best-guess from your knowledge). 
+
+16 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+- Do NOT repeat the question. Keep the answer minimal. No extra text outside the required blocks. - ALWAYS conclude your answer with a </final> tag and write nothing after it! ====== 
+
+Selection prompt (Selector LLM). When we evaluate multiple retrievers per query ( ℓ > 1), we run the answerer once per retriever and then prompt a judge model with only the question and the candidate answers (including their structured explanations). The judge selects the single most trustworthy candidate and outputs the chosen answer in a 
+
+<judge>...</judge> tag. The exact system and user prompts that we used are the following. Selector Prompt (System) 
+
+You are a question-answering judge. - You will be given a question and several candidate answers. - Each answer includes an explanation and a mode (evidence or guess). - Your task is to select the SINGLE answer that is most trustworthy. - Prefer answers in evidence mode with clear, well-structured explanations. - If no evidence-mode answers are persuasive, you may choose a guess-mode answer, but only if the explanation is reasonable and consistent with the question. - Never invent a new answer: always pick one of the candidates. - Provide a short justification (2-5 sentences) comparing candidates, referencing their mode and the quality of their explanations. STRICT FORMAT: - End with a single line ONLY: <judge>ACTUAL_ANSWER</judge></final> - IMPORTANT: Replace ACTUAL_ANSWER with the real chosen answer. - Do NOT output the word ACTUAL_ANSWER literally. - Examples of correct final lines: <judge>1998</judge></final> <judge>Eiffel Tower</judge></final> 
+
+Selector Prompt (User) 
+
+Question: {QUESTION} Candidate Answers: ====== Answer 0: {ANSWER_0} ------Answer 1: {ANSWER_1} ------Answer 2: {ANSWER_2} ------... (repeat Answer blocks as needed) ... ====== Your task: - Compare the answers using their explanations and mode. - Write a 2-5 sentence justification. - END with one line ONLY: <judge>ACTUAL_ANSWER</judge></final> - IMPORTANT: Replace ACTUAL_ANSWER with the real chosen answer. 
+
+17 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+B.8. Evaluation metrics Retrieval Metrics We evaluate retrieval performance against a set of reference supporting documents that are provided for each question in the datasets. Since retrieval operates at the chunk level, a retrieved chunk is considered a “hit” if its document ID matches one of the reference document identifiers. We report document-level performance using the following metrics at a fixed budget of n retrieved items: • Support Recall@ k: The fraction of reference documents successfully identified within the top k retrieved results. • Support F1@ k: The harmonic mean of precision and recall at budget k. This provides a balanced measure that accounts for both the accuracy (precision) of the retrieved chunks and the completeness (recall) of the retrieved support set. 
+
+End-to-end QA. We report Exact Match (EM) scores for the final selected answer. A prediction is considered correct if, after standard normalization (lowercasing, stripping punctuation and articles), it exactly matches any of the reference ground-truth answers. To characterize the efficiency-accuracy trade-offs of our approach, we further measure the total tokens generated and the end-to-end wall-clock latency of the routed pipeline. 
+
+Retrieve-more controls. To separate portfolio complementarity from simply increasing context length, we also evaluate single-retriever controls that retrieve a larger number of documents under the same answer-generation prompt format. These controls use one retriever configuration rather than a portfolio and therefore do not benefit from best-of-k coverage across complementary retrieval behaviors. 
+
+B.9. Router model and training 
+
+We train a query router that maps each question q to a ranking over the k retrievers in a learned portfolio. 
+
+Inputs. Each question q is represented by: (i) its raw text (tokenized for a T5 encoder), (ii) a dense MPNet query embedding emp (q) ∈ Rdmp , and (iii) a dense E5 query embedding ee5 (q) ∈ Rde5 . The dense query embeddings are loaded from the same per-backbone caches used by retrieval. The router also carries binary masks for the dense modalities so a missing embedding can be zeroed after projection. 
+
+Architecture. Let ht5 (q) ∈ Rdt5 denote the pooled F LAN -T5-LARGE encoder output. We pool by averaging the encoder hidden states across tokens using the attention mask. The T5 encoder is frozen throughout router training. We project the text representation and both dense embeddings to a common dimension d = 256 :
+
+˜h(q) = ϕh(Wh ht5 (q)) , ˜m(q) = mmp ϕmp (Wmp emp (q)) , ˜e(q) = me5 ϕe5 (We5 ee5 (q)) ,
+
+where each ϕ(·) is a linear layer followed by ReLU, dropout, and LayerNorm, and mmp , m e5 ∈ { 0, 1} are modality masks. We fuse the three projected vectors with a small MLP and LayerNorm: 
+
+z(q) = LayerNorm 
+
+
+
+MLP  [˜h(q); ˜ m(q); ˜ e(q)] 
+
+∈ R256 , ˆz(q) = z(q)
+
+∥z(q)∥2
+
+.
+
+The router learns one trainable prototype vector per retriever in the portfolio, {v(r) ∈ R256 }kr=1 , and uses cosine similarity scores: sim (q, r ) = cos  ˆz(q), ˆv(r) where ˆv(r) = v(r)
+
+∥v(r)∥2
+
+.
+
+At inference time, the router ranks retrievers by sim (q, r ) and executes either the argmax retriever or the top-ℓ retrievers, depending on the evaluation budget. 
+
+Training supervision from retrieval recall. For each training question q, we precompute a vector of retrieval scores 
+
+Rec@ K(q) ∈ Rk, one value per portfolio member, where K is the number of documents retrieved for evaluation. We define the winner set as the set of retrievers achieving the maximum recall on that instance: 
+
+W (q) = 
+
+n
+
+r : Rec@ K(q, r ) = max  
+
+> r′
+
+Rec@ K(q, r ′)
+
+o
+
+.
+
+Questions for which max r Rec@ K(q, r ) = 0 provide no routing signal; we exclude them from training/evaluation. To avoid unstable supervision from very large ties, we additionally ignore questions with |W (q)| > T (default T = 3 ). 18 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Contrastive argmax objective (multi-positive). Let p(r | q) = softmax r
+
+ s(q, r ) be the distribution induced by the cosine scores. We minimize a multi-positive contrastive argmax loss that concentrates probability mass on the winner set: 
+
+L(q) = − 1
+
+|W (q)|
+
+X 
+
+> r∈W(q)
+
+log p(r | q).
+
+This treats all tied-best retrievers as positives and encourages the router to assign them high likelihood. 
+
+Balanced batching. To reduce dominance of frequent single-winner cases, we bin training questions by their winner structure (e.g., “ Ri-unique” when retriever i is the unique winner, and optional tie bins such as tie2/tie3), and sample batches in a round-robin manner across non-empty bins. 
+
+Optimization and schedule. We keep the T5 encoder frozen and optimize only the dense projection heads, fusion MLP, and retriever prototype vectors. Checkpoints store only non-T5 weights. We optimize with AdamW using a single learning rate for all trainable parameters. Model selection is performed by highest dev recall@K under arg max r s(q, r ) routing. 
+
+Default hyperparameters. Unless otherwise stated, we use: • Epochs: 10 .• Batch size: 64 ; gradient accumulation: 1 step; gradient clipping: 1.0.• Learning rate: 3 × 10 −4 for all trainable non-T5 parameters. • Max input length: 256 tokens. • Max tie size: T = 3 (ignore questions q with |W (q)| > T ). 
+
+B.10. Vendi-RAG baseline details 
+
+For the Vendi-RAG baseline (Rezaei & Dieng, 2025), our implementation follows the one described in Rezaei & Dieng (2025). We implement a T -step adaptive loop over the Vendi trade-off parameter s: starting from an initial s0 = 0 .8,we repeatedly (i) retrieve with Vendi at st, (ii) answer with the same answer LLM used elsewhere, (iii) score the answer with a judge LLM, and (iv) update s for the next iteration. Our update rule maps the judge score (clamped to [0 , 10] ) to 
+
+st+1 = 1 − score /10 , i.e., lower judged answer quality increases s and shifts subsequent retrieval toward more diverse evidence. The final answer is the step with the best judge score. 
+
+# C. Detailed proofs and explanations of Section 3 
+
+We give a detailed analysis of Algorithm 1, and, in particular, we prove Theorem 3.1. The running time is immediate from the explanations and the pseudocode in Section 3. We thus focus on the approximation guarantee and the sample complexity N , which follows from that the function is monotone and submodular, and a simple uniform convergence bound (via Hoeffding’s inequality and a union bound). Recall that a set function f : 2 V → R is normalized if f (∅) = 0 . It is monotone if f (A) ≤ f (B) for all A ⊆ B ⊆ V . It is 
+
+submodular if it satisfies the diminishing returns property, i.e., for all A ⊆ B ⊆ V and x ∈ V \ B,
+
+f (A ∪ { x}) − f (A) ≥ f (B ∪ { x}) − f (B).
+
+Further note that a normalized, monotone set function is non-negative. 
+
+C.1. Submodularity of the best-of-k objective 
+
+For a fixed query q, define fq (S) := max r∈S s(q, r ) with fq (∅) = 0 . Recall s(q, r ) ∈ [0 , 1] .
+
+Lemma C.1 (Pointwise monotone submodularity) . For any fixed q, the set function fq : 2 R → [0 , 1] is normalized, monotone, and submodular. Proof. Normalization holds by definition. Monotonicity follows since a maximum cannot decrease when adding elements. For submodularity, let A ⊆ B ⊆ R and r ∈ R \ B. Let vA = max r′∈A s(q, r ′) and vB = max r′∈B s(q, r ′), so vA ≤ vB .Then 
+
+fq (A ∪ { r}) − fq (A) = max(0 , s (q, r ) − vA), fq (B ∪ { r}) − fq (B) = max(0 , s (q, r ) − vB ).
+
+Since vB ≥ vA, we have max(0 , s (q, r ) − vA) ≥ max(0 , s (q, r ) − vB ), proving diminishing returns. 19 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Given Q = {q1, . . . , q N } ∼ D N , define the empirical objective 
+
+bFQ(S) := 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+fqi (S) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+max  
+
+> r∈S
+
+s(qi, r ).
+
+Lemma C.2 (Population monotone submodularity) . The objectives F (S) = Eq∼D [fq (S)] and bFQ(S) are normalized, monotone, and submodular. Proof. By Lemma C.1, each fq (·) is normalized, monotone, and submodular. Nonnegative linear combinations (and thus expectations) preserve these properties. 
+
+C.2. Uniform convergence from finitely many query samples Lemma C.3 (Uniform additive concentration over size-k portfolios) . Fix ϵ ∈ (0 , 1) and δ ∈ (0 , 1) . Let m := |R| and 
+
+M := 
+
+> k
+
+X
+
+> j=0
+
+mj
+
+
+
+≤
+
+ em k
+
+k
+
+(1 ≤ k ≤ m).
+
+If 
+
+N ≥ 12ϵ2 log 2Mδ ,
+
+then with probability at least 1 − δ (over Q ∼ D N ), 
+
+sup  
+
+> S⊆R :|S|≤ k
+
+bFQ(S) − F (S) ≤ ϵ. 
+
+In particular it suffices that N = O
+
+ k log m+log(1 /δ )
+
+> ϵ2
+
+
+
+.Proof. Fix any S with |S| ≤ k. The variables Xi := fqi (S) ∈ [0 , 1] are i.i.d. with E[Xi] = F (S). By Hoeffding’s inequality, 
+
+Pr 
+
+h bFQ(S) − F (S) > ϵ 
+
+i
+
+≤ 2e−2N ϵ 2
+
+.
+
+Union bound over the at most M candidate portfolios gives 
+
+Pr 
+
+h
+
+∃S : |S| ≤ k s.t. bFQ(S) − F (S) > ϵ 
+
+i
+
+≤ 2M e −2N ϵ 2
+
+.
+
+Choosing N ≥ 12ϵ2 log 2Mδ makes the RHS at most δ. The simplification uses M ≤ (em/k )k.
+
+C.3. End-to-end population guarantee 
+
+The following theorem implies the stated guarantee of Theorem 3.1. 
+
+Theorem C.4 (Near-optimality of Algorithm 1) . Let m := |R| . Fix k ∈ N, ϵ ∈ (0 , 1) , and δ ∈ (0 , 1) . Draw Q ∼ D N with 
+
+N = O
+
+ k log m+log(1 /δ )
+
+> ϵ2
+
+
+
+(as in Lemma C.3). Let Sg be the output of Algorithm 1 (greedy on bFQ). Then with probability at least 1 − δ,
+
+F (Sg ) ≥
+
+
+
+1 − 1
+
+e
+
+
+
+max  
+
+> |S|≤ k
+
+F (S) − O (ϵ).
+
+More explicitly, if Lemma C.3 holds with deviation at most η, then 
+
+F (Sg ) ≥
+
+
+
+1 − 1
+
+e
+
+
+
+max  
+
+> |S|≤ k
+
+F (S) −
+
+
+
+2 − 1
+
+e
+
+
+
+η. 
+
+Proof. Condition on the event from Lemma C.3 that 
+
+sup 
+
+> |S|≤ k
+
+bFQ(S) − F (S) ≤ η. 
+
+Let S⋆ ∈ arg max |S|≤ k F (S) and bS⋆ ∈ arg max |S|≤ k bFQ(S).20 Retriever Portfolios: A Principled Approach to Adaptive RAG 
+
+Step 1: Algorithm 1 is greedy on bFQ. Fix an intermediate greedy set S, and define V [qi] = max r′∈S s(qi, r ′) as in Algorithm 1. Then for any candidate r / ∈ S,
+
+bFQ(S ∪ { r}) − bFQ(S) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+
+
+max  
+
+> r′∈S∪{ r}
+
+s(qi, r ′) − max  
+
+> r′∈S
+
+s(qi, r ′)
+
+
+
+= 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+  max( V [qi], s (qi, r )) − V [qi]
+
+= 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+max  0, s (qi, r ) − V [qi].
+
+Thus maximizing PNi=1 max(0 , s (qi, r ) − V [qi]) (as done in the algorithm) is equivalent to maximizing the empirical marginal gain bFQ(S ∪ { r}) − bFQ(S).
+
+Step 2: Greedy achieves (1 − 1/e ) on bFQ. By Lemma C.2, bFQ(·) is normalized, monotone, and submodular. Therefore, by the classical result of Nemhauser–Wolsey–Fisher (Nemhauser et al., 1978), the greedy algorithm returns Sg with |Sg | = k
+
+such that 
+
+bFQ(Sg ) ≥
+
+
+
+1 − 1
+
+e
+
+ bFQ( bS⋆) ≥
+
+
+
+1 − 1
+
+e
+
+ bFQ(S⋆).
+
+Step 3: Transfer from empirical to population. Using the uniform deviation bound, 
+
+F (Sg ) ≥ bFQ(Sg ) − η ≥
+
+
+
+1 − 1
+
+e
+
+ bFQ(S⋆) − η ≥
+
+
+
+1 − 1
+
+e
+
+ F (S⋆) − η − η, 
+
+which simplifies to 
+
+F (Sg ) ≥
+
+
+
+1 − 1
+
+e
+
+
+
+F (S⋆) −
+
+
+
+2 − 1
+
+e
+
+
+
+η =
+
+
+
+1 − 1
+
+e
+
+
+
+max  
+
+> |S|≤ k
+
+F (S) −
+
+
+
+2 − 1
+
+e
+
+
+
+η. 
+
+Finally, choosing N as in Lemma C.3 makes η = Θ( ϵ), yielding the stated O(ϵ) additive term. 21
