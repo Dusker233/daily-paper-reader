@@ -1,93 +1,48 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-06-02
 
-## 每次日报
-- 最新运行日期：2026-06-02
-- 运行时间：2026-06-02 22:36:51 UTC
-- 运行状态：成功
-- 本次总论文数：15
+- 生成时间：2026-06-02 22:36:51 UTC
+- 当次推荐总数：15
 - 精读区：4
 - 速读区：11
 
-### 今日简报（AI）
-今日共浏览15篇论文，精读两篇安全与工业异常检测方向研究成果。  
-重点关注：加密流量分析的泛化方法与基于大模型的工业系统异常检测。  
-建议尝试跟进这些方法在实际场景中的可落地性和性能表现。
-- 详情：[/202606/02/README](/202606/02/README)
+## 今日简报（AI）
+1. 今日筛选并阅读了 15 篇前沿论文，重点关注加密流量分析、工业系统异常检测，以及搜索智能体与隐私计算等方向。  
+2. 最值得关注的是《GETA》对加密流量分析能力的推进，以及《IstGPT》将大模型引入工业时空图异常检测，均获得本日报最高评分（8.3/10）。  
+3. 建议优先精读这两篇高分工作，再结合搜索智能体和同态加密训练方向的速读论文，把握 AI 安全与可信智能系统的发展趋势。
 
-### 精读区论文标签
-1. [GETA: Generalized Encrypted Traffic Analysis](/202606/02/2605.31277v1-geta-generalized-encrypted-traffic-analysis)  
-   标签：评分：8.3/10、query:q7
+## 精读区
+1. [GETA：通用加密流量分析](/202606/02/2605.31277v1-geta-generalized-encrypted-traffic-analysis)（8.3/10）
    摘要：GETA 旨在解决加密流量分析对协议头、载荷特征和大规模标注数据的依赖问题。其核心是将包大小、到达间隔和方向建模为多变量时间序列，并结合元学习、嵌入增强和自注意力实现跨域少样本适应。论文在九个公开数据集、多个任务场景下均优于现有基线，强调协议无关性与泛化能力。若关注加密流量分类、跨域迁移或少样本网络安全分析，值得进一步精读。
-   evidence：GETA框架使用机器学习直接处理加密流量分析
-2. [IstGPT: LLM\-based Anomaly Detection for Spatial\-Temporal Graph in Industrial Systems](/202606/02/2606.01691v1-istgpt-llm-based-anomaly-detection-for-spatial-temporal-graph-in-industrial-systems)  
-   标签：评分：8.3/10、query:q9
+2. [IstGPT：基于大语言模型的工业系统时空图异常检测](/202606/02/2606.01691v1-istgpt-llm-based-anomaly-detection-for-spatial-temporal-graph-in-industrial-systems)（8.3/10）
    摘要：本文提出了IstGPT，一种基于大语言模型（LLM）与图神经网络的工业系统异常检测方法，针对工业控制系统中传感器与执行器的复杂时空依赖关系进行建模。通过多模态工业知识提取依赖图，并利用LLM优化和图神经网络重建误差进行实时异常检测。实验表明，IstGPT在九个数据集上的F1和时间敏感F1指标均优于12个最新方法，显示出在实际工业场景中潜在的部署价值，值得进一步阅读。
-   evidence：基于LLM的工业网络异常检测
-3. [TraceCodec: A Compiler\-Backed Neural Codec for Stateful Multi\-Flow Network Traffic Traces](/202606/02/2605.29941v1-tracecodec-a-compiler-backed-neural-codec-for-stateful-multi-flow-network-traffic-traces)  
-   标签：评分：8.0/10、query:q4
+3. [TraceCodec：一种由编译器支持的、面向有状态多流网络流量轨迹的神经编解码器](/202606/02/2605.29941v1-tracecodec-a-compiler-backed-neural-codec-for-stateful-multi-flow-network-traffic-traces)（8.0/10）
    摘要：本文提出了TRACE CODEC，一种编译器支持的神经网络编码器，旨在生成高保真、多流、状态感知的网络流量包捕获（PCAP）。通过将每个数据包提升为带时间和流槽的动作，并使用连续潜变量表示，TRACE CODEC能够将学习的行为与协议状态分离，由确定性编译器生成合法PCAP。实验证明，在CICIDS2017数据集上，该方法在包计数、协议组成和流量数量上精度达0.03%，显著优于传统基于原始字段的生成方法，值得继续精读。
-   evidence：用于网络分析的有状态多流量编解码器
-4. [A Protocol\-Language Model for Network Intrusion \(Without Deep Packet Inspection\)](/202606/02/2606.00155v1-a-protocol-language-model-for-network-intrusion-without-deep-packet-inspection)  
-   标签：评分：8.0/10、query:q7
+4. [一种基于协议的网络入侵语言模型（无需深度包检测）](/202606/02/2606.00155v1-a-protocol-language-model-for-network-intrusion-without-deep-packet-inspection)（8.0/10）
    摘要：论文提出PLM\-NIDS，试图在TLS 1.3、QUIC等加密流量时代摆脱DPI依赖，仅利用L3/L4包头元数据（包长、时延、TTL、TCP标志位、端口等）进行入侵检测。作者将网络流量视为“协议语言”，使用RWKV状态空间模型进行因果语言建模，并以困惑度衡量异常。实验表明，无攻击标签预训练即可获得PR\-AUC 0.93，监督微调后PR\-AUC提升至0.94。若关注加密流量安全检测与网络基础模型方向，值得进一步细读。
-   evidence：用于加密网络流量分析的协议语言模型
 
-### 速读区论文标签
-1. [GrepSeek: Training Search Agents for Direct Corpus Interaction](/202606/02/2605.29307v1-grepseek-training-search-agents-for-direct-corpus-interaction)  
-   标签：评分：7.9/10、query:profile-1
+## 速读区
+1. [GrepSeek：训练搜索代理以直接与语料库交互](/202606/02/2605.29307v1-grepseek-training-search-agents-for-direct-corpus-interaction)（7.9/10）
    摘要：本文提出 GrepSeek，一种针对大型文本语料库的直接交互搜索代理（DCI），通过训练紧凑模型执行 shell 命令进行证据搜索和组合，从而替代传统基于索引的检索方式。采用两阶段训练策略：先构建冷启动数据集，再用群体相对策略优化（GRPO）精炼策略。实验显示在七个开放域问答基准上取得最佳 F1 与精确匹配成绩，表明该方法在多步证据搜索和精确匹配任务中具有潜力，值得精读。
-   evidence：LLM搜索代理直接与语料库交互以获取证据
-2. [Building an Adversarial Malware Dataset by Family and Type: Generation, Evasion, and Poisoning Evaluation](/202606/02/2605.25937v1-building-an-adversarial-malware-dataset-by-family-and-type-generation-evasion-and-poisoning-evaluation)  
-   标签：评分：7.8/10、query:q5
+2. [按家族与类型构建对抗性恶意软件数据集：生成、规避与中毒评估](/202606/02/2605.25937v1-building-an-adversarial-malware-dataset-by-family-and-type-generation-evasion-and-poisoning-evaluation)（7.8/10）
    摘要：论文构建了一个基于真实恶意软件数据集 RawMal\-TF 的大规模对抗恶意软件数据集，通过多种自动化对抗样本生成器对 Windows PE 文件进行功能保持修改，并评估其逃逸与数据投毒效果。生成了约4.4万家族标签样本和3.4万类型标签样本，对 EMBER 分类器逃逸率分别达98.35%和92.20%。进一步证明极少量错误标注的对抗样本即可严重破坏分类器鲁棒性。若关注对抗恶意软件、数据投毒或检测器稳健性，该文值得精读。
-   evidence：对抗恶意软件数据集及规避分析
-3. [Revisiting ML Training under Fully Homomorphic Encryption: Convergence Guarantees, Differential Privacy, and Efficient Algorithms](/202606/02/2605.27782v1-revisiting-ml-training-under-fully-homomorphic-encryption-convergence-guarantees-differential-privacy-and-efficient-algorithms)  
-   标签：评分：7.8/10、query:q4
+3. [在全同态加密下重新审视机器学习训练：收敛性保证、差分隐私与高效算法](/202606/02/2605.27782v1-revisiting-ml-training-under-fully-homomorphic-encryption-convergence-guarantees-differential-privacy-and-efficient-algorithms)（7.8/10）
    摘要：论文研究在全同态加密\(FHE\)环境下如何高效且有理论保证地训练机器学习模型，并同时满足差分隐私\(DP\)。作者首次给出基于多项式近似梯度下降的收敛分析，证明FHE所需的激活函数/损失函数多项式替代不会破坏优化目标；同时提出无需逐样本梯度裁剪的DP训练算法，以屏障项替代传统DP\-SGD裁剪机制。实验显示该方法在精度接近传统DP\-GD的同时显著降低FHE计算深度，若关注隐私计算、加密训练或DP优化，值得进一步细读。
-   evidence：全同态加密下的机器学习训练
-4. [NetVAD: Foundation\-Model Representation Learning for Identifier\-Free Unsupervised Intrusion Detection](/202606/02/2606.01452v1-netvad-foundation-model-representation-learning-for-identifier-free-unsupervised-intrusion-detection)  
-   标签：评分：7.8/10、query:q7
+4. [NetVAD：用于无标识符无监督入侵检测的基础模型表示学习](/202606/02/2606.01452v1-netvad-foundation-model-representation-learning-for-identifier-free-unsupervised-intrusion-detection)（7.8/10）
    摘要：本文提出NetVAD，一种基于网络基础模型（Foundation Model）表示学习的无监督入侵检测方法，在严格排除网络标识符的条件下，仅使用正常流量训练变分自编码器。实验显示在ToN\-IoT和IoT\-23数据集上，NetVAD能达到高F1\-score，尤其在复杂僵尸网络检测上表现优异，但对单包侦察类攻击仍存在检测局限。值得进一步精读以了解方法设计及实验细节。
-   evidence：基于基础模型的无监督入侵检测
-5. [Training\-Free Composed Video Retrieval via Visual Representation\-Guided Video\-LLM Reasoning](/202606/02/2606.02321v1-training-free-composed-video-retrieval-via-visual-representation-guided-video-llm-reasoning)  
-   标签：评分：7.8/10、query:q6
+5. [无训练组合视频检索：基于视觉表示引导的视频\-LLM推理](/202606/02/2606.02321v1-training-free-composed-video-retrieval-via-visual-representation-guided-video-llm-reasoning)（7.8/10）
    摘要：本文提出了一种无需训练的组合视频检索方法，通过视觉表示引导的视频大模型推理，实现给定参考视频和修改指令下的目标视频检索。方法首先使用冻结的 DINOv3 模型构建视觉候选池，再用大型视觉语言模型对候选视频进行修改感知重排序与推理优化。实验在 CVPR 2026 CoVR\-R 测试集上取得 Recall@1 为 48.78、Recall@5 为 51.48，显示训练自由的方法在组合视频检索中有效，值得继续精读。
-   evidence：用于训练自由视频检索的视频\-LLM推理
-6. [Towards Cybersecurity SuperIntelligence \(CSI\): What's the best harness for cybersecurity?](/202606/02/2605.28334v1-towards-cybersecurity-superintelligence-csi-whats-the-best-harness-for-cybersecurity)  
-   标签：评分：7.8/10、query:q9
+6. [迈向网络安全超智能（CSI）：网络安全的最佳支撑方案是什么？](/202606/02/2605.28334v1-towards-cybersecurity-superintelligence-csi-whats-the-best-harness-for-cybersecurity)（7.8/10）
    摘要：本文针对网络安全人工智能（AI）中不同代理脚手架的互补性问题，提出了Cybersecurity SuperIntelligence \(CSI\) 元脚手架，实现异构脚手架的统一编排与并行组合。通过对五种脚手架在33项cybench挑战上的实证评测，发现没有单一脚手架表现最佳，结构异构脚手架的组合在黑板多代理架构下解决率最高（57.6%），显著优于单一脚手架，结果表明多代理组合策略值得深入研究。
-   evidence：基于LLM的网络安全代理框架
-7. [Risk Averse Alert Prioritization for IDS Using Subnormal Gaussian Fuzzy Models](/202606/02/2605.27299v1-risk-averse-alert-prioritization-for-ids-using-subnormal-gaussian-fuzzy-models)  
-   标签：评分：6.9/10、query:q9
+7. [基于次正态高斯模糊模型的入侵检测系统风险规避告警优先级方法](/202606/02/2605.27299v1-risk-averse-alert-prioritization-for-ids-using-subnormal-gaussian-fuzzy-models)（6.9/10）
    摘要：本文针对入侵检测系统（IDS）中的告警疲劳问题，提出了一种基于次正规高斯模糊数的风险规避告警优先级框架，通过同时建模威胁严重性、不确定性和组织风险偏好，实现告警的合理排序。实验在CIC\-IDS2017和NSL\-KDD数据集上验证了方法在探测器性能下降时的稳健性，显示在中等置信度告警区分能力优于传统方法。论文方法可解释、计算高效，值得安全运维研究者关注。
-   evidence：入侵检测系统中模糊逻辑告警排序
-8. [AgentGuard: An Attribute\-Based Access Control Framework for Tool\-Use LLM\-Based Agent](/202606/02/2605.28071v1-agentguard-an-attribute-based-access-control-framework-for-tool-use-llm-based-agent)  
-   标签：评分：6.9/10、query:q9
+8. [AgentGuard：面向工具使用型大语言模型智能体的基于属性的访问控制框架](/202606/02/2605.28071v1-agentguard-an-attribute-based-access-control-framework-for-tool-use-llm-based-agent)（6.9/10）
    摘要：论文聚焦具备工具调用能力的LLM Agent安全治理问题，认为现有方案在风险覆盖、兼容性和策略配置上存在不足。作者提出AgentGuard，一个基于属性访问控制（ABAC）的客户端\-服务器框架，通过规则检测、LLM辅助检测和人工审核三层机制，对单工具和跨工具风险进行统一管控。其特点是低侵入集成（约10行代码改动）、跨语言兼容及可视化策略管理。不过当前文本更偏系统设计与功能展示，缺少充分实验评估，因此适合作为安全架构参考，是否显著优于现有方案仍需进一步验证。
-   evidence：在网络安全中保护工具使用型LLM代理的框架
-9. [Pocket\-Dentist: On\-Device Dental Image Understanding via Efficient Multimodal Large Language Models](/202606/02/2605.29299v2-pocket-dentist-on-device-dental-image-understanding-via-efficient-multimodal-large-language-models)  
-   标签：评分：6.9/10、query:q6
+9. [Pocket\-Dentist：基于高效多模态大语言模型的设备端牙科图像理解](/202606/02/2605.29299v2-pocket-dentist-on-device-dental-image-understanding-via-efficient-multimodal-large-language-models)（6.9/10）
    摘要：本文关注牙科视觉语言模型在真实基层筛查场景中的部署问题，提出兼顾准确率与计算成本的 Pocket\-Dentist 基准。作者将3个牙科数据集统一为多模态问答任务，覆盖约1159名患者、5类任务和7项指标，并评测14个VLM。结果发现，小型模型并不逊于大模型，部分2B级模型在牙科理解任务上反而更优。最终将微调后的2B模型部署到 iPhone 17 Pro，实现本地离线推理，显著降低延迟与内存占用。若关注医疗端侧AI、轻量化VLM或牙科AI落地，值得继续细读。
-   evidence：用于设备端视频/图像分析的多模态LLM
-10. [Not All Inputs Are Valid: Towards Open\-Set Video Moment Retrieval Using Language](/202606/02/2605.29812v1-not-all-inputs-are-valid-towards-open-set-video-moment-retrieval-using-language)  
-   标签：评分：6.9/10、query:q6
+10. [并非所有输入都是有效的：基于语言的开放集视频时刻检索研究](/202606/02/2605.29812v1-not-all-inputs-are-valid-towards-open-set-video-moment-retrieval-using-language)（6.9/10）
    摘要：本文首次提出开放集视频时刻检索（OS\-VMR）任务，指出传统VMR默认所有文本查询都与视频相关，在真实场景中会对无关查询产生错误定位。作者提出OpenVMR，通过归一化流学习ID查询分布，并利用不确定性分数区分ID/OOD查询，再结合粗细粒度跨模态交互与正负未标注学习完成时刻检索。实验显示该框架在三个VMR数据集上有效兼顾OOD拒识与ID定位能力。若关注开放世界视频理解、鲁棒检索或安全场景应用，值得进一步细读。
-   evidence：使用语言查询的视频时刻检索
-11. [Stochastic Analysis of Cybersecurity Defense Strategies Under Single Attack Scenario](/202606/02/2606.00481v1-stochastic-analysis-of-cybersecurity-defense-strategies-under-single-attack-scenario)  
-   标签：评分：6.9/10、query:q9
+11. [单次攻击情景下网络安全防御策略的随机分析](/202606/02/2606.00481v1-stochastic-analysis-of-cybersecurity-defense-strategies-under-single-attack-scenario)（6.9/10）
    摘要：本文研究单次网络攻击场景下的网络安全防御策略，通过随机分析方法建模防御系统的响应行为和攻击成功概率。论文尝试量化不同策略的效果，以指导实际防御部署。由于现有文本缺乏具体方法细节和实验数据，难以判断精读价值，但若关注理论建模与策略评估，可考虑深入。
-   evidence：主动网络安全的随机建模
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
