@@ -1,0 +1,1036 @@
+Title: A Dual-Path Architecture for Scaling Compute and Capacity in LLMs
+
+URL Source: https://arxiv.org/pdf/2605.30202v1
+
+Published Time: Fri, 29 May 2026 01:41:51 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+## A Dual-Path Architecture for Scaling Compute and Capacity in LLMs 
+
+Markus Frey 1, 2, 3 , Behzad Shomali 1, 3 , Joachim Koehler 1, 2 , Mehdi Ali 1, 2 
+
+Lamarr Institute 1, Fraunhofer IAIS 2, University of Bonn 3
+
+> markus.frey@iais.fraunhofer.de
+
+Abstract 
+
+Looped transformers apply a shared block mul-tiple times and have emerged as a parameter-efficient route to scaling compute in language models. However, at fixed FLOPs a looped model has strictly less capacity than a base-line transformer. We propose a novel dual-path block that can flexibly scale compute , the num-ber of sequential operations applied to a hidden state, and capacity , the parameters available at a single step. For this we expose both axes as parallel pathways within a single layer: a deep 
+
+sublayer re-applied K times with shared pa-rameters, and a wide sublayer with an enlarged feed-forward network applied once. Indepen-dent per-token gates combine both axes and allow detailed per-token routing analyses. We show that across two FLOP budgets, our dual-path model surpasses iso-FLOP matched mod-els on language modeling and downstream eval-uations, while using fewer parameters than the baseline at matched FLOPs. The learned gates are directly interpretable and show systematic per-token allocation with function words and lexical content trend wide, while punctuation, symbols, and arithmetic tokens trend deep. 
+
+1 Introduction 
+
+Looped (or recursive) transformers re-apply a shared block K times, trading parameter count for sequential compute (Dehghani et al., 2019; Geip-ing et al., 2025; Saunshi et al., 2025; Zhu et al., 2025). The appeal is parameter efficiency: L lay-ers looped K times reach the effective depth of 
+
+KL unshared layers at 1/K the parameters, and recent work shows this is enough to recover much of the reasoning performance of a deeper unshared stack (Saunshi et al., 2025; Zhu et al., 2025). How-ever, at fixed FLOPs, a looped model has strictly less capacity than an unshared stack of compara-ble compute, and the gap shows up empirically on tasks that depend on stored knowledge (Frey et al., 2026; Zhu et al., 2025). Looping and width scaling therefore sit on two qualitatively different axes of a transformer layer. Looped models use compute to increase the number of sequential operations applied to a hidden state, while width-scaled models increase capacity , the parameters available at a single step. Standard architectures conflate the two, with every token paying the same cost on both. A looped model puts its whole per-layer feed-forward network (FFN) budget on compute and a width-scaled FFN puts it all on capacity. Neither lets a token that needs more sequential refinement get it without also paying for capacity it does not need, or the other way around. Recent work relaxes this one axis at a time. Mixture-of-Experts (Shazeer et al., 2017; Fedus et al., 2022) routes tokens to a subset of similar experts, scaling capacity sub-linearly in compute. Mixture-of-Depths (Raposo et al., 2024) routes to-kens to skip or apply a layer, varying effective depth per position. Mixture-of-Recursions (Bae et al., 2025) varies the number of loop iterations per token, and adaptive halting mechanisms in looped models do the same via learned stopping (Graves, 2016; Banino et al., 2021; Frey et al., 2026). Each of these routes along a single axis, i.e. which ex-perts, how many loop iterations, or whether to ap-ply a layer at all. We propose a transformer layer that exposes the two axes separately within itself. Each dual-path block contains two parallel sublayers: a deep sub-layer applied K times with shared parameters (a loop, as above), and a wide sublayer with an en-larged feed-forward dimension applied once. Alearned per-token gate combines them. We train the dual-path block across different wide and deep ratios ( α) and the iso-FLOP controls for each axis separately. We show that: • At both FLOP budgets, the best dual-path con-figuration beats both single-axis controls on aggregate language-modelling, commonsense, 1
+
+> arXiv:2605.30202v1 [cs.CL] 28 May 2026
+
+and math evaluations while using fewer pa-rameters than the width-scaled control .• The learned gate that mixes the compute and capacity path does not collapse. Its allocation depends systematically on layer index, part-of-speech, and task: function words and lexical content (verbs, adjectives) trend wide, while punctuation, symbols, and arithmetic tokens trend deep. 
+
+2 Related Work 
+
+Looped and recursive transformers. Re-applying a shared block across depth has been studied as a parameter-efficient route to scaling transformers since the release of Universal Trans-formers (Dehghani et al., 2019). The idea has been revived recently in language modelling: looped decoders scale test-time compute by re-applying a shared block (Geiping et al., 2025; Saunshi et al., 2025; Zhu et al., 2025; Jeddi et al., 2026) which saves parameters while scaling compute. The cost of the parameter saving is reduced capacity. Zhu et al. (2025) show that looped models match standard transformers on knowledge manipulation but not on per-parameter memorisation, and Frey et al. (2026) report a corresponding empirical pattern downstream: adaptive looping improves mathematical reasoning but leaves commonsense benchmarks largely flat. Both observations show that looping buys compute at the cost of capacity. 
+
+Per-token compute allocation. A separate line of work allocates compute adaptively at the token level. Mixture-of-Experts (Shazeer et al., 2017; Fe-dus et al., 2022) routes each token to a small subset of many parallel experts of the same shape, de-coupling parameter count from per-token compute. Mixture-of-Depths (Raposo et al., 2024) routes to-kens to skip or apply a layer, varying effective depth per position. Mixture-of-Recursions (Bae et al., 2025) extends this to looped stacks by vary-ing the number of shared-block applications per token. All of these route along a single axis (which experts, how many loop iterations, or whether to apply a layer at all). While MoE and our dual-path block both attach a learned router to a transformer layer, they route over different sets of options. In MoE, the router selects among N feed-forward experts that share the same architecture but hold different learned weights; the choice is over which parameters a token sees. In the dual-path block, the router weighs two sublayers that differ in kind: one is a shared-parameter sublayer applied K times, the other is a wider sublayer applied once. The choice is instead over what type of update a to-ken receives. Furthermore, MoE routers are top-k
+
+sparse, whereas our gate is dense. Because both paths are always evaluated in our block, we do not skip compute; we re-allocate it. This also means both updates are observed at every token and every layer, making the gate’s value a direct read-out of how the trained model chose to allocate between two options that were both processed. Finally, be-cause the two mechanisms target different axes, they are compositional rather than competing. In theory, a MoE layer could be placed inside the wide path of a dual-path block, with the gate selecting whether to route a token through looped compute or through routed capacity. 
+
+Memory-augmented transformers. A comple-mentary route to recovering capacity in parameter-shared models is to attach learned memory banks the model can query, as in product-key memory layers (Lample et al., 2019) and persistent memory in attention (Sukhbaatar et al., 2019). Frey et al. (2026) combine adaptive looping with per-layer and global memory banks and find that memory closes part of the commonsense gap that looping alone cannot bridge. The dual-path block addresses the same capacity bottleneck from the architectural side: rather than adding a separately queried mem-ory module that scales weakly, it adds a parallel wide FFN sublayer inside each layer and lets a per-token gate decide how much of each token’s update comes from looped compute vs. wider parameters. 
+
+3 Method 
+
+3.1 Problem statement and notation 
+
+Scaling a transformer layer generally involves ei-ther expanding capacity (adding parameters, typi-cally via a wider feed-forward network) or extend-ing compute (increasing sequential operations on the hidden state, usually via more layers or by re-cursively re-applying a shared one). We study an architecture that exposes the two axes separately within each layer and let the model decide, per token, how to allocate between them. 
+
+3.2 Baseline 
+
+Given an input tensor x ∈ RB×T ×d, where B de-notes the batch size, T represents the sequence 2h(ℓ−1) 
+
+Attn 
+
+FFN ( dffn )
+
+h(ℓ)
+
+(a) Standard Block 
+
+h(ℓ−1) 
+
+Attn 
+
+FFN ( ddeep )
+
+h(ℓ)
+
+> ×K
+
+(b) PureLoop 
+
+h(ℓ−1) 
+
+Attn 
+
+FFN ( dwide )
+
+h(ℓ)
+
+(c) PureWide 
+
+h(ℓ−1) 
+
+Attn 
+
+FFN ( dwide )
+
+h(ℓ−1) 
+
+hwide 
+
+Wide 
+
+> capacity
+
+Attn 
+
+FFN ( ddeep )
+
+h(k−1) 
+
+hdeep 
+
+> ×K
+
+Deep 
+
+> compute
+
++
+
+h(ℓ) = gw hwide + gd hdeep 
+
+(d) Dual-path Block 
+
+Per-token allocation                     
+
+> learned gates (gw, g d)indicate token preference: function words trend wide ·arithmetic and symbolic tokens trend deep
+> 1
+> gate value
+> 0
+> wide ( gw)
+> deep ( gd)
+> Maria pays 15 eplus atip of 15,the total =18 e
+
+Figure 1: Block architectures. (a) Standard transformer block. (b) P URE LOOP : a shared block re-applied K times. (c) P URE WIDE : a single block with enlarged FFN. (d) Dual-path block, which runs (c) and (b) in parallel on the same input and combines them via two per-token sigmoid gates gw, g d. Bottom panel: schematic of the learned gates across sequence tokens. 
+
+length, and d is the model dimension, a standard transformer sublayer Φ is defined as 
+
+u = x + s · Attn(RMSNorm( x)) ,
+
+Φ( x; s) = u + s · FFN(RMSNorm( u)) , (1) where s ∈ R>0 is a scalar gain on the sublayer contribution. In a standard transformer s = 1 ; in our dual-path block, s is learned per recursion step and per path. 
+
+3.3 Dual-path block 
+
+Each block exposes the two scaling axes as two parallel sublayers that share the same input x, as illustrated in Figure 1. One sublayer adds sequen-tial compute by re-applying itself K times with shared parameters; the other adds capacity by us-ing a wider FFN and is applied once. A per-token gate combines them. 
+
+Deep path (compute). The deep sublayer Φdeep 
+
+uses the FFN hidden dimension ddeep and is applied 
+
+K times iteratively with shared parameters: 
+
+h(k) = Φ deep 
+
+
+
+h(k−1) ; s(k)
+
+> d
+
+
+
+, (2) where h(0) = x and k = 1 , . . . , K . The per-step gains s(k) 
+
+> d
+
+= softplus( α(k)) are learned, with one 
+
+α(k) per step. Initialising α(k) = −7 gives s(k) 
+
+> d
+
+≈
+
+9 × 10 −4, so the recursion begins as a near-identity and the model learns step-wise deviations from x.Rather than returning h(K) directly, the deep path is a learned weighted combination of all in-termediate states. A small router (a linear projec-tion from the current state h(k) and a normalised step index k/ (K − 1) ) produces a per-step weight 
+
+qk ∈ [0 , 1] . Letting πk = Q
+
+> j<k
+
+(1 − qj ), the deep representation is 
+
+hdeep =
+
+> K−1
+
+X
+
+> k=1
+
+πk qk h(k) + πK h(K). (3) The router thus lets the model down-weight later loop iterations on a per-token basis. 3Wide path (capacity). The wide sublayer Φwide 
+
+has the same attention configuration as Φdeep but an enlarged FFN hidden dimension dwide > d deep ,and is applied once: 
+
+hwide = Φ wide (x; sw), sw = softplus( β). (4) The scalar β is initialised to −7, matching the deep path. This path adds parameters through the wider FFN but no sequential compute beyond a normal layer. 
+
+Per-token gating. A linear projection Wg ∈
+
+Rd×2 with bias bg ∈ R2 maps the layer input to logits (ℓd, ℓ w) = xW g + bg, giving two indepen-dent sigmoid gates gd = σ(ℓd) and gw = σ(ℓw),both in [0 , 1] B×T . The combined update is 
+
+y = gd ⊙ hdeep + gw ⊙ hwide . (5) We initialise Wg and bg to zero, so each token re-ceives gd = gw = 0 .5 at the start of training. The gate is the mechanism by which the model can route tokens that benefit from compute toward the deep path and tokens that benefit from capacity toward the wide path. 
+
+Single-axis baselines. Disabling one path re-duces a block to a looped (P URE LOOP ) layer (y = hdeep , K recursions of the standard FFN; Figure 1b) or a width-scaled (P URE WIDE ) layer (y = hwide , one pass of the enlarged FFN; Fig-ure 1c). These two configurations share the back-bone, data, and recipe with the dual-path block and put the entire per-layer FFN FLOP budget on one axis. P URE WIDE has the largest parameter count within a budget (no parameter sharing across re-cursion); P URE LOOP has the smallest (one FFN re-applied K times). 
+
+3.4 Routing read-outs 
+
+Because both paths are evaluated for every token (Section 3.3), the forward pass exposes the raw gates ( (gd, g w)) and the per-path update vectors 
+
+∆d = hdeep − x and ∆w = hwide − x at every layer and every token. The raw gate value alone ignores update size. We therefore report the fraction of the residual update that came from the deep path, 
+
+ρd = gd ∥∆d∥
+
+gd ∥∆d∥ + gw ∥∆w∥ ∈ [0 , 1] , (6) computed per token per layer. ρd = 1 means the entire update at that position came from the deep path; ρd = 0 means it came entirely from the wide path; ρd = 0 .5 is balanced. We refer to ρd as the 
+
+deep share throughout. 
+
+Path alignment. We also record the cosine simi-larity between the two path deltas, 
+
+cos(∆ d, ∆w) = ∆d · ∆w
+
+∥∆d∥ ∥ ∆w∥ . (7) A value near +1 means the two paths push the residual in the same direction, i.e. deep and wide path do the same, while a value near 0 means they push in orthogonal directions. 
+
+4 Experiments 
+
+The backbone is a GPT2-style (Radford et al., 2019) decoder-only transformer with L = 16 lay-ers, hidden dimension d = 768 , and 12 attention heads. Attention uses rotary positional embeddings (Su et al., 2024b) applied to queries and keys, with RMSNorm on queries and keys prior to attention (Dehghani et al., 2023). Feed-forward sublayers are SwiGLU (Shazeer, 2020). These parameters are held fixed across every configuration in the pa-per, including the single-axis controls; only the FFN widths and the per-layer recursion depth vary. 
+
+4.1 Setup Models and configurations. We train models at two iso-FLOP budgets, specified by the per-layer FFN FLOPs per token ( FM = 80 M and FM =160 M, corresponding to ∼1.28G and ∼2.56G to-tal FLOPs per token for a 16-layer model). The detailed procedure for solving for matched FFN widths is given in Appendix B. Within each bud-get we sweep the dual-path FFN allocation α ∈{25 , 50 , 75 } (the share of FFN FLOPs spent on the deep path) and the recursion depth K ∈ { 2, 3, 4}.At fixed budget, larger K and larger α reduce pa-rameter count, since both shift compute toward the shared-parameter deep path. Unique param-eter counts across all configurations span from roughly 240M up to 1.4B. All models share pre-RMSNorm (Zhang and Sennrich, 2019), RoPE (Su et al., 2024b), SwiGLU (Shazeer, 2020) and QK-norm (Henry et al., 2020). Exact L, d, hq, hkv , dffn ,
+
+dwide ffn per configuration are listed in Appendix C (Tables 2 and 3). 
+
+Data and training. All models are trained on a deduplicated subset of Nemotron-CC (Su et al., 2024a) for 38B tokens with the GPT-2 4Table 1: Main results. Iso-FLOP comparison at two budgets. D UAL configurations use loop=4 ; rows vary the FFN FLOP allocation between the deep and wide paths ( a25 /a 50 /a 75 = 25/50/75% on the deep path). The full sweep over loop depths is in Appendix C. Params is shown relative to P URE WIDE within each budget. All rows within a budget are matched in FLOPs.                                                                                                                                         
+
+> Language modelling Commonsense Math Configuration Params FLOPs C4 ↓Wiki ↓Acc. ↑BPB ↓Acc. ↑BPB ↓
+> PURE WIDE 719M (1.00 ×)80M 1.037 0.946 0.5203 0.9920 0.0791 0.5261 PURE LOOP
+> Loop=2 398M (0.55 ×)80M 1.051 0.961 0.5036 1.0028 0.0723 0.5372 Loop=3 294M (0.41 ×)80M 1.065 0.976 0.5067 1.0236 0.0723 0.5454 Loop=4 238M (0.33 ×)80M 1.078 0.992 0.5031 1.0352 0.0527 0.5564 DUAL PATH (ours)
+> α= 25 606M (0.84 ×)80M 1.037 0.942 0.5163 0.9902 0.0664 0.5253
+> α= 50 483M (0.67 ×)80M 1.036 0.939 0.5256 0.9820 0.0898 0.5198
+> α= 75 360M (0.50 ×)80M 1.045 0.948 0.5249 0.9892 0.0918 0.5227 PURE WIDE 1361M (1.00 ×)160M 1.018 0.922 0.5384 0.9636 0.1250 0.5077 PURE LOOP
+> Loop=2 719M (0.53 ×)160M 1.027 0.931 0.5303 0.9814 0.1045 0.5091 Loop=3 502M (0.37 ×)160M 1.037 0.939 0.5244 0.9894 0.1191 0.5150 Loop=4 398M (0.29 ×)160M 1.045 0.945 0.5137 1.0010 0.0938 0.5199 DUAL PATH (ours)
+> α= 25 1125M (0.83 ×)160M 1.013 0.911 0.5420 0.9610 0.1250 0.5066
+> α= 50 880M (0.65 ×)160M 1.017 0.920 0.5326 0.9704 0.1328 0.4959
+> α= 75 644M (0.47 ×)160M 1.021 0.924 0.5335 0.9700 0.1406 0.5047
+
+tokenizer. Sequence length is 4096 . We use the modalities training framework (Lübbering et al., 2026) using the AdamW optimizer (with peak learning rate 5 × 10 −4, a linear warmup of 
+
+184 steps, and a cosine decay schedule down to 
+
+5 × 10 −5). Wall-clock training times range from 12.8 to 21.4 hours per model across 64 GPUs. Full optimizer hyperparameters are listed in Ap-pendix A. 
+
+Baselines. We compare against two iso-FLOP single-axis controls, trained with the same back-bone, data, and recipe: • PURE WIDE (L layers, single wider FFN of width dwide ffn , no recursion): our block with the deep path disabled. Spends the entire per-layer FFN FLOP budget on capacity. • PURE LOOP (L layers, standard FFN width, recursion depth K, no wide path): our block with the wide path disabled. Spends the en-tire per-layer FFN FLOP budget on sequential compute. 
+
+Evaluation. We report bits-per-byte (BPB) on Paloma C4 and WikiText-103 for language mod-elling, mean accuracy and BPB on six common-sense tasks (ARC-c, ARC-e, HellaSwag, PIQA, SIQA, WinoGrande), GSM8k accuracy and the OLMo3 base-easy math BPB average over seven sub-tasks, and LAMBADA / QASPER for read-ing and QA. BPB rather than accuracy gives finer-grained signal for these pre-training scales. Full per-task numbers are in Appendix E (Tables 5 and 6). 
+
+4.2 Main results 
+
+Table 1 reports our main comparison at both FLOP budgets. 
+
+A dual-path configuration performs best at both budgets. We focus on K=4 throughout this sec-tion, matching the configurations shown in Table 1 (see Appendix E for the full results). At both FLOP budgets, a dual-path configuration beats both single-axis controls on aggregate BPB (the mean of C4, WikiText-103, commonsense, and math BPB). At FM = 80 M, α = 50 (483 Mparams, 0.67 × PURE WIDE ) achieves the best ag-gregate BPB ( 0.8693 vs. 0.8753 for P URE WIDE 
+
+and 0.8880 for the best P URE LOOP ), and is also best on C4, Wiki, commonsense BPB, math BPB, and commonsense accuracy. At FM = 160 M, the optimum shifts toward capacity: α = 25 
+
+(1125 M params, 0.83 × PURE WIDE ) is best on aggregate BPB ( 0.8478 vs. 0.8530 for P URE WIDE 
+
+and 0.8622 for the best P URE LOOP ), and wins C4, Wiki, commonsense BPB, and commonsense ac-5300 400 500 600 700         
+
+> Parameters (M)
+> 0.740
+> 0.750
+> 0.760
+> 0.770
+> 0.780
+> 0.790
+> 0.800
+> Aggregate bits-per-byte  ( = better)  Iso-FLOPs: ~1.28G FLOPs/token
+> 400 600 800 1000 1200 1400
+> Parameters (M)
+> 0.725
+> 0.730
+> 0.735
+> 0.740
+> 0.745
+> 0.750
+> 0.755
+> 0.760
+> Aggregate bits-per-byte  ( = better)  Iso-FLOPs: ~2.56G FLOPs/token
+> PureWide
+> PureLoop
+> Baseline Fit (Quad)
+> Dual =25 (wide-heavy)
+> Dual =50
+> Dual =75 (deep-heavy)
+> Loops=2
+> Loops=3
+> Loops=4
+
+Figure 2: Parameter scaling sweep of dual-path configurations compared against PURE WIDE and PURE LOOP controls at matched FLOP budgets. Num-ber of Loops for P URE LOOP (triangle) is K=2, 3, 4 (from left to right). Note that P URE WIDE is equivalent to P URE LOOP with K=1 but without additional routing overhead. 
+
+curacy. This shift toward capacity at the higher budget is consistent with the broader picture that looped (parameter-shared) compute is parameter-bottlenecked. 
+
+Allocation between deep and wide path. We now investigate how the model performance changes when varying α within the K=4 mod-els. Capacity-heavy configurations ( α = 25 ) are strongest on language modelling and common-sense: at FM = 160 M, α=25 gives the best C4 and WikiText-103 BPB and the best commonsense accuracy and BPB. Compute-heavy configurations (α = 75 ) are strongest on math: GSM8k accu-racy peaks at α=75 at both budgets ( 0.0918 at 
+
+FM = 80 M, 0.1406 at FM = 160 M). This shows, that shifting FFN FLOPs toward the wide path adds parameters and helps knowledge-heavy tasks, while shifting them toward the deep path adds se-quential compute and helps reasoning-heavy tasks. 
+
+Pareto position in the parameter–quality plane. 
+
+We next plot aggregated bits-per-byte against pa-rameter count for all configurations ( K ∈ { 2, 3, 4}
+
+and α ∈ { 25 , 50 , 75 }) in Figure 2. For optimal parameter efficiency at a fixed FLOP budget, a model should land in the lower left corner. The dashed curve is a quadratic fit through the single-axis controls (the three P URE LOOP points and PURE WIDE ) and traces the Pareto frontier reach-able by sweeping the wide/loop allocation in a standard transformer. Within each α, connecting 
+
+K ∈ { 2, 3, 4} traces a short per-α segment moving from right to left (as higher K reduces parame-ter count at fixed FLOPs). At the lower budget (FM = 80 M, ∼1.28G FLOPs), the segments have different slopes, with some increasing performance along the line while others remain flat. However, at the higher budget ( FM = 160 M, ∼2.56G FLOPs), increasing the loop count generally improves per-formance across all α values, driving the models further into the optimal lower-left region. 
+
+4.3 Where does the model spend its budget? 
+
+Having established that the dual-path block im-proves overall performance, we now examine the learned gates to understand how the model allo-cates its budget. Because the architecture evaluates both paths densely, we can directly read out the routing decisions and residual updates at inference time to uncover the model’s underlying preferences for sequential compute (the deep path) or parameter capacity (the wide path). We find that the routing preference varies a) across the layer’s position in the stack, b) the identity of the token (e.g. noun vs. number), and c) the task the token is part of (math vs. question answering). All analyses below use the balanced α = 50 , K = 4 model evaluated on three Paloma sources (WikiText-103, TriviaQA, GSM8K). 
+
+Depth in the stack. Figure 4(a) plots the mean deep share per layer for all three K ∈ { 2, 3, 4}
+
+models at α = 50 , along with their average. Two regimes are visible. The middle of the network (L2–L9) is wide-dominated, with deep share be-tween 0.28 and 0.40 , while the last two layers (L14–L15) flip to deep-dominated, with the av-erage rising to 0.5–0.6. The pattern is consistent across loop counts, so the shape reflects the layer’s role in the stack rather than the specific recursion depth. Panel (b) shows the mean cosine similarity be-6tween the update vectors from the deep path ( ∆d)and the wide path ( ∆w) at each layer. A value near 
+
++1 means the paths produce nearly identical up-dates (and one is redundant), a value near 0 means they push in orthogonal directions (the paths con-tribute non-overlapping information). We observe mostly low values across the middle of the net-work, indicating that the deep and wide paths are processing the same input in genuinely different ways rather than producing scaled copies of one another. 
+
+Task. The gate responds to the task a token is part of. Figure 5 shows two example sequences side by side: in the GSM8K answer, numbers and arith-metic operators ( 15 , *, =, 3, 18 ) are deep-leaning, and the deep preference strengthens through the arithmetic blocks. In the TriviaQA example, the an-swer token Oxy is the most deep-leaning position in the sequence, while the surrounding question words sit on the wide side. Figure 6 resolves the same examples layer by layer and shows the depth pattern from earlier: later layers prefer the deep path, mid layers pre-fer the wide path. For a population estimate we align one thousand samples from each task to the 
+
+Answer token and plot the per-layer difference 
+
+ρGSM8K  
+
+> d
+
+− ρTriviaQA  
+
+> d
+
+(Figure 6c). Alignment to a shared anchor is needed because the Answer to-ken sits at different absolute positions in sequences of varying length. The post-Answer positions in GSM8K are markedly more deep-leaning than the corresponding TriviaQA positions in the late layers. At the same depth and the same relative position, a reasoning task routes more deeply than a knowl-edge task. 
+
+Token identity. To investigate in more detail be-yond task identity we tag every token with its Universal POS tag (Petrov et al., 2012; Nivre et al., 2016) using spaCy (Honnibal et al., 2020) (en_core_web_sm ) on the decoded text, with a regex override for arithmetic tokens (digits, oper-ators, =, «, », #### ). Each model token inherits the tag of the character span it overlaps most. Fig-ure 7 plots, for every (POS, layer) pair, the mean deep share over all tokens with that tag, restricted to tags with at least 10 occurrences. The ordering is stable across all three datasets and visible in the boxplot of panel (e): SPACE, PUNCT (e.g., ,, .), and SYM (e.g., =, -, «) receive the highest deep share; ADV (e.g., also , as ), PART (e.g., to , ’s ), PRON (e.g., he , it ), ADJ (e.g., many , first ), 0.0 0.5 1.0                      
+
+> gw
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> raw gates
+> gd
+> early (L0-4)
+> 0.0 0.5 1.0
+> gw
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0 middle (L5-9)
+> 0.0 0.5 1.0
+> gw
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0 late (L10-15)
+> 01
+> log(1 + gww)
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> contributions
+> log(1 +  gd d )
+> 01
+> log(1 + gww)
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 01
+> log(1 + gww)
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+
+Figure 3: Joint 2D density of routing gates and up-date contributions , split into layer bands (early, mid-dle, late) and averaged across three Paloma datasets (wikitext_103 , triviaqa , gsm8k ). Row A plots the joint density of the raw gates selected by the router: deep gate gd on the y-axis and wide gate gw on the x-axis in [0 , 1] 2. Row B plots the joint density of up-date contributions on a log-transformed scale: log(1 + 
+
+gw∥∆w∥) (wide contribution) vs. log(1 + gd∥∆d∥)
+
+(deep contribution), which shows the actual magnitude of vectors added to the residual stream. 
+
+and VERB (e.g., made , used ) receive the lowest; NUM (e.g., 2, 5) and NOUN (e.g., Question ,
+
+Answer ) sit in the middle. Overall, the POS pat-tern follows an interpretable split: symbolic and structural tokens (SPACE, PUNCT, SYM) route to compute, while lexical content tokens (VERB, ADJ, ADV, PRON, PART), route to capacity. 
+
+Per-token decisions become more polarised with depth. The analyses so far show what the gate prefers but not how strongly it commits to those preferences. We therefore plot the joint distribution of the two gates. Figure 3 plots the 2D density of (gw, g d) pooled across all tokens, grouped into three layer bands (early L0–4, middle L5–9, late L10–15). The dashed diagonal marks equal rout-ing ( gd = gw): mass on the diagonal corresponds to balanced mixtures, while mass off the diago-nal corresponds to tokens that commit primarily to one path. The per-layer breakdown is shown in Ap-pendix Figure 8. We observe that the density moves off the diagonal as depth increases. Early layers (L0–4) concentrate in a narrow band along the pos-itive diagonal near the origin, indicating small and roughly balanced gates for most tokens. Late layers (L10–15) push density onto the boundaries with a cluster near gd → 1 (tokens routed almost en-tirely through the deep path) and a cluster near 
+
+gw → 1 (tokens routed almost entirely through 70 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15                
+
+> layer
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> mean deep share
+> (a) Deep Share
+> loops=2
+> loops=3
+> loops=4
+> average
+> 012345678910 11 12 13 14 15
+> layer
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> mean cosine similarity
+> (b) Cosine Similarity
+
+Figure 4: Routing share and update vector alignment across layers. Panel (a) shows the mean routing deep share per layer. Low value indicates preference for the wide path, high values for the deep path. Panel (b) shows the mean cosine similarity between the update vector from the deep path ( ∆d) and that from the wide path ( ∆w) at each layer. Low values indicate that the deep and wide path process the same input differently. 
+
+the wide path) Row B plots the same density after re-weighting each axis by the actual update mag-nitude ( log(1 + gw∥∆w∥) vs. log(1 + gd∥∆d∥)), which accounts for the fact that a high gate value contributes little if its path’s update is small. We observe, that the gate is not just choosing different mixtures for different tokens but it also commits more strongly to one path or the other as the resid-ual stream moves through the network. 
+
+5 Conclusion 
+
+Standard transformer layers conflate two distinct scaling axes: compute (sequential operations on a hidden state) and capacity (parameters available at a single step). The dual-path block separates them, using a recursive deep sublayer and a parallel wider sublayer combined by a dense learned gate. At two iso-FLOP budgets, the best dual-path configura-tion Pareto-dominates both single-axis controls on aggregate language modelling, commonsense, and math metrics while using fewer parameters than the width-scaled baseline. The ratio between the wide and deep path α provides a predictable trade-off, with capacity-heavy settings favoring knowledge tasks and compute-heavy settings favoring reason-ing. Our results show that this parallel formulation can outperform iso-FLOP single-axis baselines on aggregate language modelling, commonsense, and math metrics at two FLOP budgets. Because both paths are evaluated at every token, the routing deci-sions are a direct read-out of how the trained model chose to spend its budget, not a sampling artifact. This learned allocation is interpretable. It varies systematically with layer depth, with wide being preferred in the middle of the stack, and deep dom-inated in the last two layers. Moreover, function words and lexical content trend wide while punctu-ation, symbols, and arithmetic tokens trend deep. The dual-path block opens several directions we find promising. First, our experiments cover two FLOP budgets on a single 16-layer backbone. The per-α trajectories in Figure 2 steepen from the lower to the higher budget, hinting that the gains from separating the two axes may compound rather than plateau with scale. Confirming this at billion-parameter budgets and across different depth/width ratios is the most direct extension. Second, as noted above, the dual-path gate and MoE routing target orthogonal axes and are archi-tecturally compositional: loops increase FLOPs while keeping parameters the same, while MoEs increase the parameters while keeping FLOPs fixed (with fixed top-k). In our model a MoE layer could occupy the wide path, with the outer gate deciding between looped compute and routed capacity. These directions suggest that separating com-pute and capacity within a layer is a primitive that naturally combines with other scaling ideas and yields an interpretable signal as a free byproduct. 
+
+References 
+
+Sangmin Bae, Yujin Kim, Reza Bayat, Sungnyun Kim, Jiyoun Ha, Tal Schuster, Adam Fisch, Hrayr Haru-tyunyan, Ziwei Ji, Aaron Courville, and 1 others. 2025. Mixture-of-recursions: Learning dynamic re-cursive depths for adaptive token-level computation. 
+
+arXiv preprint arXiv:2507.10524 .Andrea Banino, Jan Balaguer, and Charles Blundell. 2021. Pondernet: Learning to ponder. arXiv preprint arXiv:2107.05407 .Mostafa Dehghani, Josip Djolonga, Basil Mustafa, Pi-otr Padlewski, Jonathan Heek, Justin Gilmer, An-dreas Peter Steiner, Mathilde Caron, Robert Geirhos, Ibrahim Alabdulmohsin, and 1 others. 2023. Scaling 
+
+8vision transformers to 22 billion parameters. In In-ternational Conference on Machine Learning , pages 7480–7512. PMLR. Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Łukasz Kaiser. 2019. Universal transformers. In International Conference on Learn-ing Representations .William Fedus, Barret Zoph, and Noam Shazeer. 2022. Switch transformers: Scaling to trillion parameter models with simple and efficient sparsity. Journal of Machine Learning Research , 23(120):1–39. Markus Frey, Behzad Shomali, Ali Hamza Bashir, David Berghaus, Joachim Koehler, and Mehdi Ali. 2026. Adaptive loops and memory in transformers: Think harder or know more? In Latent & Implicit Thinking Workshop @ ICLR .Jonas Geiping, Sean McLeish, Neel Jain, John Kirchen-bauer, Siddharth Singh, Brian R Bartoldson, Bhavya Kailkhura, Abhinav Bhatele, and Tom Goldstein. 2025. Scaling up test-time compute with latent rea-soning: A recurrent depth approach. arXiv preprint arXiv:2502.05171 .Alex Graves. 2016. Adaptive computation time for recurrent neural networks. arXiv preprint arXiv:1603.08983 .Yuling Gu, Oyvind Tafjord, Bailey Kuehl, Dany Had-dad, Jesse Dodge, and Hannaneh Hajishirzi. 2025. Olmes: A standard for language model evaluations. In Findings of the Association for Computational Linguistics: NAACL 2025 , pages 5005–5033. Alex Henry, Prudhvi Raj Dachapally, Shubham Vivek Pawar, and Yuxuan Chen. 2020. Query-key normal-ization for transformers. In Findings of the Associ-ation for Computational Linguistics: EMNLP 2020 ,pages 4246–4253. Matthew Honnibal, Ines Montani, Sofie Van Lan-deghem, and Adriane Boyd. 2020. spacy: Industrial-strength natural language processing in python. Ahmadreza Jeddi, Marco Ciccone, and Babak Taati. 2026. Loopformer: Elastic-depth looped transform-ers for latent reasoning via shortcut modulation. 
+
+arXiv preprint arXiv:2602.11451 .Guillaume Lample, Alexandre Sablayrolles, Marc’Aurelio Ranzato, Ludovic Denoyer, and Hervé Jégou. 2019. Large memory layers with product keys. Advances in Neural Information Processing Systems , 32. Max Lübbering, Timm Ruland, Richard Rutmann, Felix Stollenwerk, David Fitzek, Michael Fromm, Alexan-der Weber, Rafet Sifa, Nicolas Flores-Herr, Joachim Köhler, and 1 others. 2026. Modalities, a pytorch-native framework for large-scale LLM training and research. arXiv preprint .Joakim Nivre, Marie-Catherine de Marneffe, Filip Gin-ter, Yoav Goldberg, Jan Hajiˇ c, Christopher D Man-ning, Ryan McDonald, Slav Petrov, Sampo Pyysalo, Natalia Silveira, Reut Tsarfaty, and Daniel Zeman. 2016. Universal dependencies v1: A multilingual treebank collection. In Proceedings of the Tenth In-ternational Conference on Language Resources and Evaluation (LREC’16) , pages 1659–1666. Slav Petrov, Dipanjan Das, and Ryan McDonald. 2012. A universal part-of-speech tagset. In Proceedings of the Eighth International Conference on Language Resources and Evaluation (LREC’12) , pages 2089– 2096. Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. 2019. Language models are unsupervised multitask learners. OpenAI Technical Report .David Raposo, Sam Ritter, Blake Richards, Timothy Lillicrap, Peter Conway Humphreys, and Adam San-toro. 2024. Mixture-of-depths: Dynamically allocat-ing compute in transformer-based language models. 
+
+arXiv preprint arXiv:2404.02258 .Nikunj Saunshi, Nishanth Dikkala, Zhiyuan Li, Sanjiv Kumar, and Sashank J Reddi. 2025. Reasoning with latent thoughts: On the power of looped transformers. Noam Shazeer. 2020. GLU variants improve trans-former. arXiv preprint arXiv:2002.05202 .Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean. 2017. Outrageously large neural networks: The sparsely-gated mixture-of-experts layer. In Inter-national Conference on Learning Representations .Dan Su, Kezhi Kong, Ying Lin, Joseph Jennings, Brandon Norick, Markus Kliegl, Mostofa Patwary, Mohammad Shoeybi, and Bryan Catanzaro. 2024a. Nemotron-CC: Transforming Common Crawl into a refined long-horizon pretraining dataset. arXiv preprint arXiv:2412.02595 .Jianlin Su, Yu Lu, Shengfeng Pan, Ahmed Murtadha, Bo Wen, and Yunfeng Liu. 2024b. Roformer: En-hanced transformer with rotary position embedding. 
+
+Neurocomputing , 568:127063. Sainbayar Sukhbaatar, Edouard Grave, Guillaume Lam-ple, Herve Jegou, and Armand Joulin. 2019. Aug-menting self-attention with persistent memory. arXiv preprint arXiv:1907.01470 .Biao Zhang and Rico Sennrich. 2019. Root mean square layer normalization. In Advances in Neural Informa-tion Processing Systems , volume 32. Rui-Jie Zhu, Zixuan Wang, Kai Hua, Tianyu Zhang, Ziniu Li, Haoran Que, Boyi Wei, Zixin Wen, Fan Yin, He Xing, and 1 others. 2025. Scaling latent rea-soning via looped language models. arXiv preprint arXiv:2510.25741 .
+
+9Appendix A Training Details 
+
+All models are trained using the modalities 
+
+framework. We use the AdamW optimizer with 
+
+β1 = 0 .9, β2 = 0 .95 , ϵ = 10 −8, and weight decay of 0.3 (excluding embedding and RMSNorm lay-ers). The learning rate is warmed up linearly from 
+
+5 × 10 −6 to a peak of 5 × 10 −4 over 184 steps, and then decayed to 5 × 10 −5 using a cosine an-nealing schedule. Wall-clock training times range from 12.8 to 21.4 hours per model (average of 16.0 hours) on the cluster hardware. Total pretraining tokens are 38B. 
+
+B FLOP-matching protocol 
+
+The FLOP budget FM is the per-token, per-layer FFN compute. For each configuration we solve for the largest legal dffn (and, for dual-path, dwide ffn )whose induced heff keeps the per-layer FFN cost at or below FM , also accounting for the router on the dual-path block. Within each budget the controls and the dual configurations agree on total per-token FFN FLOPs to within 0.5% ; the same backbone (L = 16 , d = 768 , hq = hkv = 12 ) is held fixed across all configurations, so attention compute is identical. This appendix gives the exact accounting used to match FLOPs across configurations. All FLOPs are reported per token and per layer. 
+
+Per-sublayer FLOPs. Let d be the model dimen-sion, nrep = hq/h kv the repeat factor (1 in all our runs), and dffn the configured FFN hidden width. The SwiGLU effective hidden width used by the model is 
+
+heff (dffn ) = 64 ·
+
+l 164 ⌊2dffn /3⌋
+
+m
+
+, (8) i.e. the LLaMA-style 2/3 scaling rounded up to a multiple of 64. The per-token FLOPs of one sublayer are 
+
+FLOP attn = 4 d2 + 4 d2/n rep , (9) 
+
+FLOP ffn (dffn ) = 6 d · heff (dffn ). (10) The dual-path two-gate router contributes 
+
+FLOP gate = 4 d FLOPs per token (linear d → 2). 
+
+Per-layer FLOP budgets. For the three layer types, the per-layer FFN-side FLOP count FM                                                                                           
+
+> Config Kdffn dwide ffn Params Time PURE WIDE 1—24576 719M 17.6h PURE LOOP K=2 211392 —398M 15.2h PURE LOOP K=3 37104 —294M 16.6h PURE LOOP K=4 44864 —238M 15.9h DUAL α=25 ,K=2 21600 17920 644M 14.6h DUAL α=25 ,K=3 3576 17920 615M 14.7h DUAL α=25 ,K=4 464 17920 606M 12.8h DUAL α=50 ,K=2 24864 11392 559M 17.4h DUAL α=50 ,K=3 32752 11392 511M 17.0h DUAL α=50 ,K=4 41600 11392 483M 16.5h DUAL α=75 ,K=2 28128 4864 483M 14.2h DUAL α=75 ,K=3 34864 4864 398M 13.3h DUAL α=75 ,K=4 43264 4864 360M 14.3h
+
+Table 2: Per-configuration widths, parameter counts, and wall-clock training times at the FM = 80 M FFN-FLOP budget.                                                                                            
+
+> Config Kdffn dwide ffn Params Time PURE WIDE 1—50624 1361M 21.4h PURE LOOP K=2 224448 —719M 19.9h PURE LOOP K=3 315744 —502M 15.5h PURE LOOP K=4 411392 —398M 17.7h DUAL α=25 ,K=2 24864 37440 1200M 14.8h DUAL α=25 ,K=3 32752 37440 1153M 15.1h DUAL α=25 ,K=4 41600 37440 1125M 15.0h DUAL α=50 ,K=2 211392 24448 1040M 21.3h DUAL α=50 ,K=3 37104 24448 936M 15.6h DUAL α=50 ,K=4 44864 24448 880M 19.0h DUAL α=75 ,K=2 217920 11392 880M 13.2h DUAL α=75 ,K=3 311392 11392 719M 14.5h DUAL α=75 ,K=4 48128 11392 644M 13.1h
+
+Table 3: Per-configuration widths, parameter counts, and wall-clock training times at the FM = 160 M FFN-FLOP budget. 
+
+(which we hold fixed at 80 M or 160 M) is 
+
+F PURE WIDE  
+
+> M
+
+= FLOP attn + FLOP ffn (dwide ffn ),
+
+(11) 
+
+F PURE LOOP  
+
+> M
+
+= K FLOP attn + FLOP ffn (dffn ),
+
+(12) 
+
+F DUAL  
+
+> M
+
+= K FLOP attn + FLOP ffn (dffn )
+
++ FLOP attn + FLOP ffn (dwide ffn )+ FLOP gate . (13) The dual-path layer therefore pays an extra atten-tion pass and a small router term relative to a single-axis layer at the same FFN FLOPs. Note that we hold all FLOPs fixed at 80M or 160M per layer and per token by adjusting the size of the FFN. 
+
+Solving for FFN widths. Given FM , K, and (for dual) a deep-FLOP fraction α ∈ (0 , 1) , we 10 GSM8K Mathematical Reasoning Example              
+
+> Question : Ashley ’s pizza delivery costs $ 15 . What is the total amount that Ashley should give the delivery man if she wants to give a tip that is equal to 1 / 5 of the amount she ordered ? Answer : The tip that Ashley wants to give amounts to $ 15 x1 / 5 =$ << 15 * 1 / 5 = 3 >> 3 . H ence , she will give a total of $ 15 + $ 3 = $ << 15 + 3 = 18 >> 18 to the delivery man . #### 18
+
+TriviaQA Factual Knowledge Example  
+
+> Question : What is the second most common gas in the atmosphere ? Answer : Oxy gen
+> wide-leaning deep-leaning
+
+Figure 5: Token-level deep share for GSM8K and TriviaQA. Blue denotes wide-leaning (prefers the capacity path) while red denotes deep-leaning, meaning it prefers the compute (looped) path. 
+
+set FLOP ffn (dffn ) = ( α(FM − FLOP gate )/K ) −
+
+FLOP attn and analogously for the wide width with 
+
+(1 − α). We then invert Eq. 8 for the largest 
+
+dffn (rounded down to a multiple of 64) whose 
+
+heff keeps the equation at or below the target – the “floor” rounding mode. The exception is PURE WIDE , where we round up (“ceil”); this keeps the largest single-axis capacity baseline honest by spending the entire budget and has strictly more FLOPs than the dual-path baselines. The residual mismatch is < 2% of FM in every configuration. 
+
+C Model Configurations 
+
+All configurations share the same backbone: L =16 layers, d = 768 , hq = hkv = 12 (GQA repeat factor 1), sequence length 4096, vocabulary size 50,304, weight-tied input/output embeddings, and the SwiGLU effective-hidden rule of Appendix B (multiple of 64). Tables 2 and 3 list, for every model in this paper, the configured deep FFN width 
+
+dffn , wide FFN width dwide ffn , recursion depth K,total parameter count, and wall-clock training time. 
+
+D Inference-time ablations 
+
+We probe the trained dual-path model ( FM = 80 M, 
+
+α = 50 , K = 4 ) at inference time, overriding either the loop count or the gate. Table 4 reports per-token cross-entropy on three Paloma sources. 
+
+The loop budget matters, and the schedule does not extrapolate. Forcing fewer loop iter-ations at inference monotonically degrades loss (e.g. GSM8K loss rises from 2.148 at the trained 
+
+K=4 to 3.592 at K=1 ). Returns diminish past the trained value, i.e. the loop dynamics learned at training do not extrapolate past the training budget. 
+
+Both paths are needed. Disabling either gate (gd=1 , g w=0 or gd=0 , g w=1 ) costs 3.6–5.6 nats across the three sources – larger than the gap be-tween an early-training and a fully-trained model. A uniform 0.5:0 .5 split still loses ∼ 2.6 nats. Open-ing both gates fully ( gd=1 , g w=1 ) is the worst over-ride: the model has trained with bounded gate mag-nitudes and the residual update is far out of its training distribution. 
+
+The per-token decision carries information. 
+
+The shuffled-gates row keeps the marginal distribu-tion of (gd, g w) but randomises which token gets which assignment within each sequence. Loss rises by 0.51 –0.94 nats, indicating that the gate’s per-token decisions, not just its average behaviour are load-bearing. 
+
+E Evaluation Details 
+
+We evaluate language modelling on Paloma C4 and WikiText-103 (bits-per-byte). Commonsense is the mean over ARC-c, ARC-e, HellaSwag, PIQA, SIQA, and WinoGrande. Math is GSM8k accu-racy and the OLMo3 base-easy math BPB average over Algebra, Counting, Geometry, Intermediate Algebra, Number Theory, Pre-algebra, and Pre-calculus. Note that for Figure 2 we average across BPB values from all benchmarks as listed in Ta-ble 5 ( FM = 80 M) and Table 6 ( FM = 160 M). 11 Question 
+
+> :
+> Ashley
+> 's
+> pizza
+> delivery
+> costs
+> $
+> 15
+> .
+> What
+> is
+> the
+> total
+> amount
+> that
+> Ashley
+> should
+> give
+> the
+> delivery
+> man
+> if
+> she
+> wants
+> to
+> give
+> a
+> tip
+> that
+> is
+> equal
+> to
+> 1
+> /
+> 5
+> of
+> the
+> amount
+> she
+> ordered
+> ?
+> Answer
+> :
+> The
+> tip
+> that
+> Ashley
+> wants
+> to
+> give
+> amounts
+> to
+> $
+> 15
+> x
+> 1
+> /
+> 5
+> =
+> $
+> <<
+> 15
+> *
+> 1
+> /
+> 5
+> =
+> 3
+> >>
+> 3
+> .
+> H
+> ence
+> ,
+> she
+> will
+> give
+> Average
+
+L0 
+
+L1 
+
+L2 
+
+L3 
+
+L4 
+
+L5 
+
+L6 
+
+L7 
+
+L8 
+
+L9 
+
+L10 
+
+L11 
+
+L12 
+
+L13 
+
+L14 
+
+L15 
+
+(a) GSM8K mathematical reasoning 
+
+> Question
+> :
+> What
+> is
+> the
+> second
+> most
+> common
+> gas
+> in
+> the
+> atmosphere
+> ?
+> Answer
+> :
+> Oxy
+> gen
+> Average
+
+L0 
+
+L1 
+
+L2 
+
+L3 
+
+L4 
+
+L5 
+
+L6 
+
+L7 
+
+L8 
+
+L9 
+
+L10 
+
+L11 
+
+L12 
+
+L13 
+
+L14 
+
+L15 
+
+(b) TriviaQA factual knowledge 
+
+10.0 7.5 5.0 2.5 0.0 2.5 5.0 7.5 10.0 
+
+offset from 'Answer' token 
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10 
+
+11 
+
+12 
+
+13 
+
+14 
+
+15 
+
+> layer
+
+(c) aligned difference (gsm8k triviaqa) 
+
+> 0.6
+> 0.4
+> 0.2
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> Deep Share (gsm8k  triviaqa)
+> deep
+> wide
+
+Figure 6: Step-by-step token-level routing grid and task alignment. Panel (a) shows the layer-by-token heatmap of the deep share for a sequence from GSM8K (mathematical reasoning). Panel (b) shows the heatmap for a sequence from TriviaQA (factual knowledge). Panel (c) shows the aligned difference in preference ( gsm8k − triviaqa ) around the anchor token “Answer”, averaged over one thousand sequences per dataset. 
+
+Evaluations are run using the OLMES evaluation framework (Gu et al., 2025). 12 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 
+
+> layer
+> ADJ
+> PROPN
+> PRON
+> ADV
+> PART
+> INTJ
+> VERB
+> DET
+> AUX
+> X
+> NOUN
+> ADP
+> SYM
+> CCONJ
+> SCONJ
+> NUM
+> PUNCT
+> SPACE
+
+(a) wikitext_103                
+
+> 012345678910 11 12 13 14 15
+> layer
+
+(b) triviaqa                
+
+> 012345678910 11 12 13 14 15
+> layer
+
+(c) gsm8k                      
+
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> Deep Share
+> wide deep
+> 012345678910 11 12 13 14 15
+> layer
+> ADJ
+> PROPN
+> PRON
+> ADV
+> PART
+> INTJ
+> VERB
+> DET
+> AUX
+> X
+> NOUN
+> ADP
+> SYM
+> CCONJ
+> SCONJ
+> NUM
+> PUNCT
+> SPACE
+
+(d) average across datasets     
+
+> 0.0
+> (wide)
+> 0.2 0.4 0.6 0.8 1.0
+> (deep)
+> Deep Share
+> SPACE
+> PUNCT
+> SYM
+> NUM
+> X
+> CCONJ
+> NOUN
+> INTJ
+> ADP
+> PROPN
+> DET
+> SCONJ
+> AUX
+> VERB
+> ADJ
+> PRON
+> PART
+> ADV
+
+(e) average across layers Figure 7: Parts-of-speech (POS) routing characteristics and commitment. Panels (a, b, c) show heatmaps of the mean deep share per universal POS tag across layers for wikitext_103 , triviaqa , and gsm8k , respectively, with tags sorted by the overall mean deep share. Panel (d) plots the average heatmap across the three datasets. Panel (e) shows boxplots of the deep share distribution per POS tag across all layers and datasets, sorted by their median preference (most deep-leaning at the bottom). 
+
+Ablation GSM8K TriviaQA WikiText-103 
+
+Learned router (baseline) 2.148 4.129 3.026 
+
+Compute (force K loops; trained with K=4 )
+
+K=1 3.592 (+1.44) 5.777 (+1.65) 4.846 (+1.82) 
+
+K=2 2.665 (+0.52) 4.694 (+0.57) 3.842 (+0.82) 
+
+K=3 2.221 (+0.07) 4.174 (+0.05) 3.178 (+0.15) 
+
+K=4 (trained ) 2.148 (+0.00) 4.129 (+0.00) 3.026 (+0.00) 
+
+K=5 2.206 (+0.06) 4.187 (+0.06) 3.046 (+0.02) 
+
+K=6 2.271 (+0.12) 4.239 (+0.11) 3.074 (+0.05) 
+
+K=7 2.323 (+0.18) 4.283 (+0.15) 3.098 (+0.07) 
+
+K=8 2.366 (+0.22) 4.320 (+0.19) 3.120 (+0.09) 
+
+K=9 2.405 (+0.26) 4.351 (+0.22) 3.140 (+0.11) 
+
+K=10 2.442 (+0.29) 4.380 (+0.25) 3.160 (+0.13) 
+
+Gate overrides 
+
+gd=1 , g w =0 (deep only) 7.684 (+5.54) 8.291 (+4.16) 8.090 (+5.06) 
+
+gd=0 , g w =1 (wide only) 7.574 (+5.43) 7.747 (+3.62) 8.655 (+5.63) 
+
+gd=0 .5, g w =0 .5 (uniform) 4.744 (+2.60) 6.707 (+2.58) 5.749 (+2.72) 
+
+gd=1 , g w =1 (fully open) 8.541 (+6.39) 9.099 (+4.97) 9.211 (+6.19) 
+
+Shuffled gates 2.658 (+0.51) 5.071 (+0.94) 3.720 (+0.69) 
+
+Table 4: Inference-time ablations of the dual-path router. We report per-token cross-entropy loss on three Paloma sources. Compute (top block): forcing exactly K loop iterations confirms that loop budget matters, with diminish-ing returns past the trained value. Extra inference loops beyond training degrade the model monotonically rather than plateauing, indicating the loop schedule does not extrapolate past its training budget. Gate overrides (bottom block): both paths are necessary, disabling either ( gd=1 , g w=0 or gd=0 , g w=1 ) collapses performance. 
+
+13 0.0                                                
+
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> wikitext_103
+> gd
+> L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> triviaqa
+> gd
+> 0.0 0.5 1.0
+> gw
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> gsm8k
+> gd
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+> 0.0 0.5 1.0
+> gw
+
+Figure 8: Layer-wise joint density of raw gates (gw, g d) across all layers ( L0 to L15 ) and evaluation sources. The rows correspond to the three Paloma evaluation datasets ( wikitext_103 , triviaqa , and gsm8k ), while columns correspond to layers index 0 to 15. The diagonal dashed line in each subplot represents equal routing preference ( gd = gw). Lighter regions represent higher token concentration. The model has L = 16 layers, K = 4 
+
+loops, dmodel = 768 , deep FFN hidden width = 4864 , wide FFN hidden width = 24448 , dual α = 50 .Table 5: Full results at the F80M FLOP budget. ℓ denotes the loop count. Commonsense Acc. / BPB are means over ARC-c, ARC-e, HellaSwag, PIQA, SIQA, WinoGrande. The OLMo3 easy math avg is the OLMo3 base-easy math BPB average. Best value in each row is bold (highest for accuracy ↑, lowest for BPB ↓). 
+
+Metric 
+
+> PureWide
+> PureLoop  ℓ2
+> PureLoop  ℓ3
+> PureLoop  ℓ4
+> Dual-a25  ℓ2
+> Dual-a50  ℓ2
+> Dual-a75  ℓ2
+> Dual-a25  ℓ3
+> Dual-a50  ℓ3
+> Dual-a75  ℓ3
+> Dual-a25  ℓ4
+> Dual-a50  ℓ4
+> Dual-a75  ℓ4
+
+Params 719M 398M 294M 238M 644M 559M 483M 615M 511M 398M 606M 483M 360M Commonsense (avg) 
+
+Acc. ↑ 0.5203 0.5036 0.5067 0.5031 0.5283 0.5265 0.5218 0.5239 0.5269 0.5192 0.5163 0.5256 0.5249 BPB ↓ 0.9920 1.0028 1.0236 1.0352 0.9888 0.9826 0.9866 0.9827 0.9808 0.9870 0.9902 0.9820 0.9892 
+
+Commonsense (per task, Acc. ↑ / BPB ↓)
+
+ARC-c Acc. 0.4053 0.3779 0.3770 0.3809 0.4307 0.4111 0.4346 0.4336 0.4004 0.3994 0.4014 0.4170 0.4072 ARC-c BPB 0.7967 0.8253 0.8546 0.8651 0.8001 0.7958 0.7954 0.7966 0.8016 0.8188 0.7974 0.7983 0.8090 ARC-e Acc. 0.7158 0.6953 0.6973 0.6875 0.7148 0.7305 0.7100 0.6973 0.7178 0.7119 0.7148 0.6982 0.7266 ARC-e BPB 0.5915 0.6134 0.6308 0.6801 0.5912 0.5779 0.5855 0.5907 0.5877 0.5820 0.5904 0.5912 0.6034 HellaSwag Acc. 0.3906 0.3730 0.3760 0.3643 0.4014 0.4131 0.4043 0.4121 0.4150 0.3965 0.3955 0.4150 0.3955 HellaSwag BPB 0.8947 0.8997 0.9156 0.9282 0.8872 0.8865 0.8928 0.8847 0.8888 0.8973 0.8940 0.8911 0.8946 PIQA Acc. 0.6475 0.6348 0.6436 0.6338 0.6533 0.6436 0.6455 0.6348 0.6582 0.6357 0.6289 0.6455 0.6367 PIQA BPB 1.1511 1.1816 1.1962 1.2069 1.1441 1.1524 1.1577 1.1504 1.1563 1.1646 1.1540 1.1627 1.1567 SIQA Acc. 0.4453 0.4346 0.4297 0.4326 0.4492 0.4346 0.4346 0.4385 0.4443 0.4453 0.4424 0.4424 0.4492 
+
+SIQA BPB 1.1863 1.2167 1.2252 1.2343 1.1983 1.2090 1.2101 1.1922 1.1625 1.1813 1.2147 1.1768 1.1975 WinoGrande Acc. 0.5176 0.5059 0.5166 0.5195 0.5205 0.5264 0.5020 0.5273 0.5254 0.5264 0.5146 0.5352 0.5342 WinoGrande BPB 1.3316 1.2803 1.3191 1.2964 1.3121 1.2741 1.2785 1.2819 1.2881 1.2782 1.2910 1.2716 1.2743 
+
+Math 
+
+GSM8k Acc. ↑ 0.0791 0.0723 0.0723 0.0527 0.0879 0.0801 0.1006 0.0879 0.1006 0.0820 0.0664 0.0898 0.0918 Algebra BPB ↓ 0.5201 0.5306 0.5385 0.5468 0.5173 0.5162 0.5198 0.5178 0.5115 0.5186 0.5215 0.5173 0.5141 Counting BPB ↓ 0.5240 0.5343 0.5479 0.5557 0.5228 0.5244 0.5289 0.5259 0.5232 0.5294 0.5289 0.5230 0.5252 Geometry BPB ↓ 0.5622 0.5736 0.5860 0.6004 0.5571 0.5579 0.5667 0.5596 0.5568 0.5634 0.5579 0.5567 0.5605 Int. Algebra BPB ↓ 0.5402 0.5538 0.5592 0.5707 0.5332 0.5281 0.5409 0.5358 0.5317 0.5377 0.5372 0.5262 0.5334 Number Theory BPB ↓ 0.5940 0.6057 0.6137 0.6218 0.5926 0.5902 0.5937 0.5924 0.5892 0.5981 0.5950 0.5870 0.5885 Pre-algebra BPB ↓ 0.5069 0.5155 0.5237 0.5322 0.5061 0.5033 0.5087 0.5051 0.5005 0.5078 0.5095 0.5036 0.5048 Pre-calculus BPB ↓ 0.4357 0.4470 0.4488 0.4670 0.4306 0.4252 0.4391 0.4316 0.4315 0.4335 0.4272 0.4247 0.4325 Easy math avg BPB ↓ 0.5261 0.5372 0.5454 0.5564 0.5228 0.5208 0.5282 0.5240 0.5206 0.5269 0.5253 0.5198 0.5227 
+
+Reading / QA 
+
+LAMBADA Acc. ↑ 0.2861 0.2803 0.2744 0.2793 0.2949 0.2725 0.2939 0.2832 0.3135 0.2881 0.2988 0.3037 0.3076 LAMBADA BPB ↓ 0.9492 0.9769 0.9887 1.0032 0.9161 0.9454 0.9342 0.9167 0.9146 0.9462 0.9341 0.9154 0.9473 QASPER Acc. ↑ 0.5987 0.6740 0.6771 0.6771 0.6646 0.5361 0.6677 0.6301 0.5862 0.6803 0.6301 0.4765 0.6771 QASPER BPB ↓ 0.3063 0.3098 0.3150 0.3233 0.3012 0.3030 0.3010 0.3035 0.3027 0.3020 0.2992 0.3108 0.3081 
+
+Paloma (BPB ↓)
+
+C4 1.0370 1.0513 1.0652 1.0777 1.0311 1.0374 1.0395 1.0331 1.0358 1.0472 1.0374 1.0362 1.0451 WikiText-103 0.9461 0.9608 0.9757 0.9918 0.9373 0.9453 0.9477 0.9344 0.9382 0.9508 0.9420 0.9393 0.9480 
+
+14 Table 6: Full results at the F160M FLOP budget. ℓ denotes the loop count. Commonsense Acc. / BPB are means over ARC-c, ARC-e, HellaSwag, PIQA, SIQA, WinoGrande. The OLMo3 easy math avg is the OLMo3 base-easy math BPB average. Best value in each row is bold (highest for accuracy ↑, lowest for BPB ↓). 
+
+Metric 
+
+> PureWide
+> PureLoop  ℓ2
+> PureLoop  ℓ3
+> PureLoop  ℓ4
+> Dual-a25  ℓ2
+> Dual-a50  ℓ2
+> Dual-a75  ℓ2
+> Dual-a25  ℓ3
+> Dual-a50  ℓ3
+> Dual-a75  ℓ3
+> Dual-a25  ℓ4
+> Dual-a50  ℓ4
+> Dual-a75  ℓ4
+
+Params 1361M 719M 502M 398M 1200M 1040M 880M 1153M 936M 719M 1125M 880M 644M Commonsense (avg) 
+
+Acc. ↑ 0.5384 0.5303 0.5244 0.5137 0.5374 0.5358 0.5202 0.5493 0.5360 0.5384 0.5420 0.5326 0.5335 BPB ↓ 0.9636 0.9814 0.9894 1.0010 0.9755 0.9608 0.9744 0.9655 0.9572 0.9572 0.9610 0.9704 0.9700 
+
+Commonsense (per task, Acc. ↑ / BPB ↓)
+
+ARC-c Acc. 0.4277 0.4170 0.4053 0.3896 0.4365 0.4160 0.4150 0.4346 0.4326 0.4316 0.4482 0.4512 0.4375 ARC-c BPB 0.7715 0.7880 0.8107 0.8178 0.7758 0.7674 0.7746 0.7839 0.7652 0.7704 0.7800 0.7673 0.7730 ARC-e Acc. 0.7520 0.7266 0.7109 0.7051 0.7207 0.7275 0.7129 0.7461 0.7305 0.7314 0.7373 0.7324 0.7363 ARC-e BPB 0.5558 0.5717 0.5961 0.6046 0.5634 0.5579 0.5682 0.5610 0.5633 0.5606 0.5624 0.5775 0.5668 HellaSwag Acc. 0.4229 0.4248 0.4004 0.4043 0.4414 0.4316 0.4111 0.4404 0.4258 0.4219 0.4277 0.4209 0.4170 HellaSwag BPB 0.8767 0.8809 0.8935 0.8929 0.8670 0.8723 0.8827 0.8696 0.8705 0.8738 0.8661 0.8796 0.8759 PIQA Acc. 0.6689 0.6445 0.6455 0.6367 0.6777 0.6592 0.6436 0.6660 0.6543 0.6611 0.6494 0.6602 0.6562 PIQA BPB 1.1263 1.1494 1.1660 1.1705 1.1145 1.1259 1.1336 1.1181 1.1185 1.1304 1.1367 1.1354 1.1349 SIQA Acc. 0.4541 0.4463 0.4414 0.4395 0.4395 0.4541 0.4463 0.4658 0.4434 0.4492 0.4502 0.4277 0.4443 SIQA BPB 1.1906 1.2077 1.2048 1.2272 1.1524 1.1695 1.1809 1.1780 1.1751 1.1639 1.1638 1.1794 1.1893 WinoGrande Acc. 0.5049 0.5225 0.5430 0.5068 0.5088 0.5264 0.4922 0.5430 0.5293 0.5352 0.5391 0.5029 0.5098 WinoGrande BPB 1.2609 1.2908 1.2650 1.2932 1.3800 1.2719 1.3063 1.2826 1.2509 1.2439 1.2572 1.2830 1.2802 
+
+Math 
+
+GSM8k Acc. ↑ 0.1250 0.1045 0.1191 0.0938 0.0996 0.1084 0.1055 0.1084 0.1074 0.1094 0.1250 0.1328 0.1406 
+
+Algebra BPB ↓ 0.5038 0.5013 0.5101 0.5114 0.5074 0.5081 0.5049 0.5043 0.5007 0.5041 0.5018 0.4920 0.4976 Counting BPB ↓ 0.5115 0.5112 0.5200 0.5242 0.5127 0.5147 0.5157 0.5135 0.5098 0.5129 0.5129 0.5031 0.5083 Geometry BPB ↓ 0.5419 0.5426 0.5466 0.5585 0.5397 0.5457 0.5478 0.5383 0.5389 0.5440 0.5369 0.5282 0.5404 Int. Algebra BPB ↓ 0.5137 0.5201 0.5250 0.5282 0.5208 0.5215 0.5243 0.5175 0.5186 0.5191 0.5154 0.5003 0.5145 Number Theory BPB ↓ 0.5751 0.5783 0.5840 0.5872 0.5804 0.5840 0.5784 0.5804 0.5769 0.5758 0.5758 0.5632 0.5699 Pre-algebra BPB ↓ 0.4923 0.4924 0.4974 0.5007 0.4942 0.4964 0.4956 0.4920 0.4913 0.4928 0.4917 0.4831 0.4864 Pre-calculus BPB ↓ 0.4154 0.4177 0.4221 0.4289 0.4210 0.4231 0.4239 0.4135 0.4137 0.4165 0.4117 0.4010 0.4155 Easy math avg BPB ↓ 0.5077 0.5091 0.5150 0.5199 0.5109 0.5134 0.5130 0.5085 0.5071 0.5093 0.5066 0.4959 0.5047 
+
+Reading / QA 
+
+LAMBADA Acc. ↑ 0.3086 0.3135 0.2920 0.2939 0.3115 0.2979 0.2822 0.2959 0.3115 0.3223 0.3105 0.3271 0.3203 LAMBADA BPB ↓ 0.9169 0.9038 0.9408 0.9359 0.8811 0.8997 0.9184 0.9031 0.8985 0.8780 0.8854 0.8646 0.8945 QASPER Acc. ↑ 0.5768 0.6301 0.6583 0.5987 0.6583 0.6207 0.6803 0.6865 0.5799 0.6301 0.4514 0.5925 0.6050 QASPER BPB ↓ 0.2964 0.2990 0.2916 0.2941 0.3120 0.3405 0.2982 0.3112 0.3215 0.2963 0.3247 0.3309 0.2934 
+
+Paloma (BPB ↓)
+
+C4 1.0183 1.0270 1.0367 1.0446 1.0130 1.0163 1.0203 1.0138 1.0138 1.0188 1.0129 1.0166 1.0212 WikiText-103 0.9224 0.9312 0.9388 0.9453 0.9137 0.9208 0.9220 0.9177 0.9147 0.9214 0.9108 0.9201 0.9241 
+
+15

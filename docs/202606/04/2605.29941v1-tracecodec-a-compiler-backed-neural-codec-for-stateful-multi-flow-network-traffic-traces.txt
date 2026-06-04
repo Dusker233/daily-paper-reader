@@ -1,0 +1,1059 @@
+Title: TraceCodec: A Compiler-Backed Neural Codec for Stateful Multi-Flow Network Traffic Traces
+
+URL Source: https://arxiv.org/pdf/2605.29941v1
+
+Published Time: Fri, 29 May 2026 01:21:52 GMT
+
+Number of Pages: 24
+
+Markdown Content:
+# TRACE CODEC : A Compiler-Backed Neural Codec for Stateful Multi-Flow Network Traffic Traces 
+
+Junhui Ding 
+
+Tsinghua University 
+
+Xinchen Zhang 
+
+University of Hong Kong 
+
+Xiaohui Xie 
+
+Tsinghua University 
+
+Shinan Liu 
+
+University of Hong Kong 
+
+Abstract 
+
+Critical networking workflows require high-fidelity packet captures (PCAPs) for testing, security analysis, and protocol validation, not just statistical flow-level sum-maries. Recent packet generators have demonstrated protocol-constrained PCAP synthesis, but they universally decode directly to raw packet fields. That interface entangles learned behavioral choices with deterministic protocol consequences, which forces packet realization to depend on post-hoc heuristic repair. We identify this decode interface as the fundamental bottleneck and present T RACE CODEC , a state-aware neural codec for stateful multi-flow traces. T RACE CODEC lifts each packet into a timed packet action with explicit flow slots and transport cues, then learns a continuous per-packet latent. A deterministic compiler lowers decoded ac-tions back to PCAPs, owning endpoint assignment, TCP state, legality constraints, and packet rendering. The latent layer exposes a generator-facing sequence space, so downstream traffic models can operate on packet-action latents rather than raw header fields. On CICIDS2017 Monday, T RACE CODEC matches packet count, protocol composition, and flow population to within 0.03%. Raw-field baselines under the same non-repair policy distort flow counts and TCP state by orders of magnitude. Structural diagnostics show that T RACE CODEC preserves TCP state transitions and multi-flow interleaving that raw-field decoders fragment. This work establishes a new foundation for high-fidelity packet-trace generation. 
+
+1 Introduction 
+
+Synthetic network traffic matters because real packet traces are scarce, difficult to share, and often missing the rare or counterfactual scenarios that network operators [ 13 , 3, 38 , 5] or cybersecurity experts [ 14 , 8] care about. Yet useful synthetic traffic is not merely a statistically plausible table of flow summaries. Many workflows consume packet-level artifacts: traces are inspected by packet tools (e.g., Wireshark [ 24 ], DPDK [ 6 ], and Scapy [ 1]), transformed into downstream features [ 11 , 17 ], replayed in timing-sensitive environments [ 25 ], and stress-tested under protocol constraints. In these settings, PCAP is the object that downstream systems actually consume. Recent work has established that packet-level generation is a realistic target. NetDiffusion demon-strates protocol-constrained packet-trace generation [ 13 ], and NetSSM moves toward longer, multi-flow, state-aware generation [3]. In parallel, pre-trained traffic representation models such as ET-BERT, TrafficFormer, netFound, and TrafficLLM show that useful traffic semantics can be learned for downstream analysis and cross-task generalization [ 15 , 37 , 9, 4]. These advances leave open a different question: once packet traces are treated as generative targets, what representation should a packet-trace generator operate on? 
+
+> arXiv:2605.29941v1 [cs.NI] 28 May 2026
+
+Raw-field decode                                        
+
+> behavior + protocol consequences entangled
+> PCAP Flow A
+> Flow B
+> Flow C
+> · · ·
+> raw fields
+> dt flow dir flags seq ack len cksum
+> · · · · · · · · · · · · · · · · · · · · · · · ·
+> · · · · · · · · · · · · · · · · · · · · · · · ·
+> behavior protocol
+> timing flow dir event seq len cksum legal
+> raw-field model
+> generated rows
+> flow dir flags seq ack
+> · · · · · · · · · · · · · · · ×
+> ambiguous fix
+> A
+> B
+> state drift
+> SYN DATA
+
+×
+
+> trace distortion
+> · · ·
+
+TraceCodec                       
+
+> behavior learned, realization compiled
+> PCAP Flow A
+> Flow B
+> Flow C
+> · · ·
+> packet actions
+> dt slot dir event
+> · · · · · · · · · · · ·
+> · · · · · · · · · · · ·
+> latents
+> z1z2z3z4
+> learned behavior timing slot dir event
+> clean contract
+> state-aware compiler
+> Flow slots
+> TCP automaton
+> SEDseq/ack cksum
+> decoded PCAP
+> no ambiguous fix state-consistent
+> SYN DATA
+> usable traces
+
+Figure 1: Comparison of decode interfaces. Raw-field decode entangles behavior with protocol consequences, making generated rows repair-dependent. TraceCodec learns packet actions above a clean contract and compiles them into state-consistent packets. The core problem is the decode interface. Raw packet fields mix two kinds of variables: behavioral choices that a model should learn and protocol consequences that packet state should determine. When a model emits both on the same surface, final PCAP realization depends on repair rules rather than on a clean decode contract. This problem appears in three properties that make packet traces usable. (1) Timing is an important traffic behavior. Inter-arrival times determine bursts, throughput, and latency distributions. Treating timing as a plain field [ 3, 9] weakens the generator’s ability to reproduce realistic traffic rates and burst structure. (2) Packets carry protocol statefulness. TCP packets are constrained by a state machine: flags, sequence numbers, acknowledgments, and payload lengths must agree with the current flow state. Predicting these fields independently can produce packets that violate TCP semantics. Although prior work can generate feasible traces, they still rely heavily on post-generation repairs. (3) PCAP generation can contain multiple concurrent flows, and a realistic trace may contain thousands of flows. Existing work supports at most tens of active flows [3]. Figure 1 previews the main idea. We introduce T RACE CODEC , a compiler-backed neural codec that uses “packet actions” as the decode interface instead of raw packet fields. This interface separates what the model should learn from what protocol state should determine. To preserve timing behavior ,each action carries packet time and local flow context. To respect protocol state machines , actions encode direction, TCP control semantics, payload-length behavior, and selected transport cues, while a deterministic compiler maintains sequence numbers, acknowledgments, checksums, and legality. To support multi-flow generation , actions refer to flow slots rather than independently predicted endpoint addresses, so decoded packets remain attached to active flows over time. TRACE CODEC therefore lets downstream generative models operate on latent packet-action sequences, while the compiler compiles decoded actions into parseable, timed, stateful PCAPs. Our evaluation shows that T RACE CODEC reproduces packet count, inter-arrival time, and flow count within 1% of the real trace, while baselines introduce orders-of-magnitude errors in flow counts and TCP state. Structural diagnostics further shows its preservation of TCP transitions and multi-flow structure. 
+
+Contributions. This paper makes the following contributions: • We identify the codec-interface problem for packet-trace generation and argue that generators should disentangle behavioral choices from deterministic protocol constraints. • We introduce T RACE CODEC , a compiler-backed neural codec built around timed packet actions. Its Intermediate Representation (IR) captures key traffic variables such as timing and flow-slot 2Table 1: Positioning of T RACE CODEC relative to traffic representations and packet generators.                                   
+
+> Work Learned object PCAP decode Explicit timing State / multi-flow Realization contract
+> TRAFFIC REPRESENTATIONS
+> ET-BERT [15] datagram tokens not required not required not a decode state none TrafficFormer [ 37 ]traffic tokens not required order, not explicit timing not a decode state none netFound [9] traffic representation not required not required not a decode state none TrafficLLM [4] field/value tokens not required not required not a decode state none PACKET GENERATORS
+> NetDiffusion [13] packet-like image yes, native not a codec variable not a reusable codec state protocol-constrained synthesis NetSSM [3] raw packet sequence yes, native generated with sequence implicit in generator state direct generation PACKET -T RACE CODEC
+> TraceCodec (ours)
+> timed packet actions + latent
+> yes yes yes, explicit + configurable deterministic compiler under explicit state
+
+identity; its deterministic compiler realizes these actions as state-consistent packets; and its latent codec exposes the same contract as a sequence space for downstream generators. • We evaluate T RACE CODEC on public packet traces after full PCAP rendering. Under a shared non-repair policy, our method preserves packet counts, protocol mix, timing, TCP behavior, and multi-flow structure more faithfully than raw-field decode. 
+
+2 Background and Related Work 
+
+Traffic representations. Traffic representation models learn packet or flow features for classifica-tion, protocol understanding, and transfer. Early neural classifiers consume packet bytes or streams [19 , 30 ]; later models add flow-sequence or byte-segment context [ 16 , 31 ]. Other work exposes traffic structure through packet-field fingerprints, packet representations, app-flow fingerprints, or graph en-coders [ 11 , 20 , 27 , 12 ]. Recent pretrained models scale across payload, datagram, flow, and sequence views, including foundation- and language-model-style encoders [ 10 , 15 , 36 , 21 , 29 , 37 , 9 , 4, 7]. These representations are useful for analysis, but they are not built for generative tasks: class-relevant semantics can be preserved while timing or interaction required by a decoded trace is lost. 
+
+Packet generators. Packet generators synthesize packet artifacts. NetShare synthesizes IP-header traces [ 33 ]. NetDiffusion demonstrates protocol-constrained packet-trace generation [ 13 ], and NetSSM moves toward longer, multi-flow, state-aware traces [ 3]. Together they establish PCAP-level synthesis, but focus on native generation rather than a reusable codec interface for downstream models. When the learned object remains close to packet images, raw packet fields, or packet-token sequences, timing, transport progression, and multi-flow interleaving remain responsibilities of the generator or its repair logic. T RACE CODEC instead exposes these quantities in the learned interface and gives packet realization an explicit deterministic path. 
+
+Codec interfaces. Modern generative modeling often relies on learned codecs or latent interfaces to make high-dimensional outputs tractable. VQ-VAE introduced discrete learned codes [ 26 ]; latent diffusion performs image generation in a compressed latent space [ 22 ]; and SoundStream gives audio generation an end-to-end neural codec [ 34 ]. Packet traces add a networking-specific constraint: decoded samples must be parseable, timed packet artifacts under protocol state. Table 1 summarizes the distinction. Existing traffic representations and packet generators solve adjacent problems; TRACE CODEC targets the interface between them by exposing timed packet actions with explicit flow slots and transport cues while preserving a deterministic path back to PCAP. 
+
+3 TRACE CODEC Design 
+
+3.1 Overview 
+
+TRACE CODEC is a compiler-backed neural codec that decouples learned packet behavior from deterministic packet realization. It has three layers. First, packet parsing lifts each packet into a structured packet action, a local flow context summarizing recent flow-local history, and an inter-packet timing value. Second, the learned codec maps each packet-action record into a continuous 3Encode: packet trace → timed packet-actions → latents 
+
+Decode: latents → timed packet actions → protocol-constrained trace                  
+
+> multi-flow PCAP
+> slot map context
+> F7
+> F2
+> F9
+> ct
+> gap, cnt last
+> lift packet-actions
+> ∆t.03 F7
+> SYN
+> ∆t.11 F2
+> DATA
+> ∆t.02 F7
+> ACK
+> ∆t.08 F9
+> FIN
+> neural encoder
+> xt
+> ct
+> ∆t
+> generator-facing latent sequence
+> z1z2z3z4
+> latent samples
+> z1z2z3z4
+> decoder heads
+> zt
+> coarse
+> slot/proto/event
+> details
+> len/ack cues
+> time
+> ∆t
+> decoded actions
+> c∆t
+> slot
+> SYN
+> c∆t
+> slot
+> DATA
+> c∆t
+> slot
+> ACK
+> c∆t
+> slot
+> FIN
+> deterministic state realization
+> state store
+> slot
+> template
+> seq/ack
+> SYN EST DATA
+> packet fields
+> IP
+> TCP
+> cksum
+> emitted PCAP
+
+Figure 2: T RACE CODEC overview. Packet traces are lifted into timed packet actions and continuous per-packet latents; decoding maps sampled latents back to timed actions before deterministic state realization emits the final PCAP. Table 2: Packet-action schema decoded before compiler. 
+
+Group Fields and decode role 
+
+Flow, family, and event identity flow_token , flow_evt , proto , ip_family , dir . Identify the bounded active-flow slot, protocol path, IP family, and coarse episode role. TCP control semantics tcp_ctrl . Represent coarse TCP events such as SYN, SYN-ACK, FIN, and RST without requiring raw flag prediction. Transport details tcp_opt_profile , tcp_win_d0..d3 , tcp_ack_adv_d0..d7 , tcp_ack_unseen ,
+
+tcp_seq_delta_sign , tcp_seq_delta_d0..d7 . Encode option profile, receive-window value, bounded acknowledgment advancement, unseen-ACK state, and bounded sequence progression. Packet details ttl_res , icmp_type , icmp_code , l4_payload_len_d0..d3 . Encode family-specific detail, ICMP control fields, and layer-4 payload length. Runtime context ctx_gap_b , ctx_pkt_count_b , ctx_last_payload_b , ctx_ack_streak_b ,
+
+ctx_last_dir . Provide local flow context for detail decoding. 
+
+latent vector and decodes it back into packet-action fields and timing, exposing a compact continuous sequence space. Third, the deterministic compiler compiles decoded packet actions into concrete packets under explicit flow state, resolving flow-template assignment, transport-state evolution, legality constraints, and packet rendering. As illustrated in Figure 2, the learned object is a timed “packet action” rather than a raw packet row. Concurrent flows are explicitly represented in this schema through flow-slot identity and realized under per-flow state by the compiler. T RACE CODEC produces latent packet-action sequences that downstream sequence generators can consume directly. 
+
+3.2 Packet Actions 
+
+A packet action is a structured record of the behavioral choices an endpoint makes at one packet step. It includes protocol, direction, control event, payload behavior, and timing. Table 2 lists the full schema. Fields whose values follow from flow state, such as sequence numbers and checksums, are not part of a packet action. They are recovered later by the compiler. A packet action is a codec IR, not a compressed copy of the packet header. 
+
+Lifting packets. Given a packet trace, T RACE CODEC parses each eligible packet into three objects: a discrete packet-action vector at, an inter-packet timing value ∆tt, and a local context vector ct. The schema contains coarse fields, such as flow token, flow event, protocol, IP family, direction, and TCP control event, together with detail fields, such as TCP option profile, TTL residual, explicit ICMP type/code, window digits, bounded acknowledgment-advancement digits, and payload-length digits. 4The context vector summarizes recent flow-local state, including temporal gap, packet count, last payload bucket, acknowledgment streak, and last direction. Here, flow_token is a reusable slot in a bounded active-flow vocabulary, not a restored endpoint identifier. The codec must preserve which active interaction a packet belongs to and how interleaved interactions evolve over time, but it does not learn raw endpoint identity as the object to reconstruct. 
+
+Behavioral variables. The packet-action IR is defined by the variables that must survive high-fidelity decode. In addition to the per-packet fields in Table 2, the IR also keeps cross-packet structure: packet ordering through the action sequence and inter-packet timing. These are the variables whose variation changes decoded packet- or transport-level behavior. The IR does not encode fields the compiler can derive from flow state: synthetic endpoint assignments, direction-specific source/destination tuples, absolute TCP sequence and acknowledgment numbers, checksums, and renderer metadata. Under this design, packet actions are sufficient for packet-/transport-level decode while deliberately leaving application payload semantics outside the codec. 
+
+Stateful realization. A decoded packet action specifies what happened at one step; it does not by itself determine every field of the realized packet. For TCP and other state-carrying traffic, the concrete packet depends on prior sequence progress, endpoint instantiation, direction-specific state, and timing within the interaction history. These state-dependent fields are determined by the protocol rather than the learned model. They are reconstructed by a stateful compiler at decode time. 
+
+3.3 Packet Compiler 
+
+The packet-action representation matters only if decoded actions can be lowered back into packet traces. Given decoded actions and timing values, the deterministic compiler produces 
+
+ˆp = C(ˆ a1: T , c∆t1: T ).The decoding phase of Figure 2 shows the handoff. The learned model emits timed packet-action behavior, while the compiler lowers it into rendered packets through FlowTable lookup and protocol-specific state realization. 
+
+Flow templates. The compiler first resolves the flow slot encoded by flow_token . A deterministic FlowTable maps each flow token, protocol, IP family, and generation index to a synthetic endpoint template. Direction determines whether the packet uses the template endpoints directly or swaps them. This lets the learned representation preserve flow identity, family-aware endpoint structure, and direction without relearning raw five-tuples. Because flow slots are reusable and paired with a generation index, the compiler exposes a configurable active-flow capacity rather than an unbounded hidden identifier space. 
+
+Transport state. For TCP traffic, the compiler maintains per-flow, per-direction transport state. It assigns deterministic initial sequence numbers, tracks relative sequence and acknowledgment progress, and updates state after SYN, SYN-ACK, FIN, RST, DATA, and ACK-like events. The decoded action provides the behavioral inputs for this update: TCP control event, payload-length behavior, receive-window value, bounded acknowledgment advancement, and continuous-time progression. For UDP and ICMP traffic, realization is lighter-weight but still explicit: the compiler instantiates family-aware endpoints, preserves direction and payload-length behavior, and carries explicit ICMP type/code fields across decode when present. This step is state-dependent realization . The learned model predicts bounded behavioral variables, while deterministic decode computes the corresponding packet instance under explicit state. 
+
+Constrained rendering. The compiler performs constrained lowering to preserve legality by construction. For a decoded action and current state, it emits the legal packet instance implied by the IR. These rules are deterministic constraints implied by the IR and the state machine. After flow and transport interpretation, the compiler renders a concrete packet using link, network, and transport headers. Payload bytes are deterministic synthetic material by default; their lengths are controlled by the decoded action, but the bytes themselves do not reconstruct application-level content. T RACE CODEC therefore targets parseable, transport-consistent packet traces rather than 5byte-identical application conversations. This separation also makes failures easier to diagnose: parser failures point to the compiler or renderer, while inaccurate but parseable traces point to the learned codec or downstream generator. 
+
+3.4 Latent Codec 
+
+With the packet-action IR and deterministic compiler fixed, the learned component is a context-conditioned codec over packet-action records. It maps each packet action, local context, and timing value into a continuous latent vector and decodes that vector back into packet-action fields suitable for deterministic compilation. A packet trace therefore becomes a sequence of latent vectors, one per packet step, that downstream sequence generators can model directly. 
+
+Formulation. Let xt denote the discrete packet-action fields for packet t, let ct denote the local context features, and let ∆tt denote the inter-packet timing value. The encoder defines 
+
+qϕ(zt | xt, c t, ∆tt),
+
+and the decoder defines 
+
+pθ (xt, ∆tt | zt, c t).
+
+In practice, the decoder produces reconstructed packet-action fields ˆxt and reconstructed timing c∆tt.The latent is continuous at the packet level, while traces remain sequences through the ordering of per-packet codes. Cross-packet state is not hidden inside the neural decoder; it is carried by the packet-action sequence and realized by the compiler. Concretely, discrete packet-action and context fields are embedded as tokens together with a trans-formed timing token, encoded by a compact Transformer encoder, and mapped to Gaussian latent parameters. Decoding uses separate heads for coarse packet-action fields, detail fields conditioned on decoded coarse semantics and context, and the timing value. The architecture remains conventional, so decoded quality is attributable to the packet-action interface and deterministic lowering rather than to a specialized packet-legality network. 
+
+Staged decoding. The decoder is staged. It first predicts coarse packet-action semantics such as flow token, flow event, protocol, IP family, direction, and TCP control event. It then predicts detail fields conditioned on the latent code, runtime context, and decoded coarse fields. Timing is predicted from the same latent code through a separate head. This decomposition mirrors the representation and preserves the codec separation: the model predicts timed behavioral variables, while deterministic decode owns endpoint assignment, sequence arithmetic, legality, and packet rendering. 
+
+Latent interface. The continuous latent layer serves the generator-facing part of the codec. It keeps timing inside the learned object, provides local geometry for interpolation and probe-based analysis, and exposes state-aware packet actions in a form better matched to downstream sequence models. T RACE CODEC is the learned interface through which later generators can model timed packet behavior, rather than a packet-action reconstructor alone. Other latent families can use the same packet-action IR. The model represents timed behavior; the compiler fixes packet realization, keeping the decode contract stable as the sequence model changes. 
+
+Training objective. The model is trained with a variational objective 
+
+L = Lrecon + λ∆tL∆t + βLKL ,
+
+where Lrecon aggregates reconstruction losses over coarse and detail packet-action fields, L∆t
+
+measures timing reconstruction error, and LKL regularizes the latent space. Reconstruction is computed in packet-action space rather than packet space; decoded packets are obtained only after passing reconstructed packet actions through the deterministic compiler. The learned codec is optimized to preserve fidelity-relevant packet behavior under the packet-action IR, including timing, rather than to reproduce raw packet fields as an end in themselves. The KL term shapes the latent interface instead of merely improving local reconstruction. Later ablations compare against a zero-KL variant to separate decoded-PCAP fidelity from latent regularity. 6Table 3: Decoded-PCAP fidelity on test splits. Lower is better; “–” indicates no valid decoded rows. 
+
+Dataset Method TCP event dist. (pp) ↓ Count (%) ↓ Proto (%) ↓ IAT (%) ↓ Flow cnt. (%) ↓ Flow dur. (%) ↓
+
+CICIDS2017 TVAE 72.73 37.83 5.16 14.83 25.19 45.36 Monday TabSyn-VAE 66.74 2.97 0.62 1.08 46.32 34.76 GOGGLE – – – – – –TTVAE 53.19 37.65 5.34 14.40 104.98 51.03 
+
+TRACE CODEC 14.51 0.00 0.00 0.84 0.03 9.23 
+
+Oracle 2.85 0.00 0.00 0.04 0.00 0.01 MAWI TVAE 51.53 12.05 6.38 40.05 90.51 28.44 
+
+202004071400 TabSyn-VAE 54.66 28.11 6.76 5.95 76.07 10.72 GOGGLE – – – – – –TTVAE 51.49 21.35 13.25 2.73 81.92 16.56 
+
+TRACE CODEC 2.54 0.00 0.00 9.57 0.06 2.62 
+
+Oracle 1.79 0.00 0.00 0.01 0.00 0.00 Ground Truth   
+
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+> GOGGLE
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> decoded packets retained (%)
+> 62 62
+> invalid
+> A. Packet materialization
+> reTX fast
+> reTX
+> spur.
+> reTX
+> lost
+> seg.
+> ack
+> lost
+> dup
+> ack
+> out
+> order
+> zero
+> win
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> event rate among TCP packets (%)  B. TCP diagnostic events
+> 1
+> 4-7
+> 16-31
+> 64-127
+> 256+
+> 0
+> 20
+> 40
+> 60
+> 80
+> flows (%)
+> C. Packets per flow
+> <0.1 ms
+> 5-10 ms
+> 100-500 ms
+> 5-10 s
+> 5-30 min
+> 0
+> 20
+> 40
+> 60
+> 80
+> sessions (%)
+> D. Flow duration
+> Ground Truth
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+
+Figure 3: Protocol state preservation analysis on CICIDS2017 Monday. 
+
+4 Evaluation 
+
+We evaluate T RACE CODEC on CICIDS2017 Monday [ 23 ] and MAWI 202004071400 [ 2], covering enterprise networks and backbone networks. Raw-field baselines use four published tabular generative models adapted to the same encode–decode task: TVAE [ 32 ], TabSyn-VAE [ 35 ], GOGGLE [ 18 ], and TTVAE [ 28 ]. Their decoded rows are rendered under a shared non-repair policy: packet-local recomputation is allowed, but endpoint inference, sequence-level repair, TCP-state repair, and use of TRACE CODEC ’s compiler are not. We also include an Oracle reference: ground-truth packet actions and timing are lowered by the deterministic compiler without a learned bottleneck. All metrics are computed after decode, on rendered PCAPs. Dataset construction, sharding, baseline adaptation, training budgets, and metric definitions are given in Appendices A, C, D, and F. 
+
+Overall comparisons for stateful decoded-PCAP analysis. Table 3 evaluates decoded PCAPs rather than intermediate tokens. The oracle shows that the packet-action representation and de-terministic compilation form an almost lossless symbolic path, with zero packet-count, protocol, and flow-count error on CICIDS2017 Monday. Learned T RACE CODEC stays close to this path on packet and flow structure, with 0.00% count error, 0.00% protocol error, 0.03% flow-count error, and 0.84% IAT distortion. The remaining errors concentrate in TCP dynamics and long-tail timing: TRACE CODEC has 14.51 percentage-points of TCP event-profile distance and 9.23% session-duration distortion. Raw-field baselines fail more severely. TVAE and TTVAE lose about 38% of pack-ets, TabSyn-VAE keeps packet count closer but shifts TCP events by 66.74 percentage-points, and GOGGLE produces no valid decoded rows. Figure 3 makes these failures visible in the decoding. The TCP-diagnostic-event panel is especially diagnostic: the raw-field baselines overproduce retransmission-like events or lost-segment signals, which shows that valid-looking packets can still encode the wrong transport behavior. In contrast, TRACE CODEC tracks the reference closely in these diagnostics, as well as packet materialization and flow-size distribution, while its slight gaps align with the harder TCP-event and duration errors reported in Table 3. 
+
+State transition and consistency. The same conclusion appears in explicitly structural diagnos-tics. Figure 4 isolates TCP interaction trajectories by measuring event-to-event transitions within bidirectional sessions. The Oracle and learned T RACE CODEC rows are nearly indistinguishable from the reference at the level of row-normalized transition structure; their weighted row-wise 7rst 
+
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+> from event
+
+Ground Truth 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+Oracle 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+TraceCodec 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+> from event
+
+TVAE 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+TabSyn-VAE 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+TTVAE 
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> row-normalized P
+
+Figure 4: TCP transition and state consistency on CICIDS2017 Monday. Each heatmap is a row-normalized transition matrix over coarse TCP event labels within bidirectional sessions. 0 200 400 600 800       
+
+> active flows per 1s window
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> CDF
+> A. Active flows
+> Ground Truth
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> flow switch rate
+> 0.396 0.396 0.396
+> 0.770 0.800
+> 0.901
+> B. Flow switching
+> 10 010 110 210 3
+> same-flow run length
+> 10 −5
+> 10 −4
+> 10 −3
+> 10 −2
+> 10 −1
+> 10 0
+> CCDF
+> C. Same-flow runs
+> Ground Truth
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+
+Figure 5: Active-flow and multi-flow interleaving on CICIDS2017 Monday. total-variation distances are only 3.66 × 10 −5 and 2.76 × 10 −5, respectively. The raw-field baselines are an order of magnitude different in kind rather than degree: TVAE, TabSyn-VAE, and TTVAE have transition distances 0.353 , 0.229 , and 0.350 . This matters because TCP fidelity is not only a marginal event-rate question. A decoded trace can have plausible counts of SYN, ACK, DATA, FIN, or RST packets while still placing them in implausible state trajectories. The state-aware compiler makes the transition structure a consequence of decoded actions under explicit transport state, rather than a set of independently decoded raw fields that must agree after the fact. 
+
+Multi-flow interleaving behaviors. Figure 5 tests the other structural property that scalar met-rics compress: whether many active sessions remain interleaved in time without being spuriously fragmented. Reference, Oracle, and learned T RACE CODEC all concentrate around the same packet-to-packet flow-switch rate ( ≈ 0.396 ) and preserve the same same-flow run-length tail (mean ≈ 2.53 ,p90 = 4 , p99 = 20 ). The raw-field decoders instead over-switch sharply: TVAE, TabSyn-VAE, and TTVAE reach switch rates of 0.770 , 0.800 , and 0.901 , while their mean run lengths collapse to 1.30 , 1.25 , and 1.11 . The session counts expose the mechanism. TVAE loses many packets and sessions, TabSyn-VAE keeps packet count closer but inflates sessions from 79,870 to 125,422, and TTVAE fragments most aggressively with 179,415 sessions after decode. These plots show that T RACE CODEC is not only preserving marginal packet statistics; it is preserving the concurrent multi-flow progression that makes a decoded PCAP behave like a coherent trace. 
+
+Latent usefulness for generative backbones. Because T RACE CODEC is intended as a codec layer for packet-trace generators, we ask whether its latent space is a usable interface for an imperfect downstream generator. We train the same conditional flow-matching backbone on each representation: the model observes a 1024-token latent prefix, samples a 1024-token suffix, and the sampled suffix is decoded and lowered to PCAP before evaluation. Each decoded suffix is compared with the matched real held-out suffix PCAP from the same continuation window. TVAE and TabSyn-VAE are included because their latent codes are standalone decode interfaces; TTVAE is excluded because its decoder 8Table 4: Latent-interface check on CICIDS2017 Monday. CA: coverage-adjusted total variation.                               
+
+> Representation Usable suffixes (%) ↑Valid pkt coverage (%) ↑CA IAT TV (%) ↓CA pkt-size TV (%) ↓CA flow-pkts TV (%) ↓CA sess-dur TV (%) ↓
+> TRACE CODEC 100.00 100.00 13.00 18.85 39.35 40.44
+> TVAE 0.00 63.18 41.07 49.76 64.80 57.75 TabSyn-VAE 7.03 98.29 16.09 25.59 42.99 42.59
+
+Table 5: Ablation results for T RACE CODEC . Boxes mark targeted metrics; KL rate is the encoder posterior KL to the unit-Gaussian prior, summed over latent dimensions and averaged per packet.                                       
+
+> Variant Action (%) ↑TCP event dist. (pp) ↓IAT (%) ↓Flow cnt. (%) ↓Flow dur. (%) ↓KL rate (nats/pkt)
+> Full T RACE CODEC 99.73 13.79 0.59 0.40 8.41 167.91
+> W/OKL 99.58 14.57 0.49 0.41 8.64 5222.77
+> W/Ofine timing 99.77 12.89 13.37 0.40 5.90 152.41
+> W/OTCP state cues 99.95 138.85 0.51 0.40 8.10 94.22
+
+requires input-derived encoder memory, and GOGGLE is excluded because it produces no valid decoded rows under the shared non-repair contract. Table 4 reports case-level summaries over 128 matched continuation windows. T RACE CODEC is the only representation whose sampled suffixes remain fully usable after decode, with 100% usable suffixes and 100% valid-packet coverage. TVAE loses over one-third of packet mass and never yields a fully usable suffix, while TabSyn-VAE preserves most packets but reaches only 7.03% usable suffixes. The structural distances are coverage-adjusted so that invalid or missing packet mass is charged rather than silently dropped; under this PCAP-facing accounting, T RACE CODEC remains best on timing, packet size, packets per flow, and session duration. These results should be read as a latent-interface test rather than as a full traffic-generation benchmark. Even for T RACE CODEC , the nonzero packets-per-flow and session-duration distances show that long-range continuation remains difficult; nevertheless, under the same imperfect flow-matching backbone, TRACE CODEC provides the most reliable decode surface, with sampled suffixes materializing as complete PCAPs and retaining closer coverage-adjusted timing and flow structure. 
+
+Ablation study. Table 5 tests which part of the codec interface supports each claimed property. The full model reconstructs packet actions at 99.73% and keeps decoded count, IAT, and flow-count errors below 1%, giving a reference point for the learned interface. Each ablation breaks the metric tied to the removed component. Removing fine timing raises IAT distortion from 0.59% to 13.37% while leaving other metrics close, showing that packet timing must remain explicit. Removing TCP state cues even improves action accuracy to 99.95%, but raises TCP event-profile distance to 138.85 percentage-points, showing that local reconstruction accuracy does not guarantee transport-correct decoded traces. Removing KL barely changes reconstruction metrics, but increases the test posterior KL rate from 167.91 to 5222.77 nats per packet, where the rate sums latent-dimensional KL for each packet. This makes the latent space much less suitable for downstream generation. These results show why we evaluate the codec and latent interface jointly: action accuracy alone hides failures in timing, transport behavior, and generator-facing latent structure. 
+
+5 Conclusion 
+
+This paper frames packet-trace representation learning as a codec-interface problem: learned models should capture timed packet behavior, while deterministic state-aware logic should realize proto-col consequences. T RACE CODEC embodies this separation through a packet-action interface and compiler-backed decoding, which turns learned outputs into valid packet traces under explicit trans-port state. Our experiments show that this interface avoids the brittle failure modes of raw-field reconstruction. Instead of asking the model to relearn protocol mechanics, T RACE CODEC preserves the structure needed for packet-level generation and makes the remaining errors easier to locate, especially in TCP dynamics and long-tail timing. While T RACE CODEC still can not support applica-tion layer protocols, it suggests a practical path toward higher-fidelity traffic generators built around explicit state-aware decoding rather than heuristic packet repair. 9References 
+
+[1] Philippe Biondi and Scapy community. Scapy: Manipulate packets. https://scapy.net/ ,2026. Accessed: 2026-05-06. [2] Kenjiro Cho, Kenji Mitsuya, and Akira Kato. Traffic data repository at the WIDE project. In Proceedings of the 2000 USENIX Annual Technical Conference, FREENIX Track , pages 263–270, 2000. URL https://mawi.wide.ad.jp/mawi/ .[3] Andrew Chu, Xi Jiang, Shinan Liu, Arjun Nitin Bhagoji, Francesco Bronzino, Paul J. Schmitt, and Nick Feamster. Netssm: Multi-flow and state-aware network trace generation using state-space models. Proceedings of the ACM on Networking , 4(CoNEXT1), 2026. doi: 10.1145/ 3786289. URL https://doi.org/10.1145/3786289 .[4] Tianyu Cui, Xinjie Lin, Sijia Li, Miao Chen, Qilei Yin, Qi Li, and Ke Xu. Trafficllm: Enhancing large language models for network traffic analysis with generic traffic representation, 2025. URL https://arxiv.org/abs/2504.04222 . arXiv preprint arXiv:2504.04222. [5] Joscha Cüppers, Adrien Schoen, Gregory Blanc, and Pierre-Francois Gimenez. Flowchronicle: synthetic network flow generation through pattern set mining. Proceedings of the ACM on Networking , 2(CoNEXT4):1–20, 2024. [6] DPDK Project. Dpdk – The open source data plane development kit accelerating network performance. https://www.dpdk.org/ , 2026. Accessed: 2026-05-06. [7] Zhaochen Guo, Tianyufei Zhou, Honghao Wang, Ronghua Li, and Shinan Liu. PACC: Protocol-aware cross-layer compression for compact network traffic representation, 2026. URL https: //arxiv.org/abs/2602.08331 . arXiv preprint arXiv:2602.08331. [8] Ragini Gupta, Shinan Liu, Ruixiao Zhang, Xinyue Hu, Xiaoyang Wang, Hadjer Benkraouda, Pranav Kommaraju, Phuong Cao, Nick Feamster, and Klara Nahrstedt. Generative active adapta-tion for drifting and imbalanced network intrusion detection. arXiv preprint arXiv:2503.03022 ,2025. [9] Satyandra Guthula, Navya Battula, Roman Beltiukov, Wenbo Guo, and Arpit Gupta. netfound: Foundation model for network security, 2023. URL https://arxiv.org/abs/2310.17025 .CoRR abs/2310.17025. [10] Hongye He, Zhiguo Yang, and Xiangning Chen. Payload encoding represen-tation from transformer for encrypted traffic classification. ZTE Communica-tions , 19(4):90–97, 2021. URL https://www.zte.com.cn/global/about/magazine/ zte-communications/2021/en202104/researchpaper/en202104010.html .[11] Jordan Holland, Paul Schmitt, Nick Feamster, and Prateek Mittal. New directions in automated traffic analysis. In Proceedings of the 2021 ACM SIGSAC Conference on Computer and Communications Security , pages 3366–3383, 2021. doi: 10.1145/3460120.3484758. [12] Ting-Li Huoh, Yan Luo, Peilong Li, and Tong Zhang. Flow-based encrypted network traffic clas-sification with graph neural networks. IEEE Transactions on Network and Service Management ,20(2):1224–1237, 2023. doi: 10.1109/TNSM.2022.3227500. [13] Xi Jiang, Shinan Liu, Aaron Gember-Jacobson, Arjun Nitin Bhagoji, Paul J. Schmitt, Francesco Bronzino, and Nick Feamster. Netdiffusion: Network data augmentation through protocol-constrained traffic generation. Proceedings of the ACM on Measurement and Analysis of Computing Systems , 8(1), 2024. doi: 10.1145/3639037. URL https://doi.org/10.1145/ 3639037 .[14] Minhao Jin and Maria Apostolaki. Robustifying {ML-powered } network classifiers with 
+
+{PANTS }. In 34th USENIX Security Symposium (USENIX Security 25) , pages 7291–7310, 2025. [15] Xinjie Lin, Gang Xiong, Gaopeng Gou, Zhen Li, Junzheng Shi, and Jing Yu. Et-bert: A contextu-alized datagram representation with pre-training transformers for encrypted traffic classification, 2022. URL https://arxiv.org/abs/2202.06335 . arXiv preprint arXiv:2202.06335. 10 [16] Chang Liu, Longtao He, Gang Xiong, Zigang Cao, and Zhen Li. FS-Net: A flow sequence network for encrypted traffic classification. In IEEE INFOCOM 2019 – IEEE Conference on Computer Communications , pages 1171–1179, 2019. doi: 10.1109/INFOCOM.2019.8737507. [17] Shinan Liu, Tarun Mangla, Ted Shaowang, Jinjin Zhao, John Paparrizos, Sanjay Krishnan, and Nick Feamster. Amir: Active multimodal interaction recognition from video and network traffic in connected environments. Proceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous Technologies , 7(1):1–26, 2023. [18] Tennison Liu, Zhaozhi Qian, Jeroen Berrevoets, and Mihaela van der Schaar. Goggle: Generative modelling for tabular data by learning relational structure. In International Conference on Learning Representations , 2023. URL https://openreview.net/forum?id=fPVRcJqspu .[19] Mohammad Lotfollahi, Mahdi Jafari Siavoshani, Ramin Shirali Hossein Zade, and Mohammd-sadegh Saberian. Deep packet: A novel approach for encrypted traffic classification using deep learning. Soft Computing , 24(3):1999–2012, 2020. doi: 10.1007/s00500-019-04030-2. [20] Xuying Meng, Yequan Wang, Runxin Ma, Haitong Luo, Xiang Li, and Yujun Zhang. Packet representation learning for traffic classification. In Proceedings of the 28th ACM SIGKDD Conference on Knowledge Discovery and Data Mining , pages 3546–3554, 2022. doi: 10.1145/ 3534678.3539085. [21] Lingfeng Peng, Xiaohui Xie, Sijiang Huang, Ziyi Wang, and Yong Cui. PTU: Pre-trained model for network traffic understanding. In 2024 IEEE 32nd International Conference on Network Protocols (ICNP) , pages 1–12, 2024. doi: 10.1109/ICNP61940.2024.10858503. [22] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer. High-resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , 2022. [23] Iman Sharafaldin, Arash Habibi Lashkari, and Ali A. Ghorbani. Toward generating a new intrusion detection dataset and intrusion traffic characterization. In Proceedings of the 4th International Conference on Information Systems Security and Privacy , pages 108–116, 2018. doi: 10.5220/0006639801080116. URL https://www.unb.ca/cic/datasets/ids-2017. html .[24] Leslie F Sikos. Packet analysis for network forensics: A comprehensive survey. Forensic Science International: Digital Investigation , 32:200892, 2020. [25] Aaron Turner and Fred Klassen. Tcpreplay: Pcap editing and replaying utilities. https: //github.com/appneta/tcpreplay , 2024. Accessed: 2026-05-06. [26] Aaron van den Oord, Oriol Vinyals, and Koray Kavukcuoglu. Neural discrete representation learning. In Advances in Neural Information Processing Systems , 2017. [27] Thijs van Ede, Riccardo Bortolameotti, Andrea Continella, Jingjing Ren, Daniel J. Dubois, Martina Lindorfer, David R. Choffnes, Maarten van Steen, and Andreas Peter. Flowprint: Semi-supervised mobile-app fingerprinting on encrypted network traffic. In Proceedings of the Network and Distributed System Security Symposium (NDSS) , 2020. doi: 10.14722/ndss.2020. 24412. [28] Alex X. Wang and Binh P. Nguyen. Ttvae: Transformer-based generative modeling for tabular data generation. Artificial Intelligence , 340:104292, 2025. doi: 10.1016/j.artint.2025.104292. URL https://www.sciencedirect.com/science/article/pii/S0004370225000116 .[29] Tongze Wang, Xiaohui Xie, Wenduo Wang, Chuyi Wang, Youjian Zhao, and Yong Cui. Net-mamba: Efficient network traffic classification via pre-training unidirectional mamba. In 2024 IEEE 32nd International Conference on Network Protocols (ICNP) , pages 1–11, 2024. doi: 10.1109/ICNP61940.2024.10858569. [30] Wei Wang, Ming Zhu, Jinlin Wang, Xuewen Zeng, and Zhongzhen Yang. End-to-end encrypted traffic classification with one-dimensional convolution neural networks. In 2017 IEEE Inter-national Conference on Intelligence and Security Informatics (ISI) , pages 43–48, 2017. doi: 10.1109/ISI.2017.8004872. 11 [31] Xi Xiao, Wentao Xiao, Rui Li, Xiapu Luo, Haitao Zheng, and Shutao Xia. EBSNN: Extended byte segment neural network for network traffic classification. IEEE Transactions on Depend-able and Secure Computing , 19(5):3521–3538, 2022. doi: 10.1109/TDSC.2021.3101311. [32] Lei Xu, Maria Skoularidou, Alfredo Cuesta-Infante, and Kalyan Veeramachaneni. Mod-eling tabular data using conditional GAN. In Advances in Neural Information Process-ing Systems 32 , 2019. URL https://proceedings.neurips.cc/paper/2019/hash/ 254ed7d2de3b23ab10936522dd547b78-Abstract.html .[33] Yucheng Yin, Zinan Lin, Minhao Jin, Giulia Fanti, and Vyas Sekar. Practical GAN-based synthetic IP header trace generation using NetShare. In Proceedings of the ACM SIGCOMM 2022 Conference , pages 458–472, 2022. doi: 10.1145/3544216.3544251. [34] Neil Zeghidour, Alejandro Luebs, Ahmed Omran, Jan Skoglund, and Marco Tagliasacchi. Soundstream: An end-to-end neural audio codec. IEEE/ACM Transactions on Audio, Speech, and Language Processing , 30:495–507, 2021. [35] Hengrui Zhang, Jiani Zhang, Zhengyuan Shen, Balasubramaniam Srinivasan, Xiao Qin, Christos Faloutsos, Huzefa Rangwala, and George Karypis. Mixed-type tabular data synthesis with score-based diffusion in latent space. In International Conference on Learning Representations ,2024. URL https://openreview.net/forum?id=4Ay23yeuz0 .[36] Ruijie Zhao, Mingwei Zhan, Xianwen Deng, Yanhao Wang, Yijun Wang, Guan Gui, and Zhi Xue. Yet another traffic classifier: A masked autoencoder based traffic transformer with multi-level flow representation. In Proceedings of the AAAI Conference on Artificial Intelligence ,pages 5420–5427, 2023. doi: 10.1609/AAAI.V37I4.25674. [37] Guangmeng Zhou, Xiongwen Guo, Zhuotao Liu, Tong Li, Qi Li, and Ke Xu. Trafficformer: An efficient pre-trained model for traffic data. In Proceedings of the IEEE Symposium on Security and Privacy , pages 1844–1860, 2025. doi: 10.1109/SP61157.2025.00102. [38] Yajie Zhou, Fuheng Zhao, Eric Wang, Ayse K. Coskun, Divyakant Agrawal, Amr El Abbadi, and Zaoxing Liu. Prvtel: Lightweight models for private and accurate telemetry data reten-tion. In 23rd USENIX Symposium on Networked Systems Design and Implementation (NSDI 26) . USENIX Association, 2026. URL https://www.usenix.org/conference/nsdi26/ technical-sessions .
+
+A Experimental Details 
+
+A.1 Published baselines and source traces 
+
+We compare T RACE CODEC against four published generic tabular models, each adapted to the shared raw packet-table interface described in Appendix C. 
+
+TVAE [ 32 ] is the variational autoencoder baseline introduced alongside CTGAN for mixed-type tabular data. It learns a continuous row latent and reconstructs numerical and categorical columns directly. 
+
+TabSyn-VAE [ 35 ] is the VAE backbone used by TabSyn before latent-space diffusion. It tokenizes mixed-type rows and learns a Transformer-based latent representation; in our experiments, we use this VAE stage as a standalone codec rather than the full TabSyn generator. 
+
+GOGGLE [18 ] is a graph-based tabular generator that learns relational structure among columns and decodes rows through a learned graph model. 
+
+TTVAE [28 ] is a Transformer-based variational autoencoder for tabular data. It replaces the MLP-style tabular backbone with a Transformer encoder–decoder. The two source traces are public packet captures with distinct traffic regimes: • CICIDS2017 Monday [ 23 ] is the benign Monday WorkingHours trace from the CICIDS2017 intrusion-detection dataset released by the Canadian Institute for Cybersecurity. We use it as an enterprise-style TCP-heavy setting with clear session structure. 12 • MAWI 202004071400 [ 2] is a public 15-minute backbone trace from the MAWI Working Group Traffic Archive. We use the samplepoint-F capture collected on 2020-04-07 14:00 as the higher-concurrency backbone setting. 
+
+A.2 Datasets and temporal split policy 
+
+Both evaluation settings are built from raw packet traces rather than pre-aggregated flow summaries. We first run a session-preserving temporal sharder, sort the resulting shard PCAPs by start time, and assign contiguous train/validation/test ranges over the ordered shard list. This keeps held-out shards temporally disjoint while preserving whole sessions inside each sample. Table 6 summarizes the scale and traffic regime of each split. Table 6: Evaluation dataset statistics after applying the shared packet-level scope.                                  
+
+> Dataset Shards Split shards Tokens Protocol mix Train Val Test Train Val Test TCP UDP ICMP
+> CICIDS2017 Monday 2,397 1,919 239 239 10.32M 0.68M 0.66M 91.5% 8.0% 0.02% MAWI 202004071400 13,102 10,482 1,310 1,310 93.71M 6.58M 8.26M 49.2% 17.5% 30.3%
+
+A.3 Shared preprocessing and decode scope 
+
+All learned methods consume the same shard directories and are evaluated only after decoding their own outputs back to PCAP. The tokenizer, packet-action schema, compiler, payload policy, and active-flow budget are fixed before training. Packets outside the shared packet-/transport-level decode scope are excluded consistently and recorded in the dataset manifests. Raw-field baselines use the same shard split but decode through the restricted renderer in Appendix C, so they do not inherit TRACE CODEC ’s state-aware compiler. 
+
+B Privacy Considerations 
+
+This paper is not a formal privacy paper. It does not provide differential privacy, immunity to memorization, or jurisdiction-specific legal compliance. The privacy goal is specific: reduce direct disclosure of endpoint identifiers and application content while preserving the packet- and transport-level behavior needed by the codec. 
+
+B.1 Identifier suppression 
+
+TRACE CODEC keeps the variables needed for packet-/transport-level decode, such as timing, flow-slot identity, protocol, direction, control semantics, bounded acknowledgment advancement, receive-window structure, and payload-length behavior, but it does not learn raw endpoint identifiers or application payload bytes. In particular, the learned representation omits raw IP addresses, raw transport ports, MAC addresses, checksums, absolute TCP sequence and acknowledgment numbers, and payload content. The practical implication is that the training representation is not a lightly disguised copy of the origi-nal packet headers. It is a structured behavioral representation whose purpose is to preserve packet-and transport-level semantics while suppressing directly identifying fields. Table 7 summarizes what is kept and what is omitted. 
+
+B.2 Synthetic realization 
+
+The decode path is synthetic rather than restorative. Flow templates are generated from flow-slot identity, protocol, IP family, generation index, and an optional salt; the resulting endpoints are therefore derived synthetic templates rather than original source and destination tuples. In the current implementation, IPv4 decode produces private-address-like endpoints, IPv6 decode produces unique-local-style endpoints, transport ports are regenerated, MAC addresses are synthetic, and TCP initial sequence numbers are re-instantiated from deterministic hashed state rather than copied from the source trace. 13 Table 7: Privacy-relevant field treatment in T RACE CODEC . The codec keeps behavior needed for packet-/transport-level fidelity while suppressing direct identifiers and payload content.   
+
+> Trace Element Treatment in T RACE CODEC
+> Raw IP addresses, transport ports, MAC addresses Not part of the learned packet-action representation; decode re-instantiates synthetic endpoints from flow-slot identity rather than restoring original identi-fiers. Application payload bytes Not learned. Decoded packets carry deterministic synthetic payload material by default, and truncated-capture output is also available when analysis-only artifacts are sufficient. Absolute TCP sequence/ack numbers, checksums Not learned. They are reconstructed deterministically from relative state and packet rendering rules during decode. Fidelity-relevant behavior: timing, di-rection, protocol, control events, pay-load length, bounded transport detail Retained, because these variables define the packet-/transport-level semantics the codec is intended to preserve.
+
+Payload handling follows the same principle. Payload bytes are not recovered from the training trace. Instead, the renderer emits deterministic synthetic payload material of the required length, and an analysis-oriented truncated-capture mode can further suppress payload bytes in the written PCAP while preserving wire length. The implementation also supports randomized per-run flow salts so that the same latent code can be decoded into different synthetic endpoint assignments across runs, improving unlinkability between decoded traces and any specific original address assignment. 
+
+B.3 Scope 
+
+These choices reduce direct identifier exposure and prevent literal replay of the original application payload. They are therefore meaningful privacy-aware design choices, and they are one reason we treat application-semantic replay as out of scope for the paper. However, they do not amount to a proof of privacy. Sensitive information can still survive indirectly through timing structure, payload-length patterns, rare protocol behavior, or distinctive interaction dynamics. A determined adversary could also study model memorization or nearest-neighbor leakage at the level of whole traces rather than individual identifiers. For that reason, the correct interpretation of T RACE CODEC is not “privacy guaranteed,” but “designed to suppress direct identifiers and payload content while preserving the semantics required for packet-/transport-level fidelity.” Stronger privacy statements would require dedicated evaluation, such as membership-inference tests, nearest-neighbor disclosure audits, or formal mechanisms like differential privacy. Likewise, legal and institutional compliance remains a property of the full data-governance process, not of the model architecture alone. 
+
+C Raw-Field Baselines 
+
+The main text compares T RACE CODEC against published generic tabular models adapted to raw-packet roundtrip. This appendix specifies that adaptation in enough detail to make the fairness assumptions explicit. 
+
+C.1 Raw packet table 
+
+Each packet is first converted into a mixed-type row that retains concrete header fields and timing rather than packet-action semantics. The design goal is not bit-identical reconstruction, but the strongest raw-field interface we can make compatible with protocol-constrained packet rendering without silently introducing stateful repair. The table therefore keeps fidelity-relevant concrete packet fields and omits obviously derived values that can be recomputed locally during rendering. For the auxiliary raw-table diagnostics, we separate three pre-render quantities. Invalid-row rate counts decoded rows that cannot be interpreted as valid raw packet rows under the shared schema, for example because an inactive-token leaks into an active field or because the decoded endpoints are not valid IP literals for the declared IP family. On the remaining decoded rows that satisfy the 14 Table 8: Raw packet-table schema used by tabular baselines.                      
+
+> Group Columns and role
+> Timing delta_t . First-class inter-packet timing variable. Network / packet identity ip_version ,proto ,src_ip ,dst_ip ,ttl ,dscp ,ecn ,ip_flags ,ip_frag_off ,
+> payload_len . Keep concrete family, endpoint, header, and payload-length fields needed for local packet rendering. TCP block (TCP rows only) tcp_sport ,tcp_dport ,tcp_seq ,tcp_ack ,tcp_flags ,tcp_window ,
+> tcp_opt_profile . Keep concrete transport values without introducing relative or state-derived semantics. UDP block (UDP rows only) udp_sport ,udp_dport .ICMP block (ICMP rows only) icmp_type ,icmp_code .
+
+shared contract, we report categorical-field accuracy over active categorical columns and numerical-field error over active numerical columns in raw field units. These are local diagnostics rather than decoded-PCAP metrics. Their purpose is to show whether a raw-field baseline has learned a non-trivial packet-row reconstruction map before rendering is judged, without conflating pre-render contract violations with later packet-tool failures. The resulting schema is summarized in Table 8. It is a direct per-packet projection of the protocol-neutral canonical packet contract used by the implementation rather than a bit-level dump or an engineered traffic-feature table. Source and destination IP addresses and transport ports are therefore retained as high-cardinality categorical columns, while delta_t , fragment offset, payload length, TCP sequence and acknowledgment numbers, and TCP window remain numerical columns. Transport-specific columns are active only for rows whose proto value selects the matching block. Inactive categorical columns take a reserved “not applicable” token, while inactive numerical columns are set to zero and masked out of the local row-space diagnostics. The baseline therefore sees the same concrete packet fields that were present in the source packet and nothing more. We exclude several tempting classes of columns. Locally derived quantities such as checksums, 
+
+ip_total_len , ip_payload_len , udp_len , and redundant presence bits are omitted because they can be recomputed once the retained columns are fixed. Non-raw or cross-packet variables such as flow IDs, canonicalized direction, retransmission labels, relative TCP progression, local context, and payload bytes are also omitted because including them would already give the baseline sequence/state information that raw packet rows do not normally carry. 
+
+C.2 Baseline methods 
+
+We use four published tabular generative models as the primary raw-field baselines: TVAE [ 32 ], TabSyn-VAE [ 35 ], GOGGLE [ 18 ], and TTVAE [ 28 ]. Each has a public implementation and a direct enough reconstruction path to support packet-wise encode–decode without redefining the task. In this paper they are evaluated narrowly as raw-field codecs rather than as unrestricted tabular synthesizers. All four consume the same temporally ordered shard splits used by T RACE CODEC ;only the representation and learned model differ. The set also spans distinct tabular modeling choices: TVAE and TTVAE are explicit variational codecs, TabSyn contributes the VAE backbone of a recent strong latent-diffusion tabular model, and GOGGLE adds a learned-relational generator outside that VAE family. If T RACE CODEC remains stronger after all four are forced onto the same decoded-PCAP surface, the conclusion is harder to dismiss as an artifact of one particular raw-table baseline. All raw-field baselines are trained with validation-selected checkpoints under fixed optimizer-step budgets, rather than with a fixed number of epochs. This choice makes the comparison stable under large raw-packet tables: an epoch over the CICIDS2017 Monday packet table contains millions of rows, so epoch counts are a dataset-size-dependent unit of computation. The validation objective is the model’s raw-table reconstruction objective on the held-out shard split, and the decoded test outputs are always produced from the best validation checkpoint. The step budgets and validation intervals are specified in Appendix F; the run manifests record the final step, best step, stopping reason, validation objective, and full training configuration. 15 Latent-interface controls. The latent-flow experiment in the main text uses only raw-field baselines whose latent code can be decoded without access to the original input row. TVAE satisfies this criterion directly: the decoder maps a row latent vector to the transformed raw packet table. TabSyn-VAE also satisfies it after flattening its non-CLS field-token latents; the flattened vector can be generated by the same latent-flow model and reshaped before the TabSyn decoder and field heads recover a raw row. TTVAE is not used as a latent-interface control because its decoder is not a function of the latent vector alone. In the adapted implementation, the encoder first maps the transformed row to a Transformer encoder output henc , then projects that same output to μ and log σ2. The decoder maps z to decoder tokens but reconstructs through a Transformer decoder that cross-attends to henc . Thus reconstruction has the form D(z, henc (x)) , not D(z). A downstream generator would therefore have to keep the input-derived encoder memory, generate a second high-dimensional memory sequence, or replace it with an arbitrary placeholder. Each choice changes the latent decode contract rather than testing whether a standalone raw-field latent sequence is useful. GOGGLE is also excluded from the latent-flow control set. Although its model has a learned row-level latent, the validation-selected GOGGLE checkpoint produces no decoded rows satisfying the shared raw-packet table contract on CICIDS2017 Monday under the non-repair policy, as shown in Table 9. Running a downstream generator on that latent space would therefore mostly reproduce the same pre-render contract failure rather than test latent sequence modelability. We keep GOGGLE in the main decoded-PCAP comparison, where that failure mode is part of the raw-field baseline evidence. 
+
+C.3 Rendering policy 
+
+To keep the comparison fair, baseline outputs are rendered back into packets under a restricted deterministic policy. Decoded rows are split back along the original reference shard boundaries before PCAP rendering, matching the evaluation convention used for T RACE CODEC . Local recomputation is allowed only for quantities that are straightforward consequences of a single decoded packet instance, such as checksums or directly derived length fields. In practice, packet libraries may materialize these packet-local derived values during serialization; we treat that as ordinary rendering rather than as heuristic repair. Sequence-level or flow-state repair is not allowed. In particular, the baseline renderer may not impute missing active fields, infer hidden endpoints or transport state, repair decoded sequence or acknowledgment progression, or borrow T RACE CODEC ’s packet-action compiler logic. Rows that already violate the raw-table contract are counted as invalid decoded rows and are not repaired before rendering. This restriction is what makes the comparison meaningful: if raw-field baselines require stateful repair to become parseable, the repair has become part of the representation problem. A protocol state machine is deterministic only once its input event is well specified. Independently decoded raw fields may fail to specify a unique legal event under the current flow state: flags, sequence progress, acknowledgment progress, endpoint orientation, timing, and payload length can disagree. A stateful renderer must then choose a precedence rule. If it trusts the raw fields, it may emit inconsistent packets; if it trusts protocol state and overwrites raw fields, it is no longer evaluating raw-field reconstruction; if it chooses case by case, it has become heuristic repair. Such a precedence rule is an implicit codec/compiler contract. The non-repair policy therefore isolates the raw-field interface rather than forbidding a stronger method: a raw baseline augmented with a full stateful compiler has moved toward the explicit interface design used by T RACE CODEC .
+
+C.4 Raw-table diagnostics 
+
+Table 9 reports the pre-render raw-table diagnostics for the published baselines. These rows are deliberately not mixed into the main decoded-PCAP table: they are useful for explaining whether a raw-field model fails before rendering, but they are undefined for T RACE CODEC and the Oracle path because those methods do not decode through raw packet-table rows. 
+
+C.5 Oracle roundtrip 
+
+We additionally run one no-learning oracle control: PCAP → raw packet table → \PCAP .
+
+16 Table 9: Pre-render validity diagnostics for raw-field baselines.                                   
+
+> Dataset Method Inv. row (%) ↓Cat acc. (%) ↑Num err. ↓
+> CICIDS2017 Monday TVAE 37.46 71.68 4.12 ×10 8
+> TabSyn-VAE 2.39 84.74 2.79 ×10 7
+> GOGGLE 100.00 ––TTVAE 37.28 65.99 2.57 ×10 8
+> MAWI 202004071400 TVAE 12.07 79.95 1.75 ×10 8
+> TabSyn-VAE 28.12 87.36 1.46 ×10 7
+> GOGGLE 100.00 ––TTVAE 21.37 73.18 4.86 ×10 7
+
+Table 10: Raw-table oracle roundtrip under the restricted renderer.                              
+
+> Dataset TCP event dist. (pp) ↓Count (%) ↓Proto (%) ↓IAT (%) ↓Flow cnt. (%) ↓Flow dur. (%) ↓
+> CICIDS2017 Monday 0.002 0.42 0.42 0.13 0.09 0.64 MAWI 0.063 <0.001 <0.001 <0.001 <0.001 <0.001
+
+This is not a competing baseline. It simply checks whether the shared raw table and restricted renderer can already close a near-exact roundtrip when given ground-truth rows directly. We report the check on CICIDS2017 Monday and on the MAWI 202004071400 trace used in Appendix E. Its role is interpretive. If this oracle roundtrip is near-exact while learned raw-field baselines still decode poorly, the failure is not primarily in the single-packet contract or the renderer. It appears after learning, when a generic raw-field codec has to carry cross-packet behavior through its bottleneck without the state variables used by T RACE CODEC .
+
+C.6 Alternative raw schemas 
+
+Alternative raw schemas, including higher-dimensional bit-oriented layouts such as nPrint-style packet encodings [ 11 ], are treated as sensitivity studies rather than as primary baselines. They can strengthen the appendix by showing that the qualitative conclusion is not an artifact of one raw table layout, but they are not required to define the main task-facing comparison. 
+
+D Metric Definitions 
+
+This appendix defines the metrics reported in the main tables and figures. Percent columns multiply the underlying fraction or distance by 100. “pp” denotes percentage points. All decoded-PCAP metrics are computed after packet rendering, not on intermediate token sequences. 
+
+Shard-aligned decoded-PCAP evaluation. Unless otherwise stated, a decoded test split is com-pared against the matching reference shards {xs}Ss=1 . Packet analyzers run on each reference/decoded shard pair and the resulting summaries are aggregated. This avoids mixing independent capture units and keeps sessionization, TCP analysis, and packet-count accounting aligned across methods. 
+
+TCP event dist. The main-table TCP event distance compares the rate profile of structured TCP diagnostic events. Let A contain retransmission, fast retransmission, spurious retransmission, lost segment, ACKed lost segment, duplicate ACK, out-of-order segment, and zero-window event. If 
+
+ca(x) and ca(ˆ x) are the counts of event a in the reference and decoded PCAPs, and Ntcp (x), Ntcp (ˆ x)
+
+are their TCP packet counts, the table reports 
+
+X
+
+> a∈A
+
+ca(ˆ x)max( Ntcp (ˆ x), 1) − ca(x)max( Ntcp (x), 1) 
+
+in percentage points. This is a profile-fidelity metric: real captures may contain TCP diagnostic events, so the target is the reference profile rather than zero events. 
+
+Count. If N and ˆN are the reference and decoded packet counts, the Count column reports 
+
+| ˆN − N |
+
+max( N, 1) .
+
+17 This penalizes decoded traces that silently drop or invent packets. The latent-interface appendix labels the same quantity as Count err. 
+
+Proto. Let p and ˆp be protocol-ratio vectors over TCP, UDP, ICMP, and other packets. The Proto column reports total variation, 
+
+TV( p, ˆp) = 12
+
+X
+
+> i
+
+|pi − ˆpi|.
+
+IAT. Inter-arrival times are histogrammed using fixed millisecond bins shared by all methods. If hiat 
+
+and ˆhiat are the normalized reference and decoded histograms, the IAT column reports TV( hiat , ˆhiat ).
+
+Flow cnt. Flows are measured as bidirectional transport sessions under the same sessionization rule used for duration analysis. If M and ˆM are the reference and decoded session counts, the Flow cnt. column reports 
+
+| ˆM − M |
+
+max( M, 1) .
+
+The value can exceed 100% when a method fragments traffic into many more sessions than the reference. 
+
+Flow dur. Each bidirectional five-tuple is split into transport sessions before duration measurement. TCP sessions end at RST/FIN boundaries or after a 60-second idle gap; UDP, ICMP, and other sessions use the same idle split. Session durations are histogrammed using fixed millisecond bins, and Flow dur. reports total variation between the reference and decoded duration histograms. 
+
+TCP transition distance. Figure 4 compares event-to-event TCP trajectories within bidirectional sessions. Each trace is converted into a row-normalized transition matrix over coarse TCP event labels. The scalar transition distance reported in the text is the weighted row-wise total variation between the decoded and reference matrices, with row weights taken from the reference transition mass. 
+
+Flow-switch and run-length diagnostics. Figure 5 measures whether decoded traces preserve multi-flow interleaving. The packet-to-packet flow-switch rate is the fraction of adjacent decoded packets whose bidirectional session label changes. Same-flow run length is the length of a maximal consecutive packet run belonging to the same bidirectional session. Session count is the same sessionization count used by Flow cnt. 
+
+Action. The ablation-table Action column is the mean packet-action field accuracy for T RACE -CODEC on the held-out split. It averages exact-match accuracy over decoded packet-action fields under the active masks of the schema, so inactive protocol-specific fields do not contribute. This is an intrinsic codec diagnostic; decoded-PCAP metrics remain the primary fidelity evidence. 
+
+KL rate. The ablation-table KL rate reports the test posterior KL of the codec encoder to the unit-Gaussian prior, 
+
+E
+
+" dX
+
+> k=1
+
+12
+
+ μ2 
+
+> k
+
++ exp(log σ2
+
+> k
+
+) − 1 − log σ2
+
+> k
+
+#
+
+,
+
+in nats per packet over latent dimension d. We report the raw posterior KL without free-nats clamping. The metric is used as an intrinsic latent-regularity diagnostic: removing KL can leave reconstruction metrics nearly unchanged while making the latent interface much harder for downstream generators to model. 
+
+Usable suffixes. In the latent-interface experiment, each case asks a downstream generator to produce a 1024-token suffix from a matched 1024-token prefix. Usable suffixes is the fraction of decoded cases whose rendered PCAP contains exactly the requested suffix packet count. It is a case-level measure of whether the sampled latent suffix remains on a complete decode surface. 18 Valid pkt coverage. Valid packet coverage is the decoded valid packet mass divided by the requested suffix packet mass, summarized over latent-interface cases. It gives partial credit when a suffix decodes to some valid packets but loses or invalidates the rest. 
+
+Coverage-adjusted TV. Latent-interface distributional metrics compare decoded suffixes with their matched held-out real suffixes. Ordinary TV is computed over packets that survive into the decoded PCAP summary. Coverage-adjusted TV instead scales the decoded distribution by valid packet coverage and charges missing or invalid packet mass. Thus a method cannot appear close by dropping difficult packets. The CA IAT TV, CA pkt-size TV, CA flow-pkts TV, and CA sess-dur TV columns apply this accounting to inter-arrival-time, packet-size, packets-per-flow, and session-duration histograms, respectively. 
+
+Raw-table diagnostics. The auxiliary raw-table table reports pre-render diagnostics for raw-field baselines only. Inv. row is the fraction of decoded rows that violate the shared raw-packet contract before packet rendering. Cat acc. is mean exact-match accuracy over active categorical raw-table columns on rows that survive the invalid-row filter. Num err. is mean absolute error over active numerical raw-table columns in raw field units. These diagnostics explain pre-render raw-table behavior and are not mixed into the main decoded-PCAP comparison. 
+
+E Extended Results 
+
+The main text keeps only the most important result summaries. This appendix gathers the supporting diagnostics and expanded breakdowns that strengthen interpretation without overcrowding the main paper. 
+
+E.1 Packet-action diagnostics 
+
+Packet-action accuracy, timing-head error, and related action-space diagnostics are useful for local-izing the learned codec’s errors, but they are not the primary evidence for decoded-PCAP fidelity. We therefore report them here alongside the decoded-PCAP results. For the published raw-field baselines, the appendix also expands the auxiliary raw-table diagnostics into per-column categorical accuracies and numerical reconstruction errors so that row-space success and decoded-PCAP failure can be inspected separately. For T RACE CODEC , these action-space diagnostics are reported only in flow-polarity-invariant form. Decoded traces instantiate privacy-preserving synthetic endpoints, so raw A/B direction labels are not identifiable across original and decoded traces even when the same bidirectional interaction is preserved. Accordingly, we do not report raw direction accuracy as a standalone metric. Instead, when action-space diagnostics are needed, we report polarity-invariant action exact accuracy, polarity-invariant context exact accuracy, and timing-head error after the per-flow polarity alignment defined in Appendix D. The ablation diagnostics pair packet-action accuracy with decoded-PCAP metrics so that local reconstruction and artifact-level behavior can be interpreted together. These diagnostics explain where decoded degradation comes from without replacing the decoded-PCAP evidence in the main text. 
+
+E.2 Temporal and interaction plots 
+
+The main text keeps only a compact temporal-fidelity summary. This appendix contains the fuller decoded-trace comparison: inter-arrival-time histograms, burstiness summaries, fixed-window packet-rate and byte-rate curves, protocol-ratio comparisons, packets-per-flow distributions, flow-duration distributions, TCP control-event histograms, and the structured TCP diagnostic-event breakdown. These plots compare reference, Oracle, learned T RACE CODEC , and the relevant ablation variants on the same held-out split. 19 Ground Truth  
+
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+> GOGGLE
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> decoded packets retained (%)
+> 86
+> 72
+> 38
+> invalid
+> A. Packet materialization
+> reTX fast
+> reTX
+> spur.
+> reTX
+> lost
+> seg.
+> ack
+> lost
+> dup
+> ack
+> out
+> order
+> zero
+> win
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> event rate among TCP packets (%)  B. TCP diagnostic events
+> 1
+> 4-7
+> 16-31
+> 64-127
+> 256+
+> 0
+> 20
+> 40
+> 60
+> 80
+> flows (%)
+> C. Packets per flow
+> <0.1 ms
+> 5-10 ms
+> 100-500 ms
+> 5-10 s
+> 5-30 min
+> 0
+> 20
+> 40
+> 60
+> 80
+> sessions (%)
+> D. Flow duration
+> Ground Truth
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+
+Figure 6: Protocol state preservation analysis on MAWI. This repeats the decoded-PCAP diagnostic panels from Figure 3 on the MAWI held-out split. rst 
+
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+> from event
+
+Ground Truth 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+Oracle 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+TraceCodec 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+> from event
+
+TVAE 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+TabSyn-VAE 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+to event 
+
+> rst
+> syn_ack
+> syn
+> fin
+> data
+> ack
+> other
+
+TTVAE 
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> row-normalized P
+
+Figure 7: TCP transition and state consistency on MAWI. Each heatmap is a row-normalized transition matrix over coarse TCP event labels within bidirectional sessions, matching Figure 4. 
+
+E.3 Additional MAWI results 
+
+The additional MAWI results below complement the main decoded-PCAP comparison with ablations and latent-interface diagnostics. They use the MAWI 202004071400 samplepoint-F trace with a temporal 3,000-shard split: 2,400 train shards, 300 validation shards, and 300 test shards, correspond-ing to 39.23M/1.70M/1.46M packet-action tokens after the shared packet-level scope. We refer to this setting as MAWI in the companion tables. Figures 6–8 repeat the decoded-PCAP and structural diagnostics from the main text on MAWI. They use the same held-out MAWI split and the same decoded artifacts as Table 3. The plots provide the visual counterpart to the MAWI rows in the main table: learned T RACE CODEC preserves packet materialization, TCP-event structure, and multi-flow progression far more consistently than the raw-field baselines, while the raw-field decoders either lose packet mass or fragment transport/session structure after rendering. Table 11 shows that the MAWI ablations isolate the same interface roles as in the main ablation study. Coarsening timing mainly affects the timing diagnostic, raising IAT distortion from 0.38% to 8.36% while leaving packet count and flow-count errors near zero. Removing transport-state cues leaves action accuracy high but increases TCP event-profile distance from 2.31 to 115.29 percentage-points. Removing KL keeps decoded reconstruction metrics close, but raises the test posterior KL rate from 249.38 to 5829.68 nats per packet, again separating reconstruction fidelity from latent regularity. 
+
+E.4 Latent-interface experiment 
+
+The main text reports only a compact latent-interface check. This appendix gives the details needed to interpret that table. Each PCAP shard is first encoded into a packet-ordered latent sequence. Fixed prefix/suffix windows are then extracted with a 1024-token prefix, a 1024-token generated suffix, and 20 0 1000 2000 3000 4000      
+
+> active flows per 1s window
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> CDF
+> A. Active flows
+> Ground Truth
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> flow switch rate
+> 0.812 0.812
+> 0.869
+> 0.420
+> 0.767
+> 0.822
+> B. Flow switching
+> 10 010 110 210 310 4
+> same-flow run length
+> 10 −6
+> 10 −5
+> 10 −4
+> 10 −3
+> 10 −2
+> 10 −1
+> 10 0
+> CCDF
+> C. Same-flow runs
+> Ground Truth
+> Oracle
+> TraceCodec
+> TVAE
+> TabSyn-VAE
+> TTVAE
+
+Figure 8: Active-flow and multi-flow interleaving on MAWI, using the same structural diagnostics as Figure 5. Table 11: MAWI ablation results for T RACE CODEC . Boxes mark targeted metrics; KL rate is the encoder posterior KL to the unit-Gaussian prior, summed over latent dimensions and averaged per packet.                                       
+
+> Variant Action (%) ↑TCP event dist. (pp) ↓IAT (%) ↓Flow cnt. (%) ↓Flow dur. (%) ↓KL rate (nats/pkt)
+> Full T RACE CODEC 98.75 2.31 0.38 0.07 0.25 249.38
+> W/OKL 99.50 3.33 0.34 0.04 0.17 5829.68
+> W/Ofine timing 99.05 2.81 8.36 0.07 0.41 141.66
+> W/OTCP state cues 99.67 115.29 0.32 0.04 0.19 71.40
+
+stride 512. The setting is long enough to require continuation of timing and multi-flow interaction structure, but still small enough to train the same downstream model across representations. The latent generator is a Transformer velocity model trained with conditional flow matching. It attends over the concatenation of prefix latents and noisy suffix latents, receives a scalar flow-time embedding, and predicts the suffix velocity. The reported latent objective is validation flow-matching MSE under fixed validation noise and time draws. For decoded evidence, sampled suffix latents are decoded back through the corresponding representation and compared against real held-out suffix PCAPs materialized from the same continuation windows, using the same decoded-PCAP diagnostics reported elsewhere in the paper. This evaluation asks whether a generator can stay on a usable decode surface while matching the actual continuation trace, rather than looking good only relative to a representation-specific oracle decode. For T RACE CODEC , sampled latents are lowered through the fixed packet-action decoder and compiler. For raw-field controls, sampled TVAE and TabSyn-VAE latents are decoded through their own raw-table decoders and then rendered under the same non-repair policy used in the main comparison. TTVAE and GOGGLE are not included in this latent-interface control set for the reasons described in Appendix C: TTVAE’s decoder requires input-derived encoder memory in addition to z, and GOGGLE already fails the raw-row contract before rendering on CICIDS2017 Monday. Table 12 repeats the same continuation protocol on MAWI. T RACE CODEC again provides the most reliable decode surface, with nearly all suffixes usable, full median valid-packet coverage, and substantially lower coverage-adjusted timing, packet-size, flow-size, and session-duration distances than the raw-field latent controls. TVAE and TabSyn-VAE can produce parseable packets, but their sampled suffixes lose packet mass on many windows; the coverage-adjusted diagnostics therefore expose larger continuation errors than ordinary distribution distances alone. The main ablation table does not require a separate latent-flow model for every codec variant. Instead, it uses the intrinsic posterior KL rate defined in Appendix D as the cheap latent-regularity diagnostic, and reserves flow matching for the downstream latent-interface experiment. This separation keeps the ablation study focused on codec design while still testing generation-facing usefulness where it matters. 
+
+F Reproducibility Details 
+
+This appendix records the public entry points and run metadata needed to reproduce the main result tables. The implementation writes JSON manifests at every dataset-build, training, reconstruction, 21 Table 12: Latent-interface check on MAWI. CA: coverage-adjusted total variation.                               
+
+> Representation Usable suffixes (%) ↑Valid pkt coverage (%) ↑CA IAT TV (%) ↓CA pkt-size TV (%) ↓CA flow-pkts TV (%) ↓CA sess-dur TV (%) ↓
+> TRACE CODEC 98.44 100.00 5.38 1.42 4.33 5.12
+> TVAE 7.03 85.69 40.22 16.60 39.21 41.04 TabSyn-VAE 10.94 62.30 43.33 40.38 45.22 46.95
+
+and metric-aggregation stage, so each reported row can be traced back to the corresponding run output. 
+
+Software environment. All experiments are run from the repository root in a Python 3.10+ envi-ronment created for the project. A typical setup is: 
+
+conda create -n trace_codec python=3.10 conda activate trace_codec python -m pip install --upgrade pip python -m pip install -e . python -m pip install jupyter ipykernel nbclient nbformat python -m ipykernel install --user --name trace_codec \ --display-name "trace_codec" 
+
+The package dependencies are declared in pyproject.toml ; the extra notebook packages are only needed to execute the paper notebooks. Decoded-PCAP diagnostics use Wireshark’s command-line tools, so tshark must also be available on PATH . For example, on Ubuntu: 
+
+sudo apt-get update sudo apt-get install -y tshark 
+
+The paper runs used CUDA-enabled PyTorch on NVIDIA RTX PRO 6000 Blackwell Server Edition GPUs with 96GB memory. The scripts expose –device cuda and can be restricted to a particular GPU with CUDA_VISIBLE_DEVICES . Runtime depends on the selected stages; the training budgets and evaluation caps are specified below and recorded in run manifests. 
+
+Notebook entry points. The main CICIDS2017 Monday workflow is launched from trace_codec_experiment.ipynb ; the MAWI workflow is launched from 
+
+trace_codec_experiment_mawi.ipynb . After activating the environment above, the notebooks can be run interactively with the trace_codec kernel or executed unattended: 
+
+python -u scripts/execute_notebook_with_checkpoints.py \ trace_codec_experiment.ipynb \ --output outputs/trace_codec_experiment.executed.ipynb \ --kernel-name trace_codec \ --timeout -1 \ 2>&1 | tee outputs/trace_codec_experiment.nbconvert.log 
+
+Replace the notebook path and output log with the MAWI names to reproduce the MAWI run. The notebooks call the scripts listed below and skip expensive stages when their sentinel artifacts already exist. 
+
+Shared split and dataset construction. All learned methods consume the same session-preserving temporal shard split described in Appendix A. For the raw-field baselines, the shared packet table is built once and then reused by TVAE and TTVAE; TabSyn-VAE and GOGGLE derive their prepared numerical/categorical arrays from that same table: 
+
+bash scripts/run_packet_table_baseline_experiments.sh \ --dataset-key cic_ids2017_monday \ --split-root dataset/trace_codec_experiments/cic_ids2017_monday/split \ --device cuda \ --baselines tvae,tabsyn_vae,goggle,ttvae 
+
+22 The command can be restricted to individual stages with –phases build , –phases train , or 
+
+–phases reconstruct . Reconstructions optionally include tshark expert-analysis diagnostics with –tshark-expert .
+
+Raw-field baseline training protocol. Raw-field baselines use validation-selected checkpoints under fixed optimizer-step budgets. This avoids treating one pass over a multi-million-row packet table as the primitive unit of comparison. The default budgets are TVAE: 100k optimizer steps, TTVAE: 100k steps, GOGGLE: 100k steps, and TabSyn-VAE: 15k steps. TVAE, TTVAE, and GOGGLE are evaluated every 5k steps; TabSyn-VAE is evaluated every 1k steps. Training stops at the step budget or after eight consecutive non-improving validation events, with min_delta=0 .The selected checkpoint minimizes the validation raw-table reconstruction objective, and all held-out reconstructions are decoded from that checkpoint. The corresponding script options are: 
+
+--max-steps tvae=100000,tabsyn_vae=15000,goggle=100000,ttvae=100000 --eval-interval-steps tvae=5000,tabsyn_vae=1000,goggle=5000,ttvae=5000 --patience-evals 8 --min-delta 0.0 
+
+Each training manifest records the full configuration, global_step , best_step , stop_reason ,
+
+best_val_objective , and the final held-out reconstruction diagnostics. The accompanying 
+
+history.jsonl file records every validation event, including the training-window averages since the previous validation event. For GOGGLE, learned-graph thresholding is also keyed to optimizer step, and reconstruction materializes the graph at the selected checkpoint step. 
+
+TRACE CODEC training and artifact mapping. TRACE CODEC dataset construction, training, decode, and evaluation are launched from trace_codec_experiment.ipynb , which calls the repository scripts under the same Python environment. The generated outputs are written un-der outputs/trace_codec_experiments/<dataset>/<variant>/ ; run metadata and training curves are written under runs/trace_codec_experiments/<dataset>/<variant>/ . The main comparison rows are summarized from the reconstructed test PCAP reports, while intrinsic codec diagnostics and latent checks are written under the corresponding variant output directories. The posterior KL-rate diagnostic in the ablation table is computed directly from the exported codec checkpoint and test split: 
+
+OUT=outputs/trace_codec_experiments/cic_ids2017_monday/full python scripts/compute_trace_codec_latent_rate.py \ --model-dir runs/trace_codec_experiments/cic_ids2017_monday/full/model \ --split test \ --batch-size 30000 \ --device cuda \ --output "$OUT/latent_rate_test.json" 
+
+The script reads the dataset path and dataset-variant contract from the run artifacts, then reports raw posterior KL without free-nats clamping. 
+
+Latent-interface training protocol. The latent-interface experiment is launched by the same notebooks through scripts/run_latent_sequence_experiments.sh . For each representation, the script first exports shard-aligned latent sequences for the shared train/validation/test split. It then trains a conditional latent-flow model on fixed prefix/suffix windows with stride 512. The paper-facing CICIDS2017 Monday setting uses a 1024-token prefix and a 1024-token generated suffix. Unless otherwise stated, the flow model is a 12-layer Transformer with hidden width 768, 12 attention heads, MLP ratio 4, dropout 0.05, logit-normal flow-time sampling, bfloat16 autocast, no activation checkpointing, and AdamW with learning rate 2 × 10 −4, weight decay 10 −2, gradient clipping at 1.0, 1000 warmup steps, cosine decay to a 0.2 learning-rate ratio, EMA decay 0.9999, and a 0.04 loss weight on the explicit TraceCodec time channel. The completed run uses batch size 80, 32k optimizer steps, and validation/checkpointing every 500 steps. Checkpoints are selected by the lower validation flow-matching MSE between raw and EMA weights; manifests record the selected source, step, and full configuration. Evaluation samples suffixes with a 400-step Heun solver, 23 reports latent metrics over up to 512 windows, decodes up to 128 suffix cases into PCAPs, and compares those predicted suffix PCAPs with real held-out suffix PCAPs materialized from the same continuation windows. The corresponding command shape is: 
+
+bash scripts/run_latent_sequence_experiments.sh \ --dataset-key cic_ids2017_monday \ --split-root dataset/trace_codec_experiments/cic_ids2017_monday/split \ --device cuda \ --representations trace_codec,tvae,tabsyn_vae \ --prefix-length 1024 \ --horizon 1024 \ --stride 512 \ --train-batch-size 80 \ --train-max-steps 32000 \ --train-eval-steps 500 \ --train-lr 2e-4 \ --lr-scheduler cosine \ --warmup-steps 1000 \ --min-lr-ratio 0.2 \ --ema-decay 0.9999 \ --d-model 768 \ --num-layers 12 \ --num-heads 12 \ --dropout 0.05 \ --time-loss-weight 0.04 \ --sample-steps 400 \ --sample-solver heun \ --max-metric-windows 512 \ --max-decoded-cases 128 \ --tshark-expert 
+
+24
