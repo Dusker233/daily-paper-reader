@@ -1,0 +1,416 @@
+Title: SecRL-Prune: Structured Reinforcement Learning-Based Pruning of CodeLLMs for Preserving Adversarial Code Mutation
+
+URL Source: https://arxiv.org/pdf/2606.06254v1
+
+Published Time: Fri, 05 Jun 2026 01:17:48 GMT
+
+Number of Pages: 9
+
+Markdown Content:
+# SecRL-Prune: Structured Reinforcement Learning–Based Pruning of CodeLLMs for Preserving Adversarial Code Mutation 
+
+# Parsa Memarzadehsaghezi 
+
+Ontario Tech University Oshawa, Ontario, Canada parsa.memarzadeh@ontariotechu.ca 
+
+# Pooria Madani 
+
+Ontario Tech University Oshawa, Ontario, Canada pooria.madani@ontariotechu.ca 
+
+# Khalil El-Khatib 
+
+Ontario Tech University Oshawa, Ontario, Canada khalil.el-khatib@ontariotechu.ca 
+
+## Abstract 
+
+Large code language models (CodeLLMs) can generate and rewrite programs, enabling functionality-preserving code mutation that may be used to create diverse malware variants and evade signature-based detection. A key security question is whether this mutation capability survives model compression, which would make de-ployment feasible under limited hardware budgets. We propose 
+
+SecRL-Prune , a structured pruning framework for CodeLLMs that operates on feed-forward (MLP/FFN) channels. Starting from a pretrained teacher, it learns a layer-wise pruning policy with rein-forcement learning using a teacher–student KL-divergence reward. To improve efficiency, we cache the teacher’s top-𝑃 predictions once and compare the pruned student against this compact target, avoiding simultaneous teacher–student residency in GPU memory. We evaluate SecRL-Prune on HumanEval using pass @𝑘 for exe-cution correctness and var @𝑘 for code diversity across three 7B CodeLLMs at 10–30% compression. SecRL-Prune consistently pre-serves higher pass @𝑘 and var @𝑘 than recent structured pruning baselines under aggressive pruning. In a case study on real mal-ware samples, semantics-preserving mutations from 20%-pruned models substantially reduced detections. These results show that code mutation capability can survive significant structured pruning, highlighting the security relevance of compressed CodeLLMs. 
+
+## CCS Concepts 
+
+• Security and privacy → Malware and its mitigation ; • Com-puting methodologies → Reinforcement learning .
+
+## Keywords 
+
+Code Large Language Models, Structured Pruning, Reinforcement learning, Code mutation, Metamorphic malware, Malware detection 
+
+ACM Reference Format: 
+
+Parsa Memarzadehsaghezi, Pooria Madani, and Khalil El-Khatib. 2026. SecRL-Prune: Structured Reinforcement Learning–Based Pruning of CodeLLMs for Preserving Adversarial Code Mutation. In Proceedings of the Sixteenth ACM Conference on Data and Application Security and Privacy (CODASPY ’26), June 23–25, 2026, Frankfurt am Main, Germany. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3800506.3803508  
+
+> This work is licensed under a Creative Commons Attribution 4.0 International License.
+> CODASPY ’26, Frankfurt am Main, Germany
+> ©2026 Copyright held by the owner/author(s). ACM ISBN 979-8-4007-2562-3/2026/06 https://doi.org/10.1145/3800506.3803508
+
+## 1 Introduction 
+
+The emergence of large language models capable of code generation— commonly termed CodeLLMs —has fundamentally transformed nu-merous domains within computer science. These models offer sub-stantial benefits for accelerating software development and stream-lining maintenance workflows; however, they simultaneously present significant security concerns. Threat actors can exploit the same generative capabilities to author malware, craft software exploits, and automate vulnerability discovery. Recent threat intelligence re-ports document adversaries employing LLMs to obfuscate malicious code, generate context-aware payloads, and orchestrate sophisti-cated intrusion campaigns, confirming that AI-augmented offensive tooling has transitioned from theoretical concern to operational re-ality [ 2 , 13 ]. Of particular concern is the potential for adversaries to leverage CodeLLMs’ rapid generation capabilities to systematically mutate existing malware, thereby evading signature-based detec-tion mechanisms while continuously reintroducing new variants into the threat landscape. This emerging application of CodeLLMs reflects a well-established lineage of code mutation techniques in sophisticated malware [ 11 ,18 , 25 , 29 ]. Because many detection systems continue to rely on static signatures—whether binary patterns, syntactic structures, or system call sequences—malware authors are strongly incentivized to transform their code’s representation while preserving its under-lying functionality [ 4, 11 , 25 ]. Historically, such transformations have been achieved through automated, rule-based mutation en-gines compact enough to be embedded directly within the malicious payload. This architecture enables real-time polymorphism as the malware propagates through operational environments. Metamor-phic malware exemplifies this approach: by rewriting its own code with each replication cycle, it has proven remarkably effective at circumventing static analysis methods [17, 29]. Contemporary CodeLLMs already facilitate offline variant gener-ation, wherein attackers leverage separate infrastructure to produce novel malware strains prior to deployment. However, a more conse-quential threat lies in the prospect of miniaturization—compressing these models sufficiently to embed directly within malware pay-loads or execute rapidly on consumer-grade hardware [ 17 , 23 ]. The central technical question is whether modern CodeLLMs can be re-duced to a minimal footprint through pruning, distillation, or quan-tization while retaining their capacity for semantics-preserving code transformation/mutation [ 6, 7 , 27 ]. Crucially, many auxiliary capabilities—such as documentation generation, test synthesis, and general-purpose prompt-based programming—become superfluous when the model’s sole objective is code mutation. This observation motivates the hypothesis that specialized, highly compressed mod-els optimized exclusively for code mutation are not only feasible but  
+
+> arXiv:2606.06254v1 [cs.CR] 4 Jun 2026 CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany Parsa Memarzadehsaghezi, Pooria Madani, and Khalil El-Khatib
+
+represent a significant and understudied attack vector [ 17 , 23 ]. Our work directly addresses this gap by systematically investigating the compressibility limits of CodeLLMs with respect to their code mutation fidelity. In this work, we take a first step toward rigorously evaluating this hypothesis. Our key contributions are as follows: (1) We propose SecRL-Prune , an RL-based structured pruning framework for CodeLLMs that uses a KL-guided pruning objective to preserve teacher behavior under compression. (2) We introduce a caching mechanism that accelerates RL train-ing and reduces the resource footprint of pruning: by precom-puting teacher outputs on a calibration set, SecRL-Prune 
+
+can train its policy with only the student model in mem-ory, yielding lower peak GPU usage than prior structured pruning techniques. (3) We conduct a systematic empirical study of how structured compression affects CodeLLMs’ ability to perform functionality-preserving, syntax-diverse code mutation. (4) We conduct a case study using real malware samples to assess how semantics-preserving code mutations (using pruned CodeLLMs) affect malware detection across more than 62 
+
+industry-standard malware detection engines. The rest of this paper is structured as follows: In Section 2, we provide a survey of the existing body of work on CodeLLMs and code mutation literature. In Section 3, we provide the necessary background on the structure of LLMs that we leverage in our prun-ing technique and discuss the fundamentals of how our reward function is designed. In Section 4, we present SecRL-Prune, our novel approach to pruning CodeLLMs. In Section 5, we provide a de-tailed description of our experimental setup, including the datasets used. In Section 6, we discuss the results, and in Section 7, we provide open questions and a path forward for this research. 
+
+## 2 Related Work 
+
+Malicious use of CodeLLMs , particularly for malware code mutation, has been investigated in recent work on LLM-driven code mutation and metamorphic malware evolution. These studies [ 17 , 23 ] provide both survey-style overviews and empirical analyses of the code-mutation capabilities of open- and closed-source CodeLLMs. In contrast, our work focuses on recent advances in LLM compression, with an emphasis on preserving functionality relevant to adversarial code generation/mutation [7, 21, 27]. Model compression aims to reduce model size and improve trans-former efficiency while preserving task performance (e.g., code mutation capabilities), using techniques such as knowledge distilla-tion [9, 21, 26], quantization [6], and pruning [7, 16]. In knowledge distillation, a smaller student LLM is trained to mimic the predictions or internal signals of a larger teacher, typi-cally using a Kullback-Leibler(KL) divergence–based loss between teacher and student distributions [ 12 ]. DistilBERT compresses BERT via such an approach, achieving roughly half the parameter count while retaining most of BERT’s language understanding, by combin-ing supervised cross-entropy with a KL-divergence loss on softened logits [ 21 ]. MiniLM focuses on distilling self-attention knowledge, training the student to match the teacher’s attention distributions and value relations via KL divergence [ 26 ], and MiniLLM transfers the behaviour of large generative LLMs into smaller students using an objective tailored for generation [9]. Quantization techniques, by contrast, reduce the numerical preci-sion used to represent LLM weights to save memory and accelerate inference. For example, QLoRA combines 4-bit quantization with low-rank adapters to enable memory-efficient fine-tuning of large models on standard hardware [6]. Pruning directly removes parameters from an already trained network. In unstructured pruning, individual weights are zeroed out rather than physically removed from the model. This produces fine-grained sparsity patterns that can be highly parameter-efficient in theory, and techniques like SparseGPT use blockwise approx-imations of the Hessian to decide which weights can be zeroed in LLMs [ 7]. However, because the original tensor shapes are pre-served and zeros are scattered irregularly, practical speedups often depend on specialized sparse kernels or hardware support. Without such support, the compressed model may still execute as a dense network. In structured pruning, the basic units being removed are larger groups of weights—such as channels, neurons, attention heads, or even whole layers—so that tensor dimensions themselves shrink, yielding architectures that are inherently easier to deploy. Early work in this direction, such as LLM-Pruner, scores "coupled" struc-tures (e.g., head–MLP groups) using gradient and curvature infor-mation, removes low-importance groups, and applies lightweight fine-tuning (e.g., LoRA-style adapters) to recover accuracy [ 16 ]. Subsequent methods have pushed structured pruning further in two directions. One line of work explores runtime adaptivity, dy-namically adjusting which structures are pruned during inference to trade off cost and quality on the fly [ 15 ]. Another formulates pruning as policy learning, training a reusable pruning policy that generalizes across compression ratios without requiring additional calibration data [22]. Overall, these techniques show that both unstructured and struc-tured pruning can substantially reduce the effective parameter count of large language models, and that recent post-training meth-ods can achieve high compression ratios with modest fine-tuning. However, most of this work targets natural-language LLMs and is evaluated on generic language understanding or generation bench-marks. Their behaviour on code-generation models and, in particu-lar, their impact on execution-based metrics and mutation/diversity properties of CodeLLMs remains comparatively underexplored. Recall that such compression of CodeLLMs can be an important en-abling factor in the development of next-generation metamorphic malware, which is the core thesis of this manuscript. 
+
+## 3 Background 
+
+Before introducing our novel approach for CodeLLMs pruning, we first review the transformer architecture underlying modern CodeLLMs and introduce the notation and Kullback–Leibler (KL) divergence used in our work. 
+
+## 3.1 Transformer Structure in CodeLLMs 
+
+In this work, our pruning actions operate directly on the interme-diate channels of the feed-forward network (FFN) inside each trans-former block. We therefore focus our discussion on this component. SecRL-Prune CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany 
+
+Figure 1: Feed-forward (MLP/FFN) sub-layer in a transformer block. Given the input hidden state ℎ𝑙 −1 
+
+> 𝑡
+
+∈ R𝑑 , the first linear layer 𝑊 𝑙  
+
+> 1
+
+expands to an intermediate width 𝑑 𝑙  
+
+> ff
+
+, a nonlinear-ity 𝜎 (·) produces activations 𝑧 𝑙 𝑡 , and the second linear layer 
+
+𝑊 𝑙  
+
+> 2
+
+projects back to R𝑑 to yield 𝑦 𝑙 𝑡 . Each coordinate of 𝑧 𝑙 𝑡 cor-responds to an MLP channel, which is the structured unit pruned by SecRL-Prune .
+
+Figure 1 shows the standard two-layer FFN used in decoder-only transformers. Consider transformer block (layer) 𝑙 . For a token position 𝑡 , let 
+
+ℎ 𝑙 −1 
+
+> 𝑡
+
+∈ R𝑑 be the input hidden state entering the MLP (the 𝑑 -dimensional residual stream). The MLP applies two linear layers with a pointwise nonlinearity in between: 
+
+𝑢 𝑙 𝑡 = 𝑊 𝑙  
+
+> 1
+
+ℎ 𝑙 −1 
+
+> 𝑡
+
+, 𝑧 𝑙 𝑡 = 𝜎 (𝑢 𝑙 𝑡 ), 𝑦 𝑙 𝑡 = 𝑊 𝑙  
+
+> 2
+
+𝑧 𝑙 𝑡 , (1) where 𝑊 𝑙  
+
+> 1
+
+∈ R𝑑 𝑙   
+
+> ff ×𝑑
+
+expands the representation from hidden size 𝑑 
+
+to an intermediate width 𝑑 𝑙  
+
+> ff
+
+, 𝜎 (·) is a pointwise activation function (e.g., GELU), and 𝑊 𝑙  
+
+> 2
+
+∈ R𝑑 ×𝑑 𝑙  
+
+> ff
+
+projects back to R𝑑 . The output 𝑦 𝑙 𝑡 is then added back to the residual stream via the standard residual connection. The intermediate activation 𝑧 𝑙 𝑡 ∈ R𝑑 𝑙  
+
+> ff
+
+has 𝑑 𝑙  
+
+> ff
+
+coordinates, and we refer to each coordinate 𝑧 𝑙 𝑡,𝑖 as an MLP channel (the middle “neurons” in Figure. 1). Channel 𝑖 is formed by (a) the 𝑖 -th row of 𝑊 𝑙  
+
+> 1
+
+, which computes 𝑢 𝑙 𝑡,𝑖 , and (b) the 𝑖 -th column of 𝑊 𝑙  
+
+> 2
+
+, which determines how 
+
+𝑧 𝑙 𝑡,𝑖 contributes to the output 𝑦 𝑙 𝑡 . This channel-level view is exactly the structural unit we later keep or remove in SecRL-Prune .The final output of the model depends on these MLP compu-tations across all layers. At each time step 𝑡 , after processing all tokens up to position 𝑡 , the model produces a probability distri-bution over the vocabulary 𝑉 for the next token. We denote this distribution by 
+
+𝑝 (· | 𝑥 <𝑡 ) = softmax  𝑊 out ℎ𝑁 𝑡 
+
+, (2) where ℎ𝑁 𝑡 ∈ R𝑑 is the final-layer hidden state at position 𝑡 and 
+
+𝑊 out ∈ R|𝑉 | × 𝑑 is the output projection. In practice, this distribution is typically peaked: a small set of tokens receives most of the probability mass (labeled “Top Predic-tions” in Fig. 3), while the remaining tokens share the leftover mass (“Others”). 
+
+## 3.2 KL Divergence and Knowledge Distillation 
+
+Our pruning method (presented in Section 4) aims to compress a CodeLLM while preserving its behaviour on code-generation and mutation tasks. We therefore need a simple token-level measure of how close the pruned model’s next-token predictions are to the original model’s predictions. We use the Kullback–Leibler (KL) di-vergence [ 12 ] in a standard knowledge-distillation setup, where the original model is the teacher and the pruned model is the student. KL divergence measures the difference between two probability distributions over the same set 𝑉 . For distributions 𝑝 and 𝑞 over 𝑉 ,it is defined as 
+
+KL (𝑝 ∥ 𝑞 ) =∑︁  
+
+> 𝑣 ∈𝑉
+
+𝑝 (𝑣 ) log 𝑝 (𝑣 )
+
+𝑞 (𝑣 ) . (3) If KL (𝑝 ∥ 𝑞 ) = 0, then 𝑝 and 𝑞 are exactly the same distribution (they assign the same probability to every token). As KL (𝑝 ∥ 𝑞 )
+
+increases, 𝑞 deviates more from 𝑝 , meaning the two distributions become less similar. In our setting, at each time step 𝑡 (given the prefix up to 𝑡 ), the teacher defines a next-token distribution 𝑝 𝑇 (· | prefix up to 𝑡 ) and the student defines 𝑝 𝑆 (· | prefix up to 𝑡 ). The standard distillation objective averages the teacher-to-student divergence over time steps: 
+
+LKD = 1
+
+𝑇 
+
+> 𝑇
+
+∑︁ 
+
+> 𝑡 =1
+
+KL 
+
+
+
+𝑝 𝑇 (· | pref 𝑡 ) 𝑝 𝑆 (· | pref 𝑡 )
+
+
+
+. (4) KL-based distillation is a standard technique for training compact student models to match a larger teacher [ 9, 21 , 26 ]. In contrast,SecRL-Prune reuses this teacher-to-student KL divergence as a similarity signal that later guides our pruning policy (discussed in Section 4.3). 
+
+## 4 The Proposed Approach: SecRL-Prune 
+
+Our overarching objective is to compress a given CodeLLM while preserving its ability to perform functionality-preserving code mu-tation and related adversarial code-generation tasks. To this end, we introduce SecRL-Prune , an RL-based structured pruning frame-work that operates at the level of MLP channels (defined in Sec-tion 3.1) within transformer blocks. Starting from a fully trained CodeLLM (Teacher), SecRL-Prune learns a pruning policy that retains channels most important for code mutation while pruning others, guided by a KL-based distillation reward. We focus on prun-ing the feed-forward (FFN) layers because they contain the majority of model parameters (roughly 60–70%) compared to self-attention, embeddings, and output projection layers. As depicted in Figure 2, SecRL-Prune takes two inputs: a calibra-tion set of code prompts and a pretrained CodeLLM, which serves as the teacher. The core problem is determining, for each MLP chan-nel (in the teacher model) across all layers, whether to keep it or remove it. This defines a combinatorially large search space (i.e., exponential in the total number of channels) that makes exhaustive or random search intractable. We formulate this as a reinforcement learning problem: rather than searching blindly, we train a policy that learns to identify which channels are important and which can be safely pruned, guided by a reward signal that measures how well each candidate mask (a binary vector keep/remove decision for every channel) preserves the teacher’s behavior. A key practical challenge is that naively comparing teacher and student outputs during training would require keeping both models in GPU memory simultaneously. We address this by running the teacher once on the calibration set and caching only its top-𝑃 token predictions at each time step, reducing memory usage significantly. CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany Parsa Memarzadehsaghezi, Pooria Madani, and Khalil El-Khatib 
+
+Figure 2: Overview of SecRL-Prune Using a calibration dataset, we run the pretrained teacher CodeLLM once to cache its top-𝑃 token indices and logits. A pruning policy then proposes MLP-channel masks to form a pruned student, whose predictions on the same top-𝑃 tokens are compared to the cached teacher via KL divergence to produce a reward. The reward updates the policy, and the highest-reward stu-dent is selected as the final compressed CodeLLM. 
+
+With the teacher outputs cached, we train a lightweight pruning policy that proposes, for each layer, which MLP channels to keep and which to remove (Section 4.2). Each decision produces a candi-date pruned model (the student), which we evaluate by comparing its predictions to the cached teacher distribution via KL divergence (Section 4.3). This reward drives the policy toward masks that best preserve the teacher’s output distribution. After training, we select the student achieving the highest reward as the final compressed CodeLLM (Section 4.4)—the policy itself is discarded, having served its purpose as a learned search mechanism. In the following section, we give details on Top-P logit caching, the reward function, policy design, and the final output of SecRL-Prune. 
+
+## 4.1 Compute Top-𝑃 Logits 
+
+Standard knowledge distillation requires running teacher and stu-dent models in parallel, which is memory-prohibitive for large CodeLLMs. We eliminate this bottleneck by precomputing and caching the teacher’s outputs before policy training begins. Fur-thermore, rather than storing the full |𝑉 |-way distribution at each time step, we cache only the top-𝑃 most likely tokens—prior work on logit-based distillation shows that this is often sufficient to match full-vocabulary distillation while being much more memory- and compute- efficient [8, 14, 19]. Concretely, at each time step 𝑡 , we obtain the teacher’s next-token distribution 𝑝 𝑇 (· | 𝑥 <𝑡 ), sort tokens by probability, and retain the 𝑃 most likely tokens, denoted 𝑆 𝑡 . We cache the token IDs in 𝑆 𝑡 
+
+along with their teacher logits. All remaining probability mass is grouped into a single Other bucket: 
+
+𝑝 𝑇 (Other | 𝑥 <𝑡 ) = 1 −∑︁  
+
+> 𝑣 ∈𝑆 𝑡
+
+𝑝 𝑇 (𝑣 | 𝑥 <𝑡 ). (5) 
+
+Figure 3: Output layer probabilities of the CodeLLM, grouped into Top-P tokens and an OTHER bucket. 
+
+Each time step is thus represented by a compact (𝑃 + 1)-way target: the top-𝑃 tokens plus Other (refer to Figure 3). For the stu-dent, we evaluate 𝑝 𝑆 (· | 𝑥 <𝑡 , 𝑚 ) on the teacher-cached top-𝑃 token set 𝑆 𝑡 and define the aggregated remainder mass as 𝑝 𝑆 (Other |
+
+𝑥 <𝑡 , 𝑚 ) = 1 − Í𝑣 ∈𝑆 𝑡 𝑝 𝑆 (𝑣 | 𝑥 <𝑡 , 𝑚 ).
+
+## 4.2 Policy Architecture 
+
+The goal of the policy is to learn a probability distribution over pruning masks—that is, which MLP channels to keep and which to remove across all layers. Rather than enumerating pruning masks directly, we allow the system to learn per-channel scores that de-fine this distribution: higher scores make a channel more likely to be retained. During training, the system samples masks from this distribution, evaluates the resulting student via the KL-based reward, and uses the reward signal to update the scores toward masks that better preserve the teacher’s behaviour. A standard RL approach would train a neural network that ob-serves some representation of the model and outputs pruning deci-sions. We opt for a simpler design: we directly learn one parameter vector per transformer block, where each entry scores the impor-tance of a corresponding MLP channel. Recall from Section 3.1 that in layer 𝑙 the MLP computes an intermediate activation 𝑧 𝑙 𝑡 ∈ R𝑑 𝑙  
+
+> ff
+
+,where each coordinate corresponds to an MLP channel. For each layer 𝑙 , we maintain a learnable vector 𝜋 𝑙 ∈ R𝑑 𝑙  
+
+> ff
+
+with one score per channel. At each policy step, we convert these scores into a probability distribution (via softmax) and sample a fixed number of channels to keep , matching the target pruning ratio. The selected channels form a binary mask 𝑚 𝑙 ∈ { 0, 1}𝑑 𝑙  
+
+> ff
+
+.During a forward pass, we apply the mask after the activation and before the second linear projection (see Figure 1). That is, after computing 𝑧 𝑙 𝑡 = 𝜎 (𝑢 𝑙 𝑡 ), we gate channels by 
+
+𝑧 𝑙 𝑡 ← 𝑚 𝑙 ⊙ 𝑧 𝑙 𝑡 ,𝑦 𝑙 𝑡 = 𝑊 𝑙  
+
+> 2
+
+𝑧 𝑙 𝑡 , (6) where ⊙ denotes element-wise multiplication. SecRL-Prune CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany 
+
+If 𝑚 𝑙 𝑖 = 0, channel 𝑖 contributes nothing to the MLP output (its activation is suppressed), so the corresponding structural compo-nents can be removed: the 𝑖 -th row of 𝑊 𝑙  
+
+> 1
+
+and the 𝑖 -th column of 
+
+𝑊 𝑙  
+
+> 2
+
+. If 𝑚 𝑙 𝑖 = 1, the channel is preserved. Collecting {𝜋 𝑙 }𝑁 𝑙 =1 defines the full pruning policy across the model. 
+
+## 4.3 Reward Function 
+
+The reward should encourage pruning masks that preserve the teacher’s output distribution. Given a mask 𝑚 , let 𝑝 𝑇 (· | 𝑥 <𝑡 ) and 
+
+𝑝 𝑆 (· | 𝑥 <𝑡 , 𝑚 ) denote the teacher and student next-token distribu-tions at time step 𝑡 . We measure their divergence using KL, but rather than summing over the full vocabulary 𝑉 (Eq. 3), we sum over the cached Top-𝑃 set 𝑆 𝑡 and add a term for the Other bucket (Section 4.1). This yields a per-step distillation loss over a compact 
+
+(𝑃 +1) distribution: 
+
+ℓ𝑡 (𝑚 ) =∑︁  
+
+> 𝑣 ∈𝑆 𝑡
+
+𝑝 𝑇 (𝑣 | 𝑥 <𝑡 ) log 𝑝 𝑇 (𝑣 | 𝑥 <𝑡 )
+
+𝑝 𝑆 (𝑣 | 𝑥 <𝑡 , 𝑚 )+ 𝑝 𝑇 (Other | 𝑥 <𝑡 ) log 𝑝 𝑇 (Other | 𝑥 <𝑡 )
+
+𝑝 𝑆 (Other | 𝑥 <𝑡 , 𝑚 ) . (7) We aggregate this loss across all time steps (Eq. 4) to obtain 
+
+LKD (𝑚 ) for a single code prompt, then define the reward as the negative expected distillation loss over the calibration set: 
+
+𝑅 (𝑚 ) = −Eprompt ∈ D cal [L KD (𝑚 )] . (8) Higher reward corresponds to masks that better preserve the teacher’s distribution. We update the policy parameters (i.e., per-channel scores learned by the RL agent, discussed in Section 4.2) using REINFORCE [ 28 ], a policy-gradient algorithm that adjusts the per-channel scores based on the reward signal from sampled masks. 
+
+## 4.4 The output of SecRL-Prune 
+
+After the policy-training loop terminates (refer to Figure 2), we select the pruning mask 𝑚 ★ that achieved the highest reward on the calibration set. We then apply this mask to the teacher model, converting it into a structurally pruned CodeLLM by retaining only the MLP channels marked active by 𝑚 ★ and physically removing the corresponding rows of 𝑊 𝑙  
+
+> 1
+
+and columns of 𝑊 𝑙  
+
+> 2
+
+in each layer (as discussed in Section 4.2). The resulting student is a smaller, faster CodeLLM that requires no teacher cache at inference time. This pruned model (not the policy learned by the RL agent) is the sole output of SecRL-Prune and serves as the final compressed CodeLLM. 
+
+## 5 Experimental Setup 5.1 Models and Baselines 
+
+We evaluate SecRL-Prune on three widely used CodeLLMs: CodeLlama-7B-Instruct, CodeLlama-7B-Python [ 20 ], and Qwen2.5-Coder-7B-Instruct [ 10 ]. For all models, we use the official released checkpoints without additional finetuning. 
+
+SecRL-Prune operates exclusively on the FFN/MLP sub-layers, which contain the majority of model parameters. For compression ratio 𝜌 ∈ { 0.10 , 0.20 , 0.25 , 0.30 }, we prune a 𝜌 fraction of MLP channels in each layer while keeping attention, embeddings, and the output projection unchanged. The resulting student retains the teacher’s depth and attention configuration but has reduced FFN widths, keeping a (1 − 𝜌 ) fraction of FFN channels per layer. We compare against two reference points: (i) the uncompressed teacher as an upper bound, and (ii) PruneNet [ 22 ], a recent state-of-the-art structured pruning method based on policy learning. We select PruneNet as our primary baseline because it has been shown to outperform earlier structured pruning methods, making it a competitive reference for evaluating structured pruning on CodeLLMs [22]. 
+
+## 5.2 Evaluation Protocol 
+
+Our primary objective is to evaluate how well SecRL-Prune pre-serves the code-generation and mutation capabilities of a teacher CodeLLM after structured pruning. We use the HumanEval bench-mark [ 5], which contains Python programming problems with unit tests, and evaluate pruned student models against their correspond-ing teachers. We report three families of metrics. First, pass@k [5] measures execution accuracy using the standard protocol and estimator for 
+
+𝑘 ∈ { 1, 10 , 100 }. Second, var@k [ 17 ] measures diversity among correct outputs on problems where the model produces at least one correct solution. For each HumanEval task, we consider the first 
+
+𝑘 generations, keep only those that pass the unit tests, and then count the number of unique correct solutions using hashes of the normalized code. While pass@k captures whether the model finds any correct solution, var@k captures how diverse its correct solu-tions are; the two should be interpreted together. Third, Preserved correctness (Pres.) reports the percentage of the teacher’s pass@k retained by the pruned student, averaged over 𝑘 ∈ { 1, 10 , 100 }.The calibration set used during pruning contains a total of 300 prompts, sampled from MBPP [ 3] and a small collection of GitHub functions. During pruning, both teacher and student are prompted only with the natural-language description and function signature; unit tests are never used in the RL loop. 
+
+## 5.3 Implementation Details 
+
+All experiments are implemented in PyTorch using HuggingFace Transformers. SecRL-Prune is trained with REINFORCE using a Top-𝑃 cache size of 𝑃 = 128 , batch size of 300, learning rate of 
+
+3 × 10 −4, and 10 policy updates per compression ratio. Experiments run on NVIDIA A100 40 GB GPUs, and we report the mean over five random seeds for each configuration. To quantify training cost, we measure peak GPU memory usage during RL optimization (Figure 5). Because SecRL-Prune caches the teacher once and trains with only the student in memory, it uses substantially less peak memory than approaches that require both models to remain loaded throughout training. 
+
+## 5.4 Real-World Malware Mutation Against VirusTotal Detectors 
+
+To evaluate whether semantics-preserving code mutation affects malware detectability, we conducted a small case study using three real-world samples from MalwareBazaar [1] (two Python and one JavaScript). For each sample, we first uploaded the original file to VirusTotal [ 24 ] and recorded the point-in-time detection score as CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany Parsa Memarzadehsaghezi, Pooria Madani, and Khalil El-Khatib     
+
+> (a) Preserved HumanEval correctness vs. compression ratio for three CodeLLMs under SecRL-Prune and PruneNet.
+> (b) Preserved HumanEval variability vs. compression ratio for three CodeLLMs under SecRL-Prune and PruneNet.
+
+Figure 4: Preservation trends on HumanEval under SecRL-Prune vs. PruneNet. 
+
+“flagging engines / total engines.” Next, we randomly selected a sin-gle function in each sample and generated a syntactically different but semantically equivalent rewrite using a pruned CodeLLM at 20% compression (CodeLlama-7B-Instruct or Qwen2.5-Coder-7B-Instruct), leaving the rest of the file unchanged. We then uploaded the mutated variant to VirusTotal and recorded the updated detec-tion score under the same reporting format. We report before/after detections for each sample and mutator; results are point-in-time and intended as an illustrative case study rather than a large-scale statistical evaluation. 
+
+## 6 Results and Discussion 
+
+We evaluate SecRL-Prune across three CodeLLMs and four com-pression ratios, comparing against PruneNet and the uncompressed teacher. Our results demonstrate that SecRL-Prune consistently preserves more of the teacher’s coding correctness and code muta-tion than the baseline, while requiring substantially less memory during training. We discuss each finding in turn, then address limi-tations and directions for future work. 
+
+## 6.1 Preserved Coding Capability 
+
+Table 1 summarizes HumanEval pass@k scores across all configura-tions. As expected, the uncompressed teacher attains the strongest performance, and all pruning methods degrade as compression in-creases. However, SecRL-Prune degrades more gracefully than the current state-of-the-art PruneNet [22] across the board. At 10% compression, SecRL-Prune retains roughly 80–85% of the teacher’s average pass@k, compared to 45–72% for PruneNet. The gap widens as pruning becomes more aggressive: at 30% compres-sion, SecRL-Prune roughly doubles PruneNet’s preserved correct-ness on Qwen2.5-Coder-7B-Instruct (63.7% vs. 35.7%) and maintains clear advantages on both CodeLlama variants. Figure 4 visualizes this trend: SecRL-Prune follows a flatter, higher preservation curve at every compression level, with the advantage most pronounced at aggressive pruning ratios. These results indicate that KL-guided channel selection effec-tively identifies which FFN capacity is essential for code gener-ation. Even at 30% compression—where absolute pass@1 drops substantially—the pruned models still solve a non-trivial fraction of HumanEval tasks, suggesting that CodeLLMs retain considerable capability even under aggressive structured pruning. 
+
+## 6.2 Preserved Code Mutation Capability 
+
+Beyond correctness, a mutation-capable CodeLLM must generate diverse correct variants. Table 2 reports var @𝑘 , which measures diversity (i.e., producing correct semantics with different syntac-tical structures) among correct outputs on tasks where the model produces at least one solution. Across all three CodeLLMs, SecRL-Prune preserves var @𝑘 sub-stantially better than PruneNet, especially at higher compression ra-tios. On Qwen2.5-Coder-7B-Instruct, light pruning even slightly im-proves solution diversity (var@10 increases from 34.71% to 35.72% SecRL-Prune CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany 
+
+Table 1: HumanEval functional correctness (pass@k) for three CodeLLMs under different structured pruning methods. For each model and compression level, “Pres.” is the average, over pass@1/10/100, of how large the pruned model’s pass@k remains relative to the dense model’s pass@k, reported as a percentage. 
+
+Comp. Method Qwen2.5-Coder-7B-Instruct CodeLlama-7B-Instruct CodeLlama-7B-Python 
+
+p@1 p@10 p@100 Pres. p@1 p@10 p@100 Pres. p@1 p@10 p@100 Pres. 
+
+0% Dense 71.57% 85.58% 89.63% 100.0% 27.67% 60.04% 83.53% 100.0% 36.70% 68.30% 87.80% 100.0% 10% SecRL-Prune 54.79% 73.18% 84.21% 85.3% 21.37% 46.91% 72.25% 80.6% 26.20% 53.50% 78.04% 79.5% 
+
+PruneNet 46.43% 62.08% 70.34% 72.0% 14.96% 33.07% 49.85% 56.3% 14.16% 30.09% 42.40% 43.6% 20% SecRL-Prune 41.95% 60.78% 78.65% 72.5% 15.06% 33.78% 60.97% 61.2% 18.94% 35.93% 58.39% 56.9% 
+
+PruneNet 21.30% 38.57% 51.05% 43.9% 7.98% 20.50% 37.19% 35.8% 10.55% 20.77% 33.10% 32.3% 25% SecRL-Prune 38.16% 57.38% 75.14% 68.1% 11.91% 27.72% 55.33% 51.8% 15.32% 31.58% 53.68% 49.7% 
+
+PruneNet 18.70% 34.71% 47.29% 39.8% 5.96% 14.73% 29.88% 27.3% 7.90% 15.04% 23.80% 23.6% 30% SecRL-Prune 34.37% 53.98% 71.63% 63.7% 8.75% 20.65% 49.69% 41.8% 11.70% 27.23% 48.97% 42.5% 
+
+PruneNet 16.10% 30.85% 43.53% 35.7% 4.20% 9.70% 23.85% 20.0% 5.80% 10.00% 17.60% 16.8% 
+
+Table 2: HumanEval mutation diversity (var@k) for three CodeLLMs under different structured pruning methods. “Pres.” is the average, over var@10 and var@100, of how large the pruned model’s var@k remains relative to the dense model’s var@k, reported as a percentage. 
+
+Comp. Method Qwen2.5-Coder-7B-Instruct CodeLlama-7B-Instruct CodeLlama-7B-Python 
+
+var@10 var@100 Pres. var@10 var@100 Pres. var@10 var@100 Pres. 
+
+0% Dense 34.71% 12.50% 100.0% 33.89% 15.24% 100.0% 35.88% 20.06% 100.0% 10% SecRL-Prune 35.72% 13.44% 105.2% 31.97% 12.22% 87.3% 29.44% 15.04% 78.5% 
+
+PruneNet 29.33% 12.08% 90.6% 26.62% 7.11% 62.6% 22.18% 6.05% 46.0% 20% SecRL-Prune 27.12% 12.17% 87.7% 26.98% 9.50% 71.0% 26.96% 10.39% 63.5% 
+
+PruneNet 20.24% 10.23% 70.1% 18.80% 4.75% 43.3% 16.46% 4.19% 33.4% 25% SecRL-Prune 27.71% 12.37% 89.4% 23.64% 8.25% 61.9% 23.00% 8.72% 53.8% 
+
+PruneNet 18.51% 9.74% 65.6% 14.27% 3.56% 32.7% 12.43% 2.63% 23.9% 30% SecRL-Prune 26.48% 12.17% 86.8% 18.91% 7.08% 51.1% 20.53% 7.55% 47.4% 
+
+PruneNet 16.72% 9.21% 60.9% 9.83% 2.67% 23.3% 8.57% 1.75% 16.3% at 10% compression), and var@100 remains close to the dense base-line across compression levels. In contrast, PruneNet degrades more sharply: at 30% compression, SecRL-Prune retains var@100 of 7– 8% on the CodeLlama variants, whereas PruneNet collapses below 3%. These findings suggest that our channel selection retains not just the capacity to produce correct code, but also the variability needed for effective code mutation. However, var @𝑘 must be interpreted alongside pass@k: since var @𝑘 is computed only over solved prob-lems, a model with low pass@k can still exhibit relatively high 
+
+var @𝑘 on the few tasks it solves. The two metrics together provide a more complete picture of both correctness and diversity. 
+
+## 6.3 Resource Efficiency and Security Implications 
+
+Figure 5 compares peak GPU memory during policy training at 20% compression. Across all three teachers, SecRL-Prune uses less than half the memory of PruneNet: peak usage drops from 33– 37 GiB to 14–16 GiB, a consistent 55–60% reduction. This efficiency stems directly from our caching design: SecRL-Prune runs policy optimization with only the student in memory, whereas PruneNet requires both teacher and student to remain loaded throughout training. From a security perspective, this lower resource footprint car-ries important implications. If a mutation-capable CodeLLM can be trained on a single commodity GPU and compressed to run on endpoint-class devices—exactly where many intrusions origi-nate—it becomes more realistic to embed such models into malware or operate them on cheap, disposable infrastructure. Our results sug-gest that RL-based structured pruning not only preserves mutation capability, but may also lower the barrier to obtaining and deploy-ing specialized code-mutation engines. This dual-use concern moti-vates continued research into detection and defense mechanisms alongside compression techniques. CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany Parsa Memarzadehsaghezi, Pooria Madani, and Khalil El-Khatib 
+
+Figure 5: Peak GPU memory usage during pruning-policy training at 20% compression: SecRL-Prune consistently uses less than half the memory of PruneNet. 
+
+## 6.4 Real-World Impact: Malware Detection Evasion 
+
+The metrics reported thus far—pass@k and var @𝑘 —measure cor-rectness and diversity on programming benchmarks, but they do not directly demonstrate whether pruned CodeLLMs retain prac-tical utility for adversarial tasks. To bridge this gap, we evaluate whether mutations generated by our compressed models can evade real-world malware detection systems. Figure 6 illustrates our experimental setup. We selected three malware samples—two written in Python and one in JavaScript—to test generalization across languages. For each sample, we used our pruned CodeLLMs (at 20% compression) to generate a single semantics-preserving mutation of one function, then submitted both the original and mutated versions to VirusTotal [ 24 ], which aggregates verdicts from over 60 antivirus and anti-malware en-gines. We compare the detection rates before and after mutation to quantify evasion effectiveness. Table 3 reports the results, and also includes a coarse mutation magnitude measure: Mutation Level (%) ,defined as the line-diff ratio between the mutated file and the orig-inal file (i.e., the percentage of lines added, removed, or modified relative to the original file). In our experiments, we also verified that the mutated samples remained executable and functionally correct. The results are striking. For the first Python sample, detections drop from 28/63 to 12/63 (mutated using pruned CodeLlama) and 9/63 (mutated using pruned Qwen)—a 57–68% reduction in detec-tion rate from a single function rewrite. The second Python sample shows an even larger effect, falling from 25/63 to 7/63 and 6/63 (72–76% reduction). Most dramatic is the JavaScript sample, where detections plummet from 9/62 to just 1/62 for both mutators—an 88% reduction. Because files are small and the mutated function can occupy a large fraction of total lines, this coarse line-diff ratio can appear high even when only one function is rewritten. These findings carry two important implications. First, they validate that our pruned CodeLLMs retain meaningful mutation capability beyond what benchmark metrics alone can capture: a      
+
+> Original Malware Samples (Python, JavaScript)
+> VirusTotal Pruned CodeLLM (20% compression)
+> # of Detection (i.e., 𝐷 org )Mutated Code
+> VirusTotal
+> # of Detection (i.e., 𝐷 mut )
+> Detection Reduction: Δ𝐷
+> Original path
+> Mutation path
+
+Figure 6: Experimental framework for evaluating detection evasion. Original malware is submitted directly to VirusTotal (left path) and also mutated by a pruned CodeLLM before submission (right path). The detection reduction Δ𝐷 mea-sures evasion effectiveness. 
+
+model compressed by 20% can still generate rewrites (i.e., mutate) that substantially degrade signature- and pattern-based detection. Second, the non-zero residual detections indicate that some engines employ more robust features beyond superficial syntax, suggesting a path forward for defenders. Overall, this experiment demonstrates that the security concerns motivating our work are not hypotheti-cal—compressed CodeLLMs pose a realistic threat to static malware defenses. 
+
+## 7 Conclusion and Future Work 
+
+This paper studied an emerging security risk: whether CodeLLMs can be structurally compressed while retaining the functionality-preserving code mutation behavior that enables rapid generation of malware variants and evasion of static defenses. We introduced 
+
+SecRL-Prune , an RL-based structured pruning framework that treats channel selection as a learned search problem using a KL-guided teacher–student reward, together with a Top-𝑃 caching mechanism that reduces peak GPU memory by over 50% compared to prior methods. Across three real-world CodeLLMs and four compression ra-tios, SecRL-Prune consistently preserved more execution-level correctness (pass@k) and mutation diversity ( var @𝑘 ) than a strong policy-learning baseline. These results show that code-mutation ca-pability can survive significant structured compression, increasing the feasibility of compact mutation-focused models while helping defenders assess the risk posed by miniaturized mutation engines. Several limitations point toward future work: the reward is de-fined over a calibration distribution and truncated Top-𝑃 support, SecRL-Prune CODASPY ’26, June 23–25, 2026, Frankfurt am Main, Germany 
+
+Table 3: VirusTotal detections (flagging engines / total) be-fore vs. after semantics-preserving mutation by pruned CodeLLMs at 20% compression (point-in-time). A higher re-duction in detection is better. 
+
+Sample Variant / Mu-tator Mutation Level % Detection Change in Detection Anubis Family Sample 1(Python) (SHA-256: 1c486702...2c98a )Original – 0% 28/63 Mutated CodeLlama-7B-Instruct (20% pruned) 8% 12/63 ↓ 57% 
+
+Mutated Qwen2.5-Coder-7B-Instruct (20% pruned) 60% 9/63 ↓ 68% 
+
+Anubis Family Sample 2(Python) (SHA-256: 500c9ec9...2cb42 )Original – 0% 25/63 Mutated CodeLlama-7B-Instruct (20% pruned) 18% 7/63 ↓ 72% 
+
+Mutated Qwen2.5-Coder-7B-Instruct (20% pruned) 50% 6/63 ↓ 76% 
+
+SilentStealer Sample (Javascript) (SHA-256: 79f8b6b8...3b55d )Original – 0% 9/62 Mutated CodeLlama-7B-Instruct (20% pruned) 5% 1/62 ↓ 88% 
+
+Mutated Qwen2.5-Coder-7B-Instruct (20% pruned) 11% 1/62 ↓ 88% 
+
+which may under-emphasize rare or long-tail behaviors; var @𝑘 cap-tures diversity only among correct outputs; and we prune only FFN channels while leaving attention untouched. Future work should explore broader calibration data, alternative diversity metrics, joint pruning of FFN and attention components, and staged prune-and-recover pipelines with intermediate fine-tuning. To our knowledge, this is the first structured pruning framework tailored specifically to CodeLLMs. While the pruned models re-main meaningfully capable, a noticeable gap to the dense teacher persists, motivating broader validation across additional models, benchmarks, and programming languages. 
+
+## References 
+
+[1] abuse.ch. [n. d.]. MalwareBazaar. Website. https://bazaar.abuse.ch/. [2] Anthropic. 2025. Disrupting the first reported AI-orchestrated cyber espionage campaign. Anthropic News (13 November 2025). https://www.anthropic.com/ news/disrupting-AI-espionage Accessed: 2025-12-10. [3] Jacob Austin, Augustus Odena, Maxwell Nye, Maarten Bosma, et al . 2021. Program Synthesis with Large Language Models. arXiv preprint arXiv:2108.07732 (2021). https://arxiv.org/abs/2108.07732 [4] Ahmed Bensaoud, Jugal Kalita, and Mahmoud Bensaoud. 2024. A Survey of Malware Detection Using Deep Learning (Static, Dynamic, Hybrid). Machine Learning with Applications 16 (2024), 100546. doi:10.1016/j.mlwa.2024.100546 [5] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, and et. al. 2021. Evaluating Large Language Models Trained on Code. (2021). arXiv:2107.03374 [cs.LG] [6] Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. 2023. QLoRA: Efficient Finetuning of Quantized LLMs. In Advances in Neural Infor-mation Processing Systems (NeurIPS) . https://arxiv.org/abs/2305.14314 arXiv preprint arXiv:2305.14314. [7] Elias Frantar and Dan Alistarh. 2023. SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot. In Proceedings of the 40th International Conference on Machine Learning (ICML) (Proceedings of Machine Learning Research, Vol. 202) . 10323–10337. https://arxiv.org/abs/2301.00774 [8] Gemma Team. 2025. Gemma 3 Technical Report. arXiv preprint arXiv:2503.19786 
+
+(2025). https://arxiv.org/abs/2503.19786 [9] Yuxian Gu, Li Dong, Furu Wei, and Minlie Huang. 2023. MiniLLM: Knowledge Distillation of Large Language Models. arXiv preprint arXiv:2311.13874 (2023). https://arxiv.org/abs/2311.13874 Appeared at ICLR 2024. [10] Binyuan Hui, Fan Yang, Yuxuan Ye, et al . 2024. Qwen2.5-Coder Technical Report. 
+
+arXiv preprint arXiv:2409.12186 (2024). https://arxiv.org/abs/2409.12186 [11] Evangelos Konstantinou. 2008. Metamorphic Virus: Analysis and Detection . Tech-nical Report RHUL-MA-2008-02. Royal Holloway, University of London. [12] Solomon Kullback and Richard A. Leibler. 1951. On Information and Sufficiency. 
+
+Annals of Mathematical Statistics 22, 1 (1951), 79–86. [13] Robert Lemos. 2025. How Malware Authors Are Incorporating LLMs to Evade De-tection. Dark Reading (26 November 2025). https://www.darkreading.com/threat-intelligence/malware-authors-incorporate-llms-evade-detection Accessed: 2025-12-10. [14] Ming Li, Fan Zhou, and Xia Song. 2025. BiLD: Bi-directional Logits Difference Loss for Large Language Model Distillation. In Proceedings of the 31st International Conference on Computational Linguistics (COLING 2025) .[15] Huan Liu, Chenyang Tian, Xiyu Wei, Jiayi Dai, Qiang Liu, Tao Wei, Qian Li, and Lin Li. 2025. RAP: Runtime-Adaptive Pruning for LLM Inference. arXiv preprint arXiv:2505.17138 (2025). https://arxiv.org/abs/2505.17138 [16] Xinyin Ma, Gongfan Fang, and Xinchao Wang. 2023. LLM-Pruner: On the Struc-tural Pruning of Large Language Models. In Advances in Neural Information Processing Systems 36 (NeurIPS 2023) . https://arxiv.org/abs/2305.11627 [17] Pooria Madani. 2024. Metamorphic Malware Evolution: The Potential and Peril of Large Language Models. CoRR abs/2410.23894 (2024). https://arxiv.org/abs/ 2410.23894 Also in Proc. 5th IEEE Int. Conf. on Trust, Privacy and Security in Intelligent Systems and Applications (TPS-ISA), 2023. [18] Matias Madou, Bertrand Anckaert, Patrick Moseley, Saumya Debray, Bjorn De Sut-ter, and Koen De Bosschere. 2006. Software Protection Through Dynamic Code Mutation. In Information Security Applications (WISA 2005) (Lecture Notes in Computer Science, Vol. 3786) . Springer, 194–206. doi:10.1007/11604938_16 [19] Huan Peng, Xiang Lv, Yuxiang Bai, Zhewei Yao, Jing Zhang, Lei Hou, and Juanzi Li. 2025. Pre-training Distillation for Large Language Models: A Design Space Exploration. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (ACL 2025, Long Papers) . Vienna, Austria, 3603–3618. [20] Baptiste Rozière, Jonas Gehring, Fabian Gloeckle, Sten Sootla, Itai Gat, Xiao-qing Ellen Tan, et al . 2023. Code Llama: Open Foundation Models for Code. arXiv preprint arXiv:2308.12950 (2023). https://arxiv.org/abs/2308.12950 [21] Victor Sanh, Lysandre Debut, Julien Chaumond, and Thomas Wolf. 2019. Distil-BERT, a Distilled Version of BERT: Smaller, Faster, Cheaper and Lighter. arXiv preprint arXiv:1910.01108 (2019). https://arxiv.org/abs/1910.01108 [22] Ayan Sengupta, Siddhant Chaudhary, and Tanmoy Chakraborty. 2025. You Only Prune Once: Designing Calibration-Free Model Compression with Policy Learning. In Proceedings of the Thirteenth International Conference on Learning Representations (ICLR) . https://doi.org/10.48550/arXiv.2501.15296 [23] Mohammad Setak and Pooria Madani. 2024. Fine-tuning LLMs for Code Mutation: A New Era of Cyber Threats. In 2024 IEEE 6th International Conference on Trust, Privacy and Security in Intelligent Systems and Applications (TPS-ISA) . IEEE. [24] VirusTotal. [n. d.]. VirusTotal. Website. https://www.virustotal.com/. [25] Lin Wang, Danfeng Xu, Jiang Ming, Yue Fu, and Dinghao Wu. 2019. MetaHunt: Towards Taming Malware Mutation via Studying the Evolution of Metamorphic Virus. In Proceedings of the 3rd Software Protection Workshop (SPRO’19) .[26] Wenhui Wang, Furu Wei, Li Dong, Hangbo Bao, Nan Yang, and Ming Zhou. 2020. MiniLM: Deep Self-Attention Distillation for Task-Agnostic Compression of Pre-Trained Transformers. In Advances in Neural Information Processing Systems 33 (NeurIPS 2020) .[27] Xiyu Wei, Yiming Li, Liang Zhao, and Xiang Ren. 2024. Effectively Training LLMs with Structured Feedforward Layers. In Advances in Neural Information Processing Systems .[28] Ronald J. Williams. 1992. Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning. Machine Learning 8, 3–4 (May 1992), 229–256. doi:10.1007/BF00992696 [29] Wing Wong and Mark Stamp. 2006. Hunting for Metamorphic Engines. Journal in Computer Virology 2, 3 (2006), 211–229. doi:10.1007/s11416-006-0018-1

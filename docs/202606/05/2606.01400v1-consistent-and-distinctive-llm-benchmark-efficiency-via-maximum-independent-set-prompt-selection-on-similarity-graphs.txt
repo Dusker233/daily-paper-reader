@@ -1,0 +1,454 @@
+Title: Consistent and Distinctive: LLM Benchmark Efficiency via Maximum Independent Set Prompt Selection on Similarity Graphs
+
+URL Source: https://arxiv.org/pdf/2606.01400v1
+
+Published Time: Tue, 02 Jun 2026 02:12:07 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# Consistent and Distinctive: LLM Benchmark Efficiency via Maximum Independent Set Prompt Selection on Similarity Graphs 
+
+Denica Kjorvezir 1,2 Marko Djukanović 3 Ana Gjorgjevikj 1 Gjorgjina Cenikj 1
+
+Tome Eftimov 1,2 1Computer Systems Department, Jožef Stefan Institute, Ljubljana, Slovenia 
+
+> 2
+
+Jožef Stefan International Postgraduate School, Ljubljana, Slovenia 
+
+> 3
+
+Center for Astrophysics and Cosmology, University of Nova Gorica, Nova Gorica, Slovenia 
+
+Abstract Evaluating large language models (LLMs) across comprehensive benchmarks is expensive and time-consuming. We propose a graph-based prompt selection framework that models each benchmark as a similarity graph—nodes are prompts connected if their embedding-space distance falls above a configurable threshold—and applies Maximum Independent Set (MIS) algorithms to select a maximally diverse, non-redundant subset. We evaluate four MIS solvers (CPLEX, GREEDY, Online-MIS, ReduMIS) across six embedding models, three distance measures, six percentile thresholds, and four benchmarks (GPQA, IFEval, MMLU-Pro, Omni-MATH) covering 66 LLMs. Our central hypothesis—that repeated se-lection under different random seeds yields consistent LLM rankings that may also differ from the full-benchmark baseline—is strongly confirmed: Kendall’s 𝑊 ≥ 0.90 in 99.2% of stochastic configurations (mean 𝑊 = 0.997 ± 0.008 ), while at higher percentile thresholds selected subsets achieve 25–48% prompt reduction on average. Ranking divergence from the full benchmark ( 𝜌 < 0.95 ) occurs in only 15.95% of configurations, concentrated at low thresholds ( 𝑝 10 –𝑝 20 ) and benchmarks (GPQA, IFEval), identifying overly dense graphs as the primary failure mode. 
+
+1 Introduction 
+
+Rigorous evaluation of large language models (LLMs) requires benchmarks large enough to yield statistically reliable scores, yet small enough to be tractable at scale. Widely used benchmarks such as MMLU-Pro (Wang et al., 2024) and GPQA (Rein et al., 2023) contain hundreds to thou-sands of questions, incurring substantial inference costs for frontier LLMs and large-scale LLM leaderboards (Polo et al., 2024; Liang et al., 2022). Two related but distinct problems motivate this work. The first is efficiency : can we select a compact, representative subset that preserves the rela-tive ordering (ranking) of LLMs while substantially reducing evaluation overhead? The second is coverage bias : if the prompts of a benchmark are unevenly distributed in embedding space (overrepresenting certain semantic regions) the benchmark implicitly upweights model perfor-mance on those question types. For instance, if a reasoning benchmark contains disproportion-ately many similar chemistry questions, models that excel at chemistry receive inflated scores regardless of their general capability. This structural bias is invisible in aggregate performance metrics, yet it distorts rankings by amplifying performance on overrepresented facets of the capa-bility space (Schilling-Wilhelmi et al., 2025; Truong et al., 2025). Crucially, both problems share a single root cause: semantic redundancy among prompts. If many prompts are mutually close in embedding space, they i) waste evaluation budget and ii) over-weight the capability facet they share. A method that eliminates semantic redundancy, therefore 
+
+Preprint. Under review. 1   
+
+> arXiv:2606.01400v1 [cs.CL] 31 May 2026 Benchmark prompts
+> N = 446–1000
+> Embedding model
+> BGE, E5, GIST Nomtron, Qwen
+> Similarity graph
+> G = (V, E) threshold θ, measure m
+> MIS
+> CPLEX / GREEDY Online, ReduMIS ×5 seeds
+> Subset S ⊆ Π
+> + Rankings
+> ρevaluation 66 LLMs
+
+Figure 1: The MIS-based prompt selection pipeline. Prompts are encoded, a similarity graph is con-structed using a distance threshold, and an MIS algorithm selects a maximally diverse subset for LLM evaluation. 
+
+addresses efficiency and coverage bias simultaneously. We propose modelling each benchmark as a prompt similarity graph 𝐺 = (𝑉 , 𝐸 ), where each prompt is a node (𝑣 ∈ 𝑉 ) and an edge connects two prompts (( 𝑢, 𝑣 ) ∈ 𝐸 ) if their embedding-space distance falls above a configurable threshold 
+
+(𝑑 (𝑒 𝑢 , 𝑒 𝑣 ) ≥ 𝜃 ). A Maximum Independent Set (MIS) of this graph—the largest set of mutually non-adjacent nodes—corresponds to a maximally non-redundant subset: no two selected prompts are semantically close, and no semantic region is doubly counted. Figure 1 shows the full pipeline; Figure 2 illustrates the coverage correction effect. This design gives rise to our central hypothe-sis: repeated MIS selection under different random seeds yields consistent LLM rankings—seeds agree with each other—while those rankings may differ from the full-benchmark baseline when the latter is coverage-biased. 
+
+Our key contributions are: i) A graph-theoretic prompt selection framework that simultaneously addresses evaluation efficiency and coverage bias by selecting a maximally diverse, non-redundant subset via MIS, supporting four solvers, six embedding models, three distance measures, and six distance thresholds; ii) Empirical confirmation of the consistency hypothesis across 2,563 unique configurations and 66 LLMs on four benchmarks: Kendall’s 𝑊 ≥ 0.90 in 99.2% of stochastic con-figurations (mean 𝑊 = 0.997 ± 0.008 ), with only 25–48% prompt reduction at higher percentile thresholds; ranking divergence ( 𝜌 < 0.95 ) is confined to 15.95% of configurations and is heav-ily concentrated at low thresholds ( 𝑝 10 –𝑝 20 ) and benchmarks (GPQA, IFEval), pinpointing overly dense graphs as the primary failure mode; and iii) Detailed analysis of how selection quality and consistency vary with algorithm, embedding model, distance measure, threshold, and benchmark. 
+
+2 Related Work 
+
+LLM Benchmark Design and Efficiency: The LLM benchmark landscape has grown rapidly, with evaluation scenarios spanning reasoning (Wang et al., 2024; Rein et al., 2023), instruction following (Zhou et al., 2023), and advanced mathematics (Cobbe et al., 2021; Hendrycks et al., 2021; Gao et al., 2025). Large-scale multi-dataset benchmarks such as Stanfords HELM (Liang et al., 2022), Chatbot Arena (Zheng et al., 2023), Open LLM Leaderboard by Hugging Face, and LiveBench (White et al., 2024) have become central infrastructure for standardized LLM evalua-tion across diverse scenarios and metrics. Several works have noted that full benchmark evaluation is costly and that strategic subset se-lection can maintain ranking fidelity (Perlitz et al., 2023; Vivek et al., 2024). Recent Item Response Theory (IRT)-based work explores compressing LLM benchmarks without sacrificing reliability. Polo et al. (2024) show that small, IRT-curated subsets can reproduce full-benchmark results from 100 examples. Zhou et al. (2026) use item difficulty and discrimination to select informative in-stances and diagnose saturated benchmarks, while Truong et al. (2025) select maximally informa-tive items relative to a model’s estimated ability. Zhang et al. (2026) cautions that subset-based prediction degrades at the frontier, where stronger models require extrapolation beyond observed 
+
+22 0 2 4                  
+
+> Embedding dim 1 (t-SNE)
+> 2
+> 0
+> 2
+> Embedding dim 2 (t-SNE)
+> Overrepresented
+> region (Domain A)
+> (a) Full benchmark
+> (204 prompts)
+> 2024
+> Embedding dim 1 (t-SNE)
+> 2
+> 0
+> 2
+> Embedding dim 2 (t-SNE)
+> Coverage spread
+> across all domains
+> (b) MIS-selected subset
+> (16 prompts, 8% of full)
+> 0510 15 20 25 30 35 40
+> % of selected prompts
+> Domain H
+> Domain G
+> Domain F
+> Domain E
+> Domain D
+> Domain C
+> Domain B
+> Domain A
+> Uniform
+> (c) Domain representation
+> Full
+> MIS
+> Domain A Domain B Domain C Domain D Domain E Domain F Domain G Domain H
+
+Figure 2: Embedding space coverage illustration. (a) Full benchmark: Domain A is overrepresented, biasing evaluation toward that capability facet. (b) MIS-selected subset: coloured points are selected; grey are excluded. Selection is spread uniformly across all domains. (c) Do-main proportions before (grey) and after (coloured) MIS selection, approaching the uniform baseline (dashed). This coverage correction is a structural property of MIS, not a tunable parameter. 
+
+behavior. Chen et al. (2025) apply multidimensional IRT to embed LLMs and benchmark items in a shared latent space, improving both prediction and compression. Unlike these approaches, which require iterative model interaction, our method is model-agnostic , selecting prompts based solely on pairwise similarity. 
+
+Coverage Bias in Benchmarks: A less-studied problem is that benchmark prompts may be un-evenly distributed in capability space. If a benchmark overrepresents certain question types, e.g., many paraphrases of the same underlying reasoning pattern, it implicitly amplifies those capabili-ties in the final score. Mizrahi et al. (2024) and Gururangan et al. (2018) show that dataset artefacts and distributional biases systematically favour particular model families. Our work formalises this concern geometrically: overrepresentation corresponds to prompt density in specific regions of embedding space, and MIS selection corrects it by construction—the independent set property ensures no region is doubly counted. The graph-based selection methodology underlying our approach originates from SELEC-TOR (Cenikj et al., 2022), a framework addressing reproducibility and coverage bias in numeri-cal optimization benchmarking. SELECTOR evaluates clustering and graph-theoretic heuristics-dominating sets and maximal independent sets (MIS) in a pairwise similarity graphto construct non-redundant, coverage-uniform subsets that yield reproducible comparisons. This methodology has since been adopted in several follow-up studies: Eftimov et al. (2022) extend it to time series classification benchmarks, showing that coverage-uniform subsets yield more robust statistical conclusions than using all available datasets; Cenikj et al. (2024) apply it to deduplicate optimiza-tion instances before training a transformer-based algorithm selector; and Kostovska et al. (2023) apply it to select diverse algorithm portfolios from CMA-ES variants. However, all prior work constructs similarity graphs from domain-specific numeric representations using cosine similar-ity and a narrow set of fixed thresholds (0.80, 0.90, 0.95), with only two graph algorithms evaluated. Our work extends SELECTOR to natural language prompts, employing nine embedding methods, three distance measures, and six data-driven thresholds per embeddingdistance combination, and evaluating four MIS solvers across four NLP benchmarks and 66 LLMs. We show that the structural coverage guarantees established in optimization benchmarking transfer to LLM evaluation. 
+
+33 Methodology 
+
+Figure 1 shows the full methodology pipeline. 
+
+Embedding Construction: To compare prompts geometrically, each prompt 𝑝 𝑖 ∈ Π must first be mapped to a fixed-dimensional vector representation. An embedding model 𝑓 : P → R𝑑 
+
+encodes the semantic content of a prompt into a dense vector 𝑒 𝑖 = 𝑓 (𝑝 𝑖 ), where 𝑑 is the model-specific embedding dimension. Embeddings are designed so that semantically similar inputs map to nearby points in R𝑑 , enabling distance-based reasoning about prompt redundancy. Proximity is measured via a distance function 𝑚 (e.g., cosine or Euclidean distance) applied to normalized vectors. 
+
+Similarity Graph Construction: Given the prompt embeddings {𝑒 1, . . . , 𝑒 𝑁 }, we construct a sim-ilarity graph 𝐺 = (𝑉 , 𝐸 ) that explicitly captures redundancy relationships among prompts. Each prompt 𝑝 𝑖 is represented by a node 𝑣 𝑖 ∈ 𝑉 . An undirected edge (𝑣 𝑖 , 𝑣 𝑗 ) ∈ 𝐸 is added whenever the pairwise distance between embeddings exceeds a predefined threshold, i.e., 𝑑 (𝑒 𝑖 , 𝑒 𝑗 ) ≥ 𝜃 . The threshold 𝜃 controls the strictness of similarity enforcement. Smaller threshold values produce denser graphs by connecting prompts that differ even moderately, whereas larger thresholds gener-ate sparser graphs by connecting only highly similar prompts. Under this construction, an indepen-dent set corresponds to a subset of prompts whose pairwise distances remain below the threshold 
+
+𝜃 , thereby ensuring semantic coherence and redundancy preservation within the selected subset. The resulting graph therefore, serves as the structural foundation for the deduplication and subset selection procedures described in the following sections. 
+
+Maximum Independent Set: With the similarity graph 𝐺 in hand, we cast benchmark dedupli-cation as a Maximum Independent Set (MIS) problem: find the largest subset 𝑆 ⊆ 𝑉 such that no two nodes in 𝑆 share an edge, i.e., two selected prompts are mutually similar under threshold 
+
+𝜃 . For any two selected prompts 𝑝 𝑖 , 𝑝 𝑗 ∈ 𝑆 , 𝑑 (𝑒 𝑖 , 𝑒 𝑗 ) < 𝜃 by the independence constraint. This means the selected subset cannot over-concentrate in any embedding-space region of radius 𝜃 /2:at most one prompt can be drawn from any such region. In contrast, random or stratified sampling provides no such guarantee. Importantly, since all prompts in an MIS satisfy pairwise distance con-straints below 𝜃 , the resulting subset provides a compressed semantic representation of a larger benchmark region. This enables benchmark reduction through representative prompt selection while preserving semantic consistency. Consequently, changes in downstream LLM rankings are not merely a consequence of random sampling variation, but reflect differences in the semantic structure retained after compression. 
+
+Evaluation Metrics: Having obtained a deduplicated subset 𝑆 via MIS, we assess both its effect on LLM rankings and the internal stability of stochastic solvers. For each selected subset 𝑆 we com-pute mean LLM accuracy restricted to 𝑆 , yielding ranking 𝜎 (𝑆 ), and compare to the full-benchmark ranking 𝜎 (Π) using Spearman’s rank correlation coefficient 𝜌 . For stochastic MIS algorithms, in-ternal concordance across all repeated seeds is measured by Kendall’s 𝑊 (Coefficient of Concor-dance): 
+
+𝑊 = S
+
+𝑚 2 (𝑛 3 − 𝑛 )/ 12 − 𝑚 ∑𝑗 𝑇 𝑗 
+
+(1) where 𝑚 is the number of seeds, 𝑛 is the number of LLMs, S = ∑𝑖 (𝑅 𝑖 − ¯𝑅 )2 is the sum of squared deviations of per-item rank sums 𝑅 𝑖 from their mean, and 𝑇 𝑗 = ∑ 𝑡 (𝑡 2 − 1)/ 12 is the tie correction for judge 𝑗 . 𝑊 ∈ [ 0, 1], with 𝑊 = 1 indicating perfect agreement across all seeds simultaneously. Following Landis and Koch (1977), 𝑊 ≥ 0.90 is considered near-perfect concordance, 𝑊 ≥ 0.80 
+
+substantial, and 𝑊 < 0.60 poor; all results reported below use 𝑊 ≥ 0.90 as the high-concordance threshold.                                 
+
+> 4Table 1: Benchmark statistics. |𝑃 |= prompts; |𝑀 |=#LLMs; Acc. min/max = accuracy range.
+> Dataset |P||M|Acc. min Acc. max Top-1 model
+> GPQA 446 66 0.168 0.803 Gemini 3 Pro (thinking) IFEval 541 66 0.567 0.951 Grok-3 Mini MMLU-Pro 1,000 66 0.169 0.903 Gemini 3 Pro (thinking) Omni-MATH 1,000 66 0.072 0.722 GPT-5 Mini (thinking)
+
+4 Experimental Setup 
+
+Benchmarks: We evaluate on four benchmarks from the HELM Capabilities leaderboard spanning knowledge-intensive QA (MMLU-Pro (Wang et al., 2024), GPQA (Rein et al., 2023)), instruction fol-lowing (IFEval (Zhou et al., 2023)), and mathematical reasoning (Omni-MATH (Gao et al., 2025)). We restrict to single-turn benchmarks to ensure all instances can be represented as independent text embeddings. Table 1 summarizes the four benchmarks evaluated across a fixed set of 66 fron-tier and open LLMs (listed in Appendix A), including GPT, Claude, Gemini (Team et al., 2023), Llama (Grattafiori et al., 2024), Qwen3 (Yang et al., 2025), DeepSeek (Liu et al., 2024), and Mis-tral (Jiang et al., 2023), enabling consistent comparison of ranking agreement across tasks. All scores were collected from the HELM Capabilities leaderboard as of May 2025; since HELM scores may reflect differing prompting strategies across model families (e.g., zero-shot vs. few-shot), our comparisons are relative to HELM-reported baselines rather than a controlled prompting protocol. The benchmarks differ in score distribution: MMLU-Pro and GPQA aggregate binary per-item correctness, yielding smooth accuracy estimates with strong rank separability, while IFEval and Omni-MATH produce discretized or bounded score distributions with reduced granularity. We therefore use rank-based metrics (Spearman’s 𝜌 , Kendall’s W), both robust to discretization ef-fects. 
+
+Sentence Embeddings: We construct sentence-level embeddings using six models spanning two regimes: three small encoder-based models ( bge-large-en-v1.5 (Xiao et al., 2024), e5-large (Wang et al., 2022), GIST-small-Embedding-v0 (Solatorio, 2024)) and three large decoder-based models (Llama-Embed-Nemotron-8B (Babakhin et al., 2025), Qwen3-4B , and Qwen3-8B (Zhang et al., 2025)), capturing both contrastive encoder training dynamics and large-scale generative embedding rep-resentations. Encoder models operate under a ∼512-token context window; we therefore apply length-weighted averaging over non-overlapping 510-token chunks to avoid truncation artifacts. Decoder-based models support up to 4,096 tokens, sufficient to encode all benchmark prompts in full (maximum length 2,278.5 tokens). We additionally evaluate a chunked variant for decoder models using overlapping windows (stride 256) to enable a controlled comparison between full-sequence and segmented representations. All models use attention-mask-weighted mean pooling over final hidden states followed by L2 normalization. This yields three complementary embed-ding views: encoder-based chunked, decoder-based full-sequence, and decoder-based chunked, allowing us to assess the impact of architecture and context handling on similarity structure and ranking stability. 
+
+Distance measures and thresholds: We evaluate three proximity measures for constructing sim-ilarity graphs: cosine similarity, Pearson correlation distance, and standardized Euclidean ( seu-clidean ) distance, each capturing different geometric and statistical properties of the embedding space. Graph construction is controlled via a threshold 𝜃 defined as a percentile of the empirical pairwise distance distribution, estimated from 10,000 randomly sampled embedding pairs. We con-sider thresholds ranging from 𝑝 10 to 𝑝 95 , providing a normalised, model-independent way to con-trol graph sparsity across datasets and embedding models with potentially different distance scales. Distance distributions vary substantially across embedding models and measures (Appendix B, Fig-ures 5–7), motivating percentile-based thresholding over fixed absolute values.                                                    
+
+> 5Table 2: Per-algorithm summary. 𝜌 = mean Spearman correlation with the full-benchmark ranking;
+> 𝜌 std = standard deviation across configurations (benchmark, embedding model, distance mea-sure, threshold); 𝜌 ≥0.95 = fraction of configurations achieving high rank agreement; 𝑊 =Kendall’s coefficient of concordance across seed rankings; 𝑊 std = standard deviation of 𝑊
+> across seeds; |𝑆 |= mean selected prompt subset size. 𝑊 and 𝑊 std are undefined (—) for deter-ministic algorithms CPLEX and GREEDY, which produce a single fixed output per configu-ration. Bold : best stochastic consistency metrics. Algorithm 𝜌 (mean) 𝜌 std 𝜌 ≥0.95 (%) 𝑊 𝑊 std |𝑆 |
+> CPLEX 0.968 0.060 84.3 ——331.9 GREEDY 0.968 0.063 84.3 ——330.2 Online-MIS 0.967 0.060 84.3 0.9963 0.0102 327.9 ReduMIS 0.968 0.060 83.8 0.9976 0.0076 330.7
+
+MIS Algorithms: We employ four MIS solvers spanning exact and heuristic approaches. 
+
+CPLEX Anand et al. (2017) solves the Maximum Independent Set (MIS) problem exactly via an In-teger Linear Programming (ILP) formulation, using branch-and-bound and branch-and-cut strate-gies with presolve reductions and cut generation to prove optimality. GREEDY is a deterministic heuristic that iteratively selects the lowest-degree vertex in the residual graph, adds it to the in-dependent set, and removes it along with its neighbours. It offers no optimality guarantee but scales well to large graphs. Online-MIS (Dahlum et al., 2016) is a randomised streaming heuristic that processes vertices in a random order, accepting each vertex if none of its already-accepted neighbours are in the solution. We run five independent seeds per instance to reduce variance. 
+
+ReduMIS (Lamm et al., 2017) combines graph kernelisation and reduction rules with stochastic local search, substantially shrinking the graph before exploring the remaining solution space. So-lutions are lifted back to the original graph; five seeds are used per instance. On a graph with 
+
+𝑛 = 1000 nodes, CPLEX requires approximately 30–120 seconds depending on density, ReduMIS and Online-MIS 600 seconds, and GREEDY under one second. 
+
+Configuration Space: The full grid comprises 2592 unique configurations (embedding model, dis-tance measure, threshold, optimization algorithm). We have ended up with 2,563 unique combi-nations out of 2,592. A few combinations are missing relative to a full cross-product, suggesting a handful of runs did not complete. Stochastic optimization algorithms are run with five seeds. 
+
+5 Results 
+
+Overall Performance by Algorithm: Table 2 shows that all algorithms achieve nearly identical Spearman rank correlation with the full-benchmark ordering ( 𝜌 ≈ 0.967 –0.968 ), indicating that global ranking structure is largely invariant to solver choice. The results are aggregated per op-timization algorithm, i.e., across all combinations of benchmarks, embedding models, distance measures, and thresholds. The fraction of high-correlation configurations remains stable across methods ( 𝜌 ≥ 0.95 ≈ 84% ), suggesting that performance differences primarily reflect alignment with using full baselines rather than changes in overall rank fidelity. Both stochastic optimization methods, ReduMIS and Online-MIS, achieve the strongest overall concordance ( 𝑊 = 0.9976 vs. 0.9963), indicating that rankings achieved across seeds are robust and stable. 
+
+Per-Dataset Analysis: Table 3 reveals clear but moderate variation across benchmarks. The results are aggregated for each benchmark and stochastic optimization algorithm across all combinations of embedding models, distance measures, and thresholds. GPQA, MMLU-Pro, and Omni-MATH exhibit high ranking preservation when using them as full benchmarks ( 𝜌 ≈ 0.971 –0.993 ) and near-perfect concordance ( 𝑊 ≈ 0.997 –0.999 ). IFEval is the most challenging benchmark, with noticeably lower ranking agreement than the other three benchmarks but still higher correlation 
+
+> 6
+
+Table 3: Per-dataset and per-algorithm results for stochastic algorithms. 𝜌 = mean Spearman correla-tion with the full-benchmark ranking; 𝜌 std = standard deviation across configurations; 𝑊 =Kendall’s coefficient of concordance; 𝑊 std = standard deviation of 𝑊 across seeds; |𝑆 | = mean selected subset size. Dataset Algorithm 𝜌 (mean) 𝜌 std 𝑊 𝑊 std |𝑆 |
+
+GPQA Online-MIS 0.971 0.039 0.9973 0.0037 216.1 GPQA ReduMIS 0.972 0.038 0.9983 0.0025 216.5 IFEval Online-MIS 0.921 0.097 0.9907 0.0184 237.0 IFEval ReduMIS 0.920 0.097 0.9941 0.0142 237.2 MMLU-Pro Online-MIS 0.987 0.014 0.9985 0.0022 454.7 MMLU-Pro ReduMIS 0.987 0.014 0.9989 0.0019 456.0 Omni-MATH Online-MIS 0.993 0.010 0.9990 0.0019 413.1 Omni-MATH ReduMIS 0.993 0.010 0.9992 0.0017 420.8 Table 4: Effect of similarity threshold averaged across all algorithms (CPLEX, GREEDY, Online-MIS, ReduMIS) and all embedding configurations (6 models × 3 distance measures × 4 bench-marks). 𝜌 = mean Spearman correlation with the full benchmark ranking; 𝜌 std = standard deviation across configurations; 𝑊 = Kendall’s coefficient of concordance; 𝑊 std = standard deviation of 𝑊 ; |𝑆 | = mean selected subset size; Reduction = relative reduction in selected set size vs. full benchmark. Higher thresholds consistently improve ranking quality with dimin-ishing returns beyond p80. Threshold 𝜌 𝜌 std 𝑊 𝑊 std |𝑆 | Reduction (%) p10 0.905 0.100 0.9901 0.0180 69.7 88.2–92.5 p20 0.942 0.067 0.9948 0.0092 117.7 79.8–87.2 p50 0.974 0.031 0.9983 0.0025 245.4 62.0–70.1 p80 0.992 0.010 0.9993 0.0011 429.1 37.2–44.9 p90 0.996 0.004 0.9996 0.0006 525.0 25.0–32.9 p95 0.997 0.002 0.9996 0.0006 593.3 17.2–23.3 
+
+(𝜌 ≈ 0.920 –0.921 ) and high concordance ( 𝑊 ≈ 0.991 –0.994 ). This reflects its instruction-following structure, where embedding similarity is less predictive of downstream performance similarity, leading to higher variability across sampled subsets while still maintaining high concordance over-all. 
+
+Effect of Threshold: Table 4 quantifies the effect of the similarity threshold. As 𝜃 increases from p10 to p95, both 𝜌 and 𝑊 improve monotonically, while the mean selected set size grows from ∼70 to ∼593 prompts, corresponding to a reduction from approximately 88–93% at p10 to 17–23% at p95. At very aggressive thresholds (p10–p20), ranking quality with the full benchmarks is already reasonably high ( 𝜌 ≈ 0.905 –0.942 , 𝑊 ≈ 0.990 –0.995 ), indicating strong robustness even under extreme pruning. However, these results are aggregated across all combinations of benchmarks, optimization algorithms, embedding methods, and distance measures. As a result, some specific combinations exhibit lower correlation values, which are discussed later. The p80 threshold pro-vides a strong trade-off between efficiency and fidelity, achieving near-perfect ranking preserva-tion ( 𝜌 = 0.992 , 𝑊 = 0.999 ) with a 37–45% reduction. Beyond p80, gains in ranking quality are marginal, while reductions in set size diminish rapidly, indicating a clear regime of diminishing returns. 
+
+Embedding Model and Distance Measure: Table 5 compares embedding models and distance measures. Overall, large models consistently achieve higher values than the small models in both 
+
+7Table 5: Mean Spearman correlation ( 𝜌 ) and Kendall’s coefficient of concordance ( 𝑊 ) by embedding model and distance measure (stochastic algorithms only). S/L denote small encoder-based and large decoder-based models respectively. Bold : best 𝑊 .Model Measure 𝜌 𝑊                                                       
+
+> bge (S) correlation 0.954 0.9969 bge (S) cosine 0.952 0.9966 bge (S) seuclidean 0.951 0.9971 e5 (S) correlation 0.964 0.9934 e5 (S) cosine 0.963 0.9936 e5 (S) seuclidean 0.962 0.9940 gist (S) correlation 0.953 0.9932 gist (S) cosine 0.952 0.9937 gist (S) seuclidean 0.957 0.9947 nemotron (L) correlation 0.973 0.9982 nemotron (L) cosine 0.973 0.9985 nemotron (L) seuclidean 0.972 0.9980 qwen4b (L) correlation 0.970 0.9972 qwen4b (L) cosine 0.969 0.9973 qwen4b (L) seuclidean 0.979 0.9978 qwen8b (L) correlation 0.970 0.9982 qwen8b (L) cosine 0.970 0.9980 qwen8b (L) seuclidean 0.983 0.9993
+
+ranking agreement with the full benchmarks and robustness across different seeds. Among all configurations, qwen8b with standardized Euclidean distance achieves the highest concordance, reaching 𝑊 = 0.9993 , indicating near-perfect reproducibility of selected subsets. Across models, Euclidean-based distance (seuclidean) is generally competitive or slightly stronger than cosine and correlation, particularly for larger models, where all measures converge toward high agreement regimes ( 𝑊 ≥ 0.997 ). 
+
+6 Hypothesis Analysis 
+
+The W-high / 𝜌 -varies Hypothesis: Figure 3 plots Kendall 𝑊 against Spearman 𝜌 for all stochastic configurations. The hypothesis predicts points concentrated in the upper half ( 𝑊 high, seeds agree) distributed across the full 𝑥 -range ( 𝜌 varies). This is strongly confirmed: i) Kendall’s 𝑊 ≥ 0.90 in 99.2% of configurations; the two failing cases (both from the E5 embedding model on IFEval using 
+
+Online-MIS at the 𝑝 10 threshold under cosine and Pearson correlation distances) arise from the same combination of an overly dense graph and a stochastic solver; ii) Of the 2,563 tested config-urations (benchmark × embedding model × distance measure × threshold × solver), 409 (15.95%) yield a Spearman’s 𝜌 < 0.95 . These failures are heavily concentrated in GPQA (28.4%) and IFEval (64.8%), with far fewer in MMLU-Pro (3.9%) and Omni-MATH (2.9%), reflecting the greater score discretisation and ranking instability of the former two benchmarks. Failures are similarly concen-trated at low similarity thresholds: 56.7% occur at 𝑝 10 and 28.6% at 𝑝 20 , dropping sharply to 13.2% at 𝑝 50 and 1.5% at 𝑝 80 , indicating that overly dense graphs—which retain too few representative prompts—are the primary source of ranking degradation; iii) Both conditions (consistent + dis-tinctive): 16.2% of configurations, and iv) Consistent + same as baseline: 83.6% of configurations. Larger decoder-based models ( Nemotron-8B , Qwen-4B , Qwen-8B ) yield a higher proportion of rep-resentative configurations ( 𝜌 ≥ 0.95 : 85.3–87.5%) compared to the smaller encoder-based models               
+
+> 8Figure 3: Kendall’s 𝑊 (seed concordance) vs. Spearman 𝜌 (agreement with full baseline) for all stochas-tic configurations, coloured by embedding model. Reference lines at 𝑊 =0.90 ,𝜌 =0.95
+> define four quadrants. Most points fall in the upper region ( 𝑊 ≥0.99 in 99.2% of configs), with substantial spread along the 𝑥 -axis (varying 𝜌 ), confirming the hypothesis.
+
+(BGE , E5 , GIST ; 75.7–80.4%; Table 6), suggesting that richer embedding representations better pre-serve the ranking structure under graph-based compression. Table 8 (Appendix G) slices the same points by benchmark, revealing starker differences: IFEval yields 39.8% distinctive subsets versus just 1.9% for Omni-MATH, reflecting how semantically clustered each benchmark’s prompts are in embedding space. 
+
+> Table 6: Per-embedding model breakdown of configuration outcomes.
+
+Embedding Distinctive (𝑊 ≥ 0.90 & 𝜌 < 0.95 ) Same as baseline (𝑊 ≥ 0.90 & 𝜌 ≥ 0.95 )
+
+BGE 19.6% 80.4% 
+
+E5 19.4% 79.2% 
+
+GIST 24.3% 75.7% 
+
+Nemotron 13.8% 86.2% 
+
+Qwen-4B 14.7% 85.3% 
+
+Qwen-8B 12.5% 87.5% 
+
+Prompt Reduction vs. Quality: Figure 4 shows the relationship between fraction of prompts se-lected and both 𝜌 and 𝑊 across benchmarks in combination with the stochastic optimization algo-rithm. All benchmarks show a positive correlation between selection size and ranking quality, but with benchmark-specific slopes: MMLU-Pro and Omni-MATH maintain high 𝜌 even with small subsets, while IFEval requires larger fractions to achieve good quality. Similar patterns are visible for the consistency of the rankings across different seeds. 
+
+Case Study: Rank Shift Visualization: Figure 8 (Appendix C) illustrates the hypothesis concretely for a single configuration (Online-MIS, IFEval, Qwen4b embedding, cosine distance, p20 threshold). The heatmap shows the rank deviation of each of the top-22 baseline models across 5 seeds and the full-dataset baseline (rightmost column). Seed columns exhibit similar colour patterns ( 𝑊 = 0.972 :consistent), while the selected subset shifts some models relative to the full-benchmark ranking (𝜌 = 0.820: distinctive). This specific example represents an extreme case illustrating maximum  
+
+> 9Figure 4: Agreement with full baseline ( 𝜌 , left) and seed consistency ( 𝑊 , right) as a function of the fraction of prompts selected, by dataset. Trend lines fitted per benchmark and stochastic optimization algorithm. MMLU-Pro and Omni-MATH achieve high quality even with small fractions (p10, p20, etc); IFEval requires larger subsets for comparable quality.
+
+distinction, where the MIS selection focuses on a restricted subset of instruction-following tasks, revealing a markedly different model capability profile—an extreme but illustrative instance of the distinctive-consistent trade-off. 
+
+7 Discussion 
+
+Our results establish MIS-based prompt selection as a principled, efficient approach to LLM bench-marking that simultaneously addresses two problems: evaluation cost and coverage bias. Practical recommendations: (1) Use threshold p80 for a strong balance of quality and reduction. (2) ReduMIS is the recommended stochastic solver: superior 𝑊 , near-optimal solutions. (3) Large embedding models provide modest gains; small models (BGE+correlation) are viable when compute is limited. (4) IFEval requires careful calibration—instruction-following benchmarks with dense similarity graphs demand higher thresholds. 
+
+Recommended configuration for practitioners: For most benchmarks, we recommend: ReduMIS 
+
+solver + qwen8b embedding + standardized Euclidean distance + p80 threshold. This combination achieves 𝑊 = 1.000 and 𝜌 = 0.9959 .
+
+Reinterpreting 𝜌 < 0.95 as a feature, not a flaw: A common concern with subset evaluation is that a lower Spearman 𝜌 indicates poor quality. Our framework reframes this: when the full benchmark is coverage-biased, 𝜌 < 0.95 is expected and desirable. The MIS subset down-weights overrepresented capability facets and amplifies discriminative signal from under-sampled regions, yielding a different—but not worse—ranking. IFEval’s with small thresholds ( 𝑝 10 , 𝑝 20 ) notably low 
+
+𝜌 (≈ 0.920 for stochastic algorithms) is the most extreme case: its dense embedding clusters mean that MIS selection operates on a very different capability distribution than the full set, surfacing a complementary perspective. Concordance remains high ( 𝑊 ≈ 0.990 –0.994 ), confirming that all five seeds agree on this alternative view. 
+
+Coverage uniformity as a diagnostic: The degree distribution of the full benchmark graph—how many similar prompts surround each prompt—directly quantifies its coverage bias. Benchmarks with high-degree hubs (many near-duplicate prompts) are most prone to bias and benefit most from MIS selection. Future work will report benchmark graph statistics for different embedding models, distance measures, and threshold settings alongside accuracy metrics, enabling transpar-ent assessment of the structural biases introduced by benchmark construction. 
+
+> 10
+
+8 Conclusion 
+
+We introduced an MIS framework for efficient, coverage-unbiased LLM benchmark evaluation, for-malised as a graph-theoretic problem on prompt similarity graphs. The framework addresses two problems simultaneously: (1) reducing evaluation cost, with 25–48% prompt reduction at higher percentile thresholds, and (2) correcting coverage bias by ensuring no semantic region is overrepre-sented. Across four benchmarks, 66 LLMs, four algorithms, six embedding models, three distance measures, and six thresholds, the consistency hypothesis is strongly confirmed: 𝑊 ≥ 0.90 in 99.2% of stochastic configurations (mean 𝑊 = 0.997 ± 0.008 ). Ranking divergence from the full bench-mark ( 𝜌 < 0.95 ) occurs in only 15.95% of configurations and is reframed as either a coverage correction effect or a diagnosable failure: failures are heavily concentrated at low thresholds ( 𝑝 10 –
+
+𝑝 20 ) and discretised benchmarks (GPQA, IFEval), identifying overly dense graphs—which retain too few representative prompts—as the primary source of ranking degradation. ReduMIS emerges as the recommended algorithm ( 𝑊 = 0.997 ). Future work will explore adaptive threshold selection, IRT integration, and coverage-aware ensemble evaluation. 
+
+Limitations 
+
+This study does not enforce sub-domain coverage beyond what the embedding captures; domains not well-separated in embedding space may still be conflated by MIS selection. The coverage-correction argument assumes the embedding model faithfully reflects semantic similarity relevant to the tested capability—an assumption that may not hold for highly domain-specific benchmarks. Results reflect a snapshot of 66 LLMs as of mid-2025. Large embedding models require significant GPU memory. All benchmarks are English-language; applicability to multilingual or code-centric benchmarks remains to be validated. 
+
+Reproducibility. 
+
+The source code and data are available upon request from the authors. 
+
+Acknowledgement 
+
+This work is funded by the Slovenian Research and Innovation Agency under program grant P2-0098, and project grants No. J2-70078 and No. GC-0001; and by the European Union under Grant Agreement 101187010 (HE ERA Chair AutoLearn-SI) and Grant Agreement 101211695 (HE MSCA-PF AutoLLMSelect). This work is also co-funded by the European Unions Horizon Europe research and innovation program under the Marie Sklodowska-Curie COFUND Postdoctoral Programme (grant agreement No. 101081355 – SMASH), and by the Republic of Slovenia and the European Union through the European Regional Development Fund. 
+
+References 
+
+Anand, R., Aggarwal, D., and Kumar, V. (2017). A comparative analysis of optimization solvers. 
+
+Journal of Statistics and Management Systems , 20(4):623–635. Babakhin, Y., Osmulski, R., Ak, R., Moreira, G., Xu, M., Schifferer, B., Liu, B., and Oldridge, E. (2025). Llama-embed-nemotron-8b: A universal text embedding model for multilingual and cross-lingual tasks. arXiv preprint arXiv:2511.07025 .Cenikj, G., Dieter Lang, R., Petrus Engelbrecht, A., Doerr, C., Koroec, P., and Eftimov, T. (2022). SE-LECTOR: Selecting a Representative Benchmark Suite for Reproducible Statistical Comparison. In Proc. of Genetic and Evolutionary Computation Conference (GECCO) .
+
+> 11
+
+Cenikj, G., Petelin, G., and Eftimov, T. (2024). Transoptas: Transformer-based algorithm selection for single-objective optimization. In Proceedings of the Genetic and Evolutionary Computation Conference Companion , GECCO ’24 Companion, page 403406, New York, NY, USA. Association for Computing Machinery. Chen, J., Wang, C., Zhang, G., Ye, P., Bai, L., Hu, W., Qu, Y., and Hu, S. (2025). Learning compact representations of llm abilities via item response theory. arXiv preprint arXiv:2510.00844 .Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., et al. (2021). Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 .Dahlum, J., Lamm, S., Sanders, P., Schulz, C., Strash, D., and Werneck, R. F. (2016). Accelerating local search for the maximum independent set problem. In 15th International Symposium on Experimental Algorithms SEA , volume 9685 of Lecture Notes in Computer Science , pages 118–133. Springer. Eftimov, T., Petelin, G., Cenikj, G., Kostovska, A., Ispirova, G., Koroec, P., and Bogatinovski, J. (2022). Less is more: Selecting the right benchmarking set of data for time series classification. 
+
+Expert Systems with Applications , 198:116871. Gao, B., Song, F., Yang, Z., Cai, Z., Miao, Y., Dong, Q., Li, L., Ma, C., Chen, L., Tang, Z., et al. (2025). Omni-math: A universal olympiad level mathematic benchmark for large language models. In 
+
+International Conference on Learning Representations , volume 2025, pages 100540–100569. Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Vaughan, A., et al. (2024). The llama 3 herd of models. arXiv preprint arXiv:2407.21783 .Gururangan, S., Swayamdipta, S., Levy, O., Schwartz, R., Bowman, S., and Smith, N. A. (2018). Annotation artifacts in natural language inference data. In Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies , pages 107–112. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. (2021). Measuring mathematical problem solving with the math dataset. arXiv preprint arXiv:2103.03874 .Jiang, A. Q., Sablayrolles, A., Mensch, A., Bamford, C., Chaplot, D. S., Casas, D., Bressand, F., Lengyel, G., Lample, G., Saulnier, L., et al. (2023). Mistral 7b. arXiv preprint arXiv:2310.06825 .Kostovska, A., Cenikj, G., Vermetten, D., Jankovic, A., Nikolikj, A., Skvorc, U., Korosec, P., Doerr, C., and Eftimov, T. (2023). Ps-aas: Portfolio selection for automated algorithm selection in black-box optimization. In International Conference on Automated Machine Learning , pages 11–1. PMLR. Lamm, S., Sanders, P., Schulz, C., Strash, D., and Werneck, R. F. (2017). Finding near-optimal independent sets at scale. J. Heuristics , 23(4):207–229. Landis, J. R. and Koch, G. G. (1977). The measurement of observer agreement for categorical data. 
+
+biometrics , pages 159–174. Liang, P., Bommasani, R., Lee, T., Tsipras, D., Soylu, D., Yasunaga, M., Zhang, Y., Narayanan, D., Wu, Y., Kumar, A., et al. (2022). Holistic evaluation of language models. arXiv preprint arXiv:2211.09110 .
+
+> 12
+
+Liu, A., Feng, B., Xue, B., Wang, B., Wu, B., Lu, C., Zhao, C., Deng, C., Zhang, C., Ruan, C., et al. (2024). Deepseek-v3 technical report. arXiv preprint arXiv:2412.19437 .Mizrahi, M., Kaplan, G., Malkin, D., Dror, R., Shahaf, D., and Stanovsky, G. (2024). State of what art? a call for multi-prompt LLM evaluation. Transactions of the Association for Computational Linguistics , 12:933–949. Perlitz, Y., Bandel, E., Gera, A., Arviv, O., Ein-Dor, L., Shnarch, E., Slonim, N., Shmueli-Scheuer, M., and Choshen, L. (2023). Efficient benchmarking of language models. arXiv preprint arXiv:2308.11696 .Polo, F. M., Weber, L., Choshen, L., Sun, Y., Xu, G., and Yurochkin, M. (2024). tinybenchmarks: evaluating llms with fewer examples. arXiv preprint arXiv:2402.14992 .Rein, D., Hou, B. L., Stickland, A. C., Petty, J., Pang, R. Y., Dirani, J., Michael, J., and Bowman, S. R. (2023). Gpqa: A graduate-level google-proof q&a benchmark. arXiv preprint arXiv:2311.12022 .Schilling-Wilhelmi, M., Alampara, N., and Jablonka, K. M. (2025). Lifting the benchmark iceberg with item-response theory. In AI for Accelerated Materials Design-ICLR 2025 .Solatorio, A. V. (2024). Gistembed: Guided in-sample selection of training negatives for text em-bedding fine-tuning. arXiv preprint arXiv:2402.16829 .Team, G., Anil, R., Borgeaud, S., Alayrac, J.-B., Yu, J., Soricut, R., Schalkwyk, J., Dai, A. M., Hauth, A., Millican, K., et al. (2023). Gemini: a family of highly capable multimodal models. arXiv preprint arXiv:2312.11805 .Truong, S., Tu, Y., Liang, P., Li, B., and Koyejo, S. (2025). Reliable and efficient amortized model-based evaluation. arXiv preprint arXiv:2503.13335 .Vivek, R., Ethayarajh, K., Yang, D., and Kiela, D. (2024). Anchor points: Benchmarking models with much fewer examples. In Proceedings of the 18th Conference of the European Chapter of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 1576–1601. Wang, L., Yang, N., Huang, X., Jiao, B., Yang, L., Jiang, D., Majumder, R., and Wei, F. (2022). Text embeddings by weakly-supervised contrastive pre-training. arXiv preprint arXiv:2212.03533 .Wang, Y., Ma, X., Zhang, G., Ni, Y., Chandra, A., Guo, S., Ren, W., Arulraj, A., He, X., Jiang, Z., et al. (2024). Mmlu-pro: A more robust and challenging multi-task language understanding benchmark. Advances in Neural Information Processing Systems , 37:95266–95290. White, C., Dooley, S., Roberts, M., Pal, A., Feuer, B., Jain, S., Shwartz-Ziv, R., Jain, N., Saifullah, K., Naidu, S., et al. (2024). Livebench: A challenging, contamination-free llm benchmark. arXiv preprint arXiv:2406.19314 , 4:2. Xiao, S., Liu, Z., Zhang, P., Muennighoff, N., Lian, D., and Nie, J.-Y. (2024). C-pack: Packed resources for general chinese embeddings. In Proceedings of the 47th international ACM SIGIR conference on research and development in information retrieval , pages 641–649. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., et al. (2025). Qwen3 technical report. arXiv preprint arXiv:2505.09388 .Zhang, G., Dorner, F. E., and Hardt, M. (2026). How benchmark prediction from fewer data misses the mark. Advances in Neural Information Processing Systems , 38:135638–135678. 
+
+> 13
+
+Zhang, Y., Li, M., Long, D., Zhang, X., Lin, H., Yang, B., Xie, P., Yang, A., Liu, D., Lin, J., et al. (2025). Qwen3 embedding: Advancing text embedding and reranking through foundation models. arXiv preprint arXiv:2506.05176 .Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E., et al. (2023). Judging llm-as-a-judge with mt-bench and chatbot arena. Advances in neural information processing systems , 36:46595–46623. Zhou, H., Huang, H., Zhao, Z., Han, L., Wang, H., Chen, K., Yang, M., Bao, W., Dong, J., Xu, B., et al. (2026). Lost in benchmarks? rethinking large language model benchmarking with item response theory. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, pages 35085–35093. Zhou, J., Lu, T., Mishra, S., Brahma, S., Basu, S., Luan, Y., Zhou, D., and Hou, L. (2023). Instruction-following evaluation for large language models. arXiv preprint arXiv:2311.07911 .
+
+A Evaluated LLMs 
+
+Table 7 lists all 66 LLMs evaluated in this study, drawn from the HELM Capabilities leaderboard as of May 2025. 
+
+B Distance Distribution Plots 
+
+Figures 5, 6, 7 show the distributions of the distance between prompts of the GPQA_CHUNKED, GPQA_NOCHUNK and GPQA datasets, respectively, with different models and distance metrics. 0 0 0 0 0 0       
+
+> '(#
+> 0
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> &%)#*
+> '(#   '(& )( $#   #"$(& $#  $&& !( $#
+
+(a) Nemotron 00 0 0 0 0 0 0 0 0         
+
+> &'"
+> 0
+> 00
+> 00
+> 00
+> 00
+> 000
+> 00
+> %$("*
+> &'"   &'% (' #"   $)"   #%% !' #"
+
+(b) Qwen4B 00 0 0 0 0 0         
+
+> $% 
+> 0
+> 00
+> 000
+> 00
+> 000
+> #"&  (
+> $%   $%#&%!     "'  !## %! 
+
+(c) Qwen8B Figure 5: Distance distributions for dataset GPQA_CHUNKED and different models with selected met-rics correlation. 
+
+C Rank shift heatmap for Online-MIS on IFEval (Nemotron, correlation, p80) 
+
+Figure 8 presents a rank shift heatmap for the Online-MIS method evaluated on the IFEval bench-mark using a Qwen 4B model with cosine similarity at a 20th percentile threshold. Each cell in the heatmap encodes the deviation of a subset’s model ranking from the full-benchmark baseline ranking, with green cells indicating that a model ranked higher in the subset than in the full bench-mark and red cells indicating a lower rank. The rightmost column represents the full benchmark ranking itself, showing zero deviation by definition. The seed columns corresponding to different random subsets display highly consistent patterns with one another, as evidenced by a Kendall’s W concordance coefficient of 0.972, meaning the subsets reliably agree on their internal orderings. However, these subset rankings diverge substantially from the full-benchmark baseline, reflected in a Spearman correlation of 𝜌 = 0.820 between the subset and baseline rankings. This particu-lar configuration is highlighted as an extreme case that illustrates the tension between intra-seed 
+
+14 Table 7: List of 66 Models in Omni-MATH Aggregated Benchmark 
+
+# Model Key Provider 
+
+1 amazon_nova_lite Amazon 2 amazon_nova_micro Amazon 3 amazon_nova_premier Amazon 4 amazon_nova_pro Amazon 5 claude_3_5_haiku_20241022 Anthropic 6 claude_3_5_sonnet_20241022 Anthropic 7 claude_3_7_sonnet_20250219 Anthropic 8 claude_4_opus_20250514 Anthropic 9 claude_4_opus_20250514_extended_thinking_with_thinking Anthropic 10 claude_4_sonnet_20250514 Anthropic 11 claude_4_sonnet_20250514_extended_thinking_with_thinking Anthropic 12 claude_4_5_haiku_20251001 Anthropic 13 claude_4_5_sonnet_20250929 Anthropic 14 deepseek_v3 DeepSeek 15 deepseek_r1_0528_with_thinking DeepSeek 16 gemini_1_5_flash_002 Google 17 gemini_2_0_flash Google 18 gemini_2_0_flash_lite_02_05_preview Google 19 gemini_2_5_flash_04_17_preview Google 20 gemini_2_5_flash_lite Google 21 gemini_2_5_pro_03_25_preview Google 22 gemini_3_pro_preview_with_thinking Google 23 glm_4_5_air_fp8_with_thinking Zhipu AI 24 gpt_4_1_2025_04_14 OpenAI 25 gpt_4_1_mini_2025_04_14 OpenAI 26 gpt_4_1_nano_2025_04_14 OpenAI 27 gpt_4o_2024_11_20 OpenAI 28 gpt_4o_mini_2024_07_18 OpenAI 29 gpt_5_2025_08_07_with_thinking OpenAI 30 gpt_5_mini_2025_08_07_with_thinking OpenAI 31 gpt_5_nano_2025_08_07_with_thinking OpenAI 32 gpt_5_1_2025_11_13 OpenAI 33 gpt_oss_120b_with_thinking OpenAI 34 gpt_oss_20b OpenAI 35 grok_3_beta xAI 36 grok_3_mini_beta xAI 37 grok_4_0709 xAI 38 ibm_granite_3_3_8b_instruct IBM 39 ibm_granite_4_0_micro IBM 40 ibm_granite_4_0_small IBM 41 kimi_k2_instruct Moonshot AI 42 llama_3_1_instruct_turbo_405b Meta 43 llama_3_1_instruct_turbo_70b Meta 44 llama_3_1_instruct_turbo_8b Meta 45 llama_4_maverick_17bx128e_instruct_fp8 Meta 46 llama_4_scout_17bx16e_instruct Meta 47 marin_8b_instruct Marin 48 mistral_instruct_v0_3_7b Mistral AI 49 mistral_large_2411 Mistral AI 50 mistral_small_3_1_2503 Mistral AI 51 mixtral_instruct_8x7b Mistral AI 52 o3_2025_04_16 OpenAI 53 o4_mini_2025_04_16 OpenAI 54 olmo_2_13b_instruct_november_2024 AllenAI 55 olmo_2_32b_instruct_march_2025 AllenAI 56 olmo_2_7b_instruct_november_2024 AllenAI 57 olmoe_1b_7b_instruct_january_2025 AllenAI 58 palmyra_fin Writer 59 palmyra_med Writer 60 palmyra_x5 Writer 61 palmyra_x_004 Writer 62 qwen2_5_instruct_turbo_72b Alibaba 63 qwen2_5_instruct_turbo_7b Alibaba 64 qwen3_235b_a22b_fp8_throughput_with_thinking Alibaba 65 qwen3_235b_a22b_instruct_2507_fp8 Alibaba 66 qwen3_next_80b_a3b_thinking_with_thinking Alibaba 
+
+consistency and cross-baseline distinctiveness: the subsets are highly stable among themselves yet systematically reorder models relative to the full benchmark. 
+
+D Potential risks 
+
+Potential Risks. We identify four potential risks associated with this work. (1) Adversarial subset selection. Although our framework is model-agnostic and selection is driven solely by embedding-space structure, a practitioner could exploit the configurability of the pipeline—choosing embed-ding model, distance measure, and threshold post hoc—to produce a subset that systematically favours a particular LLM. We recommend that benchmark curators fix and publicly disclose the full configuration (embedding, distance, threshold, solver) before any model evaluation is con-
+
+15 0 0 0 0 0 0    
+
+> %&!
+> 0
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> $#'!(
+> %&! %&$'&"!     ! "&$ "!  "$$ &"!
+
+(a) Nemotron 00 0 0 0 0        
+
+> #$
+> 0
+> 00
+> 00
+> 00
+> 00
+> 000
+> 00
+> "!%'
+> #$ #$"%$      !&  "" $ 
+
+(b) Qwen4B 00 0 0 0 0 0 0 0 0           
+
+> &'"
+> 0
+> 00
+> 000
+> 00
+> 000
+> 00
+> 000
+> %$("*
+> &'"   &'% (' #"   $)"   #%% !' #"
+
+(c) Qwen8B Figure 6: Distance distributions for dataset GPQA_NOCHUNK and different models with selected metrics correlation. 0 0 0 0 0   
+
+> !"
+> 0
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+>  #%
+> !"  !" #"  $   !" !
+
+(a) Gist 00 00 0 00 000 0 0 0 0 000 0        
+
+>  !
+> 0
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> "$
+>  !   !"!  #      
+
+(b) e5 0 0 0 0 0        
+
+>  !
+> 0
+> 00
+> 00
+> 00
+> 00
+> 00
+> 00
+> "$
+>  !   !"!   #     
+
+(c) Bge Figure 7: Distance distributions for dataset GPQA and different (small) models with selected metrics cosine. 
+
+ducted. (2) Embedding bias amplification. MIS selection corrects coverage bias only relative to what the chosen embedding model captures. If the embedding model encodes cultural, linguistic, or domain-specific biases, those biases may be amplified in the selected subset rather than cor-rected. This risk is highest for domain-specific or multilingual benchmarks, which we have not validated. (3) Reduced capability coverage. Aggressively pruned subsets (e.g., at 𝑝 10 –𝑝 20 ) may omit prompts that probe rare but important capabilities. This is particularly relevant for safety-critical evaluations, where under-represented edge cases carry disproportionate importance and should not be discarded in favor of coverage uniformity. 
+
+E Computational experiment 
+
+Large Embedding Generation We generated dense vector representations of each prompt us-ing three encoder models: Qwen3-8B, Qwen3-4B, and Nemotron-8B, all loaded in half-precision (float16) with automatic device placement via HuggingFace Transformers. Model loading was se-quential and took approximately 5m43s (Qwen3-8B, 5 shards), 3m14s (Qwen3-4B, 3 shards), and 7m06s (Nemotron-8B, 4 shards) respectively. Each prompt was embedded under two conditions no-chunking and chunked to assess the effect of long-text handling on representation quality. 
+
+No-chunk condition. Each prompt was tokenized with hard truncation at 4,096 tokens and passed through the model in a single forward pass. Token-level hidden states were aggregated via mean pooling over non-padding positions, then L2-normalized to unit length. Chunked condition. To avoid information loss from truncation on longer prompts, we applied a sliding-window strategy. Token sequences were split into overlapping windows of 510 tokens (512 minus 2 special tokens) with a stride of 256, yielding 50% overlap between adjacent chunks. Prompts fitting within 510 tokens were passed as a single chunk with no splitting. Each chunk was embedded independently using the same mean-pooling procedure, and the final prompt vector was computed as a length-
+
+16 Figure 8: Rank shift heatmap for Online-MIS on IFEval (Qwen4b, cosine, p20). Each cell: deviation of subset rank from full-benchmark baseline rank (green = ranked higher, red = ranked lower). Last column is the full benchmark ranking, which is 0 since it is deviation from itself. Seed columns show similar patterns (consistent, 𝑊 = 0.972 ) while the ranking differs from the baseline column (distinctive, 𝜌 = 0.820 —an extreme case illustrating maximum distinction). 
+
+weighted average across chunks where each chunk’s contribution is proportional to its token count followed by L2 normalization. Instruction prefix (Nemotron): For Nemotron-8B, each prompt was prepended with the task instruction "Instruct: Represent the following text for clustering: " prior to embedding, following the recommended usage for that model. No prefix was applied for the Qwen models. Datasets and throughput: The pipeline was applied to all prompts across four benchmarks: GPQA, IFEval, MMLU-Pro, and Omni-MATH. From the execution log, steady-state throughput during the no-chunk pass on GPQA reached approximately 910 items/second for short prompts, with occasional slowdowns to 13 items/second on longer prompts where GPU memory pressure increased processing time. The chunked pass on Omni-MATH the largest dataset with the most 
+
+> 17
+
+variable prompt lengths ran at a sustained 11 items/second for the bulk of the dataset, with peri-odic slowdowns at 9098% completion consistent with a small number of unusually long prompts triggering more chunks. Total wall-clock time for the full pipeline across all datasets and condi-tions was on the order of tens of minutes. Embeddings were written incrementally to JSONL files keyed by prompt ID, with separate output files per dataset, condition, and model. Computational Resources and Runtime: All the experiments for generating the large embed-dings were executed on the SLING national HPC infrastructure (Slovensko nacionalno superrau-nalniko omreje, Slovenia) on node nsc-vfp004, equipped with 2Œ NVIDIA L40S GPUs, a 64-core AMD CPU, and 503 GB RAM. The job was allocated all 64 CPUs, 64 GB of system memory, and both GPUs. The full pipeline covering all four datasets, both embedding conditions (no-chunk and chunked), and all three models completed in 52 minutes and 42 seconds of wall-clock time. 
+
+Small Embedding Generation In addition to the large generative encoders, we computed em-beddings using three smaller, dedicated sentence embedding models: BGE-large-en-v1.5 (BAAI), E5-large (intfloat), and GIST-small-Embedding-v0 (avsolatorio). These models were run locally on a Lenovo ThinkPad equipped with an Intel Core Ultra 7 258V CPU, 32 GB RAM, and an Intel Arc 140V GPU with 16 GB VRAM. Each model uses a task-specific instruction prefix prepended to the prompt text: BGE uses "Represent this sentence for searching relevant passages: ", E5 uses "query: ", and GIST uses no prefix. The same chunked embedding strategy was applied as for the large models, with a maxi-mum chunk size of 510 tokens (512 minus 2 special tokens) and no overlap between chunks (stride equals chunk size). For prompts fitting within 510 tokens, no splitting was applied. Chunks were decoded back to text before re-tokenization, to ensure compatibility with BERT-style tokenizers. The same length-weighted aggregation and L2 normalization were applied to produce the final embedding. Prompts exceeding 510 tokens triggered a logged warning during processing. For the smaller encoder models, non-overlapping chunks were used, as their 512-token context limit leaves minimal headroom for redundant overlap. For the large models, a 50% overlap (stride of 256 tokens) was applied to better preserve context across chunk boundaries, taking advantage of their larger 4,096-token capacity. The pipeline was run separately for each of the four datasets (GPQA, IFEval, MMLU-Pro, Omni-MATH), producing one JSONL output file per dataset. 
+
+Optimization Algorithms Experiments The optimization algorithms experiments were con-ducted on the VEGA high-performance computing supercomputer hosted at the Institute of Infor-mation Science (IZUM), Maribor, Slovenia. VEGA is a EuroHPC petascale system based on the Atos BullSequana XH2000 architecture, consisting of 960 CPU nodes equipped with dual-socket AMD EPYC 7H12 processors running at 2.6 GHz. Standard CPU nodes provide 256 GB RAM, while a subset of large-memory nodes provides up to 1 TB RAM. The system uses a high-speed HDR100 InfiniBand interconnect and is managed through the SLURM workload scheduler. All MIS-related experiments were executed in a single-threaded configuration for fair compar-ison across algorithms. The evaluated methods include: 
+
+• CPLEX (exact branch-and-bound optimization), 
+
+• GREEDY (deterministic heuristic), 
+
+• Online-MIS (stochastic online independent set heuristic), 
+
+• ReduMIS (kernelization and local-search based stochastic solver). Each job was allocated 32 GB RAM and a maximum execution time limit of 600 seconds. Stochastic algorithms (Online-MIS and ReduMIS) were executed using multiple random seeds. 
+
+> 18
+
+F AI Assistants in Research or Writing 
+
+AI writing assistance (Claude, Anthropic) was used solely for grammar and language checking; all scientific content and conclusions are the authors’ own. 
+
+G How Benchmarks Differ in Subset Characteristics 
+
+> Table 8: Distribution of subset configurations by consistency and distinctiveness category.
+
+Benchmark Representative Distinctive Inconsistent 
+
+(𝑊 ≥ 0.90 & 𝜌 ≥ 0.95 ) (𝑊 ≥ 0.90 & 𝜌 < 0.95 ) (𝑊 < 0.90 )GPQA 80.9% 19.1% 0.0% IFEval 59.6% 39.8% 0.6% MMLU-Pro 97.4% 2.6% 0.0% Omni-MATH 98.1% 1.9% 0.0%
