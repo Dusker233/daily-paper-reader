@@ -1,0 +1,848 @@
+Title: InfoMerge: Information-aware Token Compression for Efficient Video Large Language Models
+
+URL Source: https://arxiv.org/pdf/2606.02161v1
+
+Published Time: Tue, 02 Jun 2026 02:40:07 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+## InfoMerge: Information-aware Token Compression for Efficient Video Large Language Models 
+
+Xinxin Liu , Shiwei Gan * , Xiao Liu , Yafeng Yin , Lei Xie , Sanglu Lu 
+
+State Key Laboratory of Novel Software Technology, Nanjing University Nanjing 210023, China 
+
+231880474@smail.nju.edu.cn,sw@nju.edu.cn, xiaoliu@smail.nju.edu.cn {yafeng,lxie,sanglu}@nju.edu.cn 
+
+*Corresponding author. 
+
+Abstract 
+
+Video Large Language Models (Video-LLMs) achieve strong performance in video under-standing, but their excessive visual tokens bring substantial computational overhead. Existing training-free compression methods improve in-ference efficiency by reducing visual tokens, yet they often rely on local adjacent-frame sim-ilarity for temporal redundancy estimation or allocate token budgets mainly according to segment length. Such designs are sensitive to frame-level noise and fail to capture the non-uniform information distribution of real-world videos. To address these challenges, we propose InfoMerge , a training-free visual token compression method that improves to-ken utilization through robust redundancy es-timation and content-aware budget allocation. Specifically, we propose the Temporal Fin-gerprint Difference : a segment-level second-order temporal redundancy estimation strategy, which models the temporal similarity structure of tokens at the same spatial positions within each segment. We further introduce Content-Aware Budget Allocation (CABA), which dy-namically allocates segment-level token bud-gets based on segment uniqueness and spectral-entropy-based representational richness. By reducing repeated preservation of redundant static regions and allocating more tokens to in-formative segments, InfoMerge makes better use of the limited token budget while main-taining strong performance. Extensive exper-iments show that InfoMerge achieves strong efficiency–accuracy trade-offs across multiple benchmarks and backbones, with more pro-nounced advantages under aggressive compres-sion. On LLaVA-OneVision-7B, InfoMerge retains 98.8% of the original average perfor-mance while reducing 85% of visual tokens and accelerating the prefill stage by 4.24 ×.Prior Local Temporal Redundancy Estimation    
+
+> Adjacent-frame same-position similarity is used as a first-order redundancy cue.
+> Frame 1 Frame 2 Local similarity score
+> Redundant / pruned Same spatial position Retained
+
+(a) Local similarity estima-tion. second-order temporal consistency 
+
+(b) Second-order temporal consistency. second -order                   
+
+> temporal
+> consistency
+> Question: Why does the roof object fly? A. Explosion B. Child throws C. Balloon D. Lunar approach
+> FastVID: A. Explosion. (wrong)
+> Ours: D. Lunar approach .(correct)
+> Ours only
+> FastVID only
+> Local
+> similarity
+> score
+> Frame 1Frame 2
+> Frame 4Frame 14 Frame 11Frame 17
+
+(c) Qualitative comparison between FastVID and ours. 
+
+Figure 1: Qualitative analysis of token selection. (a) 
+
+Prior methods rely on local similarity between tokens at the same spatial position in adjacent frames. (b) We further model second-order temporal consistency across frames. (c) Compared with FastVID, our method retains more informative tokens related to the flying roof object, leading to the correct answer. 
+
+1 Introduction 
+
+Video-LLMs have achieved remarkable progress in complex video understanding tasks (Li et al., 2024a; Bai et al., 2025; Li et al., 2025; Cheng et al., 2024; Wang et al., 2024; Zhang et al., 2024). De-spite their strong capabilities, the high computa-tional and memory costs induced by dense video to-kens make token compression essential for efficient Video LLM inference. Existing training-free meth-ods can be broadly categorized into spatial pruning methods (Yang et al., 2025; Chen et al., 2024), tem-poral redundancy reduction methods (Tao et al., 2025), staged spatio-temporal compression meth-ods (Shen et al., 2026; Shao et al., 2025), and uni-fied spatio-temporal approaches (Du et al., 2026; Zhang et al., 2026). Despite their progress, most 
+
+> arXiv:2606.02161v1 [cs.CV] 1 Jun 2026
+
+existing methods rely on a common underlying as-sumption: local pairwise similarity is sufficient to characterize redundancy . In practice, however, this assumption becomes fragile under real-world video noise, motion, and viewpoint variations, leading to unstable redundancy estimation and suboptimal token allocation. Moreover, segment-based methods such as FastVID (Shen et al., 2026) allocate token bud-gets mainly according to segment length, ignoring the intrinsic information content of each segment. Based on these observations, we reformulate video token compression as a problem of second-order temporal redundancy estimation and information-aware budget allocation, aiming to reduce repeated preservation of static tokens and assign more bud-get to semantically distinctive and representation-rich segments. To this end, we propose InfoMerge , a training-free video token compression method from a segment-structured redundancy perspective. Un-like previous methods that estimate temporal redun-dancy using first-order adjacent-frame similarity at the same spatial position, InfoMerge introduces 
+
+Temporal Fingerprint Difference (TFD) to eval-uate temporal redundancy from a second-order per-spective by modeling pairwise similarity structures within each segment. We further propose Content-Aware Budget Allocation (CABA) , which jointly considers segment-level uniqueness and internal representation complexity to adaptively allocate to-ken budgets according to semantic distinctiveness and spectral information density. Finally, we integrate TFD and CABA into a spatio-temporal compression pipeline that per-forms redundancy-aware token merging in atraining-free and plug-and-play manner. The pro-posed method can be seamlessly integrated into ex-isting VLLMs. Figure 1 qualitatively shows that In-foMerge retains more informative visual evidence than FastVID under the same retention ratio, which helps the model produce the correct answer. Ex-tensive experiments demonstrate that InfoMerge achieves a superior efficiency–accuracy trade-off. Our contributions are summarized as follows: • We propose Temporal Fingerprint Differ-ence , which estimates temporal redundancy from a structured second-order perspective and provides a robust static-token prior for more efficient token selection. • We introduce Content-Aware Budget Allo-cation , which adaptively allocates token bud-gets according to segment-level uniqueness and representational richness, assigning more tokens to informative segments. • We propose InfoMerge, a training-free and plug-and-play method that can be seamlessly integrated into existing Video-LLMs without fine-tuning. InfoMerge achieves strong effi-ciency–accuracy trade-offs, retaining most of the original model performance even under extremely low token retention ratios. 
+
+2 Related Work 
+
+Video Large Language Models. Recent Video-LLMs (Li et al., 2025; Cheng et al., 2024; Li et al., 2024b,a; Zhang et al., 2024; Bai et al., 2025; Wang et al., 2025) have achieved strong performance in video understanding by extending image-based VLMs to video inputs. However, these models still pass thousands of visual tokens to the down-stream LLM, leading to substantial computational overhead due to the quadratic complexity of at-tention (Vaswani et al., 2017). Although some recent works (Lin et al., 2024; Liu et al., 2025) improve token efficiency through model-level opti-mization, they typically require additional training or fine-tuning. Therefore, efficient training-free token compression remains important for practical VLLM inference. 
+
+Visual Token Compression. Token compression is an effective way to reduce token redundancy in ViTs and LLMs. Training-free visual token compression aims to reduce the inference cost of VLMs and Video-LLMs without additional model training. Existing methods mainly rely on to-ken pruning or merging. Spatial methods such as ToMe (Bolya et al., 2022), VisionZip (Yang et al., 2025), and FastV (Chen et al., 2024) re-duce visual tokens according to token similarity or attention scores. Video-oriented methods fur-ther exploit temporal redundancy: DyCoke (Tao et al., 2025), TempMe (Shen et al., 2025), and PruneVID (Huang et al., 2025) merge similar to-kens across frames, while FastVID (Shen et al., 2026) performs segmentation-based token selection and merging. HoliTom (Shao et al., 2025) further considers global redundancy for temporal token or-ganization. However, two limitations remain. First, temporal redundancy is often characterized by first-order local cues, such as adjacent-frame similarity Video Input 
+
+> Visual Encoder
+> & Projector
+> TFD
+> Spatio -Temporal
+> Compression
+> Large Language Model
+
+TFD : temporal fingerprint difference       
+
+> Segment tokens Pairwise
+> fingerprint
+> DySeg
+> seg1
+> static token dynamic token
+> CABA
+> Segment
+> Uniqueness
+> ATS
+> with
+> penalty
+> DTM
+> hard mask
+> ATS: penalize repeated static positions
+> DTM: DPC -KNN with hard mask
+> masked
+> DPC -KNN
+> clustering
+> merged context tokens
+> Concatenate compressed tokens
+> Tokenizer Frame2 Frame3
+> Merging token
+> Q: “Which
+> player delivers
+> the pass to
+> number 9 to
+> score the goal? ”
+> …
+
+CABA:Content -Aware  Budget Allocation      
+
+> Unique / dense segments receive more context
+> tokens
+> Segment
+> feature Uniqueness
+> Richness
+> entropy
+> z-score
+> fusion
+> Context
+> token
+> Budget seg1 seg2
+> seg2 seg1 seg2
+
+Spatio -Temporal Compression       
+
+> Frame1
+> Frame2 Frame3 Frame1 Frame1 Frame2 Frame3 selected salient tokens
+> Frame1 Frame2 Frame3
+> Clustering center
+> Information
+> Density
+
+Figure 2: Overview of the proposed InfoMerge method. 
+
+or attention scores. These cues can be unstable under camera motion, illumination changes, or lo-cal perturbations, and they do not explicitly model whether a region is temporally static or dynamically informative. Second, segment-based methods usu-ally allocate token budgets mainly according to seg-ment length, which cannot capture the non-uniform information density of real videos. In contrast, our method uses Temporal Fingerprint Difference to model second-order temporal consistency within each segment, and Content-Aware Budget Alloca-tion to allocate more tokens to semantically unique and representation-rich segments. 
+
+3 Method 
+
+Overview. As illustrated in Fig. 2, InfoMerge consists of four components: dynamic temporal segmentation, Temporal Fingerprint Difference (TFD), Content-Aware Budget Allocation (CABA), and spatio-temporal compression. Given sampled video tokens, we first divide frames into temporally coherent segments. TFD then identifies temporally redundant spatial positions within each segment, while CABA adaptively allocates token budgets according to segment information content. Finally, we integrate both the TFD prior and CABA-guided segment budgets into spatio-temporal compression to suppress repeated preservation of static regions. 1 Temporal Fingerprint Difference                                            
+
+> F₁F₂
+> ⋯
+> F₁
+> F₂
+> ⋮
+> 𝑭 𝓥 𝓴
+> 1𝑟 1,2
+> ⋯𝑟 1,𝒱 𝓀
+> 𝑟 2,11
+> ⋯𝑟 2,𝒱 𝓀
+> ⋮⋮⋱⋮
+> 𝑟 𝒱 𝓀 ,1𝑟 𝒱 𝓀 ,2
+> ⋯1
+> 𝓥 𝓴 ×𝓥 𝓴 Pairwise Similarity Matrix
+> 2Frame -wise Difference and Aggregation
+> l
+> F₁F₂
+> ⋯
+> 𝑟 𝑙 ,1𝑟 𝑙 ,2
+> ⋯𝑟 𝑙 ,𝒱 𝓀
+> l+1𝑟 𝑙 +1,1𝑟 𝑙 +1,2
+> ⋯𝑟 𝑙 +1,𝒱 𝓀
+> l=1,…,𝓥 𝓴 −1
+> Difference
+> d₁
+> d₂
+> ⋮
+> d𝒱 𝓀 −1
+> Avg
+> (𝒱 𝓀 -1pairs in total ）
+> Avg
+> 𝑭 𝓥 𝓴
+> 𝑭 𝓥 𝓴
+
+Figure 3: Illustration of the proposed TFD. For each spatial position, we construct an intra-segment temporal similarity matrix and compute the differences between adjacent temporal fingerprints to estimate temporal dy-namics. 
+
+3.1 Dynamic Temporal Segmentation 
+
+Given a video consisting of L frames, where each frame contains N visual tokens with hidden di-mension D, we first apply Dynamic Temporal Seg-mentation (DySeg) to divide the sampled video frames into temporally coherent segments. DySeg estimates transition strength using the cosine simi-larity between adjacent frame-level global features and selects low-similarity transitions as segment boundaries. This produces a sequence of ordered segments {V k}Kk=1 . For each segment Vk, we use local frame indices l ∈ { 1, . . . , |V k|} , where |V k|
+
+denotes the segment length. These segments serve as the basic units for our subsequent TFD, CABA, and Spatio-Temporal Compression. 3.2 Temporal Fingerprint Difference 
+
+Existing methods (Tao et al., 2025; Shao et al., 2025) estimate temporal redundancy mainly through local similarities between adjacent frames. However, such short-range measurements are sen-sitive to frame-level noise and often fail to reliably distinguish temporally static tokens from dynam-ically informative ones. We argue that truly re-dundant tokens should exhibit globally consistent temporal patterns within a segment, rather than only local frame-to-frame similarity. To this end, we propose a Temporal Finger-print Difference (TFD) module, which models segment-level temporal consistency for robust re-dundancy estimation, as illustrated in Fig. 3. The design is conceptually inspired by MADD (Sarkar and Ghosh, 2019), which characterizes high-dimensional samples according to their relations to the data cloud. TFD constructs a segment-level second-order temporal fingerprint for each spatial token position. Specifically, given video features H ∈
+
+RL×N ×D, let H(k) 
+
+> l,p
+
+∈ RD denote the token at spa-tial position p in frame l of the k-th segment Vk.For each spatial position p, we first normalize to-ken features across frames and then construct a temporal similarity fingerprint matrix: 
+
+F(k) 
+
+> p
+
+[l, l ′] = Cos H(k)
+
+> l,p
+
+∥H(k) 
+
+> l,p
+
+∥2
+
+, H(k)
+
+> l′,p
+
+∥H(k)
+
+> l′,p
+
+∥2
+
+!
+
+(1) 
+
+where l, l ′ ∈ {1, . . . , |V k|} , and Cos( ·, ·) de-notes the cosine similarity function and F(k) 
+
+> p
+
+∈
+
+R|V k |×|V k | characterizes the pairwise temporal sim-ilarity structure of spatial position p throughout the entire segment. Intuitively, temporally static regions tend to maintain stable similarity struc-tures across time, while dynamic regions exhibit larger temporal variations. We measure tempo-ral dynamics by computing the average absolute difference between adjacent temporal fingerprints, corresponding to adjacent rows of the fingerprint matrix: 
+
+TFD (k)(p) =        
+
+> P|V k|− 1
+> l=1
+> P|V k|
+> l′=1 F(k)
+> p[l+1 ,l ′]−F(k)
+> p[l,l ′]
+> (|V k|− 1) |V k|
+
+(2) A smaller TFD value indicates stronger temporal consistency and thus higher redundancy. Accord-ingly, for each segment, we select the ⌊ρN ⌋ spatial positions with the smallest TFD scores as static candidates S(k).Segment -wise Low -Rank Structure       
+
+> 0200 400 600 800
+> 𝟏𝟎 −𝟎
+> Singular value index
+> Normalized spectral energy (log scale)
+> Average spectrum
+> 𝟏𝟎 −𝟐
+> 𝟏𝟎 −𝟒
+> 𝟏𝟎 −𝟔
+> 𝟏𝟎 −𝟖
+> 𝟏𝟎 −𝟏𝟎
+> 𝟏𝟎 −𝟏𝟐
+> 𝟏𝟎 −𝟏𝟒
+> k = 10 : C( 10 ) = 73.5 %
+> k = 20: C(20) = 88.1%
+> C(k) denotes cumulative spectral energy.
+
+Figure 4: Analysis of segment-wise low-rank struc-tures in video token representations. The rapidly decaying singular-value spectra indicate strong redun-dancy within the segment. 
+
+3.3 Content-Aware Budget Allocation 
+
+Video information is often unevenly distributed across time: long segments may contain mostly static or repetitive content, while short segments can include key actions or scene changes. There-fore, allocating token budgets only according to segment length may under-preserve short but in-formative segments. To address this issue, we pro-pose Content-Aware Budget Allocation (CABA) ,which estimates segment-level information content from segment uniqueness and representational rich-ness. 
+
+Segment Uniqueness. We compute the segment-level representation of the k-th segment Vk as: 
+
+¯xk = 1
+
+|V k|N 
+
+> |V k|
+
+X
+
+> l=1
+> N
+
+X
+
+> p=1
+
+H(k) 
+
+> l,p
+
+, (3) Further, we compute the global video representa-tion ¯xglob :
+
+¯xglob =
+
+PKk=1 |V k|¯xk
+
+PKk=1 |V k| . (4) We define the segment uniqueness score as the co-sine distance between the segment representation and the global video representation: 
+
+uk = 1 − Cos(¯ xk, ¯xglob ). (5) A larger uk indicates that the segment is more se-mantically distinctive from the overall video. Representational Richness. For the k-th seg-ment Vk, we flatten its visual tokens into 
+
+Xk ∈ R|V k |N ×D and compute its singular values 
+
+{σj }Rj=1 , where R = min( |V k|N, D ). As shown in Fig. 4, video token representations exhibit a clear low-rank structure within a segment.The top-20 singular directions already explain 88.1% of the spectral energy. This motivates the use of spectral entropy to estimate segment-level representational richness. We estimate representational richness using normalized spectral entropy: 
+
+πj = σ2
+
+> j
+
+PRℓ=1 σ2
+
+> ℓ
+
+(6) We then compute the normalized spectral entropy: 
+
+ek = − PRj=1 πj log πj
+
+log R . (7) A larger ek indicates that the segment spans more diverse principal directions and is therefore less likely to be represented by a few redundant pat-terns. 
+
+Budget Allocation. We fuse segment uniqueness and representational richness after z-score normal-ization as mk = αz (uk) + βz (ek). where α and 
+
+β control the contributions of the two factors. We then use a sigmoid function to map the fused score to a smooth budget modulation coefficient and mul-tiply it by the segment length: 
+
+wk = sigmoid( τ m k) · |V k|, (8) where τ is the temperature parameter that controls the sharpness of budget redistribution. Finally, the context-token budget for the k-th segment is com-puted as 
+
+Bk = max 1, round LT cwk
+
+PKj=1 wj
+
+!! 
+
+, (9) where Tc denotes the average context-token budget per frame. In this way, CABA allocates more to-kens to semantically unique and representation-rich segments. 
+
+3.4 Spatio-Temporal Compression 
+
+We follow the Attention-Based Token Selection (ATS)–Density-Based Token Merging (DTM) com-pression pipeline, where the TFD-estimated static prior guides redundancy-aware token selection and merging, while the CABA-guided segment bud-gets adaptively control the context-token allocation across segments. 
+
+Attention-Based Token Selection with Penalty. 
+
+We use the attention from the [CLS] token as a saliency estimate. For SigLIP-based Video-LLMs, we follow FastVID (Shen et al., 2026) to obtain these attention scores with the pretrained SigLIP head. However, high-attention static regions may be repeatedly selected across frames. To allevi-ate this issue, we introduce a redundancy-sensitive suppression mechanism guided by the static set of candidates S(k). For frame l in segment Vk, let 
+
+Al ∈ RN denote flattened attention scores. We maintain a historical static set P(k)
+
+> l−1
+
+, which records the static token positions selected by ATS in the previous l − 1 frames of the current segment. We only penalize positions that are both static candi-dates and have already been selected: 
+
+Al,p ← Al,p − λ · std( Al),p ∈ S (k) ∩ P (k)
+
+> l−1
+
+. (10) where λ controls the redundancy suppression strength. ATS then selects the top positions Ts
+
+according to the updated attention scores, forming the salient-token set T ATS ,(k)  
+
+> l
+
+, where Ts denotes the salient-token budget per-frame. If a selected position belongs to the static candidate set, it is added to the historical static set: 
+
+P(k) 
+
+> l
+
+= P(k) 
+
+> l−1
+
+∪
+
+
+
+T ATS ,(k)  
+
+> l
+
+∩ S (k)
+
+. (11) For these selected static positions, we further re-place their token representations in the current and subsequent frames of the segment with a segment-level merged representation at the same spatial po-sition. Details are provided in Appendix A.7. 
+
+Hard-Masked Density-Based Token Merging. 
+
+For each segment, we sample anchor frames at a fixed interval p and evenly distribute the segment-level context-token budget across these anchor frames. Within each anchor frame, for token posi-tion p, DTM computes a density-peak score q(k) 
+
+> a,p
+
+,where a denotes the index of the anchor frame in segment Vk. High-scoring tokens are selected as context anchors. However, without additional con-straints, multiple anchor frames may repeatedly se-lect the same static regions as cluster centers, lead-ing to redundant context preservation. To improve contextual diversity, we introduce a hard mask. Let 
+
+Q(k) 
+
+> a−1
+
+denote the set of static positions already se-lected by the previous a − 1 anchor frames within 
+
+Vk. For the current anchor frame a, if position pTable 1: Comparison on LLaVA-OneVision-7B. The A%/B% retention ratio indicates that A% of the LLM input tokens are retained, and subsequently compressed to B% during the LLM forward pass. The Avg. Score is computed over VideoMME Overall, MLVU, and LongVideoBench. Best results are in bold, second best underlined.                                                                                                                                                                         
+
+> Method FLOPs (T) ↓
+> FLOPs Ratio Retention Ratio VideoMME ↑MLVU ↑Long VideoBench ↑
+> Avg. ↑
+> Short Medium Long Overall Score %LLaVA-OV-7B (Li et al., 2024a) 48.8 100.0% 100% 70.2 56.8 48.8 58.6 64.9 56.4 59.97 100.0 FastV (Chen et al., 2024) 9.4 19.2% 100%/15% 65.6 55.1 46.9 55.9 60.2 53.2 56.43 94.1 VisionZip (Yang et al., 2025) 6.3 12.9% 15% 67.4 57.6 48.1 57.7 60.0 55.8 57.83 96.4 MMG-Vid (Ma et al., 2026) 6.3 12.9% 15% –––57.9 61.6 55.9 58.47 97.5 FastVID (Shen et al., 2026) 6.3 12.9% 15% 69.3 56.4 47.6 57.8 62.9 56.2 58.97 98.3
+> Ours 6.3 12.9% 15% 69.6 56.8 48.1 58.2 63.1 56.4 59.23 98.8
+> FastV (Chen et al., 2024) 7.4 15.1% 100%/10% 61.7 54.1 47.1 54.3 58.6 52.1 55.00 91.7 VisionZip (Yang et al., 2025) 4.2 8.5% 10% 63.6 56.0 48.2 55.9 59.7 54.5 56.70 94.5 FastVID (Shen et al., 2026) 4.2 8.5% 10% 67.2 55.7 47.6 56.8 62.1 55.7 58.20 97.1 Ours 4.2 8.5% 10% 68.9 55.9 48.2 57.7 61.7 55.2 58.20 97.1
+> FastV (Chen et al., 2024) 5.4 11.1% 100%/5% 56.3 51.7 44.1 50.7 56.1 48.5 51.77 86.3 VisionZip (Yang et al., 2025) 2.1 4.2% 5% 59.8 51.7 45.9 52.4 58.5 48.4 53.10 88.5 FastVID (Shen et al., 2026) 2.1 4.2% 5% 63.3 51.8 45.6 53.6 58.8 51.4 54.60 91.0
+> Ours 2.1 4.2% 5% 65.2 53.0 45.7 54.6 59.5 52.1 55.40 92.4
+
+belongs to Q(k)
+
+> a−1
+
+, its density-peak score is directly suppressed: 
+
+q(k) 
+
+> a,p
+
+← −∞ , p ∈ Q (k)
+
+> a−1
+
+. (12) The remaining high-scoring positions are then se-lected as anchor tokens according to the allocated context-token budget. After anchor selection, non-anchor tokens are assigned to their nearest anchor centers and aggre-gated into the corresponding anchor tokens through weighted merging. The salient tokens preserved by ATS and the contextual tokens generated by DTM are then concatenated in temporal order to form the compressed video-token sequence. 
+
+4 Experiments 
+
+4.1 Experimental Settings Benchmarks and Baselines. We evaluate In-foMerge with LMMS-Eval (Li, 2024; Zhang et al., 2025) on three widely used video understanding benchmarks: VideoMME (Fu et al., 2025), MLVU (Zhou et al., 2025), and LongVideoBench (Wu et al., 2024). LLaVA-OneVision-7B (Li et al., 2024a) is used as the main evaluation backbone, and the original uncom-pressed model serves as the upper-bound baseline. To evaluate cross-backbone transferability, we fur-ther apply InfoMerge to LLaVA-Video-7B (Zhang et al., 2024) and report results on VideoMME and MVBench. We compare InfoMerge with repre-sentative training-free visual token compression methods, including FastV (Chen et al., 2024), Vi-sionZip (Yang et al., 2025), and FastVID (Shen et al., 2026), MMG-Vid (Ma et al., 2026). 
+
+Implementation Details. We follow the default setting and sample 32 frames per video for LLaVA-OneVision-7B (Li et al., 2024a). For LLaVA-Video-7B (Zhang et al., 2024), we sample 64 frames by default. All experiments are conducted on one NVIDIA V100 GPU. We evaluate different compression strengths by setting the visual token retention ratios to 5%, 10%, and 15%. Unless oth-erwise specified, all ablation studies are conducted on LLaVA-OneVision-7B using the same frame sampling strategy, inference parameters, and eval-uation protocol. Detailed hyperparameter settings are provided in Appendix C. 
+
+4.2 Comparisons Performance on LLaVA-OneVision-7B. Ta-ble 1 compares InfoMerge with representative training-free token compression methods on LLaVA-OneVision-7B. Under the same reten-tion ratio and FLOPs, InfoMerge improves over FastVID at 15% and 5% retention ratios, and achieves comparable overall performance at 10% retention. At the 15% retention ratio, InfoMerge retains 98.8% of the uncompressed model per-formance with only 12.9% FLOPs. Compared with the recent MMG-Vid (Ma et al., 2026), In-foMerge improves the retained performance from 97.5% to 98.8%. On VideoMME, InfoMerge also achieves the highest overall score of 58.2, out-performing both FastVID (Shen et al., 2026) and MMG-Vid (Ma et al., 2026). At the 10% retention ratio, InfoMerge shows clear gains on VideoMME. It improves the VideoMME overall score from 56.8 to 57.7 over FastVID (Shen et al., 2026), yielding a Table 2: Comparison on LLaVA-Video-7B-Qwen2. We report results on MVBench and VideoMME. FLOPs are measured under the default 64-frame setting. “%” denotes the percentage of the Vanilla average score retained.                                                                                                                        
+
+> Method Retention Ratio R
+> FLOPs (T) ↓
+> FLOPs Ratio MVBench VideoMME Avg. Score %Overall Short Medium Long LLaVA-Video-7B 100% 94.1 100.0% 60.4 64.1 77.0 62.3 53.1 62.3 100.0 FastV (Chen et al., 2024) 15% 16.9 18.0% 50.8 54.0 60.9 54.4 46.7 52.4 84.2 VisionZip (Yang et al., 2025) 15% 11.0 11.7% 55.2 60.3 70.3 58.8 51.7 57.8 92.8 MMG-Vid (Ma et al., 2026) 15% 11.0 11.7% 56.1 61.1 72.3 60.1 50.8 58.6 94.1 FastVID (Shen et al., 2026) 15% 11.0 11.7% 60.5 62.1 73.8 61.0 51.7 61.3 98.5
+> Ours 15% 11.0 11.7% 59.9 62.8 73.4 63.0 51.9 61.4 98.6
+> FastV (Chen et al., 2024) 10% 13.1 13.9% 43.2 49.6 54.0 50.3 44.6 46.4 74.5 VisionZip (Yang et al., 2025) 10% 6.9 7.3% 53.8 58.7 67.4 57.7 51.1 56.3 90.4 MMG-Vid (Ma et al., 2026) 10% 6.9 7.3% 54.9 59.4 71.0 57.9 49.2 57.2 91.8 FastVID (Shen et al., 2026) 10% 6.9 7.3% 58.5 60.2 72.0 58.1 50.4 59.4 95.3
+> Ours 10% 6.9 7.3% 60.0 60.9 72.6 59.1 51.0 60.5 97.1
+
+Table 3: LLM-side latency comparison. Prefill time measures LLM decoder latency until the first generated token. Generate time measures LLM decoder latency for the full response, including prefill and subsequent decoding.                   
+
+> Method Time Acc. (%) Prefill (ms) Generate (ms)
+> LLaVA-OV-7B 1505.7 (1.00 ×)1538.5 (1.00 ×)100.0 Ours r=15% 355.4 (4.24 ×)389.2 (3.95 ×)98.8 Ours r=10% 225.6 (6.67 ×)257.6 (5.97 ×)97.1 Ours r=5% 121.1 (12.43 ×)150.3 (10.23 ×)92.4
+
+0.9-point improvement under the same FLOPs. In-foMerge improves the average score over FastV by 3.20 points. At the more aggressive 5% retention ratio, InfoMerge still maintains strong performance. Specifically, with 95% of visual tokens compressed, InfoMerge retains 92.4% of the original average performance, whereas the best-performing base-line FastVID retains 91.0%. Compared with the baseline methods, InfoMerge achieves consistently competitive overall performance across different retention ratios, with more pronounced advantages under extremely low token retention ratios. 
+
+Cross-backbone Transfer. Table 2 reports re-sults on LLaVA-Video-7B. InfoMerge retains 97.1% of the original average performance with only 10% of visual tokens preserved, outperform-ing FastVID, which retains 95.3% under the same setting. This result suggests that InfoMerge can transfer to another Video-LLM backbone. 
+
+Efficiency Comparison. Beyond performance, Table 3 reports the LLM-side latency after visual features are obtained. InfoMerge has substantial acceleration in both prefill and generation. Un-
+
+Table 4: Ablation study on different components.                         
+
+> Components VideoMME Acc. TFD Unique Richness r=5% r=10% r=15%
+> 53.6 56.8 57.8
+> ✓54.2 57.5 58.1
+> ✓✓54.5 57.6 58.1
+> ✓✓54.3 56.9 58.2
+> ✓✓✓54.6 57.7 58.2
+
+Table 5: Ablation of temporal redundancy estimation on VideoMME. “Adjacent Diff.” follows DyCoke and computes first-order local feature differences within a temporal window of size 4, while TFD uses our second-order temporal fingerprint difference.             
+
+> Method r=5% r=10% r=15%
+> FastVID 53.6 56.8 57.8 + Adjacent Diff. + CABA 54.4 57.5 58.2
+> + TFD + CABA 54.6 57.7 58.2
+
+der 15% retention, InfoMerge achieves substan-tial acceleration, with a 4.24 × speedup in prefill and a 3.95 × speedup in generation while maintain-ing 98.8% of the model performance on LLaVA-OneVision (Li et al., 2024a). This confirms that In-foMerge effectively improves inference efficiency under high compression rates. 
+
+4.3 Ablation Study Effect of Temporal Fingerprint Difference. We first evaluate the effectiveness of TFD for temporal redundancy estimation. As shown in Table 4, it confirms the effectiveness of TFD as the basic re-dundancy prior: using TFD alone already improves over the original FastVID across all retention ratios. As shown in Table 5, we further compare TFD with a first-order local difference baseline following Dy-Table 6: Ablation on the two-factor dynamic budget allocation on VideoMME. α and β denote the weights of segment uniqueness and representational richness, respectively. Retain Ratio = 10% 
+
+α β VideoMME Acc. 1.00 0.00 57.6 0.90 0.10 57.7 
+
+0.80 0.20 57.4 0.70 0.30 57.2 0.60 0.40 57.0 0.50 0.50 57.1 0.30 0.70 57.4 0.00 1.00 56.9 
+
+Coke (Tao et al., 2025), which computes feature differences within a temporal window of size 4. Compared with this first-order window-based vari-ant, TFD achieves better performance at stricter retention ratios, indicating that second-order tem-poral fingerprints are more effective for identifying temporally stable redundant regions when the token budget is limited. 
+
+Effect of Content-Aware Budget Allocation. 
+
+We then study the contribution of the proposed dy-namic budget allocation strategy. We first explore the fusion weights between segment uniqueness and representational richness to determine the best allocation configuration. Specifically, we fix the overall visual token retention ratio to 10% and vary the fusion weights of the two factors. As shown in Table 6, segment uniqueness is the stronger sin-gle factor, while representational richness provides complementary structural information. Their com-bination achieves the best performance, suggest-ing that segment-level budget allocation benefits from jointly considering segment uniqueness and representational richness. We further examine the contribution of each factor in Table 4. Adding segment uniqueness to TFD improves the perfor-mance at 5% and 10% retention ratios, showing that segment-level uniqueness is useful for bud-get reallocation. Adding representational richness provides complementary gains, especially at 15% retention, suggesting that representational richness helps capture the internal visual richness of each segment. The full model achieves the best results at 5% and 10% and remains competitive at 15%, demonstrating the overall effectiveness of the two-factor dynamic budget allocation. 
+
+Sensitivity to Temperature. We further conduct an ablation study on the temperature parameter τ
+
+in dynamic budget allocation. The temperature Ablation on temperature τ in dynamic budget allocation         
+
+> 56.4
+> 56.6
+> 56.8
+> 57.0
+> 57.2
+> 57.4
+> 57.6
+> 57.8
+> 58.0
+> 0.5 0.8 1.2 1.5 2.0 5.0 10.0
+> 57.48
+> 57.56 ★
+> 57.67
+> 57.59
+> 57.22
+> 56.82
+> 56.56
+> Temperature τ
+> VideoMME Acc (%)
+> ★best τ = 1.2
+
+Figure 5: Ablation on the temperature parameter τ in dynamic budget allocation. Moderate temperature leads to the best trade-off between smooth and aggressive budget redistribution. Retain Ratio = 10% .Effect of TFD penalty λ on VideoMME            
+
+> 57.0
+> 57.2
+> 57.4
+> 57.6
+> 57.8
+> 58.0
+> 125810 12 15 10⁹
+> TFD penalty λ
+> VideoMME  Acc  (%)
+> 57.3
+> 57.1
+> 57.3
+> 57.4
+> 57.7 57.7 57.7 57.7
+> ★
+
+Figure 6: Ablation on the redundancy suppression strength λ on VideoMME. Stronger suppression reduces repeated preservation of static tokens and improves to-ken utilization. Retain Ratio = 10% .
+
+controls the sensitivity of the sigmoid modulation function to the segment score. A smaller value makes the budget distribution smoother, while a larger value concentrates the token budget on a few high-scoring segments. As shown in Figure 5, a moderate temperature achieves the best perfor-mance, indicating that overly smooth or overly ag-gressive redistribution can both be suboptimal. 
+
+Effect of Redundancy Suppression Strength. 
+
+Figure 6 analyzes the effect of the redundancy sup-pression strength λ. A larger λ more strongly penal-izes previously selected static positions. The results show that strong suppression works well, suggest-ing that repeatedly selected static regions contribute limited additional information and should be ex-plicitly discouraged during token selection. 
+
+5 Conclusion 
+
+In this paper, we propose InfoMerge, a novel training-free token compression method for effi-cient Video LLM inference. Our method is built upon two key components: (1) a Temporal Finger-print Difference (TFD) module, which performs segment-level second-order redundancy identifica-tion; and (2) a Content-Aware Budget Allocation strategy, which adaptively distributes token bud-gets according to both segment uniqueness and representational richness across video segments. Extensive experiments across multiple Video-LLM architectures and benchmarks demonstrate the ef-fectiveness and strong generalization ability of our method. Notably, InfoMerge exhibits more pro-nounced advantages under aggressive compression, achieving favorable efficiency–performance trade-offs. 
+
+6 Limitations 
+
+Although InfoMerge achieves a favorable efficiency–performance trade-off for Video LLM inference, several limitations remain. The proposed Temporal Fingerprint Difference (TFD) module relies on segment-level temporal statistics. For re-gions with persistent jitter, the estimated temporal fingerprints may become less reliable, which can reduce the accuracy of identifying low-information regions such as static backgrounds. Besides, although InfoMerge generalizes well across several Video LLM architectures, our experiments mainly focus on representative open-source models and benchmarks. Its effectiveness on larger-scale multimodal systems or highly domain-specific video distributions remains to be further explored. While the proposed method significantly reduces inference FLOPs and memory usage, the additional computation introduced by redundancy estimation and spectral analysis may still incur non-negligible overhead under extremely resource-constrained environments. Finally, during the preparation of this manuscript, we leveraged AI assistants (Gemini and ChatGPT) for text polishing and grammatical corrections. 
+
+References 
+
+Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen, Xionghui Chen, Zesen Cheng, Lianghao Deng, Wei Ding, Chang Gao, Chunjiang Ge, and 1 others. 2025. Qwen3-vl technical report. arXiv preprint arXiv:2511.21631 .Daniel Bolya, Cheng-Yang Fu, Xiaoliang Dai, Peizhao Zhang, Christoph Feichtenhofer, and Judy Hoffman. 2022. Token merging: Your vit but faster. arXiv preprint arXiv:2210.09461 .Liang Chen, Haozhe Zhao, Tianyu Liu, Shuai Bai, Jun-yang Lin, Chang Zhou, and Baobao Chang. 2024. An image is worth 1/2 tokens after layer 2: Plug-and-play inference acceleration for large vision-language mod-els. In European Conference on Computer Vision ,pages 19–35. Springer. Zesen Cheng, Sicong Leng, Hang Zhang, Yifei Xin, Xin Li, Guanzheng Chen, Yongxin Zhu, Wenqi Zhang, Ziyang Luo, Deli Zhao, and 1 others. 2024. Videol-lama 2: Advancing spatial-temporal modeling and audio understanding in video-llms. arXiv preprint arXiv:2406.07476 .Junhao Du, Jialong Xue, Anqi Li, Jincheng Dai, and Guo Lu. 2026. Unified spatiotemporal token com-pression for video-llms at ultra-low retention. arXiv preprint arXiv:2603.21957 .Chaoyou Fu, Yuhan Dai, Yongdong Luo, Lei Li, Shuhuai Ren, Renrui Zhang, Zihan Wang, Chenyu Zhou, Yunhang Shen, Mengdan Zhang, and 1 oth-ers. 2025. Video-mme: The first-ever comprehensive evaluation benchmark of multi-modal llms in video analysis. In Proceedings of the IEEE/CVF confer-ence on computer vision and pattern recognition ,pages 24108–24118. Xiaohu Huang, Hao Zhou, and Kai Han. 2025. Prunevid: Visual token pruning for efficient video large language models. In Findings of the Associa-tion for Computational Linguistics: ACL 2025 , pages 19959–19973. Bo Li. 2024. Xinrun du, yuhao dong, haotian liu, yuan-han zhang, ge zhang, chunyuan li, and ziwei liu. 
+
+Lmms-eval: Accelerating the development of large multimoal models , 6. Bo Li, Yuanhan Zhang, Dong Guo, Renrui Zhang, Feng Li, Hao Zhang, Kaichen Zhang, Peiyuan Zhang, Yanwei Li, Ziwei Liu, and 1 others. 2024a. Llava-onevision: Easy visual task transfer. arXiv preprint arXiv:2408.03326 .Feng Li, Renrui Zhang, Hao Zhang, Yuanhan Zhang, Bo Li, Wei Li, Zejun Ma, and Chunyuan Li. 2024b. Llava-next-interleave: Tackling multi-image, video, and 3d in large multimodal models. arXiv preprint arXiv:2407.07895 .KunChang Li, Yinan He, Yi Wang, Yizhuo Li, Wen-hai Wang, Ping Luo, Yali Wang, Limin Wang, and Yu Qiao. 2025. Videochat: Chat-centric video un-derstanding. Science China Information Sciences ,68(10):200102. Ji Lin, Hongxu Yin, Wei Ping, Pavlo Molchanov, Mo-hammad Shoeybi, and Song Han. 2024. Vila: On pre-training for visual language models. In Proceed-ings of the IEEE/CVF conference on computer vision and pattern recognition , pages 26689–26699. Zhijian Liu, Ligeng Zhu, Baifeng Shi, Zhuoyang Zhang, Yuming Lou, Shang Yang, Haocheng Xi, Shiyi Cao, Yuxian Gu, Dacheng Li, and 1 others. 2025. Nvila: Efficient frontier visual language models. In Pro-ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 4122–4134. Junpeng Ma, Qizhe Zhang, Ming Lu, Zhibin Wang, Qiang Zhou, Jun Song, and Shanghang Zhang. 2026. Mmg-vid: Maximizing marginal gains at segment-level and token-level for efficient video llms. In 
+
+Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, pages 24253–24261. Soham Sarkar and Anil K Ghosh. 2019. On perfect clustering of high dimension, low sample size data. 
+
+IEEE transactions on pattern analysis and machine intelligence , 42(9):2257–2272. Kele Shao, Keda Tao, Can Qin, Haoxuan You, Yang Sui, and Huan Wang. 2025. Holitom: Holistic token merging for fast video large language models. arXiv preprint arXiv:2505.21334 .Leqi Shen, Guoqiang Gong, Tao He, Yifeng Zhang, Pengzhang Liu, Sicheng Zhao, and 1 others. 2026. Fastvid: Dynamic density pruning for fast video large language models. Advances in Neural Information Processing Systems , 38:123553–123581. Leqi Shen, Tianxiang Hao, Tao He, Sicheng Zhao, Yifeng Zhang, Yongjun Bao, Guiguang Ding, and 1 others. 2025. Tempme: Video temporal token merg-ing for efficient text-video retrieval. In International Conference on Learning Representations , volume 2025, pages 60839–60860. Keda Tao, Can Qin, Haoxuan You, Yang Sui, and Huan Wang. 2025. Dycoke: Dynamic compression of to-kens for fast video large language models. In Pro-ceedings of the Computer Vision and Pattern Recog-nition Conference , pages 18992–19001. Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. Advances in neural information processing systems , 30. Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhi-hao Fan, Jinze Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, and 1 others. 2024. Qwen2-vl: Enhancing vision-language model’s perception of the world at any resolution. arXiv preprint arXiv:2409.12191 .Weiyun Wang, Zhangwei Gao, Lixin Gu, Hengjun Pu, Long Cui, Xingguang Wei, Zhaoyang Liu, Linglin Jing, Shenglong Ye, Jie Shao, and 1 others. 2025. In-ternvl3. 5: Advancing open-source multimodal mod-els in versatility, reasoning, and efficiency. arXiv preprint arXiv:2508.18265 .Haoning Wu, Dongxu Li, Bei Chen, and Junnan Li. 2024. Longvideobench: A benchmark for long-context interleaved video-language understanding. 
+
+Advances in Neural Information Processing Systems ,37:28828–28857. Senqiao Yang, Yukang Chen, Zhuotao Tian, Chengyao Wang, Jingyao Li, Bei Yu, and Jiaya Jia. 2025. Vi-sionzip: Longer is better but not necessary in vision language models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recog-nition , pages 19792–19802. Evelyn Zhang, Fufu Yu, Aoqi Wu, Zichen Wen, Ke Yan, Shouhong Ding, Biqing Qi, and Linfeng Zhang. 2026. D2pruner: Debiased importance and structural di-versity for mllm token pruning. In Proceedings of the AAAI Conference on Artificial Intelligence , vol-ume 40, pages 12412–12420. Kaichen Zhang, Bo Li, Peiyuan Zhang, Fanyi Pu, Joshua Adrian Cahyono, Kairui Hu, Shuai Liu, Yuan-han Zhang, Jingkang Yang, Chunyuan Li, and 1 oth-ers. 2025. Lmms-eval: Reality check on the evalua-tion of large multimodal models. In Findings of the Association for Computational Linguistics: NAACL 2025 , pages 881–916. Yuanhan Zhang, Jinming Wu, Wei Li, Bo Li, Zejun Ma, Ziwei Liu, and Chunyuan Li. 2024. Llava-video: Video instruction tuning with synthetic data. arXiv preprint arXiv:2410.02713 .Junjie Zhou, Yan Shu, Bo Zhao, Boya Wu, Zhengyang Liang, Shitao Xiao, Minghao Qin, Xi Yang, Yong-ping Xiong, Bo Zhang, and 1 others. 2025. Mlvu: Benchmarking multi-task long video understanding. In Proceedings of the IEEE/CVF Conference on Com-puter Vision and Pattern Recognition , pages 13691– 13701. A More Implementation Details 
+
+A.1 Additional Experimental Settings 
+
+For latency measurement, we use batch size 1 and report the average latency after warm-up runs with CUDA synchronization. Latency is measured af-ter visual features are extracted, excluding video decoding, frame sampling, vision-tower encoding, and projector computation. Therefore, the reported speedups reflect LLM-side acceleration rather than full end-to-end video-QA latency. 
+
+A.2 FLOPs Calculation 
+
+We report MAC-style FLOPs, where one multiply-accumulate operation is counted as one operation. Therefore, all FLOPs numbers are not multiplied by the conventional 2× MAC-to-FLOP conversion factor. We count only the prefill computation of the Qwen2 language backbone and exclude the vi-sion encoder, projector, embedding lookup, RoPE, RMSNorm, softmax, and the LM head. For a Qwen2 decoder layer with sequence length 
+
+N , hidden size d, intermediate size dff , number of attention heads H, and number of key-value heads 
+
+Hkv , the MAC-style FLOPs are computed as: 
+
+FLOPs layer (N ) = N d 2
+
+
+
+2 + 2 Hkv 
+
+H
+
+
+
++ 2 N 2d + 3 N dd ff .
+
+(13) The first term counts the Q/K/V/O projections under grouped-query attention, the second term counts the two attention matrix multiplications, i.e., 
+
+QK ⊤ and Attn V , and the last term counts the SwiGLU MLP projections. For an L-layer Qwen2 backbone, the total prefill FLOPs are: 
+
+FLOPs( N ) = L · FLOPs layer (N ). (14) For Qwen2-7B, we use: L = 28 , d =3584 , dff = 18944 , H = 28 , Hkv = 4 . For outer-LLM token compression methods such as FastVID and InfoMerge, visual tokens are com-pressed before being fed into the Qwen2 backbone. Therefore, all decoder layers use the reduced se-quence length Nr:
+
+FLOPs outer = L · FLOPs layer (Nr). (15) In contrast, for FastV, token pruning is applied af-ter the first K full-token decoder layers. Following FastV (Chen et al., 2024), we set K = 2 and com-pute: 
+
+FLOPs FastV = K·FLOPs layer (N0)+( L−K)·FLOPs layer (Nr),
+
+(16) where N0 is the original sequence length and Nr
+
+is the sequence length after pruning. In our visual-token-only FLOPs analysis, the original sequence length is computed as: 
+
+N0 = F × P, (17) where F denotes the number of sampled frames and P denotes the number of visual tokens per frame. The reduced sequence length Nr is deter-mined by the corresponding visual-token retention ratio. Unless otherwise stated, text tokens are ex-cluded from the FLOPs calculation. 
+
+A.3 Source of Baseline Results 
+
+Unless otherwise stated, all results reported in our tables are evaluated locally under the same evalua-tion protocol. For Table 2, the accuracy results of FastV, VisionZip, and MMG-Vid on LLaVA-Video-7B are taken from MMG-Vid (Ma et al., 2026). The FastVID and InfoMerge results in Table 2 are eval-uated locally under the same 64-frame setting. For all other tables, we locally evaluate all compared methods except MMG-Vid, whose results are taken from its original paper, since MMG-Vid is not pub-licly available at the time of our experiments. 
+
+A.4 Details of Token Budget Decomposition 
+
+Given an overall visual-token retention ratio r, the total retained token budget for a video with L sam-pled frames and N visual tokens per frame is 
+
+Btotal = rLN. (18) Following FastVID (Shen et al., 2026), we use a hyperparameter d ∈ [0 , 1] to split the retained tokens into two branches: 
+
+BDTM = dB total , BATS = (1 −d)Btotal . (19) Here, BATS is used for preserving fine-grained salient tokens selected by ATS, while BDTM is used for maintaining segment-level contextual in-formation through DTM. For ATS, the salient-token budget is uniformly assigned to each frame: 
+
+Ts =
+
+ BATS 
+
+L
+
+
+
+= ⌊(1 − d)rN ⌋ , (20) where Ts denotes the number of salient tokens se-lected by ATS in each frame. For DTM, the context-token budget is distributed across temporal segments according to the CABA described in Section 3.3. Given the segment allo-cation weight wk, the context-token budget for the 
+
+k-th segment is computed as 
+
+Bk = max 1, round BDTM wk
+
+PKj=1 wj
+
+!! 
+
+. (21) In this way, the overall retention ratio r determines the total compression strength, while d controls the trade-off between ATS-based salient-token preser-vation and DTM-based context-token aggregation. 
+
+A.5 Details of Dynamic Temporal Segmentation 
+
+We follow FastVID (Shen et al., 2026) and use Dy-namic Temporal Segmentation (DySeg) to partition sampled video frames into temporally ordered seg-ments. Given a video with L sampled frames, let 
+
+gl denote the frame-level global feature of the l-th frame. DySeg computes the transition similarity between adjacent frames as: 
+
+tl = cos( gl, gl+1 ), l = 1 , . . . , L − 1. (22) A smaller ts indicates a stronger semantic transition between two adjacent frames and is therefore more likely to be selected as a segment boundary. Let T = {tl}L−1 
+
+> l=1
+
+denote all transition similari-ties. DySeg combines a minimum segment number constraint and a similarity threshold to determine the final boundary set: 
+
+S1 = argmin c−1 T , S2 = {l | tl < τ seg }, S = S1∪S 2.
+
+(23) Here, c denotes the minimum number of seg-ments, and τseg is the transition-similarity thresh-old. S1 ensures that each video is partitioned into at least c segments, while S2 further intro-duces boundaries at obvious semantic transitions. The resulting boundary set S divides the sam-pled frames into K temporally ordered segments 
+
+{Vk}Kk=1 . All subsequent TFD-based redundancy estimation, information-density-aware budget allo-cation, and spatio-temporal token compression are performed independently within these segments. 
+
+A.6 Details of Content-Aware Budget Allocation Spectral entropy as representational richness. 
+
+In CABA, we use normalized spectral entropy to estimate the internal representational richness of each segment. Given the flattened segment feature matrix Xk ∈ R|V k |N ×D, let {σj }Rj=1 denote its singular values, where R = min( |V k|N, D ). We define the normalized spectral energy distribution as 
+
+πj = σ2
+
+> j
+
+PRℓ=1 σ2
+
+> ℓ
+
+. (24) We use squared singular values because they corre-spond to the spectral energy of the feature matrix. According to the Frobenius norm decomposition, 
+
+∥Xk∥2 
+
+> F
+
+=
+
+> R
+
+X
+
+> j=1
+
+σ2 
+
+> j
+
+, (25) where σ2 
+
+> j
+
+measures the amount of feature energy captured by the j-th singular direction. Therefore, 
+
+{πj }Rj=1 can be interpreted as an energy distribu-tion over different principal directions. Based on this distribution, we compute the nor-malized spectral entropy: 
+
+ek = − PRj=1 πj log πj
+
+log R . (26) The normalization term log R ensures that ek lies in a comparable range across segments with differ-ent effective matrix sizes. A small ek indicates that most energy is concentrated in a few dominant di-rections, suggesting a lower-dimensional and more redundant representation. In contrast, a large ek
+
+indicates that the energy is distributed across more principal directions, suggesting richer and more complex visual semantics. 
+
+Relation to segment-level budget allocation. 
+
+Segment uniqueness and representational richness capture complementary aspects of segment infor-mation. The uniqueness score uk measures how much a segment deviates from the global video rep-resentation, while ek measures the diversity of in-ternal feature directions within the segment. Since the two factors have different numeric ranges, we apply z-score normalization before fusion: 
+
+mk = αz (uk) + βz (ek). (27) The sigmoid function with temperature τ controls the sharpness of redistribution: 
+
+wk = σ(τ m k) · |V k|. (28) Figure 7 provides a qualitative visualization of the proposed content-aware budget allocation. We ob-serve that segments with lower information content, such as visually repetitive or less event-relevant clips, are assigned fewer context tokens. In con-trast, segments containing key visual evidence or more diverse visual content receive larger token budgets. This suggests that InfoMerge redistributes the limited token budget toward more informative temporal segments. 
+
+A.7 Details of Token Compression Static-token replacement in ATS. Since many Video-LLMs employ SigLIP as the visual encoder, the corresponding [CLS] attention is unavailable during inference. Following FastVID (Shen et al., 2026), we re-attach the pretrained SigLIP head to obtain lightweight saliency estimation without modifying the original Video-LLM pipeline. When a selected ATS token position is identified as static by TFD, we reuse a segment-level merged represen-tation for this spatial position to avoid repeatedly preserving near-duplicate static tokens. Specifi-cally, for position p ∈ T ATS ,(k) 
+
+> l
+
+∩S (k), we compute a segment-level static representation by aggregat-ing tokens at the same spatial position across the 
+
+k-th segment: 
+
+m(k) 
+
+> p
+
+= 1
+
+|V k| 
+
+> |V k|
+
+X
+
+> r=1
+
+H(k) 
+
+> r,p
+
+. (29) Then, for the current frame and all subsequent frames in the same segment, the token at position 
+
+p is replaced by this merged representation: 
+
+H(k) 
+
+> r,p
+
+← m(k) 
+
+> p
+
+, r = l, . . . , |V k|. (30) This operation reduces repeated preservation of visually similar static tokens while keeping a com-pact representation of the corresponding static re-gion. This replacement is a feature-level substi-tution and does not introduce an additional token-pruning step or change the number of retained to-kens. 
+
+Density-peak anchor selection in DTM. Within each anchor frame, DTM follows density-peak clus-tering to select representative context anchors. For token ti, its local density is computed as 
+
+ρi = exp 
+
+− 1
+
+Knn 
+
+X 
+
+> tj∈kNN( ti)
+
+d(ti, t j )2
+
+ , (31) where d(·, ·) denotes the token distance and 
+
+kNN( ti) denotes the Knn nearest neighbors of ti.The distance to higher-density tokens is defined as 
+
+δi =
+
+(
+
+min j:ρj >ρ i d(ti, t j ), ∃j, ρ j > ρ i,
+
+max j d(ti, t j ), otherwise . (32) The final density-peak score is 
+
+si = ρiδi. (33) Tokens with higher density-peak scores are selected as context anchors unless suppressed by the TFD-guided hard mask described in Section 3.4. 
+
+Anchor-centric aggregation. After context an-chors are selected, each non-anchor token is as-signed to its nearest anchor token center. For an-chor token a with assigned token set {b1, . . . , b n},the updated anchor representation is computed as 
+
+a⋆ = μa + (1 − μ) 1
+
+n
+
+> n
+
+X
+
+> j=1
+
+bj , (34) where μ balances the original anchor feature and the aggregated neighboring information. The up-dated anchors are used as contextual tokens and concatenated with the salient tokens selected by ATS. 
+
+B Qualitative Analysis 
+
+To better understand the effect of content-aware budget allocation, we provide a qualitative case study in Figure 8. The question asks what caused the sudden fall of the woman, which requires the model to identify the causal event before the fall. FastVID allocates context-token budgets mainly ac-cording to segment length and may under-preserve short but evidence-critical segments. In contrast, InfoMerge assigns more context tokens to the prank segment according to its segment-level information content, thereby preserving key visual evidence for causal reasoning. As a result, InfoMerge correctly predicts “Scared by a prank”, while FastVID fails to determine the cause. This example demonstrates that InfoMerge can redistribute the limited token budget toward informative temporal segments in-stead of relying only on segment length. 
+
+C Hyperparameter Settings 
+
+We use different hyperparameter settings for dif-ferent retention ratios to balance salient-token preservation and contextual-token aggregation un-der varying compression strengths. The detailed Figure 7: Visualization of token selection in the proposed InfoMerge.Segments with lower information content receive fewer context tokens, while informative segments receive larger budgets. Table 7: Hyperparameter settings under different visual-token retention ratios. 
+
+r τ ρ λ α β
+
+0.05 2.0 0.05 12.0 0.9 0.1 0.10 1.2 0.10 12.0 0.9 0.1 0.15 1.2 0.09 12.0 0.9 0.1 settings are summarized in Table 7. Unless oth-erwise specified, all methods are evaluated under the same frame sampling strategy and evaluation protocol. VideoMME ·Question: What caused the sudden fall of the woman? 
+
+Bathroom setup 
+
+Prank appears 
+
+Woman falls 
+
+Context -token budget  
+
+> 0
+> 50
+> 99
+> 149
+
+FastVID: Cannot  be  determined 
+
+(wrong) 
+
+Ours: Scared by  a prank 
+
+(correct) 
+
+FastVID (length -based) 
+
+Ours (CABA) 
+
+Se gment  uniqueness 
+
+> 0
+> 0.06
+> 0.13
+> 0.19
+> 0.019
+> 0.136
+> 0.121
+
+Representational richness 
+
+> 0
+> 2.84
+> 5.67
+> 8.51
+> 5.21
+> 6.65
+> 3.77
+
+Bathroom  setup 
+
+seg1 , F0 -6
+
+Prank 
+
+seg2, F7 -18 
+
+Woman falls 
+
+eg3 , F19 -31 
+
+Bathroom  setup 
+
+seg1 , F0 -6
+
+Prank 
+
+seg2, F7 -18 
+
+Woman falls 
+
+eg3 , F19 -31 
+
+Bathroom  setup 
+
+seg1 , F0 -6
+
+Prank 
+
+seg2, F7 -18 
+
+Woman falls 
+
+eg3 , F19 -31 Figure 8: Case study of evidence-aware budget allocation on VideoMME. The question asks what caused the sudden fall of the woman, requiring the model to identify the causal event before the fall. We show three temporal segments corresponding to the bathroom setup, the prank appearance, and the woman’s fall. Compared with FastVID’s length-based allocation, InfoMerge assigns more context-token budget to the evidence-critical prank segment, which also exhibits higher segment uniqueness and representational richness. This helps preserve the key visual evidence for causal reasoning. As a result, InfoMerge correctly predicts “Scared by a prank”, while FastVID fails to determine the cause.
