@@ -1,0 +1,1956 @@
+Title: Private Embedding Lookup with Encrypted Compact Queries under Fully Homomorphic Encryption
+
+URL Source: https://arxiv.org/pdf/2606.03191v3
+
+Published Time: Tue, 09 Jun 2026 01:10:34 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+# Private Embedding Lookup with Encrypted Compact Queries under Fully Homomorphic Encryption 
+
+# Jung Hee Cheon ∗
+
+Department of Mathematical Sciences, Seoul National University Seoul, Republic of Korea CryptoLab Inc. Seoul, Republic of Korea jhcheon@snu.ac.kr 
+
+# Daehyun Jang 
+
+Department of Mathematical Sciences, Seoul National University Seoul, Republic of Korea jadh0309@snu.ac.kr 
+
+# Jaehee Kang 
+
+Department of Mathematical Sciences, Seoul National University Seoul, Republic of Korea jaehee.kang422@snu.ac.kr 
+
+# Hanee Rhee 
+
+Department of Mathematical Sciences, Seoul National University Seoul, Republic of Korea hnrhee11@snu.ac.kr 
+
+## Abstract 
+
+Many Natural Language Processing (NLP) and recommendation models begin by mapping discrete client inputs to embedding vec-tors. Because these inputs can reveal sensitive information, this embedding step need to be protected in privacy-preserving infer-ence. Fully Homomorphic Encryption (FHE) enables inference over encrypted client data, but under FHE the embedding lookup is no longer a simple table access and has to be realized through homomorphic computation. To keep the embedding table on the server and avoid transmitting encrypted embedding vectors from the client, we focus on the server-side lookup: the client sends only a small encrypted index. Prior work from ICML 2024 [ 36 ] first builds a one-hot vector from the encrypted index before multiplying it with the embedding table, and this one-hot generation is the domi-nant cost. However, one-hot-based methods are expensive in FHE because they construct a 𝑝 -dimensional selection vector by per-forming an equality test for each coordinate, requiring 𝑂 (𝑝 log 𝑝 )
+
+homomorphic operations in total. Our key observation is that private embedding lookup only re-quires a linearly independent representation of the encrypted index, not the one-hot basis itself. Building on this observation, we pro-pose Independent Vector Evaluation (IVE). Instead of constructing a one-hot vector, IVE evaluates a linearly independent vector built from successive powers of a single encrypted value, reducing the vector-generation cost to 𝑂 (𝑝 ) homomorphic operations. It then re-covers the same embedding vector through a precomputed change of basis, which we instantiate with an orthogonal Discrete Cosine Transform (DCT) to mitigate error amplification. Our implementation demonstrates that this design improves amortized lookup time by up to 78 .4× over the prior method. We further evaluate its impact through end-to-end encrypted FastText inference, where embedding lookup is a major cost in the shal-low model. Concretely, on the Enron-Spam email-spam dataset, replacing one-hot generation with IVE reduces the share of vector generation in encrypted inference time from 99 .6% to 66 .3% .
+
+> ∗Authors are listed in alphabetical order.
+
+## Keywords 
+
+Private Embedding Lookup, Fully Homomorphic Encryption, CKKS, Privacy-Preserving Machine Learning, Encrypted Inference, Em-bedding Layers 
+
+## 1 Introduction 
+
+Modern machine learning (ML) services increasingly run through an outsourcing model: a client sends an input to a server, and the server evaluates a model on that input. This model is natural in ML-as-a-Service (MLaaS), where clients such as smartphones, wearable devices, or small applications may not have the memory or compute resources to run the full model locally. This delegated computation creates an immediate privacy problem. The input sent to the server can reveal medical symptoms, financial behavior, search intent, or the exact words typed by the user. Thus, the client may want to use the model while keeping the input hidden from the server that evaluates it. Privacy-preserving machine learning (PPML) addresses this problem by allowing the server to compute on the client’s data without directly observing it. Fully Homomorphic Encryption (FHE) is a natural tool for PPML because it supports arithmetic computation directly on cipher-texts [ 8, 9, 14 , 15 , 23 , 24 , 26 ]. Compared with MPC or OT-based protocols, FHE keeps the online interaction simple: the client en-crypts its input, the server evaluates the circuit, and the client or a later component decrypts only the intended result. This is at-tractive in the MLaaS setting because the client does not need to participate in every layer of the computation after sending the encrypted input. Compared with differential privacy, FHE targets cryptographic confidentiality of the input rather than hiding an individual’s contribution through noise. Among various homomor-phic encryption schemes, the CKKS scheme [ 14 ] is widely used for PPML because it efficiently supports approximate computation over complex numbers. Recent progress in such FHE schemes, together with FHE al-gorithms for neural-network inference [ 11 , 20 , 21 , 28 , 44 , 51 ], has made encrypted inference a realistic target for a growing range of 
+
+> 1
+> arXiv:2606.03191v3 [cs.CR] 7 Jun 2026 Cheon, Jang, Kang, and Rhee
+
+ML workloads. For arithmetic layers, this progress is especially vis-ible: homomorphic linear layers can use algorithmic reductions to plaintext matrix multiplication [ 5 , 13 , 48 ], while nonlinear functions such as activation functions are increasingly optimized through polynomial approximations [ 17 ]. This paper focuses on a different bottleneck in such pipelines: privately performing the embedding lookup for discrete user inputs. For models whose inputs include discrete tokens or indices, infer-ence begins with an embedding layer. Given an index 𝑗 ∈ [ 𝑃 ], the embedding layer retrieves the vector 𝑀 𝑗 ∈ R𝑑 , the column indexed by 𝑗 of an embedding table 𝑀 ∈ R𝑑 ×𝑃 , and passes this vector to the remaining layers. Equivalently, if e𝑗 is the one-hot vector for index 𝑗 , then the lookup can be written as 𝑀 𝑗 = 𝑀 e𝑗 . The embed-ding layer therefore converts a discrete index into the continuous vector representation expected by the rest of the model. This step is standard in word embeddings [ 43 , 49 ], transformers [ 22 , 54 ], and recommendation models [ 45 ]. The privacy of the index itself is important. A token index is not an arbitrary number: it identifies a word, subword, item, or query chosen by the user. Revealing whether a user typed a medical term, a financial term, or a polit-ically sensitive term may already reveal the sensitive part of the interaction. Thus, for FHE-based inference over discrete inputs, the lookup from the index to the embedding vector must also be handled without revealing the index. There are two direct ways to handle this step. The first way is client-side embedding: the client obtains the embedding table, performs the lookup locally, encrypts 𝑀 𝑗 , and sends the encrypted vector to the server. This avoids encrypted lookup on the server, but it requires the server to distribute the embedding table to the client and the client to send an encrypted 𝑑 -dimensional vector per token. For GloVe.42B.300d, the table has 1.9M vectors of dimension 
+
+300 , which is about 2.3GB in single precision before any encryp-tion is considered. Thus, the client must receive and store a large table. If the table is proprietary, distributing it also exposes model parameters to the client. Even when the table is public, storage, redistribution, and update costs remain substantial. The encrypted vector sent per token also adds substantial client-to-server commu-nication, since the transmitted ciphertexts scale with the embedding dimension 𝑑 . This cost becomes more pronounced for multi-token inputs or large embedding dimensions. These requirements are unattractive for lightweight clients. The other way is server-side embedding: the client sends an encrypted query derived from the index 𝑗 , and the server performs the lookup on ciphertexts. This keeps the table on the server and avoids sending the embedding vector from the client, but it shifts the table-size dependent lookup cost to the server. We call this server-side task Private Embedding Lookup (PEL) : the client sends an encrypted query derived from a private index, and the server produces ciphertexts encoding the corresponding embedding vector in a form suitable for the following homomorphic layers. The main difficulty in server-side embedding is that private lookup no longer behaves like ordinary memory access. In plain-text, the lookup is just a memory access. Under FHE, however, the server cannot branch on an encrypted index or use it as a memory address. The lookup must be replaced by arithmetic operations over ciphertexts, and the cost grows with the table size 𝑃 . For example, lookup-table methods may evaluate an interpolating polynomial [ 3 ], while embedding approaches often reduce the lookup to a matrix-vector multiplication. As a result, a step that is essentially a memory access in plaintext becomes a table-size-dependent ciphertext com-putation under FHE. This change is especially costly for embedding layers because their tables are often large: vocabulary sizes such as BERT’s roughly 30K tokens, GPT-2’s roughly 50K tokens, or GloVe.42B.300d’s 1.9M tokens. As a result, the embedding lookup stage can already become a dominant component of the encrypted inference cost, even before the model reaches the usual linear and nonlinear layers. Efficient PEL is therefore needed to make server-side embed-ding a practical alternative to client-side embedding: the goal is to keep the embedding table on the server and avoid client-to-server transmission of encrypted embedding vectors, without turning the private lookup itself into the dominant cost. We focus on this server-side PEL setting in the rest of this section. The remaining question is how existing protocols handle the resulting private lookup problem. 
+
+## 1.1 Prior Work Comparison 
+
+We compare how existing protocols handle this private lookup problem. For efficiency, the works considered in [ 25 , 36 ] compress the table before private lookup is applied. Instead of using one large table 𝑀 ∈ R𝑑 ×𝑃 , table compression represents it by ℓ smaller subta-bles 𝑀 (1) , . . . , 𝑀 (ℓ ) ∈ R𝑑 ×𝑝 . An original index 𝑗 ∈ [ 𝑃 ] is mapped to a tuple of sub-indices ( 𝑗 1, . . . , 𝑗 ℓ ) ∈ [ 𝑝 ]ℓ , and the embedding vector is reconstructed by retrieving one vector from each subtable and summing them: 
+
+𝑀 𝑗 ≈
+
+> ℓ
+
+∑︁ 
+
+> 𝑡 =1
+
+𝑀 (𝑡 ) 
+
+> 𝑗 𝑡
+
+.
+
+Thus a lookup over a table of size 𝑃 is replaced by ℓ lookups over tables of size 𝑝 . We treat this compression step as a front-end choice: once it produces subtables of size 𝑝 , our focus is the cryptographic cost of each private subtable lookup. 
+
+Communication Cost vs. Computation Cost. These protocols ex-pose the tradeoff we aim to resolve: keeping the compact communi-cation of scalar-index queries without making the server homomor-phically generate a one-hot vector. Existing works [ 25 , 36 , 39 ] take different approaches to this private lookup problem. FastQuery [ 39 ]targets private embedding lookup, but in a 2PC+HE protocol with a masked one-hot online query and additive shares setting, making it somewhat less aligned with the FHE-based inference setting that we consider. For the FHE-only line of work, the important distinction is the tradeoff between client communication and server-side one-hot computation. HE-LRM [ 25 ] lets the client provide an encrypted one-hot vector 𝑒 𝑗 ∈ { 0, 1}𝑝 . Once the server has this vector, the lookup itself is a homomorphic linear operation with the table, 
+
+𝑀 𝑗 = 𝑀𝑒 𝑗 ∈ R𝑑 . This keeps the server-side lookup simple, but the client must communicate a length-𝑝 encrypted vector for each private lookup, which leads to substantial blowup if 𝑃 is large. The method of Kim et al. (ICML 2024) [ 36 ] instead allows the client to send only an encrypted scalar index 𝑗 ∈ [ 𝑝 ]. This keeps the query compact. The server, however, must first transform the encrypted index 𝑗 into the corresponding one-hot vector 𝑒 𝑗 before 
+
+> 2Private Embedding Lookup with Encrypted Compact Queries under FHE
+
+Table 1: Design-space comparison for private embedding lookup. For the FHE-only rows, table compression gives ℓ private lookups over subtables of size 𝑝 , followed by summation of the resulting vectors. FastQuery is included as an adjacent 2PC+HE comparison point rather than as a protocol normalized under this FHE-only compressed-table metric. Query size counts the plaintext query representation before encryption and packing. The last row shows the design point pursued in this work.                                             
+
+> Work Setting/output Client query Server vector recovery Takeaway Representation Size One-hot vector on server? Cost before table multiplication FastQuery [39] 2PC+HE Masked one-hot-vector query with offline randomness; not based on the table-compression front-end. Not directly comparable No Not an FHE-only encrypted-output pipeline Adjacent setting: output is share-based, so the FHE-only encrypted-output metric below does not directly apply. HE-LRM [25] FHE Encrypted one-hot vectors Enc (e𝑗𝑡 ).Large :Θ(ℓ𝑝 )vector entries No; client provides vectors None before table multiplication Saves server recovery work, but pays for it with large client communication. Kim et al. [36] FHE Encrypted scalar sub-indices
+> Enc (𝑗 𝑡 ).
+> Compact :Θ(ℓ)scalars Yes High :Θ(ℓ𝑝 log 𝑝 )
+> operations Communication is compact, but homomorphic one-hot generation becomes the bottleneck.
+> IVE-PEL (this work) FHE Encrypted scalar sub-indices
+> Enc (𝑗 𝑡 ).
+> Compact :Θ(ℓ)scalars No Lower :Θ(ℓ𝑝 )operations Hits the target point: compact query and no server-side one-hot generation.
+
+applying the same linear operation. Kim et al. introduced a function called the Encrypted Indicator Function (EIF) to perform this oper-ation, but it is extremely costly, even compared to the subsequent multiplication with the table. To sum up, if the client sends the one-hot vector, the server-side computation is simple but the communication is large. If the client sends only the scalar index, the communication is small but the server additionally computes the one-hot vector homomorphically. This one-hot generation step is homomorphically expensive and becomes the main server-side bottleneck in the lookup regimes we target. Table 1 summarizes this communication-versus-one-hot computation tradeoff for the FHE-only approaches. It lists Fast-Query separately as an adjacent 2PC+HE comparison point. 
+
+## 1.2 Our Method 
+
+Our goal is the missing design point identified above: keep the com-munication benefit of sending encrypted scalar sub-indices while avoiding expensive server-side one-hot generation. In other words, we aim to retain a compact query representation while achieving the effect of one-hot generation with a computational cost that is not dominant compared to the subsequent table multiplication. We achieve this by avoiding one-hot generation altogether. The server does not actually need the one-hot vector itself. It only needs to produce the same selected embedding vector. This suggests an algebraic alternative. The server only needs an encrypted represen-tation that uniquely identifies the index and can be converted, by a plaintext precomputed transformation, into the same selected em-bedding. Instead of representing the index 𝑗 by the one-hot vector 
+
+e𝑗 , we associate it with another vector v𝑗 . As long as the vectors 
+
+{v𝑗 } are linearly independent, there exists a change-of-basis matrix 
+
+𝐿 satisfying 𝐿 v𝑗 = e𝑗 . Then the lookup result is unchanged: 
+
+𝑀 e𝑗 = 𝑀𝐿 v𝑗 .
+
+The matrix 𝑀𝐿 is plaintext and can be precomputed by the server. Therefore, the online task is no longer constructing the one-hot vector but becomes evaluating a suitable independent vector v𝑗 .This changes the design space. One-hot vectors are only one possible basis, and they are not friendly to homomorphic evaluation from an encrypted index. Once we allow any linearly independent vector family, we can choose vectors that are much easier to gener-ate homomorphically and still recover the same embedding after the precomputed linear transformation. Our method follows this principle through Independent Vector Evaluation (IVE). The chal-lenge is not merely to find another basis, but to choose one that is cheap to generate under FHE and numerically stable under CKKS approximation. This imposes two additional requirements: efficient homomorphic generation and numerical stability. 
+
+Efficiency Requirement. The vector family should be easy to gen-erate under FHE. This suggests vectors generated from powers of one value, such as 
+
+v(𝑥 ) = (1, 𝑥, 𝑥 2, . . . , 𝑥 𝑝 −1)⊤.
+
+Once the server has an encryption of 𝑥 , it can generate powers of 𝑥 
+
+using ordinary arithmetic operations. This is much more arithmetic-friendly than testing, coordinate by coordinate, which position equals the hidden index. 
+
+Stability Requirement. Efficiency alone is not enough. A poorly conditioned change of basis can amplify the error in the evaluated vector. We therefore want the matrix 𝐿 formed by the vectors v𝑗 
+
+to be orthogonal, or at least very well conditioned. Together with the power-vector form, this points to roots of unity: in the complex setting, powers of roots of unity give the Fourier basis, which is unitary. Thus the guiding principle is to use powers for efficient homomorphic generation and roots of unity for numerical stability. 
+
+Real-valued Version. Further, since embedding tables are real-valued, so we use a real-valued version of this idea. We take a shifted root-of-unity construction and separate the real and imaginary parts of the resulting powers. This realification yields the Discrete Cosine Transform (DCT) matrix used in our protocol. The DCT choice keeps the change of basis orthogonal while letting the server generate the vector entries from powers of a single encrypted value. This gives 𝑂 (𝑝 ) homomorphic vector generation for a table of size 
+
+𝑝 .
+
+> 3Cheon, Jang, Kang, and Rhee
+
+## 1.3 Our Contributions 
+
+This work studies Private Embedding Lookup (PEL) for FHE-based inference over discrete inputs for the feasibility for lightweight client situation. We aim to design PEL to support server-side lookup with compact client queries while keeping the homomorphic com-putation small enough for end-to-end inference. Our contributions are as follows. 
+
+• Independent Vector Evaluation. We propose Indepen-dent Vector Evaluation (IVE), which replaces encrypted one-hot generation with the evaluation of an arithmetic-friendly linearly independent vector v𝑗 . The key observa-tion is that one-hot vectors are only one possible basis: if 
+
+𝐿 v𝑗 = e𝑗 , then the server can precompute 𝑀𝐿 and recover the same embedding as 𝑀𝐿 v𝑗 = 𝑀 𝑗 . We instantiate this idea using a DCT-based orthogonal construction, which supports power-based homomorphic generation while con-trolling numerical error amplification in CKKS. For a size-𝑝 
+
+lookup, IVE reduces vector generation from 𝑂 (𝑝 log 𝑝 ) to 
+
+𝑂 (𝑝 ) homomorphic operations. 
+
+• An Efficient PEL Pipeline via IVE and PCMM. We inte-grate IVE with plaintext-ciphertext matrix multiplication (PCMM) [ 5 ] to build an efficient PEL pipeline for multiple token queries. IVE reduces the cost of encrypted vector gen-eration, while PCMM reduces the linear cost of applying the embedding table to many encrypted query vectors in paral-lel. Under the same CKKS parameters and lookup size, our implementation shows that the proposed IVE-based PEL pipeline improves the amortized lookup time by 18 .5–78 .4×
+
+over the one-hot-based method of Kim et al. at log 𝑝 = 10 ,as reported in Table 3. 
+
+• End-to-end Encrypted FastText Inference. We imple-ment an end-to-end encrypted inference pipeline for a FastText-style text classification model on privacy-sensitive text datasets. The pipeline uses our PEL method as the en-crypted embedding layer and then performs the remaining linear classification homomorphically. Compared with re-placing the embedding layer by the one-hot-based lookup method of Kim et al., our method substantially reduces the amortized end-to-end inference time per input example. On the spam mail classification dataset (Enron-Spam), IVE-PEL reduces the share of vector generation in the encrypted inference time from 99 .6% under Kim et al.’s method to 
+
+66 .3% , as reported in Table 5. These results show that our faster lookup method also improves the overall encrypted inference time. 
+
+## 1.4 Related Work 
+
+The closest prior systems for private embedding lookup are HE-LRM [ 25 ], the method of Kim et al. [ 36 ], and FastQuery [ 39 ]; these are compared in Section 1.1. We use this subsection only to clarify how PEL differs from adjacent primitives such as PIR and Homo-morphic Lookup. 
+
+Relation to PIR. Private Information Retrieval (PIR) [ 18 ] also hides an index while retrieving a database entry. At a high level, this sounds very close to PEL. The client has a private index, the server has a table, and the protocol should retrieve the selected entry without revealing the index. The closest PIR analogue is single-server, single-round, linear PIR, where the client sends one encrypted query and the server combines table entries according to that query. The difference is the role of the output. In PIR, the selected record is usually returned to the client. The client can then decrypt it and may use preprocessing or postprocessing to recover the final record; many PIR communication/computation trade-offs are built around this final-client-output model [ 4 ]. In PEL, the embedding is not the final output of the application. It is an intermediate ciphertext inside an FHE inference pipeline. The next homomorphic layer must be able to consume it directly. If the client had to decrypt, reconstruct, and re-encrypt the embedding, the FHE pipeline would be interrupted. Thus PEL needs a lookup protocol whose encrypted output is already in the right form for the following homomorphic computation. 
+
+Relation to Homomorphic Lookup. Homomorphic lookup algo-rithms [ 3 , 7, 16 ] evaluate functions of encrypted inputs and are closely related to scalar-input lookup. They are relevant because an embedding lookup can also be viewed as a function of an encrypted index. However, such work usually focuses on evaluating a function inside a homomorphic circuit. Client-to-server communication is not usually the main design choice in that cost model. PEL differs in two ways. First, the query representation is part of the problem. The client might send a one-hot query, a scalar-index query, or another compact encoding, and this choice directly changes both communication and server-side work. Second, the output is vector-valued and must be encoded in a CKKS format suit-able for downstream linear layers. Standard homomorphic lookup analyses do not directly capture this combination of query commu-nication, vector output, CKKS encoding, and compatibility with the rest of the FHE inference pipeline. 
+
+## 2 Preliminaries 
+
+In this section, we present the notation and review the main tools used in our protocol. For a positive integer 𝑝 , we denote [𝑝 ] := {0, 1, . . . , 𝑝 − 1}.Throughout, log denotes log 2. We use bold lower-case letters (e.g., 
+
+v) for vectors and upper-case letters (e.g., 𝑀 ) for matrices. We write √−1 for the imaginary unit (reserving 𝑖 for indexing). For a vector 
+
+v, we write v[𝑖 ] for its 𝑖 -th component. For a matrix 𝑀 , we write 
+
+𝑀 𝑗 for its 𝑗 -th column. 
+
+## 2.1 Fully Homomorphic Encryption 
+
+Fully Homomorphic Encryption (FHE) enables arithmetic directly over encrypted data [ 26 ]. We recall the basic definition of an FHE scheme. A Fully Homomorphic Encryption scheme ΠHE is a tuple of probabilistic polynomial time (PPT) algorithms 
+
+ΠHE = (KeyGen , Enc , Dec , Eval ).
+
+Here, SK and PK denote secret key space and public key space, respectively. We let pk include the public encryption key and the evaluation keys needed for homomorphic operations. Also, M and 
+
+C denote message space and ciphertext space, respectively. 
+
+• KeyGen (1𝜆 ) → ( sk , pk ): Given security parameter 𝜆 , out-puts a secret key sk ∈ SK and public key pk ∈ PK .
+
+> 4Private Embedding Lookup with Encrypted Compact Queries under FHE
+
+• Enc (pk , 𝑚 ) → ct : Given message 𝑚 ∈ M and public key 
+
+pk , outputs a ciphertext ct ∈ C .
+
+• Dec (sk , ct ) → 𝑚 : Given ciphertext ct ∈ C and secret key 
+
+sk , outputs a message 𝑚 ∈ M .
+
+• Eval (pk , (ct 𝑖 )𝑖 ∈ [ 𝑛 1 ] ; 𝐶 ) → ( ct ′ 
+
+> 𝑗
+
+)𝑗 ∈ [ 𝑛 2 ] : Given public key pk ,an 𝑛 1-tuple of ciphertexts, and an 𝑛 1-input-𝑛 2-output circuit 
+
+𝐶 , outputs an 𝑛 2-tuple of ciphertexts. 
+
+## 2.2 CKKS Scheme 
+
+In this work, we use the CKKS scheme [ 14 ], which supports approx-imate (fixed-point) arithmetic over complex numbers. We introduce the basic concepts required for our construction; additional details are in Appendix A. 
+
+CKKS Message and Ciphertext. Let 𝑁 be a power-of-two. We define R𝑁 := Z[𝑋 ]/( 𝑋 𝑁 + 1). For integers 𝑞 0, . . . , 𝑞 𝐿 , set 𝑄 ℓ :=
+
+Îℓ𝑖 =0 𝑞 𝑖 for ℓ = 0, . . . , 𝐿 . Let R𝑁 ,𝑄 ℓ := Z𝑄 ℓ [𝑋 ]/( 𝑋 𝑁 + 1). We call 
+
+𝑁 the ring degree , ℓ the level , and 𝑄 ℓ the ( ℓ-level) modulus . Then, the CKKS message space M is C𝑁 /2. The ( ℓ-level) CKKS ciphertext space Cℓ is R2 
+
+> 𝑁 ,𝑄 ℓ
+
+= {( 𝑎, 𝑏 ) : 𝑎, 𝑏 ∈ R 𝑁 ,𝑄 ℓ }.
+
+CKKS Encryption. CKKS encryption Enc proceeds as follows. A complex vector m ∈ C𝑁 /2 is first scaled by a scale factor Δ
+
+and encoded (via an FFT-based map) into a polynomial 𝜇 ∈ R 𝑁 .(Using a larger scale factor Δ generally yields higher-precision homomorphic computations.) The encryption algorithm (to level 
+
+ℓ) outputs a ciphertext (𝑎, 𝑏 ) ∈ C ℓ such that 𝑎𝑠 + 𝑏 = 𝜇 + 𝑒 enc 
+
+(mod 𝑄 ℓ ) for a secret 𝑠 = sk ∈ R 𝑁 and small encryption error 
+
+𝑒 enc . Accordingly, decryption Dec takes a level-ℓ ciphertext (𝑎, 𝑏 ),computes 𝑎𝑠 + 𝑏 (mod 𝑄 ℓ ) with respect to the secret key 𝑠 , and then decodes the result to recover a vector in C𝑁 /2.
+
+CKKS Operations. For CKKS ciphertexts, homomorphic addition and multiplication are supported over 𝑁 /2 complex values in a SIMD manner. 
+
+• Add : Adds two ciphertexts or one ciphertext and a message, denoted as ct 1 + ct 2 or ct + 𝑚 .
+
+• Mult : Multiplies two ciphertexts or one ciphertext and a message, denoted as ct 1 · ct 2 or 𝑚 · ct .
+
+• Conj : Conjugates a ciphertext ct homomorphically, denoted as ct .The cost of the CKKS operation depends on the ciphertext level: Operations on higher-level ciphertexts incur greater cost, approxi-mately proportional to the level. Each ciphertext-ciphertext mul-tiplication, and typically each multiplication by an encoded non-integer plaintext, consumes one level of a CKKS ciphertext 1. Once all levels are exhausted, further homomorphic multiplications are no longer supported. The total number of levels consumed by a homomorphic circuit is called its (multiplicative) depth . CKKS boot-strapping BTS refreshes a ciphertext by restoring its level while approximately preserving the underlying message [12]. Matrix multiplication is widely used in practice, and extensive prior work has studied how to perform it efficiently under FHE, including both encoding strategies and optimized multiplication  
+
+> 1As an exception, multiplying a ciphertext by an integer (including Gaussian integers in Z[√−1]) does not consume a level.
+
+procedures. Among these, the multiplication of a plaintext ma-trix with a ciphertext matrix is commonly referred to as PCMM .A recent advance enables this operation to be implemented very efficiently [5]. 
+
+• PCMM 𝐴 (CT ): For a plaintext matrix 𝐴 ∈ C𝑟 ×𝑠 and cipher-text(s) CT encoding a matrix 𝐵 ∈ C𝑠 ×𝑡 under a prescribed layout, outputs ciphertext(s) encoding 𝐴𝐵 under the corre-sponding output layout. 
+
+## 3 PEL: Private Embedding Lookup 
+
+In this section, we formalize Private Embedding Lookup (PEL) and discuss its properties. Let ΠHE = (KeyGen , Enc , Dec , Eval ) be a homomorphic encryp-tion scheme with message space M and ciphertext space C. For positive integers 𝑟, 𝑑 , let VecEcd : R𝑑 → M 𝑟 be a vector encoding map with corresponding decoding map VecDcd . Let T ⊂ R𝑑 ×𝑝 be a finite-precision family of embedding tables, and write 𝑀 𝑗 := 𝑀 :,𝑗 ∈
+
+R𝑑 for the 𝑗 -th column of 𝑀 . Let 𝐸 : R𝑑 × R𝑑 → [ 0, ∞] be an error metric function and let 𝑢 be the inverse-error target, so that the target error is 1/𝑢 . Then we define Private Embedding Lookup as follows: 
+
+Definition 3.1 (Private Embedding Lookup) . A Private Embedding Lookup protocol ΠPEL is a tuple of PPT algorithms 
+
+ΠPEL = (Setup , Query , Emb )
+
+parameterized by (ΠHE , VecEcd , T , 𝐸, 𝑢 ), between a client C that privately holds the HE secret key sk ∈ SK and an index 𝑗 ∈ [ 𝑝 ],and a server S that privately holds the embedding table 𝑀 ∈ T .
+
+• Setup (1𝜆 ) → ( sk , pp ): Given security parameter 𝜆 , outputs public parameters pp , including the HE public/evaluation keys, and the ΠHE secret key sk .
+
+• Query ( 𝑗, pp ) → q: Given public parameters and C’s private index 𝑗 ∈ [ 𝑝 ], outputs a query q.
+
+• Emb (𝑀, q, pp ) → ( ct 𝑘 )𝑘 ∈ [ 𝑟 ] ∈ C 𝑟 : Given query, public parameters, and S’s private table 𝑀 ∈ T , outputs an 𝑟 -tuple of server-held ΠHE ciphertexts encrypted under C’s key. 
+
+Definition 3.2 (Correctness) . ΠPEL (ΠHE , VecEcd , T , 𝐸, 𝑢 ) is said to be correct if, for any 𝑗 ∈ [ 𝑝 ] and 𝑀 ∈ T , the following probability over the randomness of Setup , Query , and Emb is overwhelming in 𝜆 :
+
+Pr 
+
+h
+
+𝐸 
+
+
+
+𝑀 𝑗 , VecDcd  (Dec (sk , ct 𝑘 )) 𝑘 ∈ [ 𝑟 ]
+
+
+
+< 1/𝑢 
+
+i
+
+,
+
+where (sk , pp ) ← Setup (1𝜆 ), q ← Query ( 𝑗, pp ), and (ct 𝑘 )𝑘 ∈ [ 𝑟 ] ←
+
+Emb (𝑀, q, pp ). The decryption in this condition is used only to de-fine the plaintext represented by the server-held output ciphertexts. 
+
+Definition 3.3 (Security) . PEL satisfies client index privacy if for any two distinct indices 𝑗 1, 𝑗 2 ∈ [ 𝑝 ] and probabilistic polynomial time algorithm A, the following is negligible in 𝜆 for (sk , pp ) ← 
+
+Setup (1𝜆 ) and q𝑖 ← Query ( 𝑗 𝑖 , pp ):
+
+Pr [1 ← A ( q1, pp )] − Pr [1 ← A ( q2, pp )] .
+
+> 5Cheon, Jang, Kang, and Rhee
+
+Threat Model. We assume semi-honest adversaries. PEL targets 
+
+client index privacy : S should learn nothing about 𝑗 ∈ [ 𝑝 ] from the public parameters and the protocol transcript. In our one-message formulation, the client-to-server transcript consists only of q; af-ter receiving q, Emb is local server-side post-processing using 
+
+(𝑀, q, pp ). Thus indistinguishability of the query implies indistin-guishability of the full server-side transcript by post-processing. Since PEL does not return the resulting ciphertext to the client, the 
+
+server privacy of 𝑀 ∈ T is automatically satisfied. Rather, server pri-vacy should be interpreted in the context of the entire FHE pipeline that uses PEL as a component, rather than as a standalone property of PEL. Related discussions appear in [ 32 , 33 ], and we leave this as an orthogonal direction. 
+
+Performance Metrics. We evaluate a PEL protocol by (i) the client-to-server communication cost, measured by the query size |q| or the communication overhead |q|/ log 𝑝 ,(ii) the server-side cost of Emb (computation cost), and (iii) the achieved accuracy captured by the error bound 𝑢 .
+
+## 4 IVE: Independent Vector Evaluation 
+
+In this section, we present the Independent Vector Evaluation (IVE) algorithm, a core method for our efficient, batched-PEL solution under the CKKS scheme. We use a tilde to denote an approximate value (e.g., ˜𝑥 ), and denote the perturbation by 𝜖 𝑥 := ˜𝑥 − 𝑥 . For an 
+
+𝑚 -dimensional error vector 𝜖 , we use the root-mean-square (RMS) norm ∥𝜖 ∥RMS = ∥𝜖 ∥2/√𝑚 .We start from the approach of Kim et al . [36] , where the client encrypts the index as a single-slot value, from which the server ho-momorphically constructs a one-hot vector e𝑗 ∈ R𝑝 and computes 
+
+𝑀 𝑗 = 𝑀 e𝑗 . Similarly, we take as our baseline the standard approach in which the client encodes the index and sends an encryption of the encoded value to the server for communication efficiency. However, constructing a one-hot vector from an encrypted index is not arithmetic-friendly. In particular, the approach of Kim et al. uses numerical methods: It relies on 𝑂 (𝑝 log 𝑝 ) multiplicative oper-ations to drive each component of the vector to converge to either 
+
+0 or 1, consuming substantial multiplicative depth and potentially incurring poor latency under CKKS. One of the key principles in FHE-based applications is to reformulate computations to be as arithmetic-friendly as possible, so as to minimize multiplicative depth and improve latency. From this perspective, directly synthe-sizing a one-hot vector from the encrypted index is not an ideal strategy. To overcome this limitation, we propose the Independent Vector Evaluation (IVE) method. In IVE, the one-hot vectors e𝑗 are replaced with linearly independent vectors v𝑗 that serve as inputs to a matrix multiplication layer. Let 𝐿 ∈ R𝑝 ×𝑝 denote the basis-change matrix satisfying 𝐿 v𝑗 = e𝑗 , so that 𝑀 𝑗 = 𝑀 e𝑗 = (𝑀𝐿 )v𝑗 , where 𝑀𝐿 can be precomputed offline. 
+
+## 4.1 Choice of Independent Vectors 
+
+Regarding the choice of {v𝑗 }𝑗 ∈ [ 𝑝 ] , two aspects are particularly important in this method: Computational Efficiency and Numerical Stability .First, for the computational efficiency, since it suffices that 
+
+{v𝑗 }𝑗 ∈ [ 𝑝 ] are linearly independent, any efficient arithmetic circuit satisfying this condition may be chosen to maximize efficiency. Next, since 𝑀 and 𝐿 are fixed and can be precomputed in plaintext with high precision, the dominant source of error arises from the evaluation of v𝑗 from the encrypted index 𝑗 and multiplication between 𝑀𝐿 and v𝑗 . After the server obtains a ciphertext that decrypts to ˜v𝑗 = v𝑗 + 𝜖 v𝑗 for some error vector 𝜖 v𝑗 after IVE, it homomorphically multiplies by 𝑀𝐿 to produce an encryption of 
+
+˜𝑀 𝑗 . The corresponding error ∥𝜖 𝑀 𝑗 ∥2 is bounded as follows: 
+
+∥𝜖 𝑀 𝑗 ∥2 = ∥ ˜𝑀 𝑗 − 𝑀 𝑗 ∥2 ≤ ∥ ˜𝑀 𝑗 − 𝑀𝐿 ˜v𝑗 ∥2 + ∥ 𝑀𝐿𝜖 v𝑗 ∥2. (1) The first term ∥ ˜𝑀 𝑗 − 𝑀𝐿 ˜v𝑗 ∥2 is determined by the stability of the matrix multiplication algorithm, and our primary concern lies in the second term, ∥𝑀𝐿𝜖 v𝑗 ∥2. It depends primarily on the error 𝜖 v
+
+incurred during the generation of v𝑗 and on the conditioning of 𝑀 
+
+and 𝐿 . In particular, if the basis-change matrix 𝐿 is ill-conditioned, the error 𝜖 v𝑗 can be substantially amplified. 
+
+Discrete Cosine Transform Matrix. To meet the above two require-ments, we propose to use the Discrete Cosine Transform (DCT) matrix [ 1 ], an orthogonal matrix that has been widely adopted in image and signal processing due to its efficient implementation and 
+
+stable numerical properties . Our choice is further motivated by its compatibility with CKKS: since CKKS supports complex arithmetic, DCT entries can be generated from complex exponentials. This also aligns naturally with CKKS functional bootstrapping, which efficiently produces such exponentials from encrypted exponents. In this work, we assume 𝑝 is even and define a (row-permuted) DCT matrix 𝐷 = (𝐷 𝑘,𝑗 ) ∈ R𝑝 ×𝑝 as follows. 
+
+𝐷 𝑘,𝑗 =
+
+√︃  
+
+> 2
+> 𝑝
+
+cos 
+
+ (− 1) 𝑗 (2𝑗 +1)𝜋  
+
+> 2𝑝
+
+(𝑘 + 1)
+
+
+
+0 ≤ 𝑘 < 𝑝 
+
+> 2
+
+√︃  
+
+> 2
+> 𝑝
+
+sin 
+
+ (− 1) 𝑗 (2𝑗 +1)𝜋 
+
+> 2𝑝
+
+ 𝑘 − 𝑝  
+
+> 2
+
++ 1 𝑝  
+
+> 2
+
+≤ 𝑘 < 𝑝 − 1 
+
+> 1√𝑝
+
+𝑘 = 𝑝 − 1
+
+We defer the proof of orthogonality of 𝐷 to Appendix B. Now let 𝐿 = 𝐷 −1. It follows that ∥𝐿 ∥2 = 1 due to orthogonality, and v𝑗 corresponds to the 𝑗 -th column of 𝐷 .
+
+## 4.2 Vector Evaluating Algorithm 
+
+We now describe how to compute v𝑗 efficiently in CKKS. 
+
+Evaluating v𝑗 . Let 𝛼 𝑗 := exp 
+
+
+
+𝐽 𝑗 · 2𝜋 √−1
+
+
+
+for 𝐽 𝑗 := (− 1) 𝑗 (2𝑗 +1) 
+
+> 4𝑝
+
+.Assume that the server is given 𝛼 𝑗 . Then, the index-wise linearly independent vectors v𝑗 ’s can be efficiently evaluated as follows: It holds that v𝑗 = v(𝛼 𝑗 ) where 
+
+v(𝛼 ) :=√︃ 2
+
+> 𝑝
+
+
+
+𝑅𝑒 (𝛼, . . . , 𝛼 𝑝  
+
+> 2
+
+), 𝐼𝑚 (𝛼, . . . , 𝛼 𝑝  
+
+> 2−1
+
+), 1√2
+
+⊤
+
+. (2) We defer the proof for v𝑗 = v(𝛼 𝑗 ) to Appendix B. Algorithm 1 describes the procedure for computing encryptions of a constant multiple of the (v𝑗 𝑖 )𝑖 ∈ [ 𝑁 /2] from the given encrypted 
+
+(𝛼 𝑗 𝑖 )𝑖 ∈ [ 𝑁 /2] . The algorithm outputs √2𝑝 · v𝑗 𝑖 ; this constant factor is absorbed into the subsequent matrix multiplication phase to reduce depth consumption. By packing 𝛼 𝑗 𝑖 across slots of ct , the algorithm exploits batch computation to evaluate all v𝑗 𝑖 ’s in paral-lel. In the first stage, the algorithm performs power generation in 
+
+> 6Private Embedding Lookup with Encrypted Compact Queries under FHE
+
+a multiplication-tree manner to produce ciphertexts that encrypt successive powers of 𝛼 𝑗 𝑖 ’s with logarithmic multiplicative depth. For the stated tree schedule and cost table, we assume 𝑝 /2 is a power of two; otherwise, the vector family can be padded to the next such size. In the second stage, it separates the resulting val-ues into their real and imaginary parts by conjugation, outputting ciphertexts that encrypt (2𝑅𝑒 (𝛼 𝑘 +1 
+
+> 𝑗 𝑖
+
+)) 𝑖 and (2𝐼𝑚 (𝛼 𝑘 +1 
+
+> 𝑗 𝑖
+
+)) 𝑖 for the cor-responding zero-based loop index 𝑘 . We note that, in line 14 in Algorithm 1, multiplying an integer constant (√−1)−1 ∈ Z[√−1]
+
+does not consume level. 
+
+Matrix Multiplication. By executing the above procedure in CKKS, the scaled vectors √2𝑝 · v𝑗 𝑖 for 𝑖 ∈ [ 𝑁 /2] are computed in a batched manner, yielding an encryption of a matrix, denoted by CT . Once CT = (ct 𝑘 )𝑘 ∈ [ 𝑝 ] encrypting √2𝑝 · v(𝛼 𝑗 𝑖 ) is available, the server performs a plaintext–ciphertext matrix multiplication (PCMM ) with the preprocessed plaintext matrix 𝑀𝐿 /√2𝑝 . This yields encryptions of the selected embeddings (𝑀 𝑗 𝑖 )𝑖 ∈ [ 𝑁 /2] in a batched manner. Table 2 summarizes the CKKS resources consumed in this process. 
+
+Algorithm 1 IVE algorithm 
+
+Input: ct : Dec (ct ) [ 𝑖 ] ≈ 𝛼 𝑗 𝑖 .
+
+Output: (ct 𝑘 )𝑘 ∈ [ 𝑝 ] : Dec (ct 𝑘 ) [ 𝑖 ] ≈ √2𝑝 · v𝑗 𝑖 [𝑘 ]. 
+
+> 1:
+
+𝑛 ← 𝑝 /2 
+
+> 2:
+
+ct ′0 ← ct  
+
+> 3:
+
+for 𝑑 = 0 to log 2 𝑛 − 1 do  
+
+> 4:
+
+𝑖 ← 2𝑑  
+
+> 5:
+
+𝑡 ← min (𝑖, 𝑛 − 𝑖 ) 
+
+> 6:
+
+for 𝑗 = 1 to 𝑡 do  
+
+> 7:
+
+ct ′𝑖 +𝑗 −1 ← ct ′𝑖 −1 · ct ′ 𝑗 −1 
+
+> 8:
+
+end for  
+
+> 9:
+
+end for  
+
+> 10:
+
+for 𝑘 = 0 to 𝑛 − 1 do  
+
+> 11:
+
+ct ← ct ′ 
+
+> 𝑘
+> 12:
+
+ct 𝑘 ← ct ′ 
+
+> 𝑘
+
++ ct  
+
+> 13:
+
+if 𝑘 < 𝑛 − 1 then  
+
+> 14:
+
+ct 𝑛 +𝑘 ←  ct ′ 
+
+> 𝑘
+
+− ct /√−1 
+
+> 15:
+
+else  
+
+> 16:
+
+ct 𝑝 −1 ← Enc (√2) 
+
+> 17:
+
+end if  
+
+> 18:
+
+end for  
+
+> 19:
+
+return (ct 𝑘 )𝑘 ∈ [ 𝑝 ]
+
+Table 2: Resource Consumption of Homomorphic Evaluation on the Server-side for IVE , plus one PCMM call. #Add #ptMult #Mult #Conj #PCMM Depth 
+
+𝑝 − 1 𝑝 
+
+2 − 1 𝑝 
+
+2 − 1 𝑝 
+
+2 1 log 𝑝 
+
+## 5 IVE-PEL 
+
+In the previous section, we showed how the server can homomor-phically derive the target embedding vector 𝑀 𝑗 once it is given an encryption of 𝛼 𝑗 . This section completes the construction by describing how the client can provide such an input ciphertext with compact amortized communication while achieving the target numerical precision in the output embedding vector. For clarity, we describe the transmission for a batch size of 𝑁 /2, where 𝑁 is the ciphertext ring degree, and the same approach applies to other batch sizes. 
+
+## 5.1 Query Transmission 
+
+Standard Transmission Layer. We use standard RLWE ciphertext-transmission techniques [ 6, 10 ] as a communication layer. The client forms the values 𝛼 𝑗 𝑖 , as defined in Section 4.2, encrypts them at the lowest modulus 𝑄 0 over R2  
+
+> 𝑁 /2,𝑄 0
+
+, and sends a seed for the 𝑎 
+
+component together with the 𝑏 component. The server regenerates 
+
+𝑎 and packs the ciphertext to R2 
+
+> 𝑁 ,𝑄 0
+
+via ring packing, obtaining the input ciphertext for IVE. We defer the details of ring packing to Appendix A.6. 
+
+IVE-PEL. Putting the above components together, we obtain the 
+
+IVE-PEL protocol with batch size 𝑁 /2. We summarize the construc-tion in Figure 1. In particular, the server-side computation ( Emb ) is depicted in Figure 2. 
+
+Protocol IVE-PEL 
+
+Input : C holds ( 𝑗 𝑖 )𝑖 ∈ [ 𝑁 /2] ∈ [ 𝑝 ]𝑁 /2, S holds 𝑀 ∈ R𝑑 ×𝑝 .
+
+Output : S gets CKKS encryptions of 𝑀 𝑗 𝑖 ∈ R𝑑 for 𝑖 ∈ [ 𝑁 /2].
+
+• Setup (1𝜆 ): Share pp including CKKS public/evaluation parameters and ring-packing keys. C gets CKKS secret 
+
+sk .
+
+• Query (( 𝑗 𝑖 )𝑖 , pp ): C samples a 128-bit seed 𝜌 , uses it to generate 𝑎 , and encrypts  𝛼 𝑗 𝑖 
+
+   
+
+> 𝑖 ∈ [ 𝑁 /2]
+
+at 0 level to get 
+
+(𝑎, 𝑏 ) ∈ R 2  
+
+> 𝑁 /2,𝑄 0
+
+. Outputs query q = (𝜌, 𝑏 ) and sends to 
+
+S.
+
+• Emb (𝑀, q, pp ): S reconstructs (𝑎, 𝑏 ) and packs into ring degree 𝑁 to get ct ∈ R2 
+
+> 𝑁 ,𝑄 0
+
+. Then computes 
+
+(ct out ,𝑘 )𝑘 ∈ [ 𝑑 ] ← ( PCMM 𝑀𝐿 /√2𝑝 ◦ IVE )( ct )
+
+Figure 1: IVE-PEL protocol. 
+
+## 5.2 Numerical Precision and Parameter Selection 
+
+The scaling factor Δ is chosen to meet the target precision and error budget. We state a sufficient condition below and defer the derivation to Appendix C. 
+
+Error Model and Notation. Fix a correctness parameter 𝑢 , an even index size 𝑝 satisfying the assumptions of Section 4 (or its padded size), an embedding-vector dimension 𝑑 , and a CKKS ring degree 𝑁 .Let Δ be the CKKS scale factor. Let 𝐶 PCMM bound the final PCMM RMS error by 𝐶 PCMM Δ−1, and let 𝐶 𝑇 satisfy ∥𝑀 ∥2 ≤ 𝐶 𝑇 (√𝑑 + √𝑝 )
+
+for tables 𝑀 ∈ T . Let 𝐶 𝑉 be a local Lipschitz constant for the map 
+
+> 7
+
+Cheon, Jang, Kang, and Rhee                                                                                
+
+> 𝛼 𝑗 1𝛼 𝑗 2𝛼 𝑗 𝑠 ct ct
+> 𝛼 1
+> 𝑗 1𝛼 1
+> 𝑗 2𝛼 1
+> 𝑗 𝑠
+> 𝛼 2
+> 𝑗 1𝛼 2
+> 𝑗 2𝛼 2
+> 𝑗 𝑠
+> .........
+> 𝛼 𝑝
+> 2
+> 𝑗 1𝛼 𝑝
+> 2
+> 𝑗 2𝛼 𝑝
+> 2
+> 𝑗 𝑠
+> (ct ′)(ct ′𝑘 )𝑘 ∈[ 𝑝 /2]
+> 2𝑟 11 2𝑟 12 2𝑟 1𝑠
+> 2𝑟 21 2𝑟 22 2𝑟 2𝑠
+> .........
+> 2𝑟 𝑝
+> 212𝑟 𝑝
+> 222𝑟 𝑝
+> 2𝑠
+> CT ′+CT ′(ct ′𝑘 +ct ′𝑘 )𝑘 ∈[ 𝑝 /2]
+> 2𝑖 11 2𝑖 12 2𝑖 1𝑠
+> .........
+> 2𝑖 𝑝
+> 2−1,12𝑖 𝑝
+> 2−1,22𝑖 𝑝
+> 2−1,𝑠
+> CT ′−CT ′
+> √−1[0; 𝑝
+> 2−2]
+> ct ′𝑘 −ct ′𝑘
+> √−1
+> 
+> 𝑘 ∈
+> h𝑝
+> 2−1
+> i
+> √2√2√2
+> (ct 𝑘 )𝑘 ∈[ 𝑝 ]=IVE (ct )
+> Ecd (√2)Ecd (√2)
+> 𝑚 11 𝑚 12 𝑚 1𝑠
+> 𝑚 21 𝑚 22 𝑚 2𝑠
+> 𝑚 31 𝑚 32 𝑚 3𝑠
+> .........
+> 𝑚 𝑑 1𝑚 𝑑 2𝑚 𝑑𝑠
+> 𝑀 𝑗 1𝑀 𝑗 2𝑀 𝑗 𝑠
+> Ecd (√2)PCMM 𝑀𝐿 √2𝑝
+>  (ct 𝑘 )𝑘 ∈[ 𝑝 ]
+> 
+
+Figure 2: IVE-PEL server-side procedure ( Emb ). Given a ciphertext ct encoding (𝛼 𝑗 𝑚 )𝑚 ∈ [ 𝑠 ] , the server obtains the embedding vectors (𝑀 𝑗 𝑚 )𝑚 ∈ [ 𝑠 ] by applying IVE and PCMM . Each row corresponds to a single CKKS ciphertext. Here, 𝑠 denotes the number of slots (i.e., 𝑠 = 𝑁 /2). For 1 ≤ ℓ ≤ 𝑝 /2 and 1 ≤ 𝑚 ≤ 𝑠 , 𝑟 ℓ𝑚 and 𝑖 ℓ𝑚 denote Re (𝛼 ℓ𝑗 𝑚 ) and Im (𝛼 ℓ𝑗 𝑚 ), respectively. 
+
+𝛼 ↦ → v(𝛼 ). Let 𝐶 coeff = 19 .2 denote the coefficient-domain 6-sigma bound for Gaussian error of standard deviation 𝜎 = 3.2, and set 
+
+𝐶 0 := 𝐶 coeff 
+
+√𝑁 for the corresponding canonical-embedding bound, following the CKKS noise analysis [ 14 ]. Assume that after ring packing, the value entering IVE is ˜𝛼 𝑖 = 𝛼 𝑗 𝑖 + 𝜖 𝛼,𝑖 with 
+
+𝜖 𝛼,𝑖 ≤ 𝐶 0
+
+Δ .
+
+The expanded RMS error budget is 
+
+𝐶 PCMM 
+
+Δ + 𝐶 𝑇 (√𝑑 + √𝑝 )√𝑑 · 𝐶 𝑉 
+
+𝑝 + 2
+
+√12 · 𝐶 0
+
+Δ ≤ 1
+
+𝑢 , (3) 
+
+Theorem 5.1. Under the error model above, suppose (3) holds. Then, with overwhelming probability, IVE-PEL returns encryptions of 𝑀 𝑗 𝑖 
+
+for every packed index 𝑗 𝑖 , with RMS error at most 1/𝑢 .Interpreting the condition. Define 
+
+𝑆 (Δ) :=
+
+ Δ
+
+𝑢 − 𝐶 PCMM 
+
+ √𝑑 𝐶 𝑉 𝐶 𝑇 (√𝑑 + √𝑝 )√12 
+
+𝑝 + 2 .
+
+For Δ/𝑢 > 𝐶 PCMM , the condition becomes 
+
+𝐶 0 ≤ 𝑆 (Δ). (4) Equivalently, it suffices to choose 
+
+Δ ≥ 𝑢𝐶 PCMM + 𝑢 · 𝐶 𝑉 𝐶 𝑇 (√𝑑 + √𝑝 )√𝑑 · 𝑝 + 2
+
+√12 · 𝐶 0.
+
+If 𝐶 PCMM = 𝑜 (Δ/𝑢 ), then this scale satisfies 
+
+log Δ = log 
+
+
+
+𝑢 · 𝑝 · 𝐶 0 ·  1 +√︁ 𝑝 /𝑑 
+
++ 𝑂 (1), (5) where 𝑂 (1) hides absolute constants and table-dependent factors. 
+
+Query-size Accounting. We generate the 𝑎 component from a 128-bit seed and transmit the 𝑏 component at modulus 𝑄 0. Sending one encrypted scalar query slot for each of the 𝑁 /2 indices costs 
+
+128 + ( 𝑁 /2) log 𝑄 0 bits. Thus the amortized multiplicative overhead relative to the plaintext index representation is 
+
+128 + ( 𝑁 /2) log 𝑄 0
+
+(𝑁 /2) log 𝑝 = log 𝑄 0
+
+log 𝑝 + 256 
+
+𝑁 log 𝑝 .
+
+With 𝑄 0 = Δ and Δ chosen as above, this amounts to 
+
+1 +
+
+log 
+
+
+
+𝑢 · 𝐶 0 · ( 1 +√︁ 𝑝 /𝑑 )
+
+
+
+log 𝑝 + 𝑂 
+
+ 1log 𝑝 
+
+
+
++ 256 
+
+𝑁 log 𝑝 , (6) which is bounded with respect to 𝑝 for fixed target precision. 
+
+## 6 Implementation 
+
+In this section, we evaluate the practical implementation perfor-mance of private embedding lookup. The experiments are divided into two parts. In the first experiment, presented in Section 6.1, we compare our method with the private embedding lookup method of Kim et al. [ 36 ], which was the most efficient prior approach at the embedding-layer level for lookup from an encrypted index. This experiment focuses on the cost difference in vector generation. In the second experiment, presented in Section 6.2, we integrate our lookup method into an end-to-end encrypted inference pipeline and evaluate its practicality at the application level. For this purpose, we use a FastText-style text classification model on datasets repre-senting practical text-classification workloads, where lightweight embedding-based classification is a natural fit and the embedding layer accounts for a significant part of the computation. The results show that our method can efficiently process private token queries while preserving accurate classification performance. Throughout the experiments, we consider a setting where the client sends many private token queries to the server at once. This setting naturally arises when a document contains many tokens, when multiple documents are processed together, or when several inference requests are batched. In such cases, CKKS SIMD pack-ing allows the cost of homomorphic operations to be amortized across many queries. Therefore, in our implementation, we apply plaintext-ciphertext matrix multiplication (PCMM) [ 5] to multiply 
+
+8Private Embedding Lookup with Encrypted Compact Queries under FHE 
+
+the independent vectors generated from multiple queries by the embedding table simultaneously, thereby reducing the cost of the linear part. We separately report the case where the number of packed queries is smaller than the number of CKKS SIMD slots in Appendix E. 
+
+Implementation Environment. Our CKKS implementations are built on the C++ HEaaN library [ 19 ] and executed on an Intel Xeon Gold 6542Y with a single CPU thread. For the linear transformation, we use PCMM algorithm [ 5], while plaintext matrix multiplications are computed with the single-threaded OpenBLAS library [ 46 ]. Training experiments are performed on an NVIDIA GeForce RTX 4090 GPU. 
+
+## 6.1 Evaluation of Private Embedding Lookup 
+
+We first compare Kim et al. [ 36 ] and our IVE-PEL as private embed-ding lookup methods. This experiment evaluates the server-side cost of performing private embedding lookup from encrypted token indices and shows the performance gain of replacing one-hot vector generation with IVE. 
+
+6.1.1 Implementation Detail. 
+
+Embedding Datasets. We use three widely used embedding tables as source pretrained embeddings: 
+
+• GloVe.42B.300d [49]: 𝑃 = 1,917 ,494 words, 𝑑 = 300 .
+
+• GloVe.6B.50d [49]: 𝑃 = 400 ,000 words, 𝑑 = 50 .
+
+• GPT-2 [50]: 𝑃 = 50 ,257 tokens, 𝑑 = 768 .Here, 𝑃 denotes the number of distinct token entries in the source embedding table, and 𝑑 denotes the embedding dimension, i.e., the size of each embedding vector. These source embedding tables are used to train compressed embedding representations offline. 
+
+Embedding Table Compression. As discussed in Section 1.1, table compression is used as a front-end before private lookup is applied. For each source embedding table 𝑀 ∈ R𝑃 ×𝑑 , we adopt the table-compression method of [ 52 ] and follow the implementation in [ 47 ]for training. The method represents 𝑀 using ℓ compressed subta-bles 𝑀 (1) , . . . , 𝑀 (ℓ ) ∈ R𝑝 ×𝑑 . Each original token index 𝑗 ∈ [ 𝑃 ] is represented by an index tuple ( 𝑗 1, . . . , 𝑗 ℓ ) ∈ [ 𝑝 ]ℓ , and its embedding is reconstructed as 
+
+𝑀 𝑗 ≈
+
+> ℓ
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑀 (𝑖 ) 
+
+> 𝑗 𝑖
+
+.
+
+Thus, the embedding table size is reduced from 𝑃 ×𝑑 to ℓ𝑝 ×𝑑 . In all experiments in this subsection, we fix ℓ = 4 and vary the subtable size 𝑝 .To assess whether the compressed embeddings preserve down-stream utility, we report IMDB [ 41 ] sentiment classification accu-racy. For this evaluation, we train a lightweight LSTM classifier using the compressed GloVe embeddings as pretrained embeddings. Detailed compression training settings and IMDB classifier training details are provided in Appendix D. 
+
+Experimental Setup. For each compressed embedding table and each choice of subtable size 𝑝 , we compare the method of Kim et al. [ 36 ] and our IVE-PEL under the same compressed tables, CKKS parameters, and PCMM algorithm. Because both methods use the identical scalar-index query, their client-to-server communication is the same, and we therefore focus the comparison on server-side cost. We decompose the PEL pipeline into two parts: VecGen and 
+
+PCMM . The VecGen stage generates the encrypted one-hot vectors in Kim et al.’s method and the linearly independent vectors in ours. The PCMM stage performs plaintext-ciphertext matrix multiplica-tion between the corresponding plaintext table and the generated encrypted vectors. In our method, this plaintext table refers to the preprocessed matrix obtained by multiplying the embedding matrix with the basis-change matrix 𝐿 .2 Table 3 reports the amortized per-token time of VecGen , PCMM , and the total PEL pipeline, together with the multiplicative depth consumed by PEL, for both methods across different datasets and values of 𝑝 .
+
+CKKS Parameter. To fairly compare the algorithmic cost of our method with that of Kim et al., we use the same CKKS parameter set for both methods. The parameters are chosen to support the method of Kim et al., which requires a large multiplicative depth. The concrete parameter set is given in Table 4. The resulting param-eter set provides at least 128-bit security according to the Lattice Estimator [2]. 
+
+6.1.2 Implementation Results. Table 3 shows that our method re-duces the cost of VecGen and thereby lowers the total cost of private embedding lookup. Across all datasets and all values of 𝑝 , the main performance difference between the two methods appears in the 
+
+VecGen stage. Recall that Kim et al.’s VecGen requires 𝑂 (𝑝 log 𝑝 )
+
+homomorphic operations for lookup size 𝑝 , while ours requires only 
+
+𝑂 (𝑝 ). The results in Table 3 are consistent with this complexity difference, especially for larger values of 𝑝 .For example, on GloVe.6B.50d, the amortized VecGen time of Kim et al.’s method increases from 11 .7711 ms at log 𝑝 = 6 to 
+
+424 .7096 ms at log 𝑝 = 10 . In contrast, the corresponding cost of IVE-PEL increases only from 0.1953 ms to 3.1543 ms. This gives a VecGen speedup of up to 134 .6×. Consequently, for log 𝑝 = 10 
+
+on GloVe.6B.50d, IVE-PEL reduces the total amortized PEL time from 427 .0195 ms to 5.4461 ms, achieving a 78 .4× total speedup. For the same log 𝑝 = 10 setting, the total speedup is 36 .4× on GloVe.42B.300d. For GPT-2, where the embedding dimension is larger ( 𝑑 = 768 ), the PCMM stage accounts for a larger fraction of the total time, but IVE-PEL still achieves an 18 .5× total speedup. A larger subtable size can better preserve the quality of the compressed embedding representation, as reflected by the IMDB accuracy results, but it also increases the cost of private lookup. IVE-PEL reduces this cost increase by substantially lowering the 
+
+VecGen cost. In addition, our method consumes only about 1/3
+
+of the multiplicative depth required by Kim et al.’s method across the tested values of 𝑝 . Thus, IVE-PEL makes larger compressed subtables more practical for private embedding lookup. 
+
+## 6.2 End-to-End Encrypted FastText Inference 
+
+We next integrate private embedding lookup into an end-to-end encrypted text classification pipeline. This experiment evaluates            
+
+> 2This preprocessing is performed entirely by the server in plaintext and is a one-time offline cost. In the same single-threaded CPU setting as our experiments, it takes only
+> 0.54 seconds even for the setting log 𝑝 =10 ,𝑑 =300 , and ℓ=4.9Cheon, Jang, Kang, and Rhee
+
+Table 3: Comparison of IVE-PEL and Kim et al. on three datasets. For all experiments, each token is represented by four subtable indices, and 216 tokens are processed simultaneously via CKKS SIMD packing. VecGen , PCMM , and Total report the amortized time (ms) for vector generation, plaintext-ciphertext matrix multiplication, and the overall PEL pipeline, respectively. 
+
+Depth measures the multiplicative depth consumed during evaluation. IMDB accuracy indicates the embedding quality after compression; the uncompressed baseline accuracies are 0.8570 for GloVe.6B.50d and 0.8857 for GloVe.42B.300d. We do not report IMDB accuracy for GPT-2 because less than 10% of IMDB tokens overlap with its vocabulary. All timings are averaged over 10 runs, except Kim et al. with log 𝑝 = 10 , which is averaged over 2 runs due to its high computational cost. 
+
+Dataset log 𝑝 Method VecGen PCMM Total Depth IMDB Accuracy GloVe.6B.50d 6 Ours 0.1953 0.1526 0.3480 6 0.7797 Kim et al. 11.7711 0.1729 11.9440 20 8 Ours 0.7895 0.5583 1.3478 8 0.8147 Kim et al. 69.4889 0.6201 70.1090 24 10 Ours 3.1543 2.2918 5.4461 10 0.8073 Kim et al. 424.7096 2.3099 427.0195 29 GloVe.42B.300d 6 Ours 0.1942 0.6723 0.8666 6 0.8053 Kim et al. 11.6995 0.6948 12.3943 20 8 Ours 0.8032 2.2757 3.078 8 0.8340 Kim et al. 70.6454 2.4227 73.0681 24 10 Ours 3.1488 8.7470 11.8958 10 0.8453 Kim et al. 423.5058 9.5222 433.0280 29 GPT-2 6 Ours 0.1932 1.6957 1.8889 6 -Kim et al. 12.3247 1.7110 14.0357 20 8 Ours 0.7974 5.5967 6.3942 8 -Kim et al. 70.9080 5.6021 76.5101 24 10 Ours 3.1385 20.8469 23.9855 10 -Kim et al. 423.9253 20.8978 444.8231 29 whether the performance improvement observed in private embed-ding lookup leads to faster end-to-end inference while preserving the classification accuracy of the underlying plaintext model. 
+
+Figure 3: Overview of the fastText model used in our imple-mentation. The model maps input tokens to embeddings, averages them into an input-level representation, and ap-plies a single linear classifier without a bias term. 
+
+6.2.1 FastText Model Structure. FastText [ 34 ] is a shallow text clas-sification model showing that fast and accurate text classification can be achieved without a complex deep neural network, using only the average of word embeddings followed by a single linear classi-fier. As illustrated in Figure 3, an input sentence is first tokenized into words, and each word is mapped to an embedding vector. The sentence representation is then obtained by averaging these word embeddings. Finally, a linear classifier is applied to compute the class scores. In this work, we use the same FastText structure during training, but combine the embedding lookup and the linear classifier during encrypted inference. Specifically, the class score can be rewritten as 
+
+𝑧 = 𝑊 1
+
+𝑚 
+
+> 𝑚
+
+∑︁ 
+
+> 𝑖 =1
+
+𝐸 [𝑤 𝑖 ]
+
+!
+
+= 1
+
+𝑚 
+
+> 𝑚
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑊 𝐸 [𝑤 𝑖 ].
+
+Therefore, the final class score is obtained by looking up the pre-computed score vector 𝑊 𝐸 [𝑤 𝑖 ] for each word and summing these vectors. After decryption, the predicted label is determined by taking 
+
+arg max over the resulting scores. The averaging factor 1/𝑚 is a positive scalar applied equally to all class scores, and hence it does not affect the arg max result. Therefore, in the actual encrypted inference, we compute 
+
+˜𝑧 =
+
+> 𝑚
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑊 𝐸 [𝑤 𝑖 ]
+
+> 10 Private Embedding Lookup with Encrypted Compact Queries under FHE
+
+and determine the class label after decryption as 
+
+ˆ𝑦 = arg max  
+
+> 𝑗
+
+˜𝑧 𝑗 .
+
+Since ˜𝑧 = 𝑚𝑧 and 𝑚 > 0, this gives the same arg max -based predic-tion as the original FastText model. 
+
+6.2.2 Implementation Detail. 
+
+Datasets. We use two datasets for end-to-end encrypted FastText inference. These datasets represent privacy-sensitive text domains: emails may contain personal or confidential communication, while drug reviews may reveal health-related information. Here, a uni-gram means a single word token, and a bigram means an adjacent pair of words; for example, the sentence “this is good” contains the unigram tokens “this”, “is”, and “good”, and the bigram tokens “this is” and “is good”. 
+
+• Enron-Spam [ 42 ]: email spam classification consisting of 33,716 emails with binary spam/ham labels. We concatenate the subject and body of each email and use unigram tokens. We set the embedding dimension to 𝑑 = 50 . Existing plain-text baselines report around 97% –99% accuracy [ 27 , 35 , 37 ]. 
+
+• Drugs.com Review [29 ]: drug-review sentiment classifica-tion consisting of 215,063 reviews. We binarize the original rating into negative/positive sentiment labels and use both unigram and bigram tokens from the review text. We set the embedding dimension to 𝑑 = 300 . Existing plaintext baselines report around 88% –94% accuracy [38, 53, 55]. Detailed preprocessing rules, split construction, vocabulary con-struction are given in Appendix D. 
+
+Experimental Setup. Unlike Section 6.1, which compresses exist-ing pretrained embedding tables, this experiment trains the com-pressed embedding representation from scratch as part of the Fast-Text classifier. For both datasets, we use ℓ = 4 compressed subtables, each of size 𝑝 = 256 , so the total compressed embedding table size is ℓ𝑝 × 𝑑 = 1024 × 𝑑 , where 𝑑 denotes the embedding dimension. During plaintext training, each input example is padded or trun-cated to 128 tokens, and the compressed subtables, the mapping from each token to an ℓ-tuple of subtable indices, and the linear clas-sifier are trained jointly for the target classification task. After train-ing, each token is mapped to a fixed index tuple ( 𝑗 1, . . . , 𝑗 ℓ ) ∈ [ 𝑝 ]ℓ
+
+with ℓ = 4. This index tuple is encrypted and used as the private lookup query during encrypted inference. Since both tasks are binary classification tasks, the linear classifier is represented by a matrix 𝑊 ∈ R2×𝑑 and is trained without a bias term. Detailed plaintext training settings and hyperparameters are provided in Appendix D. As explained in Section 6.2.1, we fold the linear classifier into the lookup using precomputed score subtables corresponding to 𝑊 𝐸 .Thus, encrypted inference consists of VecGen followed by PCMM 
+
+over the ℓ score subtables, and the resulting score contributions are summed over the ℓ subtables and the 128 tokens. 
+
+CKKS Parameter. As shown in the Table 3, our method requires a smaller multiplicative depth than Kim et al.’s method. This directly benefits end-to-end encrypted inference, where bootstrapping is often the dominant bottleneck. Reducing the required depth can lower the number of bootstrapping operations and may also en-able lighter parameters, such as a smaller modulus budget or a lower ring degree, 𝑁 = 216 . In lightweight models such as FastText, where end-to-end encrypted inference can be performed without bootstrapping, these lighter parameters directly reduce the cost of the entire inference pipeline. Thus, while Table 3 uses the same CKKS parameter set for both methods, the end-to-end experiment uses separate parameter sets chosen to satisfy the depth require-ment of each method. The concrete parameter sets are given in Table 4. Both sets provide at least 128-bit security based on the lattice estimator [2]. 
+
+Table 4: CKKS parameter sets used for the implementation results. For Table 3, both methods use the same parameter set. The terms 𝑁 , 𝑃𝑄 , Δ, dnum , and ℎ denote the ring degree, largest modulus, scale factor, gadget rank, and Hamming weight, respectively. 
+
+Method log 𝑁 log 𝑃𝑄 log Δ dnum ℎ
+
+Table 3 - 17 2070 51 3 64 Table 5 Ours 16 1555 42 5 192 Kim et al. 17 2070 51 3 64 
+
+CKKS SIMD Packing Setup. For encrypted inference, each input example (an email in Enron-Spam or a review in Drugs.com Review) is represented by 128 tokens, and each token is encoded by ℓ =
+
+4 subtable indices. In our implementation, the ℓ subtable-index streams are stored in ℓ separate ciphertexts during the VecGen 
+
+stage. Thus, each ciphertext uses 128 SIMD slots per input example. A CKKS ciphertext with ring dimension 𝑁 provides 𝑁 /2 SIMD slots. Therefore, our parameter set with 𝑁 = 216 provides 215 slots and can pack 215 /128 = 256 examples, while Kim et al.’s parameter set with 𝑁 = 217 provides 216 slots and can pack 216 /128 = 512 
+
+examples. The time for each method is divided by the number of input examples processed simultaneously, and is reported as per-example time. 
+
+6.2.3 Implementation Results. Table 5 shows the end-to-end en-crypted FastText inference results on the two text classification datasets. Both datasets use the same compressed-table configura-tion with ℓ = 4 and 𝑝 = 256 , but represent different practical text domains: email filtering and health-related review classification. For each dataset, both methods use the same plaintext FastText model and therefore achieve the same classification accuracy. The resulting accuracies are comparable to the plaintext baselines re-ported for the corresponding datasets. The difference in encrypted inference comes from the private lookup method and the CKKS parameter set enabled by its multiplicative-depth requirement. The main performance difference comes from the VecGen stage. In the Enron-Spam experiment, VecGen accounts for 99 .6% of the total amortized inference time in Kim et al.’s method, making it the dominant part of the encrypted pipeline. IVE-PEL reduces the amor-tized VecGen time from 9.0630 s to 0.0552 s per example, and the resulting VecGen fraction becomes 66 .3% . The Linear stage is also faster in our implementation, because our smaller depth require-ment allows the use of a smaller ring degree. Together, these effects 
+
+> 11 Cheon, Jang, Kang, and Rhee
+
+reduce the total amortized inference time from 9.1017 s to 0.0832 s, achieving a 109 .4× speedup. The Drugs.com Review experiment shows the same trend: IVE-PEL reduces the total amortized infer-ence time from 9.1843 s to 0.0862 s, achieving a 106 .5× end-to-end speedup. These results show that our method can be integrated into an end-to-end encrypted FastText inference pipeline while preserving baseline classification accuracy. The same design principle also applies to NLP inference pipelines that start from an embedding layer and process many token queries. In such settings, the proposed method can improve end-to-end encrypted inference by reducing the cost of server-side private lookup at the input stage. 
+
+## 7 Conclusion 
+
+In this work, we formalized Private Embedding Lookup (PEL), a primitive that homomorphically performs the lookup of the cor-responding embedding vector from an encrypted index query. To make PEL practical, we consider both client-side communication and server-side computation. Rather than constructing a one-hot vector and multiplying it by the table, we propose a new evaluation algorithm based on an orthogonal Discrete Cosine Transform (DCT) basis, leveraging offline preprocessing of the embedding table and the complex-arithmetic features of CKKS. Starting from encrypted queries that carry only single-slot index information, our design minimizes communication and reduces the dominant vector gener-ation cost to 𝑂 (𝑝 ), significantly lowering server-side computation. In our implementation, this improves amortized lookup time by up to 78 .4× over the prior one-hot-based method. In end-to-end encrypted FastText inference on the Enron-Spam dataset, it lowers the share of vector generation in the total inference time from 99 .6% 
+
+to 66 .3% , showing that the faster lookup also speeds up the overall encrypted inference. 
+
+## Acknowledgments Ethical Considerations 
+
+This work aims to improve the efficiency of privacy-preserving ma-chine learning by reducing the cost of encrypted embedding lookup. The proposed techniques are intended to help protect client inputs during outsourced inference and do not require the collection of new personal data or interaction with human subjects. Our exper-iments use publicly available datasets and pretrained embedding tables, and we report only aggregate performance and accuracy results. As with other cryptographic and privacy-enhancing techniques, deployment requires careful parameter selection and implementa-tion review. Incorrect parameters or side-channel vulnerabilities outside the formal protocol model could weaken the intended pri-vacy guarantees. We therefore view this work as a building block for privacy-preserving inference systems rather than a complete end-to-end security solution. 
+
+## Open Science 
+
+Our implementation is currently built on the HEaaN library, which is not publicly available. Therefore, we are unable to release the full implementation artifact at this time. This limitation is due to the underlying HE library dependency rather than the datasets or training data used in our experiments. All datasets used in this work are publicly available, and the embedding-compression procedure follows the public implementation of [ 47 ]. The training and prepro-cessing settings are described in Appendix D, so the non-HE parts of the experimental setup are based on public data and documented procedures. Furthermore, the IVE algorithm and the overall PEL pipeline are described explicitly in the paper. Therefore, although we cannot release the current HEaaN-based implementation itself, the method can be implemented from the algorithmic description. 
+
+## AI Use 
+
+The authors used AI-based writing and coding assistance during manuscript preparation. The tools were used to assist with lan-guage polishing, LaTeX editing, consistency checks across sections, and drafting candidate revisions for explanatory text and proof presentation. They were not used to generate experimental data, select baselines, validate cryptographic parameters, or make final scientific judgments. All mathematical claims, proofs, experiments, references, and final manuscript text were reviewed and approved by the authors, who take full responsibility for the content. 
+
+## References                              
+
+> [1] N. Ahmed, T. Natarajan, and K.R. Rao. 1974. Discrete Cosine Transform. IEEE Trans. Comput. 23, 1 (1974), 90–93. [2] Martin R. Albrecht, Rachel Player, and Sam Scott. 2015. On the concrete hardness of Learning with Errors. Journal of Mathematical Cryptology 9, 3 (2015), 169–203. [3] Andreea Alexandru, Andrey Kim, and Yuriy Polyakov. 2025. General Functional Bootstrapping Using CKKS. In Advances in Cryptology – CRYPTO 2025 , Yael Tauman Kalai and Seny F. Kamara (Eds.). Springer Nature Switzerland, Cham, Switzerland, 304–337. [4] Asra Ali, Tancrède Lepoint, Sarvar Patel, Mariana Raykova, Phillipp Schoppmann, Karn Seth, and Kevin Yeo. 2021. Communication–Computation Trade-offs in PIR. In 30th USENIX Security Symposium (USENIX Security ’21) . USENIX Association, 1811–1828. [5] Youngjin Bae, Jung Hee Cheon, Guillaume Hanrot, Jai Hyun Park, and Damien Stehlé. 2024. Plaintext-Ciphertext Matrix Multiplication and FHE Bootstrapping: Fast and Fused. In Advances in Cryptology – CRYPTO 2024 , Leonid Reyzin and Douglas Stebila (Eds.). Springer Nature Switzerland, Cham, Switzerland, 387– 421. [6] Youngjin Bae, Jung Hee Cheon, Jaehyung Kim, Jai Hyun Park, and Damien Stehlé. 2023. HERMES: Efficient Ring Packing Using MLWE Ciphertexts and Application to Transciphering. In Advances in Cryptology – CRYPTO 2023 (Santa Barbara, CA, USA). Springer Nature Switzerland, Cham, Switzerland, 37–69. [7] Youngjin Bae, Jung Hee Cheon, Jaehyung Kim, and Damien Stehlé. 2024. Boot-strapping Bits with CKKS. In Advances in Cryptology – EUROCRYPT 2024 (Zurich, Switzerland). Springer Nature Switzerland, Cham, Switzerland, 94–123. [8] Zvika Brakerski. 2012. Fully Homomorphic Encryption without Modulus Switch-ing from Classical GapSVP. In Proceedings of the 32nd Annual Cryptology Confer-ence on Advances in Cryptology — CRYPTO 2012 - Volume 7417 . Springer-Verlag, Berlin, Heidelberg, 868–886. [9] Zvika Brakerski, Craig Gentry, and Vinod Vaikuntanathan. 2012. (Leveled) fully homomorphic encryption without bootstrapping. In Proceedings of the 3rd Inno-vations in Theoretical Computer Science Conference (Cambridge, Massachusetts)
+> (ITCS ’12) . Association for Computing Machinery, New York, NY, USA, 309–325. [10] Hao Chen, Wei Dai, Miran Kim, and Yongsoo Song. 2021. Efficient Homomorphic Conversion Between (Ring) LWE Ciphertexts. In International conference on applied cryptography and network security , Kazue Sako and Nils Ole Tippenhauer (Eds.). Springer International Publishing, Cham, Switzerland, 460–479. [11] Tianyu Chen, Hangbo Bao, Shaohan Huang, Li Dong, Binxing Jiao, Daxin Jiang, Haoyi Zhou, Jianxin Li, and Furu Wei. 2022. THE-X: Privacy-Preserving Trans-former Inference with Homomorphic Encryption. In Findings of the Association for Computational Linguistics: ACL 2022 . Association for Computational Linguis-tics, Dublin, Ireland, 3510–3520. [12] Jung Hee Cheon, Kyoohyung Han, Andrey Kim, Miran Kim, and Yongsoo Song. 2018. Bootstrapping for Approximate Homomorphic Encryption. In Advances in Cryptology – EUROCRYPT 2018 , Jesper Buus Nielsen and Vincent Rijmen (Eds.). Springer International Publishing, Cham, Switzerland, 360–384. 12
+
+Private Embedding Lookup with Encrypted Compact Queries under FHE 
+
+Table 5: End-to-end encrypted FastText inference on two datasets. For all experiments, the FastText embedding layer is represented by four compressed subtables with log 𝑝 = 8. Under their respective CKKS parameter sets, 256 input examples are processed simultaneously by our method, while 512 input examples are processed simultaneously by Kim et al.’s method. VecGen ,
+
+Linear , and Total report the amortized per-example time (s) for vector generation, the linear computation combining lookup and classification, and the overall encrypted inference pipeline, respectively. Accuracy reports the plaintext test accuracy of the same FastText model evaluated in encrypted inference. All timings are averaged over 10 independent runs. 
+
+Dataset Method VecGen Linear Total Accuracy Enron-Spam Ours 0.0552 0.0280 0.0832 0.9887 Kim et al. 9.063 0.0386 9.1017 Drugs.com Review Ours 0.0568 0.0294 0.0862 0.9015 Kim et al. 9.1451 0.0392 9.1843 
+
+[13] Jung Hee Cheon, Minsik Kang, and Junho Lee. 2025. Fast Batch Matrix Multipli-cation in Ciphertexts. Cryptology ePrint Archive, Paper 2025/1957. [14] Jung Hee Cheon, Andrey Kim, Miran Kim, and Yongsoo Song. 2017. Homomor-phic Encryption for Arithmetic of Approximate Numbers. In Advances in Cryp-tology – ASIACRYPT 2017 , Tsuyoshi Takagi and Thomas Peyrin (Eds.). Springer International Publishing, Cham, Switzerland, 409–437. [15] Ilaria Chillotti, Nicolas Gama, Mariya Georgieva, and Malika Izabachène. 2020. TFHE: Fast Fully Homomorphic Encryption Over the Torus. J. Cryptol. 33, 1 (Jan. 2020), 34–91. [16] Ilaria Chillotti, Damien Ligier, Jean-Baptiste Orfila, and Samuel Tap. 2021. Im-proved Programmable Bootstrapping with Larger Precision and Efficient Arith-metic Circuits for TFHE. In Advances in Cryptology – ASIACRYPT 2021 , Mehdi Tibouchi and Huaxiong Wang (Eds.). Springer International Publishing, Cham, Switzerland, 670–699. [17] Wonhee Cho, Guillaume Hanrot, Taeseong Kim, Minje Park, and Damien Stehlé. 2024. Fast and Accurate Homomorphic Softmax Evaluation. In Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security 
+
+(Salt Lake City, UT, USA) (CCS) . Association for Computing Machinery, New York, NY, USA, 4391–4404. [18] Benny Chor, Oded Goldreich, Eyal Kushilevitz, and Madhu Sudan. 1995. Private Information Retrieval. In Proceedings of IEEE 36th Annual Foundations of Computer Science . IEEE, Washington, DC, USA, 41–50. doi:10.1109/SFCS.1995.492461 [19] CryptoLab. 2022. HEaaN Library. https://www.cryptolab.co.kr/en/products-en/. https://www.cryptolab.co.kr/en/products-en/ [20] Roshan Dathathri, Blagovesta Kostova, Olli Saarikivi, Wei Dai, Kim Laine, and Madan Musuvathi. 2020. EVA: an encrypted vector arithmetic language and compiler for efficient homomorphic computation. In Proceedings of the 41st ACM SIGPLAN Conference on Programming Language Design and Implementation (PLDI 2020) . ACM, 546–561. doi:10.1145/3385412.3386023 [21] Roshan Dathathri, Olli Saarikivi, Hao Chen, Kim Laine, Kristin E. Lauter, Saeed Maleki, Madanlal Musuvathi, and Todd Mytkowicz. 2019. CHET: an optimizing compiler for fully-homomorphic neural-network inferencing. In Proceedings of the 40th ACM SIGPLAN Conference on Programming Language Design and Implementation (PLDI 2019) . ACM, 142–156. [22] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. In 
+
+Proceedings of the 2019 conference of the North American chapter of the association for computational linguistics: human language technologies , Vol. 1. Association for Computational Linguistics, Minneapolis, Minnesota, USA, 4171–4186. [23] Léo Ducas and Daniele Micciancio. 2015. FHEW: Bootstrapping Homomorphic Encryption in Less Than a Second. In Advances in Cryptology – EUROCRYPT 2015 , Elisabeth Oswald and Marc Fischlin (Eds.). Springer Berlin Heidelberg, Berlin, Heidelberg, 617–640. [24] Junfeng Fan and Frederik Vercauteren. 2012. Somewhat Practical Fully Homo-morphic Encryption. Cryptology ePrint Archive, Paper 2012/144. [25] Karthik Garimella, Austin Ebel, Gabrielle De Micheli, and Brandon Reagen. 2025. HE-LRM: Efficient Private Embedding Lookups for Neural Inference Using Fully Homomorphic Encryption. arXiv:2506.18150 [cs.CR] doi:10.48550/arXiv.2506. 18150 [26] Craig Gentry. 2009. Fully homomorphic encryption using ideal lattices. In 
+
+Proceedings of the Forty-First Annual ACM Symposium on Theory of Computing (STOC) . Association for Computing Machinery, New York, NY, USA, 169–178. [27] Pramod Prakash Ghogare, Husain H. Dawoodi, and Manoj P. Patil. 2024. En-hancing Spam Email Classification Using Effective Preprocessing Strategies and Optimal Machine Learning Algorithms. Indian Journal of Science and Technology 
+
+17, 15 (2024), 1545–1556. doi:10.17485/IJST/v17i15.2979 [28] Ran Gilad-Bachrach, Nathan Dowlin, Kim Laine, Kristin Lauter, Michael Naehrig, and John Wernsing. 2016. CryptoNets: Applying Neural Networks to Encrypted Data with High Throughput and Accuracy. In Proceedings of the 33rd Interna-tional Conference on Machine Learning (Proceedings of Machine Learning Research, Vol. 48) , Maria Florina Balcan and Kilian Q. Weinberger (Eds.). PMLR, New York, New York, USA, 201–210. [29] Felix Gräßer, Surya Kallumadi, Hagen Malberg, and Sebastian Zaunseder. 2018. Aspect-Based Sentiment Analysis of Drug Reviews Applying Cross-Domain and Cross-Data Learning. In Proceedings of the 2018 International Conference on Digital Health (DH’18) . ACM, Lyon, France, 121–125. doi:10.1145/3194658.3194677 [30] Shai Halevi and Victor Shoup. 2018. Faster Homomorphic Linear Transforma-tions in HElib. In Advances in Cryptology – CRYPTO 2018 , Hovav Shacham and Alexandra Boldyreva (Eds.). Springer International Publishing, Cham, 93–120. [31] Nicholas J. Higham. 2002. Accuracy and Stability of Numerical Algorithms . Vol. 80. Society for Industrial and Applied Mathematics, Philadelphia, PA, USA. [32] Intak Hwang, Yisol Hwang, Miran Kim, Dongwon Lee, and Yongsoo Song. 2025. Provably Secure Approximate Computation Protocols from CKKS. Cryptology ePrint Archive, Paper 2025/395. [33] Intak Hwang, Seonhong Min, Jinyeong Seo, and Yongsoo Song. 2025. On the Security and Privacy of CKKS-Based Homomorphic Evaluation Protocols. In 
+
+Advances in Cryptology – ASIACRYPT 2025 . Springer Nature Singapore, Singapore, 296–330. [34] Armand Joulin, Edouard Grave, Piotr Bojanowski, and Tomas Mikolov. 2017. Bag of Tricks for Efficient Text Classification. In Proceedings of the 15th Confer-ence of the European Chapter of the Association for Computational Linguistics: Volume 2, Short Papers , Mirella Lapata, Phil Blunsom, and Alexander Koller (Eds.). Association for Computational Linguistics, Valencia, Spain, 427–431. https://aclanthology.org/E17-2068/ [35] Akash Junnarkar, Siddhant Adhikari, Jainam Fagania, Priya Chimurkar, and Deepak Karia. 2021. E-Mail Spam Classification via Machine Learning and Natural Language Processing. In Proceedings of the 2021 Third International Conference on Intelligent Communication Technologies and Virtual Mobile Networks (ICICV) . 693–699. doi:10.1109/ICICV50876.2021.9388530 [36] Jaeyun Kim, Saerom Park, Joohee Lee, and Jung Hee Cheon. 2024. Privacy-Preserving Embedding via Look-up Table Evaluation with Fully Homomorphic Encryption. In Proceedings of the 41st International Conference on Machine Learn-ing (ICML) . PMLR, Vienna, Austria, 24437–24457. [37] Meghana Kshirsagar, Vedant Rathi, and Conor Ryan. 2025. Meta-learner-based frameworks for interpretable email spam detection. Frontiers in Artificial Intelli-gence 8 (2025), 1569804. doi:10.3389/frai.2025.1569804 [38] E. Lee, F. Rustam, H. F. Shahzad, P. B. Washington, A. Ishaq, and I. Ashraf. 2023. Drug Usage Safety from Drug Reviews with Hybrid Machine Learning Approach. Computer Systems Science and Engineering 45, 3 (2023), 3053–3077. doi:10.32604/csse.2023.029059 [39] Chenqi Lin, Tianshi Xu, Zebin Yang, Runsheng Wang, Ru Huang, and Meng Li. 2024. FastQuery: Communication-efficient Embedding Table Query for Private LLM Inference. In Proceedings of the 61st ACM/IEEE Design Automation Conference (DAC) . Association for Computing Machinery, New York, NY, USA, 6 pages. doi:10.1145/3649329.3657374 [40] Vadim Lyubashevsky, Chris Peikert, and Oded Regev. 2010. On Ideal Lattices and Learning with Errors over Rings. In Advances in Cryptology – EUROCRYPT 2010 . Springer-Verlag, Berlin, Heidelberg, 1–23. [41] Andrew L. Maas, Raymond E. Daly, Peter T. Pham, Dan Huang, Andrew Y. Ng, and Christopher Potts. 2011. Learning Word Vectors for Sentiment Analysis. In Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies . Association for Computational Lin-guistics, Portland, Oregon, USA, 142–150. 13 Cheon, Jang, Kang, and Rhee 
+
+[42] Vangelis Metsis, Ion Androutsopoulos, and Georgios Paliouras. 2006. Spam Filtering with Naive Bayes – Which Naive Bayes?. In Proceedings of the 3rd Conference on Email and Anti-Spam (CEAS) . Mountain View, California, USA. [43] Tomás Mikolov, Kai Chen, Greg Corrado, and Jeffrey Dean. 2013. Efficient Esti-mation of Word Representations in Vector Space. In 1st International Conference on Learning Representations (ICLR) . OpenReview.net, Scottsdale, Arizona, USA, May 2-4. [44] Jungho Moon, Dongwoo Yoo, Xiaoqian Jiang, and Miran Kim. 2025. THOR: Secure Transformer Inference with Homomorphic Encryption. In Proceedings of the 2025 ACM SIGSAC Conference on Computer and Communications Security 
+
+(Taipei, Taiwan) (CCS ’25) . Association for Computing Machinery, New York, NY, USA, 3765–3779. doi:10.1145/3719027.3765150 [45] Maxim Naumov et al . 2019. Deep Learning Recommendation Model for Per-sonalization and Recommendation Systems. arXiv preprint arXiv:1906.00091 
+
+(2019). [46] OpenBLAS Contributors. 2022. OpenBLAS: An Optimized BLAS Library. https: //github.com/OpenMathLib/OpenBLAS Version 0.3.20. [47] Jungsoo Park. 2020. Word Embedding Compression. https://github.com/ JJumSSu/WordEmbedding2Code [48] Jai Hyun Park. 2025. Ciphertext-Ciphertext Matrix Multiplication: Fast for Large Matrices. In Advances in Cryptology – EUROCRYPT 2025 , Serge Fehr and Pierre-Alain Fouque (Eds.). Springer Nature Switzerland, Cham, Switzerland, 153–180. [49] Jeffrey Pennington, Richard Socher, and Christopher D. Manning. 2014. GloVe: Global Vectors for Word Representation. In Proceedings of the 2014 conference on empirical methods in natural language processing (EMNLP) . Association for Computational Linguistics, Doha, Qatar, 1532–1543. [50] Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. 2019. Language Models are Unsupervised Multitask Learners. OpenAI technical report. https://cdn.openai.com/better-language-models/language_ models_are_unsupervised_multitask_learners.pdf [51] Donghwan Rho, Taeseong Kim, Minje Park, Jung Woo Kim, Hyunsik Chae, Ernest K. Ryu, and Jung Hee Cheon. 2025. Encryption-Friendly LLM Architecture. In The Thirteenth International Conference on Learning Representations .[52] Raphael Shu and Hideki Nakayama. 2018. Compressing word embeddings via deep compositional code learning. In International Conference on Learning Representations (ICLR) . OpenReview.net, Vancouver, BC, Canada. [53] Mohammed Nazim Uddin, Md. Ferdous Bin Hafiz, Sohrab Hossain, and Shah Mohammad Mominul Islam. 2022. Drug Sentiment Analysis using Machine Learning Classifiers. International Journal of Advanced Computer Science and Applications 13, 1 (2022). doi:10.14569/IJACSA.2022.0130112 [54] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017. Attention Is All You Need. In Proceedings of the 31st International Conference on Neural Infor-mation Processing Systems (NIPS) . Curran Associates, Inc., Red Hook, NY, USA, 6000–6010. [55] Sairamvinay Vijayaraghavan and Debraj Basu. 2020. Sentiment Analysis in Drug Reviews using Supervised Machine Learning Algorithms. (2020). arXiv:2003.11643 
+
+## A Details on CKKS 
+
+The CKKS homomorphic encryption scheme [ 14 ] provides approx-imate arithmetic on vectors of complex numbers. 
+
+## A.1 CKKS Encoding 
+
+For a power-of-two 𝑁 , let R𝑁 := Z[𝑋 ]/( 𝑋 𝑁 + 1) be the plaintext space. We call 𝑁 the ring degree . If 𝑁 is clear from the context, we write R𝑁 = R. Note that R ⊗ R = R[𝑋 ]/( 𝑋 𝑁 + 1) can be viewed as a C-vector space of dimension 𝑁 /2 by identifying 𝑋 𝑁 /2 with the imaginary unit √−1.We consider two bijections between R ⊗ R and C𝑁 /2. The first is a C-algebra isomorphism given by the Discrete Fourier Transform: 
+
+DFT : 𝑝 (𝑋 ) ↦ → ( 𝑝 (𝜁 𝑖 )) 𝑖 ∈ [ 𝑁 /2] ,
+
+with inverse iDFT , where 𝜁 𝑖 = exp 
+
+ 5𝑖 √−1𝜋 𝑁 
+
+
+
+denotes the 2𝑁 -th roots of unity. The second is 
+
+iCoeff :∑︁   
+
+> 𝑖 ∈ [ 𝑁 ]
+
+𝑚 𝑖 𝑋 𝑖 ↦ → ( 𝑚 𝑖 + √−1𝑚 𝑖 +𝑁 /2)𝑖 ∈ [ 𝑁 /2],
+
+with inverse Coeff . Note that iCoeff and Coeff are not C-algebra isomorphisms, but only C-vector space isomorphisms. 3
+
+Also note that for every 𝑝 (𝑋 ) ∈ R ⊗ R and 𝑉 = (𝜁 𝑗 𝑖 )𝑖,𝑗 ∈
+
+C𝑁 /2×𝑁 /2, we have 
+
+DFT (𝑝 (𝑋 )) = 𝑉 · iCoeff (𝑝 (𝑋 )) .
+
+Or equivalently, for every z ∈ C𝑁 /2,
+
+iDFT (z) = Coeff (𝑉 −1 · z).
+
+A complex vector z ∈ C𝑁 /2 is encoded into a plaintext 𝑚 (𝑋 ) ∈ R 
+
+as follows. An encoding map is parameterized by two components: a bijection f : C𝑁 /2 → R ⊗ R and a scaling factor Δ. For a given map f : C𝑁 /2 → R ⊗ R—typically including iDFT and Coeff , among many other possible choices—the vector z is first mapped to a polynomial f(z) ∈ R ⊗ R, then scaled by Δ and rounded, yielding 
+
+Ecd (z) = 𝑚 (𝑋 ) = ⌈Δ · f(z)⌋ ∈ R .
+
+The resulting rounding error 
+
+𝛿 Ecd (𝑋 ) = Δ · f(z) − ⌈ Δ · f(z)⌋ 
+
+is called the encoding error .When f = iDFT , 𝑚 is referred to as the slot encoding of z, and when f = Coeff , 𝑚 is referred to as the coefficient encoding of z.Since DFT is an isomorphism that preserves all operations (addition, scalar multiplication, and multiplication), we adopt slot encoding as the standard encoding scheme. Unless stated otherwise, encoding 
+
+refers to slot encoding by default. When decoding a polynomial 𝑚 (𝑋 ), we rescale and apply f−1,yielding 
+
+Dcd (𝑚 (𝑋 )) = f−1 (Δ−1𝑚 (𝑋 )) ∈ C𝑁 /2.
+
+Error Amplification and Encoding Error. Assume that f is R-linear. To study error amplification, fix an encoding map and its corre-sponding decoding map. Consider a polynomial Δf(z) ∈ R ⊗ R
+
+that decodes to z ∈ C𝑁 /2. Then, the decoding error induced by perturbing Δf(z) to Δf(z) + 𝑒 (𝑋 ) is 
+
+Dcd (Δf(z) + 𝑒 (𝑋 )) − Dcd (Δf(z)) 
+
+= f−1 Δ−1 (Δf(z) + 𝑒 (𝑋 ))  − f−1 Δ−1Δf(z)
+
+= Δ−1f−1 (𝑒 (𝑋 )) .
+
+Therefore, for a small error polynomial 𝑒 (𝑋 ) ∈ R ⊗ R, its impact on the decoded complex vector is determined by the magnitude of 𝑒 (𝑋 ),the amplification behavior of f−1, and the scaling factor Δ. When 
+
+f−1 = DFT , the error per vector component is heuristically amplified by a factor of about √𝑁 . When f−1 = iCoeff , no such amplification occurs, and the induced error is on the order of Δ−1 ∥𝑒 (𝑋 )∥ ∞.The encoding error 𝛿 Ecd (𝑋 ) also propagates through the same mechanism. Here, the plaintext-domain error is 𝛿 Ecd (𝑋 ) with 
+
+∥𝛿 Ecd (𝑋 )∥ ∞ ≤ 0.5. If slot encoding is used, this error can be amplified by a factor of approximately √𝑁 .
+
+> 3
+
+That is, a C-algebra homomorphism preserves addition, scalar multiplication, and mul-tiplication, whereas a C-vector-space homomorphism need not preserve multiplication. 14 Private Embedding Lookup with Encrypted Compact Queries under FHE 
+
+## A.2 CKKS Encryption 
+
+From now on, for notational convenience we omit the indeterminate 
+
+𝑋 and write polynomials without explicitly indicating it (e.g., 𝑎 (𝑋 )
+
+is written as 𝑎 ). For an integer 𝑄 , define R𝑁 ,𝑄 := R𝑁 /𝑄 R𝑁 . When 𝑁 is clear from the context, we write R𝑄 instead of R𝑁 ,𝑄 ; there should be no risk of confusion between R𝑁 and R𝑄 . We call 𝑄 a modulus . Let integers 𝑞 𝑖 ≈ Δ for 𝑖 = 1, . . . , 𝐿 and 𝑞 0 ≥ Δ be given, and let the modulus 𝑄 ℓ = Îℓ𝑖 =0 𝑞 𝑖 . We call {𝑄 ℓ }ℓ ∈ [ 𝐿 ] a modulus chain. Then a 
+
+ciphertext at level ℓ is a pair (𝑎, 𝑏 ) ∈ R 2 
+
+> 𝑄 ℓ
+
+.If ∥𝑚 ∥∞ < 𝑄 0/2, 𝑚 can be regarded as an element of R𝑄 ℓ , and every element of R𝑄 ℓ can be uniquely lifted to an element of R
+
+with infinity norm at most 𝑄 0/2. Under the RLWE assumption [ 40 ], 
+
+𝑚 ∈ R 𝑄 ℓ can be encrypted into (𝑎, 𝑏 ) ∈ R 2 
+
+> 𝑄 ℓ
+
+satisfying 
+
+𝑎𝑠 + 𝑏 = 𝑚 + 𝑒 RLWE ∈ R 𝑄 ℓ
+
+for some secret 𝑠 ∈ R with ∥𝑠 ∥1 = ℎ and ∥𝑠 ∥∞ = 1 (Hamming weight ℎ), and an RLWE error 𝑒 RLWE ← 𝜒 𝑒𝑟𝑟 .Depending on the context, we say that (𝑎, 𝑏 ) ∈ R 2 
+
+> 𝑄 ℓ
+
+is an encryp-tion of 𝑎𝑠 + 𝑏 ∈ R 𝑄 ℓ , or equivalently, of [𝑎𝑠 + 𝑏 ]𝑄 ℓ ∈ R ; when f
+
+and Δ (and hence Dcd ) are specified, we may also say that it is an encryption of Dcd ([ 𝑎𝑠 + 𝑏 ]𝑄 ℓ ) ∈ C𝑁 /2.
+
+Encryption Error. Here, the additional error introduced in the underlying plaintext is 𝑒 RLWE , and the corresponding error in the decoded complex vector is given by Δ−1f−1 (𝑒 RLWE ); the same dis-cussion as above applies. 
+
+## A.3 CKKS Operations 
+
+CKKS supports the following operations. For convenience, we as-sume that the encoding is slot encoding. 
+
+• Addition : Homomorphically performs addition, either be-tween two ciphertexts or between a ciphertext and a plain-text. 
+
+• Multiplication : Performs multiplication over R, either be-tween two ciphertexts or between a ciphertext and a plain-text. Multiplication consumes a level: multiplying a level-ℓ
+
+ciphertext with a level-ℓ′ ciphertext yields a ciphertext at level min {ℓ, ℓ ′ } − 1.
+
+• Galois Automorphism : Homomorphically applies a Ga-lois automorphism 𝜎 ∈ Gal (R) . Under slot encoding, these automorphisms correspond to entrywise complex conju-gation (𝑧 𝑖 )𝑖 ∈ [ 𝑁 /2] ↦ → ( 𝑧 𝑖 )𝑖 ∈ [ 𝑁 /2] , a rotation (𝑧 𝑖 )𝑖 ∈ [ 𝑁 /2] ↦ →(𝑧 𝑖 +𝑟 )𝑖 ∈ [ 𝑁 /2] (with indices taken modulo 𝑁 /2), or their com-position. Except for addition, these operations typically introduce a small error 𝑒 ∈ R ⊗ R in the plaintext domain whose norm is heuristically 
+
+∥𝑒 ∥∞ = 𝑂 (√ℎ). By error amplification, this induces an error of 
+
+Δ−1f−1 (𝑒 ) ∈ C𝑁 /2 in the decoded complex vector. 
+
+## A.4 CKKS Bootstrapping 
+
+As multiplications are repeatedly performed, the ciphertext even-tually exhausts its modulus, making further rescaling impossible. CKKS bootstrapping restores the modulus and enables additional multiplications. Suppose we have a low-level CKKS ciphertext en-crypting a vector z, and we wish to perform bootstrapping on it. The CKKS bootstrapping procedure consists of the following four main steps: S2C , ModRaise , C2S , and EvalMod .
+
+• S2C : Homomorphically converts a slot-encoded CKKS ci-phertext into a coefficient-encoded CKKS ciphertext while approximately preserving the underlying complex vector. 
+
+• ModRaise : For a coefficient-encoded CKKS ciphertext 
+
+(𝑎, 𝑏 ) ∈ R 2 
+
+> 𝑄 0
+
+such that 𝑎𝑠 + 𝑏 = 𝑚 ∈ R 𝑄 0 , this step lifts it to 
+
+R2 
+
+> 𝑄 𝐿
+
+so that 
+
+𝑎𝑠 + 𝑏 = 𝑚 + 𝑄 0𝐼 ∈ R 𝑄 𝐿 
+
+for some 𝐼 ∈ R 𝑄 𝐿 . (Note that iCoeff (𝑄 0𝐼 ) ∈ 𝑄 0Z[√−1]𝑁 /2.) 
+
+• C2S : Homomorphically converts a coefficient-encoded CKKS ciphertext into a slot-encoded CKKS ciphertext while approximately preserving the underlying complex vector. 
+
+• EvalMod : Homomorphically removes the iCoeff (𝑄 0𝐼 ) ∈ 
+
+𝑄 0Z[√−1]𝑁 /2 term by evaluating the “Mod” function 𝑧 ↦ →[𝑧 ]𝑄 0/Δ on 𝑅𝑒 (𝑧 ) and 𝐼𝑚 (𝑧 ) independently. If only the real value is required, we apply the Mod function only to 𝑅𝑒 (𝑧 ).Therefore, the bootstrapping procedure can be expressed as 
+
+EvalMod ◦ C2S ◦ ModRaise ◦ S2C . If the level restored by ModRaise 
+
+exceeds the total level consumed by S2C , C2S , and EvalMod , then bootstrapping successfully achieves its purpose. 
+
+Functional Bootstrapping. The EvalMod step can be replaced by evaluating a function defined modulo 𝑄 0/Δ; in this case, a bootstrap-ping procedure that both refreshes the level and evaluates a target function is called functional bootstrapping [3 , 7]. A representative example is 
+
+x ↦ → exp (2𝜋 √−1x)
+
+for x ∈ [ 0, 1]𝑁 /2. (In this case, we require 𝑄 0 = Δ.) We call the resulting functional bootstrapping procedure ExpBTS . This proce-dure is similar to the standard CKKS bootstrapping described above, except that the EvalMod step is replaced by EvalExp . Consequently, 
+
+ExpBTS can be expressed as EvalExp ◦ C2S ◦ ModRaise ◦ S2C .
+
+## A.5 Accuracy in CKKS 
+
+Encoding, encryption, and each homomorphic operation in CKKS introduce an error of magnitude 𝑂 (√ℎ) in the plaintext domain. Under slot encoding, this error is mapped to the complex vector with an additional factor of 𝑂 (Δ−1√𝑁 ). Therefore, the error added to the complex vector per operation is approximately 12 log (ℎ𝑁 ) − 
+
+log Δ + 𝑂 (1) bits with high probability [ 14 ]. Accordingly, CKKS with scaling factor Δ supports a per-slot precision (in bits) of 
+
+log Δ − 12 log (ℎ𝑁 ) − 𝑂 (1).
+
+Hence, a larger scaling factor Δ yields correspondingly higher-precision approximate computations. 
+
+Remark A.1 . The error should not be interpreted as something that necessarily accumulates monotonically; rather, this behavior reflects the intrinsic nature of approximate computation, not a pecu-liarity of CKKS itself. The classical question of whether meaningful computations remain possible under finite precision has been stud-ied extensively; for controlling numerical error in finite-precision arithmetic, we refer to [31]. 
+
+> 15 Cheon, Jang, Kang, and Rhee
+
+## A.6 Ring Packing 
+
+Ciphertexts of different ring degrees are compatible (via an appro-priate embedding). For simplicity, we describe only the cases of ring degree 𝑁 /2 and 𝑁 .
+
+Ring-degree embedding (noise-free). Consider the following ring embedding: 
+
+𝜄 : R𝑁 /2,𝑄 → R 𝑁 ,𝑄 , 1 ↦ → 1, 𝑋 ↦ → 𝑋 2.
+
+This map is well-defined since (𝑋 𝑁 /2 + 1) ↦ → ( 𝑋 2)𝑁 /2 + 1 = 𝑋 𝑁 +
+
+1. Moreover, since 𝜄 is a ring homomorphism, if (𝑎, 𝑏 ) ∈ R 2 
+
+> 𝑁 /2,𝑄
+
+satisfies 𝑎𝑠 + 𝑏 = 𝑚 , then (𝜄 (𝑎 ), 𝜄 (𝑏 )) ∈ R 2 
+
+> 𝑁 ,𝑄
+
+satisfies the following with respect to the secret key 𝜄 (𝑠 ):
+
+𝜄 (𝑎 ) 𝜄 (𝑠 ) + 𝜄 (𝑏 ) = 𝜄 (𝑎𝑠 + 𝑏 )
+
+= 𝜄 (𝑚 ) ∈ R 𝑁 ,𝑄 .
+
+Hence, increasing the ring degree is purely algebraic and does not introduce any additional approximation error. 
+
+Packing for real bootstrapping + EvalExp . We now assume that bootstrapping is performed at ring degree 𝑁 . A coefficient-encoded plaintext can be written as 
+
+∑︁   
+
+> 𝑖 ∈ [ 𝑁 /2]
+
+𝑚 𝑖 𝑋 𝑖 
+
++ 𝑋 𝑁 /2 ∑︁   
+
+> 𝑖 ∈ [ 𝑁 /2]
+
+𝑚 𝑖 +𝑁 /2𝑋 𝑖 
+
+,
+
+and let the first term be 𝑟 (𝑋 ) and the second summation be 𝑖 (𝑋 ).Real bootstrapping recovers only the coefficients of 𝑟 (𝑋 ). (To also recover 𝑖 (𝑋 ), an additional EvalMod is required (depending on the option), which increases the runtime.) EvalExp applies 𝑥 ↦ →
+
+exp (2𝜋 √−1𝑥 ) only to the recovered coefficients {𝑚 𝑖 }𝑖 ∈ [ 𝑁 /2] of 
+
+𝑟 (𝑋 ).Therefore, for ring packing, we first lift 𝑚 ∈ R 𝑁 /2,𝑄 to 𝜄 (𝑚 ) ∈ R𝑁 ,𝑄 , and then concentrate all information of 𝑚 into the first 𝑁 /2
+
+coefficients that are accessible to EvalExp . To do so, we compute: 
+
+
+
+𝜄 (𝑎 ) − 𝑋 𝑁 /2+1𝜄 (𝑎 )
+
+
+
+𝜄 (𝑠 ) + 
+
+
+
+𝜄 (𝑏 ) − 𝑋 𝑁 /2+1𝜄 (𝑏 )
+
+
+
+= 𝜄 (𝑚 ) − 𝑋 𝑁 /2+1𝜄 (𝑚 ) ∈ R 𝑁 ,𝑄 .
+
+In the resulting plaintext, the first 𝑁 /2 coefficients contain all co-efficient information of 𝑚 (at even/odd positions). Thus, applying real bootstrapping followed by EvalExp to this ciphertext yields the desired values {exp (2𝜋 √−1𝑚 𝑖 )} 𝑖 ∈ [ 𝑁 /2] in the 𝑁 /2 slots of a ring-degree-𝑁 ciphertext. 
+
+Remark A.2 . To compute at ring degree 𝑁 , a secret key 𝑠 ∈ R 𝑁 /2
+
+cannot be used directly as 𝜄 (𝑠 ); instead, one must use a key sampled from the secret-key distribution over R𝑁 . This can be handled via standard key-switching. 
+
+## B Deferred Proof for DCT Matrix 
+
+In this appendix, we provide proofs of the deferred arguments. 
+
+## B.1 Proof for Orthogonality of 𝐷 
+
+Lemma B.1. Let 𝑝 be even integer. Consider a matrix 𝐷 =
+
+(𝐷 𝑘,ℓ )𝑘,ℓ ∈ R𝑝 ×𝑝 :
+
+𝐷 𝑘,ℓ =
+
+√︃  
+
+> 2
+> 𝑝
+
+cos 
+
+ (− 1)ℓ (2ℓ+1)𝜋  
+
+> 2𝑝
+
+(𝑘 + 1)
+
+
+
+0 ≤ 𝑘 < 𝑝 
+
+> 2
+
+√︃  
+
+> 2
+> 𝑝
+
+sin 
+
+ (− 1)ℓ (2ℓ+1)𝜋 
+
+> 2𝑝
+
+ 𝑘 − 𝑝  
+
+> 2
+
++ 1 𝑝  
+
+> 2
+
+≤ 𝑘 < 𝑝 − 1 
+
+> 1√𝑝
+
+𝑘 = 𝑝 − 1
+
+Then, 𝐷 is orthogonal. 
+
+Proof. It suffices to show 𝐷 ⊤𝐷 = 𝐼 . Set 𝑁 := 𝑝 /2 and define 
+
+𝜔 ℓ := (− 1)ℓ (2ℓ + 1)𝜋 
+
+2𝑝 , ℓ = 0, 1, . . . , 𝑝 − 1.
+
+For a fixed column index ℓ, rewrite the entries of the ℓ-th column using the change of variables 𝑟 = 𝑘 + 1 for 0 ≤ 𝑘 ≤ 𝑁 − 1 and 
+
+𝑟 = 𝑘 − 𝑁 + 1 for 𝑁 ≤ 𝑘 ≤ 𝑝 − 2:
+
+𝐷 𝑘,ℓ =
+
+√︃  
+
+> 2
+> 𝑝
+
+cos (𝜔 ℓ𝑟 ), 𝑟 = 1, 2, . . . , 𝑁 , √︃  
+
+> 2
+> 𝑝
+
+sin (𝜔 ℓ𝑟 ), 𝑟 = 1, 2, . . . , 𝑁 − 1, 
+
+> 1√𝑝
+
+, 𝑘 = 𝑝 − 1.
+
+Hence, for any ℓ, ℓ ′, with Δ := 𝜔 ℓ − 𝜔 ℓ′ and Σ := 𝜔 ℓ + 𝜔 ℓ′ , we obtain 
+
+(𝐷 ⊤𝐷 )ℓ,ℓ ′ = 
+
+> 𝑝 −1
+
+∑︁ 
+
+> 𝑘 =0
+
+𝐷 𝑘,ℓ 𝐷 𝑘,ℓ ′
+
+= 2
+
+𝑝 
+
+> 𝑁
+
+∑︁  
+
+> 𝑟 =1
+
+cos (𝜔 ℓ𝑟 ) cos (𝜔 ℓ′ 𝑟 ) +  
+
+> 𝑁 −1
+
+∑︁  
+
+> 𝑟 =1
+
+sin (𝜔 ℓ𝑟 ) sin (𝜔 ℓ′ 𝑟 )
+
+!
+
++ 1
+
+𝑝 
+
+= 1
+
+𝑝 
+
+
+
+1 + cos (𝑁 Σ) + cos (𝑁 Δ) + 2 
+
+> 𝑁 −1
+
+∑︁  
+
+> 𝑟 =1
+
+cos (𝑟 Δ)
+
+
+
+.
+
+Case 1: ( ℓ = ℓ′). If ℓ = ℓ′, then Δ = 0 and Σ = 2𝜔 ℓ , so 
+
+cos (𝑁 Δ) = 1, 
+
+> 𝑁 −1
+
+∑︁  
+
+> 𝑟 =1
+
+cos (𝑟 Δ) = 𝑁 − 1.
+
+Moreover, since (2ℓ + 1) is odd, 
+
+cos (𝑁 Σ) = cos (𝑝𝜔 ℓ ) = cos 
+
+ (− 1)ℓ (2ℓ + 1)𝜋 
+
+2
+
+
+
+= 0.
+
+Therefore 
+
+(𝐷 ⊤𝐷 )ℓ,ℓ = 1
+
+𝑝 
+
+ 1 + 0 + 1 + 2(𝑁 − 1) = 2𝑁 𝑝 = 1.
+
+Case 2: ( ℓ ≠ ℓ′). Define the odd integers 
+
+𝑞 ℓ := (− 1)ℓ (2ℓ + 1).
+
+We first note that 𝑞 ℓ ≡ 1 (mod 4) for all ℓ. Hence 𝑞 ℓ −𝑞 ℓ′ is divisible by 4, so for some 𝑚 ∈ Z \ { 0},
+
+Δ = 𝜔 ℓ − 𝜔 ℓ′ = (𝑞 ℓ − 𝑞 ℓ′ )𝜋 
+
+2𝑝 = 2𝑚𝜋 𝑝 .
+
+Consider the geometric sum 
+
+𝑆 :=
+
+> 𝑁
+
+∑︁   
+
+> 𝑟 =−𝑁 +1
+
+𝑒   
+
+> √−1𝑟 Δ
+
+.
+
+> 16 Private Embedding Lookup with Encrypted Compact Queries under FHE
+
+Since 2𝑁 = 𝑝 , we have 𝑒 √−1𝑝 Δ = 𝑒 √−12 𝑚𝜋 = 1, while Δ .
+
+0 (mod 2 𝜋 ) for ℓ ≠ ℓ′, so 
+
+𝑆 = 𝑒 −√−1(𝑁 −1)Δ 1 − 𝑒 √−1𝑝 Δ
+
+1 − 𝑒 √−1Δ = 0.
+
+Taking real parts gives 
+
+0 = 𝑅𝑒 (𝑆 ) = 1 + cos (𝑁 Δ) + 2 
+
+> 𝑁 −1
+
+∑︁  
+
+> 𝑟 =1
+
+cos (𝑟 Δ).
+
+It remains to show cos (𝑁 Σ) = 0. Note that 𝑞 ℓ + 𝑞 ℓ′ ≡ 2 (mod 4), so 
+
+(𝑞 ℓ + 𝑞 ℓ′ )/ 2 is odd and 
+
+𝑁 Σ = 𝑝 
+
+2 · (𝑞 ℓ + 𝑞 ℓ′ )𝜋 
+
+2𝑝 = (𝑞 ℓ + 𝑞 ℓ′ )𝜋 
+
+4 = (odd ) 𝜋 
+
+2 ,
+
+hence cos (𝑁 Σ) = 0. Therefore, for ℓ ≠ ℓ′,
+
+(𝐷 ⊤𝐷 )ℓ,ℓ ′
+
+= 1
+
+𝑝 
+
+
+
+1 + cos (𝑁 Δ) + 2 
+
+> 𝑁 −1
+
+∑︁  
+
+> 𝑟 =1
+
+cos (𝑟 Δ)
+
+| {z } 
+
+> =0
+
++ cos (𝑁 Σ)
+
+| {z } 
+
+> =0
+
+
+
+=0.
+
+Combining Steps 1 and 2 yields 𝐷 ⊤𝐷 = 𝐼 . □
+
+## B.2 Proof of v(𝛼 𝑗 ) = v𝑗 
+
+Lemma B.2. Let 𝐷 ∈ R𝑝 ×𝑝 be given as in Lemma B.1. Let 𝛼 𝑗 :=
+
+exp 
+
+
+
+𝐽 · 2𝜋 √−1
+
+
+
+for 𝐽 := (− 1) 𝑗 (2𝑗 +1) 
+
+> 4𝑝
+
+. Let 
+
+v(𝛼 ) :=√︃ 2
+
+> 𝑝
+
+
+
+𝑅𝑒 (𝛼, . . . , 𝛼 𝑝  
+
+> 2
+
+), 𝐼𝑚 (𝛼, . . . , 𝛼 𝑝  
+
+> 2−1
+
+), 1√2
+
+⊤
+
+.
+
+Then, 𝑗 th column of 𝐷 is equal to v(𝛼 𝑗 ).
+
+Proof. Fix 𝑗 ∈ { 0, 1, . . . , 𝑝 − 1} and define 
+
+𝐽 := (− 1) 𝑗 (2𝑗 + 1)
+
+4𝑝 , 𝛼 𝑗 := exp  2𝜋𝑖 𝐽 .
+
+Then 
+
+𝛼 𝑗 = exp 
+
+√−1 (− 1) 𝑗 (2𝑗 + 1)𝜋 
+
+2𝑝 
+
+
+
+=: 𝑒   
+
+> √−1𝜔 𝑗
+
+,𝜔 𝑗 := (− 1) 𝑗 (2𝑗 + 1)𝜋 
+
+2𝑝 ,
+
+so that 
+
+𝑅𝑒 (𝛼 𝑟 𝑗 ) = cos (𝑟𝜔 𝑗 ), 𝐼𝑚 (𝛼 𝑟 𝑗 ) = sin (𝑟𝜔 𝑗 ).
+
+We now compare the entries of the vector v(𝛼 𝑗 ) in (2) with the 
+
+𝑗 th column of 𝐷 .
+
+(i) Cosine block. For 0 ≤ 𝑘 < 𝑝  
+
+> 2
+
+, set 𝑟 = 𝑘 + 1 ∈ { 1, . . . , 𝑝  
+
+> 2
+
+}. Then the 𝑘 th entry of v(𝛼 𝑗 ) equals 
+
+v(𝛼 𝑗 )𝑘 =√︄ 2
+
+𝑝 𝑅𝑒 (𝛼 𝑟 𝑗 ) =√︄ 2
+
+𝑝 cos (𝜔 𝑗 𝑟 ) =√︄ 2
+
+𝑝 cos  𝜔 𝑗 (𝑘 + 1),
+
+which coincides with 𝐷 𝑘,𝑗 by the definition of 𝐷 (first case). 
+
+(ii) Sine block. For 𝑝  
+
+> 2
+
+≤ 𝑘 < 𝑝 − 1, set 𝑟 = 𝑘 − 𝑝  
+
+> 2
+
++ 1 ∈ { 1, . . . , 𝑝  
+
+> 2
+
+− 1}.Then the 𝑘 th entry of v(𝛼 𝑗 ) equals 
+
+v(𝛼 𝑗 )𝑘 =√︄ 2
+
+𝑝 𝐼𝑚 (𝛼 𝑟 𝑗 ) =√︄ 2
+
+𝑝 sin (𝜔 𝑗 𝑟 ) =√︄ 2
+
+𝑝 sin 
+
+
+
+𝜔 𝑗 
+
+ 𝑘 − 𝑝  
+
+> 2
+
++ 1
+
+,
+
+which coincides with 𝐷 𝑘,𝑗 by the definition of 𝐷 (second case). 
+
+(iii) Last entry. Finally, the last component of v(𝛼 𝑗 ) is 
+
+v(𝛼 𝑗 )𝑝 −1 =√︄ 2
+
+𝑝 · 1
+
+√2 = 1
+
+√𝑝 = 𝐷 𝑝 −1,𝑗 ,
+
+matching the third case in the definition of 𝐷 . Since all entries agree, the 𝑗 th column of 𝐷 is exactly v(𝛼 𝑗 ). □
+
+## C Numerical Analysis 
+
+We separate the total deviation into the error due to approximate evaluation and the error induced by input perturbation. Let 𝑓 be the target function and let ˜𝑓 be a circuit (or procedure) that computes an approximation of 𝑓 . Given an input perturbation from 𝑥 to ˜𝑥 ,we write 
+
+˜𝑓 ( ˜𝑥 ) − 𝑓 (𝑥 ) = ˜𝑓 ( ˜𝑥 ) − 𝑓 ( ˜𝑥 )
+
+| {z }
+
+> forward error
+
++ 𝑓 ( ˜𝑥 ) − 𝑓 (𝑥 )
+
+| {z }
+
+> backward error
+
+. (7) The first term captures the approximation error incurred even on the same input ˜𝑥 , whereas the second term captures the sensitivity of 𝑓 to the input perturbation. When 𝑓 is differentiable, the backward error admits the first-order expansion 
+
+𝑓 ( ˜𝑥 ) − 𝑓 (𝑥 ) = 𝐷 𝑓 (𝑥 ) · ( ˜𝑥 − 𝑥 ) + 𝑜 (∥ ˜𝑥 − 𝑥 ∥) . (8) Equivalently, if 𝑓 is locally Lipschitz around 𝑥 with constant 𝐿 , then 
+
+|𝑓 ( ˜𝑥 ) − 𝑓 (𝑥 )| ≤ 𝐿 ∥ ˜𝑥 − 𝑥 ∥.We now instantiate this decomposition for CKKS. CKKS supports fixed-point arithmetic via a scaling factor Δ. The per-slot precision is roughly log Δ − 12 log (ℎ𝑁 ) − 𝑂 (1) bits; correspondingly, each basic arithmetic step (notably ciphertext multiplication followed by rescaling) introduces an absolute error of such order in the decoded (slot) value. While the exact constant depends on parameters and implementation details, this model provides a convenient conser-vative abstraction for tracking accumulated approximation error along a circuit. In particular, a coefficient-domain Gaussian error with coefficient standard deviation 𝜎 is measured in the slot domain through its canonical embedding. Following the standard CKKS noise analysis [ 14 ], we use the high-probability bound 6𝜎 √𝑁 on this canonical-embedding norm. With this convention, we proceed to the proof of the theorem. 
+
+Theorem C.1. Fix a correctness parameter 𝑢 , an even index size 
+
+𝑝 satisfying the assumptions of Section 4 (or its padded size), an embedding dimension 𝑑 , and a CKKS ring degree 𝑁 . Let Δ be the CKKS scaling factor. Let 𝐶 PCMM satisfy ∥𝜖 PCMM ∥RMS ≤ 𝐶 PCMM Δ−1
+
+for the final PCMM step, and let 𝐶 𝑇 satisfy ∥𝑀 ∥2 ≤ 𝐶 𝑇 (√𝑑 + √𝑝 )
+
+for tables 𝑀 ∈ T . Let 𝐶 𝑉 be a local Lipschitz constant satisfying 
+
+∥v(𝛼 + 𝜖 ) − v(𝛼 )∥ 2 ≤ 𝐶 𝑉 𝑝 +2 
+
+> √12
+
+|𝜖 | in the perturbation range considered below. Let 𝐶 coeff = 19 .2 denote the coefficient-domain 6-sigma bound for Gaussian error of standard deviation 𝜎 = 3.2, and set 𝐶 0 :=
+
+𝐶 coeff 
+
+√𝑁 for the corresponding canonical-embedding bound. Assume that after ring packing, the value entering IVE is ˜𝛼 𝑖 = 𝛼 𝑗 𝑖 + 𝜖 𝛼,𝑖 with 
+
+𝜖 𝛼,𝑖 ≤ 𝐶 0
+
+Δ .
+
+> 17 Cheon, Jang, Kang, and Rhee
+
+If 
+
+𝐶 PCMM 
+
+Δ + 𝐶 𝑇 (√𝑑 + √𝑝 )√𝑑 · 𝐶 𝑉 
+
+𝑝 + 2
+
+√12 · 𝐶 0
+
+Δ ≤ 1
+
+𝑢 , (9) 
+
+then IVE-PEL returns encryptions of 𝑀 𝑗 𝑖 , for every packed index 𝑗 𝑖 ,with RMS error at most 1/𝑢 , with overwhelming probability over the protocol randomness under the stated CKKS error bounds. 
+
+Proof. We track one packed index 𝑗 𝑖 and omit the subscript 𝑖 .The same argument applies independently to every packed slot. All bounds below are conditioned on the high-probability CKKS error events stated in the theorem. All tildes denote values computed from approximate arithmetic and/or perturbed inputs. (1) The server reconstructs (𝑎, 𝑏 ), applies ring packing, and obtains a ciphertext ct ∈ R 2 
+
+> 𝑁 ,𝑄 0
+
+whose decoded IVE input is ˜𝛼 = 𝛼 + 𝜖 𝛼 .(2) The server runs IVE to obtain encryptions of √2𝑝 ˜v𝑗 . After the following multiplication by 𝑀𝐿 /√2𝑝 , we write 𝜖 v𝑗 := ˜v𝑗 − v𝑗 
+
+for the corresponding unscaled vector error. (3) The server runs PCMM 𝑀𝐿 /√2𝑝 and obtains encryptions of ˜𝑀 𝑗 .
+
+## Step 1: Bounding 𝜖 𝑀 𝑗 from 𝜖 v𝑗 
+
+Write the PCMM forward error as 
+
+𝜖 PCMM := ˜𝑀 𝑗 − 𝑀𝐿 ˜v𝑗 , ∥𝜖 PCMM ∥RMS ≤ 𝐶 PCMM 
+
+Δ .
+
+Since 𝐿 is orthogonal, ∥𝑀𝐿 ∥2 = ∥𝑀 ∥2. Using the table bound 
+
+∥𝑀 ∥2 ≤ 𝐶 𝑇 (√𝑑 + √𝑝 ), we get 
+
+∥ ˜𝑀 𝑗 − 𝑀 𝑗 ∥RMS ≤ ∥ 𝜖 PCMM ∥RMS + 1
+
+√𝑑 ∥𝑀𝐿 ( ˜v𝑗 − v𝑗 )∥ 2
+
+≤ 𝐶 PCMM 
+
+Δ + 𝐶 𝑇 (√𝑑 + √𝑝 )√𝑑 ∥𝜖 v𝑗 ∥2. (10) 
+
+## Step 2: Bounding 𝜖 v𝑗 from 𝜖 𝛼 
+
+We use the following local Lipschitz bound for the IVE vector map. 
+
+Lemma C.2. Let v(𝛼 ) be defined by 
+
+v(𝛼 ) :=√︃ 2
+
+> 𝑝
+
+
+
+𝑅𝑒 (𝛼, . . . , 𝛼 𝑝 /2), 𝐼𝑚 (𝛼, . . . , 𝛼 𝑝 /2−1), 1√2
+
+⊤
+
+.
+
+Suppose |𝛼 | = 1 and 𝜖 lies in the perturbation range in which 
+
+|( 𝛼 + 𝜖 )𝑘 − 𝛼 𝑘 | ≤ 𝐶 𝑉 𝑘 |𝜖 | (1 ≤ 𝑘 ≤ 𝑝 /2)
+
+for an absolute constant 𝐶 𝑉 . Then 
+
+∥v(𝛼 + 𝜖 ) − v(𝛼 )∥ 2 ≤ 𝐶 𝑉 
+
+𝑝 + 2
+
+√12 |𝜖 |.
+
+Proof of Lemma C.2. For each 1 ≤ 𝑘 ≤ 𝑝 /2 − 1, the real and imaginary coordinates together contribute at most |( 𝛼 + 𝜖 )𝑘 − 𝛼 𝑘 |2.The last real coordinate for 𝑘 = 𝑝 /2 contributes at most the same complex-power difference. Therefore, 
+
+∥v(𝛼 + 𝜖 ) − v(𝛼 )∥ 22 ≤ 2
+
+𝑝 𝐶 2 
+
+> 𝑉
+
+|𝜖 |2
+
+> 𝑝 /2
+
+∑︁ 
+
+> 𝑘 =1
+
+𝑘 2
+
+= 𝐶 2 
+
+> 𝑉
+
+|𝜖 |2 (𝑝 + 1)( 𝑝 + 2)
+
+12 
+
+≤ 𝐶 2 
+
+> 𝑉
+
+|𝜖 |2 (𝑝 + 2)2
+
+12 .
+
+Taking square roots proves the claim. □
+
+By Lemma C.2, with 𝜖 𝛼 := ˜𝛼 − 𝛼 ,
+
+∥𝜖 v𝑗 ∥2 ≤ 𝐶 𝑉 
+
+𝑝 + 2
+
+√12 |𝜖 𝛼 |. (11) 
+
+## Step 3: Bounding the initial 𝜖 𝛼 
+
+By the theorem assumption, the packed input satisfies 
+
+˜𝛼 = 𝛼 + 𝜖 𝛼 , |𝜖 𝛼 | ≤ 𝐶 0
+
+Δ .
+
+Combining (10) and (11) with this initial bound, we get 
+
+∥ ˜𝑀 𝑗 − 𝑀 𝑗 ∥RMS ≤ 𝐶 PCMM 
+
+Δ + 𝐶 𝑇 (√𝑑 + √𝑝 )√𝑑 · 𝐶 𝑉 
+
+𝑝 + 2
+
+√12 · 𝐶 0
+
+Δ .
+
+The sufficient condition (9) makes the right-hand side at most 1/𝑢 .
+
+□
+
+The theorem gives the following parameter consequences. Define 
+
+𝑆 (Δ) :=
+
+ Δ
+
+𝑢 − 𝐶 PCMM 
+
+ √𝑑 𝐶 𝑉 𝐶 𝑇 (√𝑑 + √𝑝 )√12 
+
+𝑝 + 2 .
+
+For Δ/𝑢 > 𝐶 PCMM , condition (9) is equivalent to 
+
+𝐶 0 ≤ 𝑆 (Δ). (12) 
+
+Corollary C.3 (Scale selection) . It suffices to choose 
+
+Δ ≥ 𝑢𝐶 PCMM + 𝑢 · 𝐶 𝑉 𝐶 𝑇 (√𝑑 + √𝑝 )√𝑑 · 𝑝 + 2
+
+√12 · 𝐶 0. (13) 
+
+This is exactly condition (12) written as a lower bound on Δ.
+
+Corollary C.4 (Asymptotic parameter relation) . Assume 𝐶 PCMM =
+
+𝑜 (Δ/𝑢 ) and choose Δ on the scale of (13) . Then 
+
+log Δ = log 
+
+
+
+𝐶 𝑉 𝐶 𝑇 · 𝑢 · 𝐶 0 · ( 𝑝 + 2) · ( 1 +√︁ 𝑝 /𝑑 )
+
+
+
++ 𝑂 (1)
+
+= log 
+
+
+
+𝑢 · 𝐶 0 · 𝑝 · ( 1 +√︁ 𝑝 /𝑑 )
+
+
+
++ 𝑂 (1),
+
+(14) 
+
+where the final 𝑂 (1) absorbs absolute constants and table-dependent constants. 
+
+Corollary C.5 (Query-size accounting) . At modulus 𝑄 0 = Δ, the query consists of a 128-bit seed and the 𝑏 component. Sending one encrypted scalar query slot for each of the 𝑁 /2 indices costs 
+
+128 + 𝑁 
+
+2 log 𝑄 0
+
+bits. Therefore the amortized multiplicative overhead relative to the 
+
+log 𝑝 -bit plaintext index representation is 
+
+128 + 𝑁  
+
+> 2
+
+log 𝑄 0 
+
+> 𝑁
+> 2
+
+log 𝑝 = log 𝑄 0
+
+log 𝑝 + 256 
+
+𝑁 log 𝑝 .
+
+With 𝑄 0 = Δ and the asymptotic relation (14) , this becomes 
+
+1 + log  𝑢𝐶 0 (1 +√︁ 𝑝 /𝑑 )
+
+log 𝑝 + 𝑂 
+
+ 1log 𝑝 
+
+
+
++ 256 
+
+𝑁 log 𝑝 .
+
+## D Training Details 
+
+In this appendix, we provide additional preprocessing and train-ing details used in our implementation. 
+
+> 18 Private Embedding Lookup with Encrypted Compact Queries under FHE
+
+## D.1 Implementation 1. Comparison of PEL Method 
+
+There are two separate training stages in the experiments of Sec-tion 6.1. First, we train compressed embedding tables from the source embeddings (GloVe.42B.300d, GloVe.6B.50d, GPT-2). Second, we train an IMDB sentiment classifier using the compressed em-beddings obtained in the first stage to evaluate downstream utility. 
+
+Compressed Embedding Training. The table-compression struc-ture is described in Section 6.1. Here we give the training details. For each source embedding table, we train the compressed subta-bles using the implementation of [ 47 ]. The training objective is the mean-squared error between the original embedding and its recon-structed compressed embedding. We use Adam with learning rate 
+
+10 −4, batch size 128 , and train for 20 epochs. We save the checkpoint with the lowest validation MSE and use this checkpoint to generate the compressed subtables and the learned index tuples. In all cases, we fix the number of subtables to ℓ = 4 and vary the subtable size 
+
+𝑝 . Thus, the total compressed table size is ℓ𝑝 × 𝑑 = 4𝑝 × 𝑑 .
+
+IMDB Utility Evaluation. To evaluate whether the compressed embeddings retain downstream utility, we train a lightweight LSTM classifier on the IMDB sentiment classification task [ 41 ]. For GloVe-based experiments, the compressed GloVe embeddings are used as pretrained word embeddings for the classifier. The classifier consists of a single LSTM layer with hidden dimension 150 , fol-lowed by a linear classification layer. We train the classifier with Adam, learning rate 10 −4, batch size 128 , and negative log-likelihood loss. For GloVe.42B.300d, we train the classifier for 100 epochs. For GloVe.6B.50d, we use the same learning rate and train the classifier for 300 epochs. For the IMDB preprocessing, we use the Keras IMDB dataset with maximum sequence length 400 . We build the classifier vo-cabulary from the intersection of the IMDB word vocabulary and the corresponding GloVe vocabulary. Words not covered by the GloVe vocabulary are mapped to <unk> , and shorter sequences are padded to length 400 . The IMDB training split is further divided into training and validation subsets: we randomly sample 3 batches of training examples for validation and use the remaining examples for training. We save the checkpoint with the lowest validation loss and report the test accuracy of this checkpoint. All reported IMDB accuracies are averaged over three runs. We do not report IMDB accuracy for GPT-2 embeddings. In our preprocessing pipeline, only about 5.4% of IMDB words overlap with the GPT-2 token vocabulary. Consequently, more than 90% of IMDB words are mapped to the unknown token, making it difficult for the classifier to learn meaningful representations from GPT-2 in this setting. 
+
+## D.2 Implementation 2. End-to-End FastText Inference 
+
+Dataset Processing. All datasets share a common tokenization pipeline. We lowercase the text and extract alphabetic token se-quences using the regular expression, discarding digits, punctua-tion, and non-ASCII symbols. The vocabulary is constructed only from the training split to avoid label leakage, and out-of-vocabulary tokens are mapped to a trainable <unk> embedding. Each input example is padded or truncated to 128 tokens. For Enron-Spam, we concatenate the email subject and message body into a single document and binarize the label into spam and ham. We split the 33,716 emails into training, validation, and test sets using a stratified 80/10/10 split, resulting in 26,972 training samples, 3,372 validation samples, and 3,372 test samples. We use unigram tokenization. For Drugs.com Review, we use the review text and first apply HTML-entity unescaping and whitespace normalization before tokenization. We convert the original 1–10 rating into a binary sentiment label, where ratings 1–5 are labeled negative and ratings 6–10 are labeled positive. Starting from the official split of 161,297 training reviews and 53,766 test reviews, we reserve 10% of the official training set for validation, resulting in 145,167 training samples, 16,130 validation samples, and 53,766 test samples. We use unigram+bigram tokenization. The vocabulary is built from the training split, and tokens appearing fewer than three times are mapped to <unk> .
+
+Plaintext Training Details. In Implementation 2, we train a FastText-style classifier directly with compressed embedding tables. Unlike Implementation 1, where compressed tables are obtained by compressing pretrained embeddings, the compressed subtables in this experiment are trained from scratch for the target classification task. For both datasets, we use ℓ = 4 compressed subtables, each of size 𝑝 = 256 . The compressed subtables, the mapping from each token to an ℓ-tuple of subtable indices, and the linear classifier are trained jointly in plaintext. We train the model using cross-entropy loss and AdamW. The mapping from tokens to subtable indices is discrete, but discrete index selection is not directly differentiable. Therefore, during train-ing, we use a softmax relaxation: for each token and each subtable, the model learns a probability distribution over the 𝑝 entries and uses the corresponding weighted average of subtable entries. After training, this soft assignment is converted into a hard assignment by taking the argmax entry in each subtable. Thus, each token is finally represented by an index tuple ( 𝑗 1, . . . , 𝑗 ℓ ) ∈ [ 𝑝 ]ℓ , which is used for encrypted inference. The linear classifier is trained without a bias term. For Enron-Spam, we set the maximum number of tokens per email to 128 , the embedding dimension to 𝑑 = 50 , the learning rate to 10 −2, and train for 20 epochs. For Drugs.com Review, we set the maximum number of tokens per review to 128 , the embedding dimension to 𝑑 = 300 , the learning rate to 7 · 10 −3, and train for 
+
+20 epochs. For Drugs.com Review, we also use code-sharpening regularization with entropy weight 2 · 10 −3 and confidence weight 
+
+10 −2.
+
+## E Embedding Lookup in Smaller Queries 
+
+In the main implementation results, we evaluate private embed-ding lookup in a full-batch setting that maximizes the use of CKKS SIMD packing. Here, a batch means the number of private token queries processed together in one ciphertext. This setting captures a natural high-throughput regime where many token queries are available at once, for example when a long document is processed, 
+
+> 19 Cheon, Jang, Kang, and Rhee
+
+multiple documents are evaluated together, or several inference requests are batched. For a broader evaluation, we additionally consider smaller-batch settings, where the number of packed queries is below the full SIMD capacity. This experiment shows the performance of the proposed lookup procedure under different degrees of SIMD utilization. We report these additional results in this appendix. Unlike the main experiments, which use plaintext-ciphertext matrix-matrix multiplication (PCMM) to process many generated vectors simultaneously, this experiment implements the linear step using plaintext-ciphertext matrix-vector multiplication. We imple-ment this matrix-vector multiplication using the baby-step giant-step (BSGS) method together with one-hoisting, following the stan-dard approach for homomorphic linear transformations [ 30 ]. This reduces the number of ciphertext rotations compared with the naive diagonal method, while hoisting amortizes the common key-switching decomposition across multiple rotations of the same ciphertext. 
+
+Packing Method. To evaluate the smaller-batch regime, we in-stantiate the lookup task using the GloVe.42B.300d embedding table. As in the main implementation, each token is represented by four codebook indices, and the lookup is performed over four corre-sponding subtables. Since the embedding layer produces the first input representation for the subsequent model computation, the output of private lookup should be packed in a form that can be directly consumed by the downstream encrypted operations. For this purpose, we use a strided sparse packing layout. Concretely, each embedding vector has dimension 300 , and we pad it to 2⌈log 2 300 ⌉ = 512 coordinates. Since one CKKS ciphertext contains 216 slots, this packing layout supports 216 /512 = 128 
+
+queried tokens in one ciphertext. The resulting strided layout is given by 
+
+slot [128 𝑗 + 𝑏 ] =
+
+(
+
+v𝑏 [ 𝑗 ], 0 ≤ 𝑗 < 300 , 0 ≤ 𝑏 < 128 ,
+
+0, 300 ≤ 𝑗 < 512 , 0 ≤ 𝑏 < 128 .
+
+Thus, the effective batch size in this smaller-batch setting is 128 .When 𝑝 > 512 , a selection vector cannot be represented within the slots allocated to a single queried token in one ciphertext. There-fore, two ciphertexts are required to represent the selection vector. The case log 𝑝 = 10 in our experiment corresponds exactly to this setting. For our method, after power generation, the additional cost is limited because the real and imaginary parts can be placed in separate ciphertexts. In contrast, Kim et al.’s method must apply the same homomorphic operations to the additional ciphertext as well. Consequently, when log 𝑝 = 10 , the main evaluation cost of Kim et al.’s method is incurred almost twice, whereas the additional cost of our method remains relatively small. 
+
+Implementation Results. Table 6 reports the smaller-batch eval-uation results on GloVe.42B.300d. For all parameter settings, our method achieves faster evaluation than Kim et al.’s method when generating an output ciphertext containing 128 embedding vectors. Specifically, our method reduces the total latency by 2.62 ×, 2.30 ×,and 2.83 × for log 𝑝 = 6, 8, 10 , respectively. The speedup is less pronounced than in the full-batch setting be-cause Kim et al.’s method applies the same function independently to many entries of the selection vector, and this element-wise struc-ture benefits directly from CKKS SIMD parallelism. Nevertheless, our method still achieves a consistent 2–3× improvement in total latency. This improvement mainly comes from the lower multiplica-tive depth of our evaluation. When a selection vector is processed within the same ciphertext, both our method and Kim et al.’s method require 𝑂 (log 𝑝 ) non-scalar multiplications asymptotically. How-ever, Kim et al.’s method incurs a depth of log 𝑝 + 𝑂 (1), where the additional constant-depth terms have a non-negligible impact in this parameter range. In contrast, our method requires only 
+
+log 𝑝 multiplicative depth. Therefore, when the output ciphertexts are matched at the same output modulus, our method can start from a smaller initial modulus chain and perform the evaluation with lighter ciphertext arithmetic. This explains why the proposed method remains faster even in the smaller-batch setting, where the SIMD advantage of the baseline is more directly exploited. 
+
+Table 6: Smaller-batch evaluation using the same GloVe.42B.300d dataset as Table 3. We use the same CKKS parameters as in Table 3. Here, batch size denotes the number of embedding vectors packed in a single output ciphertext, where each vector corresponds to one private token query. For each batch size, we report the latency (s) required to generate one such output ciphertext. The linear step, denoted by MatVec, is implemented using plaintext-ciphertext matrix-vector multiplication rather than PCMM. Each latency is averaged over 10 independent runs. 
+
+log 𝑝 Method VecGen MatVec Total Batch Size 6 Ours 6.2334 2.8236 9.0572 128 Kim et al. 20.7202 3.0494 23.7695 8 Ours 9.2418 5.5929 14.8345 128 Kim et al. 28.6495 5.4167 34.0663 10 Ours 13.5587 14.6284 28.1873 128 Kim et al. 64.8553 14.9204 79.7758
