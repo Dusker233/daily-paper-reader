@@ -1,0 +1,1189 @@
+Title: Exploring CKKS Parameter Trade-offs for Privacy-Preserving Personalized Federated Learning
+
+URL Source: https://arxiv.org/pdf/2606.08521v1
+
+Published Time: Tue, 09 Jun 2026 01:07:00 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+> 1
+
+# Exploring CKKS Parameter Trade-offs for Privacy-Preserving Personalized Federated Learning 
+
+Kamolchanok Saengtong, Phanwadee Sinthong, Norrathep Rattanavipanon 
+
+Abstract —Privacy-preserving Personalized Federated Learn-ing (PFL) enables clients to collaboratively train personalized models without exposing raw data, but exchanged model updates remain vulnerable to inference attacks from honest-but-curious servers. Homomorphic Encryption (HE) addresses this by allow-ing server-side aggregation directly on encrypted updates, with the CKKS scheme being particularly suitable due to its native support for approximate floating-point arithmetic. However, no prior work has examined how to configure CKKS for PFL deployments, leaving practitioners without principled guidance on parameter selection that directly affects privacy, precision, and computational cost. This paper presents pFedCKKS, a generic framework in-tegrating CKKS into PFL, and provides the first systematic parameter selection guide for practitioners. We derive the full CKKS parameter constraints under 128-bit security for the PFL setting, showing the selection problem reduces to choosing just two values: the inner and outer ciphertext prime. Implemented using the Flower framework and TenSEAL library, pFedCKKS is evaluated on the FEMNIST, CelebA and Sentiment140 datasets with FedFinetune , Ditto and FedPer which represents PFL algorithms. Experimental results reveal an empirical trade-off between precision and computational/communication costs. This allows us to draw a concrete guideline for selecting proper CKKS parameters that balance efficiency and accuracy in real-world deployments of pFedCKKS. 
+
+I. I NTRODUCTION 
+
+The growing demand for data-driven Artificial Intelligence technologies has led to large-scale personal data collection, which in turn stimulates serious privacy concerns. In response, many countries have enacted privacy regulations (e.g., GDPR) that limit the sharing and use of personal information. To reconcile the conflict between data utility and privacy, Feder-ated Learning (FL) [1] has emerged as a promising solution. As shown in Figure 1, instead of transmitting raw data to a central server, FL allows each client to ➀ train a local machine learning (ML) model and ➁ share only model updates (e.g., gradients or parameters) with the server. The server then aggregates these local updates into a global model ➂ and redis-tribute it to clients for the next training round ➃. This process is repeated until the global model converges or a predefined number of rounds is reached, after which it produces the final global model that can be shared with all participating clients. By keeping data on-device, FL reduces privacy risks while 
+
+Kamolchanok Saengtong and Norrathep Rattanavipanon are with the Col-lege of Computing, Prince of Songkla University, Phuket, Thailand. Phanwadee Sinthong is with the School of Informatics, Walailak University, Nakhon Si Thammarat, Thailand. Corresponding authors: Phanwadee Sinthong (phanwadee.si@wu.ac.th) and Norrathep Rattanavipanon (norrathep.r@psu.ac.th). 
+
+allowing organizations to work with sensitive data to comply with regulatory requirements. A key practical limitation of standard FL is that all clients ultimately obtains the same ML model, i.e., the one in a red box of Figure 1. This can lead to suboptimal performance in real-world scenarios, where client data is typically het-erogeneous and non-independent and identically distributed (non-IID) [2]. In such settings, a single ML model from FL cannot effectively capture all distributions across clients. To address this, Personalized Federated Learning (PFL) [3] has been proposed. Unlike traditional FL, PFL enables each client to develop a personalized model (i.e., the ones in green dotted boxes of Figure 1) tailored to its local data. As a result, PFL has been shown to improve performance in practical non-IID settings [4], [5], [6], [3], [7], [8], [9]. Local 
+
+> Model Global Model Clients Local
+> Model Local
+> Model Clients Data Server Data Data FL final model PFL final model 1
+> 2
+> 3
+> 4
+
+Fig. 1: Federated Learning (FL) vs Personalized Federated Learning (PFL) While FL/PFL reduce privacy risks compared to the central-ized approach, they are still not immune to privacy leakage. Prior studies have demonstrated that local updates still retain sensitive information of the training data, making them vulner-able to inference attacks. These attacks, for example, can en-able the central server to reconstruct private training data [10], [11], infer sensitive properties of the training dataset [12], [13], or determine whether a specific record (i.e., membership) was used during training [14], [15]. To mitigate these risks, various techniques have been pro-posed, among which is homomorphic encryption (HE). HE enables certain computations to be performed directly on encrypted gradients or model parameters without requiring de-cryption. This allows the central server to aggregate encrypted local updates without ever seeing the underlying plaintexts. Hence, the global model can be computed at the ciphertext-level on the central server and is only decryptable on the 
+
+> arXiv:2606.08521v1 [cs.CR] 7 Jun 2026 2
+
+client’s side, preventing the central server from performing the privacy attacks on local updates. Among existing HE schemes, the CKKS (Cheon-Kim-Kim-Song) scheme [16], [17] has become the preferred choice of HE for machine learning tasks since it efficiently supports approximate arithmetic over real numbers, which are the standard data type for gradients or model parameters. This has led to several studies exploring integration of CKKS into FL to enhance its privacy [18], [19], [20]. However, to the best of our knowledge, no prior work has investigated the use of CKKS in the context of PFL. Incorporating CKKS into PFL poses non-trivial practical challenges related to parameter selection, where these pa-rameters can significantly impact various performance aspects such as encryption/decryption time, ciphertext size, and the precision of decrypted results. This complexity leaves open the question of how best to configure and optimize CKKS for PFL settings, where heterogeneous computing resources and network conditions have a direct effect on model training and performance. To bridge this gap, this paper first presents the integration of the CKKS scheme into PFL and then conducts an extensive evaluation by exploring key factors to assess the performance impact introduced by CKKS. The main contributions of this work are as follows:  
+
+> ●
+
+New Framework. We design a generic framework, called pFedCKKS, which integrates PFL with the CKKS scheme. To demonstrate its compatibility with major PFL algorithms, we apply our integration to popular PFL strategies: FedAVG+Finetuned [6], FedPer [4] and Ditto [5]. These three collectively represent major PFL categories according to a recent PFL taxonomy [21].  
+
+> ●
+
+Analysis of CKKS Parameters. To quantify the im-pact of this integration, we first analyze the full set of CKKS parameters used in pFedCKKS under the stan-dard security level. Our analysis reveals that the CKKS ciphertext moduli are the most influential, as it strongly controls pFedCKKS soundness. Our analysis also reveals constraints on how the modulus values should be selected to achieve the standard security level.  
+
+> ●
+
+Empirical Evaluation. Given the constraints, we evaluate pFedCKKS across a wide range of ciphertext modulus values to identify the combination that yields optimal performance; our experiments focus on three metrics: computation, communication, and precision, using three different datasets (two vision and one text classification tasks) The results indicate that ciphertext moduli of 
+
+(28 , 26 , 28 ) (i.e., 28-bit outer primes and 26-bit inner prime) provide a practical operating point across all datasets, yielding the best balance between precision and performance. 
+
+Organization: The rest of this paper is organized into the following sections: Section II introduces background on PFL algorithms used in this work ( FedFinetune , Ditto , FedPer )and the CKKS encryption scheme. Section III describes the pFedCKKS system model, adversary assumptions, workflow, and analysis. Section IV details the experimental setup and evaluates performance. Section V reviews prior work on federated learning and personalized FL. Finally, the paper concludes in Section VI. II. P RELIMINARIES 
+
+A. Personalized Federated Learning 
+
+In PFL, we consider a distributed system consisting of one central server and n clients. Each client Ci holds a private dataset Di. PFL operates in multiple rounds where each round runs two algorithms in sequence:  
+
+> ●
+
+ClientUpdate (Θ, θ i, D i) → ˆΘi, ˆθi: Executed on client Ci,this algorithm takes as input global parameters Θ (shared for all clients) and personalized parameters θi (specific to 
+
+Ci) and then trains on Di, producing updated parameters 
+
+ˆΘi and ˆθi. ˆΘi is sent to the server while Ci keeps ˆθi
+
+locally used as θi in the next round.  
+
+> ●
+
+ServerAgg ( ˆΘ1, ..., ˆΘn) → Θ: Executed on the central server, this algorithm aggregates locally updated share-able parameters from all clients ( ˆΘ1, ..., ˆΘn) into a new global Θ, which is then sent to all clients for the next round’s ClientUpdate .The objective of PFL is to find personalized parameters 
+
+ˆθ1, ..., ˆθn that minimizes the following global objective: 
+
+ˆθ1, ..., ˆθn = arg min G(L1, ..., L n)
+
+where Li = L(θi, D i; Θ ) is the local loss on client Ci, L
+
+denotes the loss function, and G is commonly computed as a weighted average of local losses w.r.t. the dataset sizes: 
+
+G(L1, ..., L n) = ∑ni=1 Li ⋅ ∣Di∣  
+
+> ∑nj=1∣Dj∣
+
+Let ϕ denote as a null/unused variable. Next, we de-scribe how ClientUpdate and ServerAgg can be instantiated in PFL algorithms experimented in this work, where the choice of these algorithms is motivated by the recent PFL taxonomy [21]. 
+
+FedAVG+Finetuned (FedFinetune ) [6] extends FedAVG [1] to support non-IID settings by adopting personalized parameters from fine-tuned models rather than directly using the global model from FedAVG. Specifically, 
+
+FedFinetune implements each round’s algorithm as:  
+
+> ●
+
+FedFinetune .ClientUpdate (Θ, ϕ, D i): Client Ci receives the entire model parameters Θ from the server (randomly initialized by the server in the first round) and performs stochastic gradient descent (SGD) using Θ on Di for a fixed number of steps. It then produces updated parame-ters ˆΘi. If this is a final round, it sets ˆθi as ˆΘi to serve as the client’s personalized model; otherwise ˆθi = ϕ. 
+
+> ●
+
+FedFinetune .ServerAgg ( ˆΘ1, ..., ˆΘn): The server aggre-gates all ˆΘ-s using a weighted average: 
+
+Θ ←
+
+> n
+
+∑
+
+> i=1
+
+Θi ⋅ ∣Di∣
+
+∑nj=1 ∣Dj ∣ (1) 
+
+FedPer [4] splits training of a deep learning model into two disjoint parts: the base layers (i.e., early layers) are shared with the central server, while the personalized layers are kept private on each client.  
+
+> ●
+
+FedPer .ClientUpdate (Θ, θ i, D i): Client Ci receives the global base layers Θ from the server (random weights 3
+
+in the first rounds) and personalized parameters θi (i.e., 
+
+ˆθi from the previous round). It then performs SGD on the combined model ( Θ, θ i) using Di for a fixed number steps. This produces updated parameters for the shared base layers ˆΘi and the personalized layers ˆθi. 
+
+> ●
+
+FedPer .ServerAgg ( ˆΘ1, ..., ˆΘn): A common approach in FedPer is to aggregate all shared base layers via aweighted average, following Equation 1. 
+
+Ditto [5]. Unlike previous strategies, Ditto completely sep-arates the entire personalized model from the global one and introduces an additional proximal term when training the personalized parameters.  
+
+> ●
+
+Ditto .ClientUpdate (Θ, ϕ, D i): Client Ci receives the global parameters Θ from the server (random weights in the first rounds) and performs SGD using Θ on Di for a fixed number steps to obtain ˆΘ. Then, it derives θi from 
+
+Θ by solving the following optimization problem: 
+
+θi ← arg min 
+
+> θ
+
+(L(θ, D i) + λ
+
+2 ∣∣ θ − Θ∣∣ 2) (2) where λ is a hyperparameter in which higher λ leads to 
+
+θi being closer to the global model.  
+
+> ●
+
+Ditto .ServerAgg ( ˆΘ1, ..., ˆΘn): Similar to FedFinetune 
+
+and FedPer , a weighted average is commonly a preferred choice for aggregation on the server, i.e., this algorithm follows Equation 1. 
+
+B. Cheon-Kim-Kim-Song (CKKS) Scheme 
+
+The main “claim to fame” of the CKKS scheme is its ability to perform HE for approximate arithmetic that natively supports complex numbers . This makes this scheme well-suited for floating-point data such as model parameters and gradients. In addition, CKKS features Single Instruction Mul-tiple Data (SIMD) parallelism; this allows a vector of floating-point data to be packed into a single ciphertext and processed simultaneously. Security of this scheme relies on the computational hardness assumption of the Ring-based Learning With Errors (RLWE) problem [22], which encrypts a message under noisy inner products. In particular, CKKS is defined over the polynomial ring R with integer coefficients, i.e., R = Z[X]/( XN + 1)
+
+where N is the degree of the polynomial modulus (typically a power of two). The scheme supports a pre-defined number L
+
+of multiplicative depths (or levels), with each level 0 < l ≤ L
+
+associated with a ciphertext prime modulus ql. Besides ql-s, 
+
+q0 is used for encryption and qL+1 represents a special last prime to ensure sufficient precision for decryption. Intuitively, 
+
+L specifies how many times homomorphic multiplication can be performed in the current CKKS setup. We define the total modulus at level l as Ql = qL+1 ⋅ ∏lj=0 qj and a ciphertext at the same level is an element in R2 
+
+> Ql
+
+, i.e., a two-component polynomial over R modulo Ql.The CKKS scheme consists of the following algorithms:  
+
+> ●
+
+CKKS .KeyGen (1λ, N, [q0, ..., q L]) → (pk, sk, evk ) ∶ On a security parameter λ, it outputs a public encryption key 
+
+pk , a private decryption key sk and an evaluation key 
+
+evk . 
+
+> ●
+
+CKKS .Encode (z, ∆) → m: It encodes an (N/2)-dimensional vector of complex numbers z ∈ CN /2 into a polynomial m ∈ R suitable for encryption. During this process, it uses a scaling factor ∆ to control precision.  
+
+> ●
+
+CKKS .Decode (m, ∆) → z: It is the inverse of 
+
+CKKS .Encode where it decodes polynomial m back into a (N/2)-dimensional vector z, approximately recovering the original values by dividing by ∆. 
+
+> ●
+
+CKKS .Encrypt (m, pk ) → c: It encrypts m using the pub-lic encryption key pk , resulting in a ciphertext c ∈ R2 
+
+> QL
+
+. 
+
+> ●
+
+CKKS .Decrypt (c, sk ) → m: It recovers m from the ciphertext c using the private decryption key sk . 
+
+> ●
+
+CKKS .Add (c1, c 2) → cadd : It performs homomorphic ad-dition on two ciphertexts c1, c 2, resulting in cadd . Concep-tually, cadd is equivalent to CKKS .Encrypt (m1 +m2, pk ). 
+
+> ●
+
+CKKS .Mult (c1, c 2, evk ) → cmult : Given the evaluation key evk and current multiplicative level l with ciphertext modulus Ql, it performs homomorphic multiplication on two ciphertexts c1, c 2 ∈ R2 
+
+> Ql
+
+, resulting in cmult , where 
+
+cmult ≡ CKKS .Encrypt (m1 ⋅ m2, pk ). After multiplica-tion, it rescales the ciphertext modulus reducing it to 
+
+Ql−1, i.e., resulting in cmult ∈ R2 
+
+> Ql−1
+
+. 
+
+> ●
+
+CKKS .MultConst (c, a, evk ) → c′: It is a special case of CKKS .Mult where a ciphertext c is multiplied by a constant a ∈ R producing a new ciphertext c′ that is equivalent to CKKS .Encrypt (a ⋅ m, pk ). Rescaling is also commonly applied, making c′ ∈ R2 
+
+> Ql−1
+
+as a result of this operation. III. PFED CKKS: F RAMEWORK FOR PFL I NTEGRATION WITH CKKS The goal of this work is to investigate the performance impact of introducing the CKKS scheme to enhance privacy in PFL. To this end, we first present the system and adver-sary models under our envisioned privacy-preserving settings in Section III-A and Section III-B, respectively. Next, in Section III-C, we describe the generic composition of PFL and CKKS that forms the basis of our study. Finally, in Section III-D, we evaluate the security and soundness of this composition and analyze the CKKS parameter choices required to achieve these properties. 
+
+A. System Model 
+
+In this work, we target cross-silo PFL settings as depicted in Figure 1, where each client represents a company or organization (e.g., a bank or hospital). In this setting, every client has its own private dataset; the dataset is not directly shareable due to privacy and legal concerns. Instead, the goal is for clients to collaboratively improve their local models by leveraging knowledge from other clients’ data without exposing or exchanging the raw data itself. As a cross-silo setting, the number of clients is relatively small (typically between 2 and 100), and they are expected to participate reli-ably and faithfully throughout the training process. The central server, distinct from the clients, coordinates and orchestrates the training until completion. 4
+
+B. Threat Model 
+
+We follow the standard adversary assumption from prior work applying HE to traditional FL [23], [24]: an honest-but-curious server and honest clients . Specifically, the server complies with the protocol but may attempt to exploit the information exchanged during protocol execution to violate clients’ privacy, e.g., by launching membership inference attacks using client’s local updates. In line with the cross-silo setting, the clients are organizations subject to privacy regula-tions and therefore have little incentive to behave maliciously. Accordingly, we consider all clients to be honest throughout the protocol and do not collude with the server. We assume secure communications between the server and each client, e.g., by employing TLS-based connections, ensuring that no external adversaries (or other clients) can eavesdrop on the data exchanged during the training process. Before the training process, we assume the presence of a leader (either a client elected by the server [23] or a trusted third party [24]) responsible for running CKKS .KeyGen to generate the CKKS keys: pk , sk , and evk . The leader then securely distributes them to all clients, while providing only pk and 
+
+evk to the server. 
+
+C. Our Framework: pFedCKKS 1Server Client Aggregate Decrypyt Encrypt Serealized Deserealized Local Update  
+
+> 23
+> 4
+> 5
+> 7
+> 8
+> 6
+
+Fig. 2: The workflow of pFedCKKS We present pFedCKKS, a generic framework that integrates CKKS into PFL to provide privacy protection against an honest-but-curious server. pFedCKKS operates in two main phases: setup and training. In the setup phase, following Section III-B, a leader is selected to generate pk , sk , and 
+
+evk . The leader then distributes pk , sk , and evk to all clients, while only pk and evk are shared with the server. The training phase consists of eight steps, illustrated in Figure 2 and detailed in Algorithm 1. Each client first ini-tializes its personalized model θi, while the server initializes the global model Θ using either random weights or a pre-trained model. Using pk , the server encrypt Θ, obtaining Θe.It then distributes Θe to all clients to begin the first round of PFL training in Step (1). In Step (2), upon receiving Θe, each client Ci decrypts and decodes it to recover the global model as a floating-point vector. Next, it deserializes the vector into the correct model format (e.g., PyTorch), yielding Θ in Step (3). 
+
+Algorithm 1: pFedCKKS 
+
+input : Number of rounds t, CKKS parameters: ∆, L,
+
+(q0, ..., q L+1)
+
+output : θi for client Ci
+
+// Setup  
+
+> 1
+
+The server elects a leader to run 
+
+CKKS .KeyGen (1λ, (q0, ..., q L)) ; 
+
+> 2
+
+The leader produces (pk, sk, evk ), shares them with clients and sends only pk, evk to server; 
+
+// Server  
+
+> 3
+
+The server initializes global model Θ and uses pk to serialize and encrypt Θ, resulting in Θe; 
+
+> 4
+
+for round ∈ {1, ..., t } do  
+
+> 5
+
+Send Θe to clients;  
+
+> 6
+
+(Θe
+
+> 1
+
+, ∣D1∣) , ..., (ΘeN , ∣Dn∣) ← Receive updates from clients;  
+
+> 7
+
+Θe ← CKKS .Encrypt (CKKS .Encode (0, ∆), pk ); 
+
+> 8
+
+for j ∈ {1, ..., n } do  
+
+> 9
+
+wj ← nj / ∑ni ∣Di∣; 
+
+> 10
+
+mj ← CKKS .MultConst (Θej , w j ); 
+
+> 11
+
+Θe ← CKKS .Add (Θe, m j ); 
+
+> 12
+
+end  
+
+> 13
+
+end 
+
+// Client Ci 
+
+> 14
+
+Each client Ci initializes a local model θi; 
+
+> 15
+
+for t ∈ {1, ..., T } do  
+
+> 16
+
+Θe ← Receive encrypted global parameters from server;  
+
+> 17
+
+Θ ← CKKS .Decode (CKKS .Decrypt (Θe, sk ), ∆); 
+
+> 18
+
+Θ ← Deserialize (Θ); 
+
+> 19
+
+ˆΘi, ˆθi ← ClientUpdate (Θ, θ i, D i); 
+
+> 20
+
+ˆΘi ← Serialize ( ˆΘi); 
+
+> 21
+
+ˆΘei ← CKKS .Encrypt (CKKS .Encode ( ˆΘi, ∆), pk ); 
+
+> 22
+
+Send ( ˆΘe, ∣Di∣) to server;  
+
+> 23
+
+end  
+
+> 24
+
+Use θi as the final model; 
+
+In Step (4), it performs a local PFL update using the underlying PFL algorithm (e.g., FedFinetune .ClientUpdate ,
+
+Ditto .ClientUpdate or FedPer .ClientUpdate ), resulting in an updated global model ˆΘi and a new personalized model ˆθi.
+
+ˆθi is retained for the next training round while the client prepares ˆΘi for transmission to the server. In Step (5), ˆΘi is serialized into a floating-point vector, which is then encoded and encrypted in Step (6); we note that the CKKS encryption in pFedCKKS is performed with the packing method, where it packs up to N /2 floating-point values into a single ciphertext. In Step (7), the client sends the ciphertexts, along with the sample size used for training, back to the server. Finally, in Step (8), once the server receives ciphertexts from all clients, it performs homomorphic weighted-average aggregation (Lines 7-14 of Algorithm 1), obtaining the ag-gregate ciphertext Θe. At this point, Θe corresponds to the encrypted version of Θ as defined in Equation 1. The server then continues with the next PFL round by sending Θe to the clients. This process repeats until all rounds ( T ) are consumed, after which each client Ci adopts its ˆθi as the final personalized model. 
+
+D. Analysis 
+
+Here, we analyze security and soundness of pFedCKKS. 5
+
+Security. We informally argue that pFedCKKS protects the confidentiality of each client’s uploaded model update 
+
+ˆΘi against the honest-but-curious server, while providing the formal proof to Appendix A. During training, each client Ci
+
+sends only its encrypted update ˆΘei and dataset size ∣Di∣ to the server; see Line 22 of Algorithm 1. The dataset size is intentionally revealed because it is required for weighted aggregation, but it discloses only the number of local samples and not the raw training records. Let L denote the information explicitly visible to the server, including the number of clients, client participation in each round, ciphertext sizes, model/update dimensions, public CKKS parameters, and ∣Di∣. Given L, the server does not learn ˆΘi from ˆΘei . This follows from the IND-CPA security of CKKS under the RLWE hardness assumption [16], [17], [25]. In particular, the server receives only the public key and evaluation key, but not the secret key. Therefore, an honest-but-curious server cannot distinguish encryptions of two equal-length candidate updates, except with negligible probability. As a result, pFedCKKS provides privacy protection of training data w.r.t. the threat model described in Section III-B. 
+
+Soundness. Under ideal CKKS parameters, the aggregation performed by the server produces an encrypted approximation of the aggregate model Θ defined in Equation 1. Clients can therefore recover an approximation of Θ as in a standard PFL setup, i.e., the one without HE. However, because CKKS introduces noise during encryption, decrypted results may deviate slightly from the exact plaintext values. The extent of this deviation depends on the choice of CKKS parameters in pFedCKKS, which will be explored next. 
+
+CKKS parameters. In CKKS, 4 parameters are critical to decryption precision and thus the soundness of pFedCKKS: 
+
+N , L, (q0, . . . , q L+1), and ∆. The parameter N also directly determines the security level of CKKS. To achieve the standard 128-bit security level, we follow the recommended setting of 
+
+N = 8192 [26], [25], [27]. The multiplicative depth L specifies how many homomorphic multiplications can be supported. In pFedCKKS, we only need one multiplication (Line 9 of Algorithm 1), so L = 1. This results in three ciphertext moduli: 
+
+(q0, q 1, q 2), where we refer q0 and q2 as the outer prime and 
+
+q1 as the inner prime. Following standard practice [20], [28], [18], we fix ∆ = q1,
+
+q0 = q2 with q0 > q1, and require log 2(Q1) = log 2(q0) +
+
+log 2(q1) + log 2(q2) < 218 to maintain 128-bit security [26], [29], [18]. As a result, we have the following constraints for selecting CKKS parameters in pFedCKKS: 
+
+N = 8192 , L = 1, q 0 = q2, q 1 = ∆ (3) 
+
+q0 > q1, log 2(q0) + log 2(q1) + log 2(q2) < 218 (4) Given these constraints, to use pFedCKKS, we only need to select values for the outer prime ( q0) and the inner prime (q1) that satisfy the inequality in Equation 4. Once chosen, the full parameter set can be populated using Equation 3. In CKKS, decryption precision is largely influenced by inner and outer primes. A larger ∆ (= q1) retains more precision in the decimal part, while the decryption precision of the integer part depends on the gap between q0 and q1. Moreover, 
+
+∆ determines how plaintext values are scaled relative to the noise. If q1 (and thus ∆) is too small, the scaling becomes insufficient to reliably distinguish plaintext values from the accumulated noise during decryption. However, increasing either q0 or q1 enlarges the total modulus QL, which in turn requires more bits to represent ciphertexts. This results in larger ciphertext sizes, higher bandwidth consumption and longer computation times. Consequently, CKKS introduces an inherent trade-off: im-proving numerical precision comes at the cost of increased computational and communication overheads. To balance these competing factors, one must carefully select CKKS parameters that minimize these overheads while maintaining sufficient accuracy for the downstream machine learning task. In the following sections, we empirically explore this trade-off to identify practical parameter choices. To the best of our knowl-edge, this issue has not been systematically investigated in prior work, including studies of CKKS in traditional FL. IV. E XPERIMENTS 
+
+A. Setup 
+
+Implementation. We implement pFedCKKS in Python us-ing the Flower federated learning framework [30]. Flower provides a standard FL pipeline based on two functions: fit 
+
+and aggregate . The fit function is executed by a Flower client and defines the logic for local training on its own dataset. It returns the updated model along with the number of trained samples, which Flower automatically forwards to the server. Upon receiving results from clients, Flower invokes 
+
+aggregate on the server, which implements the aggregation logic producing an aggregate result. This result is then sent back to the clients for the next training round. To implement pFedCKKS in Flower, we modify the fit 
+
+function to implement Lines 19-24 of Algorithm 1 and the server’s aggregate function to implement Lines 7–14. We use the Tenseal library [25] to provide Python APIs for CKKS operations in our implementation. 
+
+Hardware. We evaluate our pFedCKKS implementation by simulating both clients and server on the same machine: an i7-11700K desktop with 32 GB of RAM and NVIDIA GeForce RTX 4060 GPU. In total, all experiments take around ≈ 336 GPU hours and ≈ 720 hours. 
+
+Datasets and Models. We use three datasets from the LEAF federated learning benchmark [31] in our experiments: FEMNIST, CelebA, and Sentiment140. The datasets and the corresponding models used for training are summarized in Table I and described in detail below: 1) FEMNIST represents an image classification task, con-sisting of 28×28 grayscale images of handwritten digits and both lowercase and uppercase letters (62 classes in total). It contains a total of 805,263 samples. To evaluate pFedCKKS, we adopt the CNN model implementation provided in LEAF, which consists of five layers: two convolutional layers (with 32 and 64 filters of size 5×5), one fully connected hidden layer with 2048 neurons, and 6
+
+TABLE I: Summary of datasets used in our experiments.                       
+
+> Dataset Dataset Type # Samples # Classes Task Model # Parameters
+> FEMNIST Grayscale images 805,263 62 Handwritten classification 2D CNN 6.60M CelebA RGB images 202,599 2Smiling detection 2D CNN 30.2K Sentiment140 Tweet texts 1,600,498 2Sentiment analysis 1D CNN 8M
+
+a final output layer with a softmax activation over 62 classes. 2) CelebA is a large-scale face attribute classification dataset containing 202,599 RGB images of celebrity faces annotated with 40 binary attributes. Following the LEAF benchmark, we focus on the binary classification task for the smiling attribute. We use the 2D CNN model provided by LEAF. The model has four convolutional layers and one fully connected layer followed by a softmax layer for binary classification. 3) Sentiment140 is a LEAF dataset for sentiment classifica-tion. It contains 1,600,498 tweets collected from 660,120 users, where each tweet is labeled with either positive or negative sentiment. The original LEAF implementation uses a logistic regression model for sentiment analysis. However, this model is not suitable for FedPer because it consists of only a single layer and therefore cannot be separated into the base and personalized layers required by FedPer . Motivated by [32], we instead adopt a 1D CNN model consisting of three convolutional layers with 32, 64, and 128 filters, followed by a fully connected layer that produces the final sentiment prediction. 
+
+PFL Algorithms and Parameters. We evaluate pFed-CKKS on the dataset using three underlying PFL algorithms: 
+
+FedFinetune , FedPer and Ditto . Specifically, for FedPer ,we use the last layer (classification head/fully connected layer+softmax activation) as the personalized layer, while the remaining are the base layers shared with the server during training. In Ditto , we set the hyperparameter λ (see Section II-A) to 0.1, following previous work [5]. For all algorithms, we use the following setup: a learning rate of 0.01, 20 communication rounds, 3 PFL clients (for cross-silo settings), the entire dataset divided into 100 par-titions where each client holds one partition, and an 80/20 train-test split. For the FEMNIST dataset, data is partitioned in a non-IID manner using the Dirichlet partitioning method with α = 0.1. For the CelebA and Sentiment140 datasets, the tasks are binary classification, which makes it difficult to reliably construct non-IID partitions based on prediction labels. Therefore, we partition these two datasets in an IID manner instead. 
+
+Baseline and Metrics. In this work, we consider the baseline to be the respective unmodified (unencrypted) PFL algorithm. Our goal is to explore pFedCKKS trade-off be-tween communication/computational overhead and precision. Accordingly, we report three performance metrics in our experiments:  
+
+> ●
+
+Communication (Section IV-B) measured by the total number of bytes each client transmits and receives in each training round.  
+
+> ●
+
+Computation (Section IV-C) as the total time (CPU + GPU) performed on each client to complete each training round.  
+
+> ●
+
+Precision (Section IV-D), where we measure at two levels: parameter and model level. 
+
+B. Communication 
+
+Figure 3 illustrates the communication cost of pFedCKKS and its overhead relative to the baseline. The percentage communication overhead exhibits a consistent trend across all datasets and PFL algorithms: both inner and outer primes directly influence the overhead, with larger values leading to higher communication cost. For example, with a fixed 40-bit outer prime, increasing the inner prime from 18 to 38 results in at least an additional 100% communication overhead. Also, for a fixed inner prime of 22 , increasing the outer prime from the lowest value ( 24 ) to the largest value ( 40 ) leads to an increase of at least 250%. The overall communication cost follows a similar trend to the % overhead, where the choice of inner/outer prime bits influence actual bandwidth usage. For FEMNIST, FedFinetune 
+
+and Ditto exhibit similar bandwidth consumption (≈257– 468 MB), whereas FedPer reduces the communication cost to less than 4 MB. This reduction is expected, as FedPer decou-ples personalized parameters from shared parameters and only transmits a smaller subset of shared parameters (i.e., the base layer of the 2D CNN used in FEMNIST which contributes to 79% of the overall model parameters), thereby significantly lowering the amount of encrypted data exchanged. A similar trend is observed in Sentiment140, where 
+
+FedFinetune and Ditto again consume comparable bandwidth to their FEMNIST counterparts. However, FedPer incurs higher bandwidth usage in this case because the shared com-ponent corresponds to the base layers of a 1D CNN, which constitutes a larger fraction ( ≈ 99.98%) of the total model parameters. Finally, due to its smaller model size, CelebA results in the lowest bandwidth consumption (less than 2.5 MB across all settings). However, when compared to the baseline, its relative overhead remains comparable to that of other datasets. 
+
+Takeaway 1: Impact on Communication 
+
+In pFedCKKS, the choice of both inner and outer CKKS primes directly affects communication over-head over the unencrypted baseline, with larger values leading to higher overhead. In terms of absolute cost, the choice of PFL algorithm and model architecture further influences the overall bandwidth usage. 718 22 26 30 34 38 
+
+> Inner Prime
+> 250
+> 300
+> 350
+> 400
+> 450
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(a) FedFinetune – FEMNIST 18 22 26 30 34 38  
+
+> Inner Prime
+> 250
+> 300
+> 350
+> 400
+> 450
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(b) Ditto – FEMNIST 18 22 26 30 34 38  
+
+> Inner Prime
+> 2.00
+> 2.25
+> 2.50
+> 2.75
+> 3.00
+> 3.25
+> 3.50
+> 3.75
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(c) FedPer – FEMNIST 18 22 26 30 34 38 
+
+> Inner Prime
+> 1.4
+> 1.6
+> 1.8
+> 2.0
+> 2.2
+> Bandwidth (MB)
+> 500
+> 600
+> 700
+> 800
+> Overhead (%)
+
+(d) FedFinetune – CelebA 18 22 26 30 34 38  
+
+> Inner Prime
+> 1.4
+> 1.6
+> 1.8
+> 2.0
+> 2.2
+> Bandwidth (MB)
+> 500
+> 600
+> 700
+> 800
+> Overhead (%)
+
+(e) Ditto – CelebA 18 22 26 30 34 38  
+
+> Inner Prime
+> 1.2
+> 1.4
+> 1.6
+> 1.8
+> 2.0
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(f) FedPer – CelebA 18 22 26 30 34 38 
+
+> Inner Prime
+> 300
+> 350
+> 400
+> 450
+> 500
+> 550
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(g) FedFinetune – Sentiment140 18 22 26 30 34 38  
+
+> Inner Prime
+> 300
+> 350
+> 400
+> 450
+> 500
+> 550
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(h) Ditto – Sentiment140 18 22 26 30 34 38  
+
+> Inner Prime
+> 300
+> 350
+> 400
+> 450
+> 500
+> 550
+> Bandwidth (MB)
+> 400
+> 450
+> 500
+> 550
+> 600
+> 650
+> 700
+> 750
+> 800
+> Overhead (%)
+
+(i) FedPer – Sentiment140 
+
+Fig. 3: pFedCKKS’s bandwidth usage (absolute value on the left y-axis) and its overhead w.r.t. the baseline (percentage on the right y-axis). Each line corresponds to a different outer prime value: ●=20 , ∎=24 , ▲=28 , ⧫=32 , ▼=36 , =40 ; inner prime bits are varied along in the x-axis. Results are averaged over 3 seeds; standard deviation is < 0.01 and omitted. 
+
+C. Computation 
+
+We define the computation cost of pFedCKKS as the per-round execution time of Algorithm 1 on each PFL client. Figure 4 reports both the absolute runtime and the cor-responding overhead (in %) relative to the baseline under varying pFedCKKS’s CKKS inner and outer prime bit sizes. We observe that only five out of the nine settings exhibit a clear trend: similar to communication overhead, increasing the inner and outer prime values leads to higher computation time. These settings include all three PFL algorithms on the Sentiment140 dataset (Figure 4g–4i) and two PFL algorithms on the FEMNIST dataset (Figure 4a and Figure 4b). Among these five settings, the two that employ Ditto incur a computation overhead of approximately 2.2-2.8× over the baseline, while the remaining three exhibit higher overheads of 4.2–5.6×. The remaining settings do not show a clear relationship between computation cost and the CKKS prime parameters. For settings that exhibit a clear trend, each PFL round takes around 10 seconds, with low variance (standard deviation 
+
+< 0.01 ). In contrast, settings without a clear trend complete significantly faster (2-4 seconds) and may exhibit higher runtime variance; however, the absolute difference between the maximum and minimum runtime remains small, typically within the first or second decimal place (e.g., 2.464 vs. 2.476 seconds in Figure 4f). To better understand this behavior, we perform a runtime microbenchmark that breaks the computation cost into finer-grained operations. Based on Lines 14-24 of Algorithm 1, we consider three main components: (i) CKKS decryption (Lines 17-18), (ii) local training (Line 19), and (iii) CKKS encryption (Lines 20-21). Among these, (i) and (iii) constitute the sources of pFedCKKS computation overhead compared to the unencrypted baseline. 818 22 26 30 34 38 
+
+> Inner Prime
+> 8.8
+> 9.0
+> 9.2
+> 9.4
+> 9.6
+> 9.8
+> Runtime (seconds)
+> 420
+> 430
+> 440
+> 450
+> 460
+> 470
+> 480
+> Overhead (%)
+
+(a) FedFinetune – FEMNIST 18 22 26 30 34 38  
+
+> Inner Prime
+> 10.0
+> 10.2
+> 10.4
+> 10.6
+> 10.8
+> 11.0
+> Runtime (seconds)
+> 245
+> 250
+> 255
+> 260
+> 265
+> 270
+> 275
+> 280
+> Overhead (%)
+
+(b) Ditto – FEMNIST 18 22 26 30 34 38  
+
+> Inner Prime
+> 1.750
+> 1.755
+> 1.760
+> 1.765
+> 1.770
+> Runtime (seconds)
+> 1.6
+> 1.8
+> 2.0
+> 2.2
+> 2.4
+> 2.6
+> 2.8
+> 3.0
+> 3.2
+> Overhead (%)
+
+(c) FedPer – FEMNIST 18 22 26 30 34 38 
+
+> Inner Prime
+> 2.46
+> 2.48
+> 2.50
+> 2.52
+> 2.54
+> 2.56
+> 2.58
+> 2.60
+> Runtime (seconds)
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> Overhead (%)
+
+(d) FedFinetune – CelebA 18 22 26 30 34 38  
+
+> Inner Prime
+> 4.14
+> 4.16
+> 4.18
+> 4.20
+> 4.22
+> 4.24
+> 4.26
+> Runtime (seconds)
+> 0.5
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Overhead (%)
+
+(e) Ditto – CelebA 18 22 26 30 34 38  
+
+> Inner Prime
+> 2.464
+> 2.466
+> 2.468
+> 2.470
+> 2.472
+> 2.474
+> 2.476
+> Runtime (seconds)
+> 1.2
+> 1.3
+> 1.4
+> 1.5
+> 1.6
+> Overhead (%)
+
+(f) FedPer – CelebA 18 22 26 30 34 38 
+
+> Inner Prime
+> 10.6
+> 10.8
+> 11.0
+> 11.2
+> 11.4
+> 11.6
+> 11.8
+> Runtime (seconds)
+> 490
+> 500
+> 510
+> 520
+> 530
+> 540
+> 550
+> 560
+> Overhead (%)
+
+(g) FedFinetune – Sentiment140 18 22 26 30 34 38  
+
+> Inner Prime
+> 12.8
+> 13.0
+> 13.2
+> 13.4
+> 13.6
+> 13.8
+> 14.0
+> Runtime (seconds)
+> 220
+> 225
+> 230
+> 235
+> 240
+> 245
+> 250
+> 255
+> Overhead (%)
+
+(h) Ditto – Sentiment140 18 22 26 30 34 38  
+
+> Inner Prime
+> 10.6
+> 10.8
+> 11.0
+> 11.2
+> 11.4
+> 11.6
+> 11.8
+> Runtime (seconds)
+> 450
+> 460
+> 470
+> 480
+> 490
+> 500
+> 510
+> 520
+> Overhead (%)
+
+(i) FedPer – Sentiment140 
+
+Fig. 4: Runtime usage of pFedCKKS with various inner and outer prime values (in bits). Each line corresponds to a different 
+
+outer prime value: ●=20 , ∎=24 , ▲=28 , ⧫=32 , ▼=36 , =40 ;Table II presents the runtime breakdown. For the four settings that do not exhibit a clear trend in Figure 4, the total runtime is dominated by (ii) local training, which varies significantly across different runs/seeds. In contrast, the run-time of (i) and (iii) is much smaller (0.90-3.4% of the overall runtime) and stable. As a result, incorporating pFedCKKS (i.e., adding (i) and (iii)) does not significantly affect the overall computation time, with the overhead remaining below 3.4%. Notably, three of these four settings correspond to CelebA, where the model size is relatively small, leading to faster execution of (i)/(iii) compared to (ii). The remaining setting corresponds to the FedPer –FEMNIST combination. In this case, the base layers of FEMNIST constitute only about 3.4% of the total model parameters; thus, under FedPer , only this small subset is encrypted and decrypted, resulting in minimal overhead from (i) and (iii). From Table II, the remaining five settings that exhibit a clear relationship between CKKS inner/outer prime sizes and computation cost are dominated by CKKS encryption (iii) and CKKS decryption (i), with encryption contributing the larger share of the overhead around 7.3-7.4×, which is consistent with the finding from prior work [33]. We also observe a non-monotonic behavior in computation time w.r.t. the outer prime size. In particular, certain config-urations (e.g., outer prime = 36 bits) exhibit slightly higher runtime compared to larger sizes (e.g., outer prime = 40 bits), which appears counterintuitive. Upon further inspection, we found that this behavior stems from the serialization mecha-nism in the underlying TenSEAL library. Prime sizes that are not byte-aligned introduce additional padding overhead during (de)serialization. To validate this explanation, we benchmark CKKS serialization and encryption runtime while varying the outer prime size from 20 to 40 bits. Results in Table III support this claim, showing that byte-aligned prime sizes are generally faster than non-aligned ones, even when using larger bit lengths. 9                                       
+
+> Algorithm Dataset (i) Decrypt (ms) (ii) Training (ms) (iii) Encrypt (ms) CKKS Total (ms) Total Fit (ms)
+> FedFinetune
+> FEMNIST 899.6 ±1.6 (9.8%) 1259.7 ±4.1 (13.7%) 6645.5 ±27.1 (72.2%) 7545.1 ±27.1 (82.0%) 9204.3 ±28.7 CelebA 5.6 ±0.1 (0.22%) 2036.7 ±5.7 (81.7%) 33.8 ±0.7 (1.36%) 39.4 ±0.8 (1.58%) 2490.7 ±6.2 Sentiment 1118.2 ±9.6 (10.1%) 1051.4 ±7.1 (9.47%) 8212.2 ±3.4 (74.0%) 9330.5 ±11.5 (84.1%) 11098.1 ±4.7
+> Ditto
+> FEMNIST 908.7 ±7.7 (8.7%) 2499.6 ±13.2 (23.9%) 6657.8 ±17.4 (63.6%) 7566.6 ±25.0 (72.3%) 10472.5 ±32.0 CelebA 5.5 ±0.0 (0.13%) 3720.2 ±12.0 (87.6%) 32.8 ±0.3 (0.77%) 38.3 ±0.3 (0.90%) 4244.9 ±10.7 Sentiment 1118.9 ±10.2 (8.4%) 3278.6 ±16.1 (24.6%) 8252.0 ±12.0 (61.8%) 9370.9 ±10.1 (70.3%) 13342.0 ±12.1
+> FedPer
+> FEMNIST 7.8 ±0.0 (0.44%) 1263.9 ±2.8 (71.6%) 52.8 ±0.8 (3.0%) 60.7 ±0.8 (3.4%) 1764.4 ±13.2 CelebA 4.6 ±0.0 (0.19%) 2024.2 ±3.5 (82.0%) 30.0 ±0.4 (1.2%) 34.7 ±0.4 (1.41%) 2469.3 ±3.1 Sentiment 1123.5 ±5.9 (10.6%) 1199.7 ±2.9 (11.5%) 8156.4 ±12.3 (77.8%) 9279.9 ±7.6 (88.5%) 11191.0 ±6.6
+
+TABLE II: Computation time breakdown per federated round using CKKS homomorphic encryption (prime config [40,38,40], mean ±std across 3 seeds). All times in milliseconds (ms). (i) CKKS decryption, (ii) local training, (iii) CKKS encryption. Gray rows indicate settings where training (ii) dominates over CKKS operations (i)+(iii), causing no clear trend. TABLE III: Encryption and serialization time (ms) across outer prime bits, measured on the FEMNIST model.            
+
+> Outer Prime (bits) Encryption + Serialization Time (ms)
+> 20 6531.2 22 6547.0 24 6501.0 26 6664.7 28 6742.3 30 6737.0 32 6737.9 34 6979.2 36 7131.1 38 7067.9 40 6731.8
+
+Takeaway 2: Impact on Computation 
+
+In pFedCKKS, the choice of CKKS inner and outer prime sizes significantly impacts computation over-head, with larger values leading to higher runtime. However, this effect is only evident when CKKS encryption/decryption operations dominate the compu-tation; otherwise, local training masks this trend. 
+
+D. Precision 
+
+We evaluate the impact of pFedCKKS on precision at two levels: the parameter level and the model level. This allows us to assess how pFedCKKS overhead affects the numerical precision of the model parameters (the former) and whether these parameter deviations are sufficient to impact the model’s predictive performance (the latter). 
+
+a) Parameter-level Precision: We define the parameter-level precision overhead as the average ℓ1 training error (Eℓ1) between the final personalized parameters in pFedCKKS (wpFedCKKS ) and the baseline ( wbaseline ), formally: 
+
+Eℓ1 = 1
+
+N
+
+> N
+
+∑
+
+> i=1
+
+∥wpFedCKKS  
+
+> i
+
+− wbase  
+
+> i
+
+∥1 (5) Recall from Section III-D that, in pFedCKKS, the precision for the decimal points of decrypted parameters is determined by the inner prime while the integer-part precision is controlled by the difference between the outer and inner prime values, where the larger value leads to better precision. Figure 5 illustrates Eℓ1 under various inner and outer prime bit settings. We observe that Eℓ1 is primarily influenced by the inner prime, while the choice of outer prime has anegligible effect (besides when the inner prime is 18 bits); this trend is consistent across all nine settings. Further inspection suggests that this behavior arises because wbase lie within a range [−6, 6], which is sufficiently small for all evaluated configurations to provide enough integer precision. In contrast, the precision of the decimal points is controlled by the inner prime. Increasing the inner prime improves this precision, with Eℓ1 going down rapidly. Across all settings, this improvement begins to plateau around 26-bit inner prime (corresponding to Eℓ1 around 10 −2), indicating diminishing returns of Eℓ1 afterwards. 
+
+b) Model-level Precision: Next, we consider model-level precision by measuring the difference in test accuracy between pFedCKKS and the baseline. Table IV reports these results. We observe that, regardless of the outer prime value, using an 18-bit inner prime leads to severe model accuracy degradation. This behavior is consistent with the parameter-level precision results in Figure 5, which show that the personalized parame-ters obtained with an 18-bit inner prime deviate substantially from the baseline. In some cases (e.g., Figure 5b), the param-eter error Eℓ1 reaches as high as 10 22 . Such extreme errors suggest that the accumulated CKKS approximation noise may cause overflow during decoding, resulting in corrupted model parameters and poor model accuracy. In contrast, increasing the inner prime to 22 bits substan-tially improves compared to the 18-bit setting. However, the test accuracy still shows an observable drop (more than 1%) in many settings. In comparison, larger inner primes ( ≥ 26 bits) consistently maintain test accuracy at a level comparable to the baseline. Similar to parameter-level precision, the outer prime has no impact on model-level precision. Next, we investigate the impact of the number of federated communication rounds on both model convergence and model-level precision in pFedCKKS. Since CKKS introduces ap-proximation noise, repeated encryption and decryption across rounds may accumulate errors and potentially affect conver-gence/accuracy. Since the outer prime has negligible impact on precision, we fix the outer prime to 40 bits and vary only the inner prime; we also intentionally exclude the 18-bit inner prime from this 10 
+
+(a) FedFinetune – FEMNIST 18 22 26 30 34 38   
+
+> Inner Prime
+> 10 1
+> 10 3
+> 10 7
+> 10 11
+> 10 15
+> 10 19
+> 10 23
+> L1 Error (per parameter)
+
+(b) Ditto – FEMNIST 18 22 26 30 34 38   
+
+> Inner Prime
+> 10 1
+> 10 0
+> L1 Error (per parameter)
+
+(c) FedPer – FEMNIST 18 22 26 30 34 38   
+
+> Inner Prime
+> 10 2
+> 10 1
+> 10 0
+> 10 1
+> 10 2
+> L1 Error (per parameter)
+
+(d) FedFinetune – CelebA 18 22 26 30 34 38   
+
+> Inner Prime
+> 10 1
+> 10 2
+> 10 5
+> 10 8
+> 10 11
+> 10 14
+> 10 17
+> 10 20
+> L1 Error (per parameter)
+
+(e) Ditto – CelebA 18 22 26 30 34 38    
+
+> Inner Prime
+> 10 2
+> 10 1
+> 10 0
+> 10 1
+> 10 2
+> 10 3
+> 10 4
+> L1 Error (per parameter)
+
+(f) FedPer – CelebA 18 22 26 30 34 38     
+
+> Inner Prime
+> 10 4
+> 10 3
+> 10 2
+> 10 1
+> 10 0
+> 10 1
+> 10 2
+> 10 3
+> 10 4
+> L1 Error (per parameter)
+
+(g) FedFinetune – Sentiment140 18 22 26 30 34 38   
+
+> Inner Prime
+> 10 3
+> 10 0
+> 10 3
+> 10 6
+> 10 9
+> 10 12
+> 10 15
+> 10 18
+> L1 Error (per parameter)
+
+(h) Ditto – Sentiment140 18 22 26 30 34 38      
+
+> Inner Prime
+> 10 4
+> 10 3
+> 10 2
+> 10 1
+> 10 0
+> 10 1
+> 10 2
+> 10 3
+> 10 4
+> L1 Error (per parameter)
+
+(i) FedPer – Sentiment140 
+
+Fig. 5: L1 error (accuracy deviation) of pFedCKKS under various inner and outer prime bits across FEMNIST, CelebA, and Sentiment datasets. Each line corresponds to a different outer prime value: ●=20 , ∎=24 , ▲=28 , ⧫=32 , ▼=36 , =40 ;experiment due to its poor accuracy results in the previous evaluation. We then track model accuracy over 60 federated communication rounds. Figure 6 presents the results. Overall, almost all datasets and PFL algorithms exhibit similar convergence behavior: model accuracy improves rapidly during the early communication rounds and gradually stabilizes as training progresses. The only notable exceptions are FEMNIST and Sentiment140 when using a 22-bit inner prime. In these cases, model accuracy begins to decline after 25 communication rounds for FEMNIST and 10 communication rounds for Sentiment140. A possible explanation is the accumulation of CKKS noise over repeated rounds of training, which may gradually reduce the precision of the aggregated model and negatively affect convergence. Since both models contain a relatively large number of parameters, they may be more susceptible to the accumulation of CKKS approximation noise across commu-nication rounds, resulting in degraded accuracy during the later stages of training. This result further supports our earlier finding that a 22-bit inner prime is insufficient to maintain model-level precision. In contrast, inner primes of at least 26 bits consistently achieve convergence behavior and final model accuracy comparable to the baseline, even after prolonged training. 
+
+Takeaway 3: Impact on Precision 
+
+In pFedCKKS, the inner prime is the primary factor affecting both parameter- and model-level precision. Smaller inner primes increase average ℓ1 parame-ter error, introduce numerical instability, and degrade test accuracy. Increasing the inner prime improves precision significantly, while diminishing returns are observed beyond 26 bits. In contrast, the outer prime has negligible impact on precision. 11                                                                                                                                                                                                                                                                                                                                                                                           
+
+> FEMNIST – Fine-Tuning (Base: 83.4%) O/I18 22 26 30 34 38 20 −81 .4±1.2−−−−−
+> 24 −79 .3±2.0−0.9±0.2−−−−
+> 28 −78 .9±2.3−0.8±0.3−0.4±0.3−−−
+> 32 −76 .5±0.9−0.8±0.2−0.1±0.1−0.1±0.1−−
+> 36 −78 .3±1.0−1.2±0.3−0.2±0.1−0.1±0.2−0.2±0.3−
+> 40 −77 .7±0.6−0.8±0.4−0.3±0.1−0.5±0.2−0.2±0.2−0.4±0.2
+> FMNIST – Ditto (Base: 83.1%) O/I18 22 26 30 34 38 20 −78 .3±0.9−−−−−
+> 24 −78 .9±0.7−0.4±0.2−−−−
+> 28 −79 .5±1.3−0.5±0.4+0.2±0.4−−−
+> 32 −78 .7±1.1−0.6±0.1+0.1±0.6+0.5±0.0−−
+> 36 −78 .9±0.6−0.4±0.2+0.2±0.3+0.3±0.2−0.1±0.2−
+> 40 −78 .4±0.2−0.4±0.2−0.0±0.2−0.1±0.1−0.4±0.2+0.0±0.1
+> FMNIST – FedPer (Base: 81.7%) O/I18 22 26 30 34 38 20 −76 .7±0.2−−−−−
+> 24 −75 .9±1.2−0.1±0.1−−−−
+> 28 −75 .7±0.9−0.5±0.2+0.0±0.4−−−
+> 32 −76 .3±0.8−0.2±0.5−0.3±0.5+0.1±0.1−−
+> 36 −76 .2±0.2−0.5±0.5−0.2±0.2−0.1±0.3+0.1±0.5−
+> 40 −74 .8±1.4−1.4±0.4+0.3±0.5+0.1±0.4+0.2±0.5+0.4±0.4
+> Sentiment140 – Fine-Tuning (Base: 67.1%) O/I18 22 26 30 34 38 20 −17 .4±0.4−−−−−
+> 24 −17 .1±0.1−2.1±0.4−−−−
+> 28 −17 .1±0.0−1.7±0.3+0.0±0.3−−−
+> 32 −17 .0±0.0−2.0±0.2−0.2±0.3+0.1±0.1−−
+> 36 −16 .6±0.6−1.7±0.4+0.4±0.1+0.0±0.1+0.3±0.3−
+> 40 −17 .0±0.0−2.0±0.3−0.0±0.4+0.3±0.2+0.1±0.5+0.2±0.4
+> Sentiment140 – Ditto (Base: 68.2%) O/I18 22 26 30 34 38 20 −18 .3±0.4−−−−−
+> 24 −18 .0±0.4−2.6±0.6−−−−
+> 28 −17 .8±0.0−1.8±0.7−0.2±0.5−−−
+> 32 −18 .0±0.4−2.2±0.5−0.3±0.5−0.2±0.3−−
+> 36 −17 .8±0.0−2.3±0.6−0.4±0.4−0.1±0.7−0.4±0.5−
+> 40 −17 .8±0.0−2.3±0.6−0.7±0.6−0.3±0.2−0.1±0.7−0.2±0.4
+> Sentiment140 – FedPer (Base: 66.4%) O/I18 22 26 30 34 38 20 −16 .3±0.0−−−−−
+> 24 −16 .3±0.0−1.9±0.2−−−−
+> 28 −16 .4±0.1−1.8±0.7+0.0±0.1−−−
+> 32 −16 .3±0.0−1.4±0.2+0.4±0.5−0.2±0.2−−
+> 36 −16 .3±0.0−1.9±0.2−0.5±0.3+0.1±0.4−0.2±0.3−
+> 40 −16 .3±0.0−1.7±0.5+0.3±0.2+0.5±0.2−0.5±0.3−0.3±0.1
+> CelebA – Fine-Tuning (Base: 86.1%) O/I18 22 26 30 34 38 20 −36 .6±2.2−−−−−
+> 24 −32 .8±4.6+0.4±2.6−−−−
+> 28 −35 .3±2.4+1.1±1.1+0.1±1.6−−−
+> 32 −35 .2±2.5+0.7±1.7+0.2±1.6−0.3±1.5−−
+> 36 −35 .3±2.4+1.2±1.2+0.3±1.8−0.2±1.7+0.2±1.7−
+> 40 −33 .5±0.2+1.4±1.2+0.2±1.7+0.1±2.1−0.1±2.1+0.0±1.5
+> CelebA – Ditto (Base: 86.3%) O/I18 22 26 30 34 38 20 −37 .7±1.8−−−−−
+> 24 −36 .7±2.0+0.3±0.5−−−−
+> 28 −37 .4±2.3+0.9±0.6−0.2±1.7−−−
+> 32 −36 .3±2.3+1.0±1.5−0.1±1.7−0.1±1.8−−
+> 36 −33 .8±0.2+1.1±1.4+0.1±1.5−0.1±1.8−0.1±1.8−
+> 40 −35 .6±2.5+0.7±1.2−0.4±1.6−0.4±1.5−0.3±2.2−0.0±2.4
+> CelebA – FedPer (Base: 86.5%) O/I18 22 26 30 34 38 20 −34 .0±0.2−−−−−
+> 24 −34 .0±0.2−0.3±0.8−−−−
+> 28 −35 .8±2.4−0.4±1.1−0.3±1.5−−−
+> 32 −33 .9±0.2+0.4±0.5−0.8±1.5+0.3±0.6−−
+> 36 −34 .0±0.2−0.1±1.4−0.9±0.2−0.0±1.1+0.7±1.0−
+> 40 −34 .0±0.2−0.9±2.4+0.1±1.5−0.4±0.3−0.1±0.3−0.1±0.9
+
+< −1% −1% to 0% > 0% 
+
+TABLE IV: Accuracy difference (pFedCKKS vs the baseline) in percentage points for each dataset and federated learning method. O and I denote the outer and inner prime parameters, respectively. Values are reported as mean ± std across 3 seeds. 
+
+E. Parameters Recommendation 
+
+Our empirical results highlight the trade-off between preci-sion and computational/communication costs in pFedCKKS. In particular, Takeaways 1-2 suggest using smaller inner and outer primes to reduce computation and communication overhead. In contrast, Takeaway 3 indicates that increasing the inner prime improves parameter/model-level precision while the outer prime has negligible impact on precision. In practice, however, minor degradation at the parameter level is accept-able as long as model-level accuracy is preserved. Our results show that inner primes of 26 bits or higher consistently maintain model-level accuracy comparable to the baseline across all evaluated outer prime settings. While larger inner primes further reduce parameter-level error, they yield negli-gible improvements in model-level accuracy beyond 26 bits, while incurring higher computation and communication costs. Based on these observations, we recommend using a CKKS ciphertext modulus configuration of (28 , 26 , 28 ) for pFed-CKKS deployment. This configuration minimizes communi-cation and computation overhead while maintaining model accuracy comparable to the baseline. V. R ELATED WORK 
+
+Despite not sharing raw data directly, traditional FL methods still suffer from the risk of privacy leakage through exchanged model updates [10], [11], [12], [13], [14], [15]. To mitigate this impact, prior research has explored integrating privacy-enhancing technologies (PETs) into FL. These efforts gen-erally fall into four categories based on the underlying PET technique: (1) Homomorphic Encryption (HE) [34], [35], (2) Secure Multi-party Computation [36], [37], (3) Differential Privacy [38], [39], and (4) Zero-Knowledge Proofs [40]. Each category offers distinct trade-offs in terms of computation and communication costs, trust assumptions, and security guaran-tees; we refer to the recent survey [41] for a comprehensive comparison of these categories. Since this work focuses on integrating the CKKS scheme into PFL, we review prior work in the HE category. Early work [42], [43], [44] adopted the Paillier additive HE scheme [45] to encrypt local model updates before aggre-gation on the server. However, these approaches introduced substantial computation and communication overhead, which impeded their practical applicability. Subsequent studies [23], [46], [18], [20] improved upon this by incorporating batching techniques to group model parameters prior to encryption. One promising direction is to adopt the CKKS scheme [16], [17] into FL since it natively supports batching by encoding multiple floating-point parameters into a single plaintext, later encrypted into a single ciphertext. Building upon this property, FedSHE [18] investigates the integration of CKKS into FL, analyzing how the multiplicative depth parameter ( L) affects computational overhead. However, its analysis is limited to a single parameter while leaving other CKKS parameters unexplored. In contrast, our parameter selection analysis is more comprehensive, covering a wider range of CKKS parameters. Moreover, our evaluation con-siders both computation and communication costs, and more importantly their trade-off with decryption precision, which was not explored in FedSHE. Finally, FedSHE focuses on standard FL with the FedAVG algorithm [1], whereas our work targets PFL with the analysis and findings that can generalize to standard FL settings. To the best of our knowledge, only one study has exam-ined the integration of HE within a PFL framework: CLDP-MPE [47] applies the CKKS scheme and local differential pri-vacy to enhance security and privacy of the PFL method based on a group-based meta-learning algorithm [48]. Nonetheless, it does not investigate how CKKS affects decryption precision or 12 10 20 30 40 50 60 
+
+> Communication Rounds
+> 50.0
+> 55.0
+> 60.0
+> 65.0
+> 70.0
+> 75.0
+> 80.0
+> 85.0
+> Accuracy (%)
+
+(a) FedFinetune – FEMNIST 10 20 30 40 50 60  
+
+> Communication Rounds
+> 60.0
+> 65.0
+> 70.0
+> 75.0
+> 80.0
+> 85.0
+> Accuracy (%)
+
+(b) Ditto – FEMNIST 10 20 30 40 50 60  
+
+> Communication Rounds
+> 67.5
+> 70.0
+> 72.5
+> 75.0
+> 77.5
+> 80.0
+> 82.5
+> Accuracy (%)
+
+(c) FedPer – FEMNIST 10 20 30 40 50 60 
+
+> Communication Rounds
+> 50.0
+> 55.0
+> 60.0
+> 65.0
+> 70.0
+> 75.0
+> 80.0
+> 85.0
+> 90.0
+> Accuracy (%)
+
+(d) FedFinetune – CelebA 10 20 30 40 50 60  
+
+> Communication Rounds
+> 55.0
+> 60.0
+> 65.0
+> 70.0
+> 75.0
+> 80.0
+> 85.0
+> 90.0
+> Accuracy (%)
+
+(e) Ditto – CelebA 10 20 30 40 50 60  
+
+> Communication Rounds
+> 55.0
+> 60.0
+> 65.0
+> 70.0
+> 75.0
+> 80.0
+> 85.0
+> 90.0
+> Accuracy (%)
+
+(f) FedPer – CelebA 10 20 30 40 50 60 
+
+> Communication Rounds
+> 50.0
+> 52.5
+> 55.0
+> 57.5
+> 60.0
+> 62.5
+> 65.0
+> 67.5
+> Accuracy (%)
+
+(g) FedFinetune – Sentiment140 10 20 30 40 50 60  
+
+> Communication Rounds
+> 52.0
+> 54.0
+> 56.0
+> 58.0
+> 60.0
+> 62.0
+> 64.0
+> 66.0
+> 68.0
+> Accuracy (%)
+
+(h) Ditto – Sentiment140 10 20 30 40 50 60  
+
+> Communication Rounds
+> 52.0
+> 54.0
+> 56.0
+> 58.0
+> 60.0
+> 62.0
+> 64.0
+> 66.0
+> 68.0
+> Accuracy (%)
+
+(i) FedPer – Sentiment140 
+
+Fig. 6: Model accuracy across different numbers of communication rounds when pFedCKKS is instantiated with a fixed 40-bit outer prime and varying inner prime bits. Each line represents a different inner prime value: ●=22 , ∎=26 , ▲=30 , ⧫=34 , =38 .the associated computation and communication costs, which are the main focus of this work. VI. C ONCLUSION 
+
+In this work, we explored the integration of CKKS ho-momorphic encryption into Personalized Federated Learn-ing (PFL) through the pFedCKKS framework. Our evalua-tion of pFedCKKS across three underlying PFL algorithms (FedFinetune , FedPer and Ditto ) demonstrated that the in-ner ciphertext prime is a major contributor to performance overheads and decryption precision where a larger value improves decryption accuracy but increases bandwidth and runtime. Based on these findings, we recommend configuring the CKKS prime parameters as (28 , 26 , 28 ), i.e., 28-bit outer prime and 26-bit inner prime, to achieve the best practical trade-off, benefiting from high accuracy while minimizing computational and communication costs. Overall, pFedCKKS validates that privacy preservation in PFL can be achieved efficiently when CKKS parameters are carefully tuned. Future work includes exploring different datasets with various degrees of heterogeneity and integration with other privacy-enhancing techniques such as differential privacy. REFERENCES [1] B. McMahan, E. Moore, D. Ramage, S. Hampson, and B. A. y Arcas, “Communication-efficient learning of deep networks from decentralized data,” in Artificial intelligence and statistics , pp. 1273–1282, PMLR, 2017. [2] Y. Zhao, M. Li, L. Lai, N. Suda, D. Civin, and V. Chandra, “Federated learning with non-iid data,” arXiv preprint arXiv:1806.00582 , 2018. [3] A. Z. Tan, H. Yu, L. Cui, and Q. Yang, “Towards personalized federated learning,” IEEE transactions on neural networks and learning systems ,vol. 34, no. 12, pp. 9587–9603, 2022. [4] M. G. Arivazhagan, V. Aggarwal, A. K. Singh, and S. Choud-hary, “Federated learning with personalization layers,” arXiv preprint arXiv:1912.00818 , 2019. [5] T. Li, S. Hu, A. Beirami, and V. Smith, “Ditto: Fair and robust federated learning through personalization,” in International conference on machine learning , pp. 6357–6368, PMLR, 2021. 13 
+
+[6] L. Collins, H. Hassani, A. Mokhtari, and S. Shakkottai, “Fedavg with fine tuning: Local updates lead to representation learning,” Advances in Neural Information Processing Systems , vol. 35, pp. 10572–10586, 2022. [7] Z. Lu, H. Pan, Y. Dai, X. Si, and Y. Zhang, “Federated learning with non-iid data: A survey,” IEEE Internet of Things Journal , vol. 11, no. 11, pp. 19188–19209, 2024. [8] A. Fallah, A. Mokhtari, and A. Ozdaglar, “Personalized federated learning: A meta-learning approach,” arXiv preprint arXiv:2002.07948 ,2020. [9] F. Hanzely and P. Richt´ arik, “Federated learning of a mixture of global and local models,” arXiv preprint arXiv:2002.05516 , 2020. [10] L. Zhu, Z. Liu, and S. Han, “Deep leakage from gradients,” Advances in neural information processing systems , vol. 32, 2019. [11] Z. Wang, M. Song, Z. Zhang, Y. Song, Q. Wang, and H. Qi, “Beyond inferring class representatives: User-level privacy leakage from federated learning,” in IEEE INFOCOM 2019-IEEE conference on computer communications , pp. 2512–2520, IEEE, 2019. [12] L. Melis, C. Song, E. De Cristofaro, and V. Shmatikov, “Exploiting unintended feature leakage in collaborative learning,” in 2019 IEEE symposium on security and privacy (SP) , pp. 691–706, IEEE, 2019. [13] X. Luo, Y. Wu, X. Xiao, and B. C. Ooi, “Feature inference attack on model predictions in vertical federated learning,” in 2021 IEEE 37th international conference on data engineering (ICDE) , pp. 181–192, IEEE, 2021. [14] M. Nasr, R. Shokri, and A. Houmansadr, “Comprehensive privacy analysis of deep learning: Passive and active white-box inference attacks against centralized and federated learning,” in 2019 IEEE symposium on security and privacy (SP) , pp. 739–753, IEEE, 2019. [15] R. Shokri, M. Stronati, C. Song, and V. Shmatikov, “Membership inference attacks against machine learning models,” in 2017 IEEE symposium on security and privacy (SP) , pp. 3–18, IEEE, 2017. [16] J. H. Cheon, A. Kim, M. Kim, and Y. Song, “Homomorphic encryption for arithmetic of approximate numbers,” in International conference on the theory and application of cryptology and information security ,pp. 409–437, Springer, 2017. [17] J. H. Cheon, K. Han, A. Kim, M. Kim, and Y. Song, “A full rns variant of approximate homomorphic encryption,” in International Conference on Selected Areas in Cryptography , pp. 347–368, Springer, 2018. [18] Y. Pan, Z. Chao, W. He, Y. Jing, L. Hongjia, and W. Liming, “Fed-she: privacy preserving and efficient federated learning with adaptive segmented ckks homomorphic encryption,” Cybersecurity , vol. 7, no. 1, p. 40, 2024. [19] P. Yao, H. Wang, C. Zheng, J. Yang, and L. Wang, “Efficient federated learning aggregation protocol using approximate homomorphic encryp-tion,” in 2023 26th international conference on computer supported cooperative work in design (CSCWD) , pp. 1884–1889, IEEE, 2023. [20] F. Qiu, H. Yang, L. Zhou, C. Ma, and L. Fang, “Privacy preserving federated learning using ckks homomorphic encryption,” in International conference on wireless algorithms, systems, and applications , pp. 427– 440, Springer, 2022. [21] T. Fan, X. Chen, Y. Dong, X. Chen, Y. Xuan, and W. Jing, “Lightweight secure aggregation for personalized federated learning with backdoor resistance,” in 2024 Annual Computer Security Applications Conference (ACSAC) , pp. 810–825, IEEE, 2024. [22] V. Lyubashevsky, C. Peikert, and O. Regev, “On ideal lattices and learning with errors over rings,” in Annual international conference on the theory and applications of cryptographic techniques , pp. 1–23, Springer, 2010. [23] C. Zhang, S. Li, J. Xia, W. Wang, F. Yan, and Y. Liu, “ {BatchCrypt }:Efficient homomorphic encryption for {Cross-Silo } federated learning,” in 2020 USENIX annual technical conference (USENIX ATC 20) ,pp. 493–506, 2020. [24] P. Correia, I. Costa, I. Amorim, E. Maia, and I. Prac ¸a, “Federated learn-ing: An approach with hybrid homomorphic encryption,” in European Symposium on Research in Computer Security , pp. 254–273, Springer, 2025. [25] A. Benaissa, B. Retiat, B. Cebere, and A. E. Belfedhal, “Tenseal: A library for encrypted tensor operations using homomorphic encryption,” 
+
+arXiv preprint arXiv:2104.03152 , 2021. [26] M. Albrecht, M. Chase, H. Chen, J. Ding, S. Goldwasser, S. Gorbunov, S. Halevi, J. Hoffstein, K. Laine, K. Lauter, et al. , “Homomorphic encryption standard,” in Protecting privacy through homomorphic en-cryption , pp. 31–62, Springer, 2022. [27] M. Furka, M. Kal´ uz, M. Fikar, and M. Klauˇ co, “Guidelines for secure process control: Harnessing the power of homomorphic encryption and state feedback control,” IEEE Access , vol. 11, pp. 110328–110341, 2023. [28] Y. Rahulamathavan, “Privacy-preserving similarity calculation of speaker features using fully homomorphic encryption,” arXiv preprint arXiv:2202.07994 , 2022. [29] J.-P. Bossuat, R. Cammarota, I. Chillotti, B. R. Curtis, W. Dai, H. Gong, E. Hales, D. Kim, B. Kumara, C. Lee, et al. , “Security guidelines for implementing homomorphic encryption,” Cryptology ePrint Archive ,2024. [30] D. J. Beutel, T. Topal, A. Mathur, X. Qiu, J. Fernandez-Marques, Y. Gao, L. Sani, K. H. Li, T. Parcollet, P. P. B. De Gusm˜ ao, et al. ,“Flower: A friendly federated learning research framework,” arXiv preprint arXiv:2007.14390 , 2020. [31] S. Caldas, S. M. K. Duddu, P. Wu, T. Li, J. Koneˇ cn` y, H. B. McMahan, V. Smith, and A. Talwalkar, “Leaf: A benchmark for federated settings,” 
+
+arXiv preprint arXiv:1812.01097 , 2018. [32] Y. Kim, “Convolutional neural networks for sentence classification,” in 
+
+Proceedings of the 2014 conference on empirical methods in natural language processing (EMNLP) , pp. 1746–1751, 2014. [33] L. Jiang and L. Ju, “Fhebench: Benchmarking fully homomorphic encryption schemes,” arXiv preprint arXiv:2203.00728 , 2022. [34] F. Wang, H. Zhu, R. Lu, Y. Zheng, and H. Li, “Achieve efficient and privacy-preserving disease risk assessment over multi-outsourced verti-cal datasets,” IEEE Transactions on Dependable and Secure Computing ,vol. 19, no. 3, pp. 1492–1504, 2020. [35] X. Liu, H. Li, G. Xu, Z. Chen, X. Huang, and R. Lu, “Privacy-enhanced federated learning against poisoning adversaries,” IEEE Transactions on Information Forensics and Security , vol. 16, pp. 4574–4588, 2021. [36] A. Segal, A. Marcedone, B. Kreuter, D. Ramage, H. B. McMahan, K. Seth, K. Bonawitz, S. Patel, and V. Ivanov, “Practical secure aggregation for privacy-preserving machine learning,” CCS , 2017. [37] Y. Ma, J. Woods, S. Angel, A. Polychroniadou, and T. Rabin, “Flamingo: Multi-round single-server secure aggregation with applications to private federated learning,” in 2023 IEEE Symposium on Security and Privacy (SP) , pp. 477–496, IEEE, 2023. [38] Y. Shi, Y. Liu, K. Wei, L. Shen, X. Wang, and D. Tao, “Make landscape flatter in differentially private federated learning,” in Proceedings of the IEEE/CVF conference on computer vision and pattern recognition ,pp. 24552–24562, 2023. [39] S. Truex, N. Baracaldo, A. Anwar, T. Steinke, H. Ludwig, R. Zhang, and Y. Zhou, “A hybrid approach to privacy-preserving federated learning,” in Proceedings of the 12th ACM workshop on artificial intelligence and security , pp. 1–11, 2019. [40] Y. Li, X. Tao, X. Zhang, J. Liu, and J. Xu, “Privacy-preserved federated learning for autonomous driving,” IEEE Transactions on Intelligent Transportation Systems , vol. 23, no. 7, pp. 8423–8434, 2021. [41] J. Chen, H. Yan, Z. Liu, M. Zhang, H. Xiong, and S. Yu, “When feder-ated learning meets privacy-preserving computation,” ACM Computing Surveys , vol. 56, no. 12, pp. 1–36, 2024. [42] K. Cheng, T. Fan, Y. Jin, Y. Liu, T. Chen, D. Papadopoulos, and Q. Yang, “Secureboost: A lossless federated learning framework,” IEEE intelligent systems , vol. 36, no. 6, pp. 87–98, 2021. [43] Y. Aono, T. Hayashi, L. Wang, S. Moriai, et al. , “Privacy-preserving deep learning via additively homomorphic encryption,” IEEE transac-tions on information forensics and security , vol. 13, no. 5, pp. 1333– 1345, 2017. [44] C. Liu, S. Chakraborty, and D. Verma, “Secure model fusion for distributed learning using partial homomorphic encryption,” in Policy-Based Autonomic Data Governance , pp. 154–179, Springer, 2019. [45] P. Paillier, “Public-key cryptosystems based on composite degree residu-osity classes,” in International conference on the theory and applications of cryptographic techniques , pp. 223–238, Springer, 1999. [46] Y. Li, N. Yan, J. Chen, X. Wang, J. Hong, K. He, W. Wang, and B. Li, “Fedphe: A secure and efficient federated learning via packed homo-morphic encryption,” IEEE Transactions on Dependable and Secure Computing , 2025. [47] F. Shen, L. Hui, Q. Liang, J. Zhang, C. Xu, Y. Chen, and Y. He, “Ckks and local differential privacy based model parameters encryption for personalized federated learning,” in 2024 6th International Conference on System Reliability and Safety Engineering (SRSE) , pp. 135–143, IEEE, 2024. [48] L. Yang, J. Huang, W. Lin, and J. Cao, “Personalized federated learning on non-iid data via group-based meta-learning,” ACM Transactions on Knowledge Discovery from Data , vol. 17, no. 4, pp. 1–20, 2023. [49] B. Li and D. Micciancio, “On the security of homomorphic encryption on approximate numbers,” in Annual International Conference on the Theory and Applications of Cryptographic Techniques , pp. 648–677, Springer, 2021. 14 
+
+APPENDIX APROOF OF P FED CKKS SECURITY 
+
+Let L denote the protocol leakage visible to the server, including the number of participating clients, client participa-tion, ciphertext sizes, model/update dimensions, public CKKS parameters, and dataset sizes ∣Di∣.
+
+Lemma 1. Assume that the CKKS encryption scheme used in pFedCKKS is IND-CPA secure under the RLWE assumption. Then, under the honest-but-curious server model, pFedCKKS preserves confidentiality of each client’s uploaded model up-date ˆΘi, except for the leakage L.Proof. We prove Lemma 1 by contradiction. Suppose there exists a PPT adversary A that breaks the confidentiality guarantee stated in Lemma 1, i.e., A can distinguish the encrypted upload of one client update from the encrypted upload of another equal-length client update, beyond L, with non-negligible probability. We show how to use A to construct another adversary B that breaks the IND-CPA security of the underlying CKKS encryption scheme. 
+
+B participates in the CKKS IND-CPA game and submits two equal-length plaintext updates ˆΘ0 
+
+> i
+
+and ˆΘ1 
+
+> i
+
+with the same 
+
+L to the challenger. The challenger samples a bit b ∈ {0, 1}
+
+and returns a challenge ciphertext c⋆ = Enc pk ( ˆΘbi ). B then simulates the view of the honest-but-curious server for A,using c⋆ as the target uploaded ciphertext ˆΘei . Since A can determine whether c⋆ encrypts ˆΘ0 
+
+> i
+
+or ˆΘ1 
+
+> i
+
+with non-negligible advantage, B can output the same guess and hence win the CKKS IND-CPA game with non-negligible advantage. This contradicts the IND-CPA security of CKKS, which holds under the RLWE hardness assumption. Therefore, such an adversary A cannot exist, and Lemma 1 follows. We note that the work in [49] identified a stronger security notion, IND-CPAD D, where an adversary can approximate plaintext outputs when it has access to a decryption oracle. However, the adversary (server) is never granted decryption access, making this notion not applicable in our setting.

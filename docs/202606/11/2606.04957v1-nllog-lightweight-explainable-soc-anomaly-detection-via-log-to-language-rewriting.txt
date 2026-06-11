@@ -1,0 +1,1060 @@
+Title: NLLog: Lightweight, Explainable SOC Anomaly Detection via Log-to-Language Rewriting
+
+URL Source: https://arxiv.org/pdf/2606.04957v1
+
+Published Time: Thu, 04 Jun 2026 01:13:53 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# NLLog: Lightweight, Explainable SOC Anomaly Detection via Log-to-Language Rewriting 
+
+Samuel Ndichu 1, Tao Ban 1, Seiichi Ozawa 2, Takeshi Takahashi 1, Daisuke Inoue 1
+
+> 1
+
+National Institute of Information and Communications Technology, Tokyo, Japan 
+
+> 2
+
+Kobe University, Kobe, Japan {ndichu, bantao, takeshi_takahashi, dai}@nict.go.jp, ozawasei@kobe-u.ac.jp 
+
+Abstract —System-generated logs underpin security monitor-ing, yet their rigid template-based format hinders both au-tomated analysis and human comprehension. We present NLLog (Natural-Language Log), a lightweight pipeline that deterministically rewrites parsed templates into WHO–WHAT– SEVERITY sentences, pools them with term-frequency-inverse-document-frequency weighting, classifies sessions with tree ensembles, and back-projects evidence with TreeSHAP for analyst review. On Hadoop Distributed File System (HDFS) and Blue Gene/L (BGL) corpora, NLLog exceeds two repro-duced matched-protocol baselines; across HDFS, BGL, and the AIT Alert Data Set, it sustains low false-positive rates with commodity-hardware latency suitable for security operations center triage. Coverage, sparse-versus-dense, faithfulness, and adversarial ablations show that fallback sufficiency is corpus-dependent, that an enrollment-time coverage check can surface refinement requirements before deployment, and that an au-ditable deterministic rewrite combined with lightweight dense encoding provides a measurable representation layer for log-anomaly detection and triage. 
+
+Index Terms —Security operations center, log analysis, anomaly detection, intrusion detection, natural language processing, pre-trained language models, explainable security, alert fatigue 
+
+1. Introduction 
+
+Security operations centers (SOCs) serve as the first line of defense for modern enterprises. SOC analysts investigate millions of log entries to detect and respond to threats. This persistent alert fatigue problem , the difficulty of isolating genuine threats from an overwhelming number of machine-generated warnings, has endured for decades [1]–[3]. When critical alerts are drowned out by low-value noise, attacker dwell time increases and organizational risk escalates. 
+
+NLLog (Natural-Language Log ) targets one narrow part of this broader problem: the semantic opacity of template-based logs. Prior log anomaly detection work spans tem-plate heuristics, hand-engineered statistical features, and deep or language-model-based methods [4]–[13], including semi-supervised parsing pipelines such as PLELog [14], no-parsing semantic models such as NeuralLog [15], and large language model (LLM)-based approaches such as LogPrompt [16] and LogGPT [17]. These approaches can be effective, but they can also require more manual effort, computation, or tuning than lightweight SOC deployments allow. Pre-trained language models (LMs) offer useful se-mantics without fine-tuning [18], [19], yet raw logs contain many non-linguistic tokens that make direct encoding diffi-cult [15], [20]–[22]. Instead of adapting larger models to raw logs, NLLog inserts a deterministic rewriting layer in front of a frozen encoder. For template-based software logs, NLLog parses each line with Drain3 [4] and converts the resulting template into an analyst-readable WHO–WHAT–SEVERITY (WWS) sentence. For intrusion detection system (IDS) alert records such as AIT-ADS, where alerts are already structured tex-tual records, NLLog uses the normalized alert signature as an alert-name WWS analogue. The resulting text is then embedded with a frozen sentence encoder, aggregated via term-frequency-inverse-document-frequency (TF–IDF) weighting [23], and classified by a tree ensemble whose decisions are back-projected to the most influential sen-tences via TreeSHAP (Tree SHapley Additive exPlanations). The rewriting step is deterministic normalization rather than prompt engineering, which keeps the system reproducibly CPU-deployable. We evaluate NLLog on three public datasets spanning clusters, supercomputers, and real-world alerts: Hadoop Distributed File System (HDFS) [24], [25], Blue Gene/L supercomputer logs (BGL) [25], [26], and the AIT Alert Data Set (AIT-ADS) [27], [28]. On HDFS and BGL under our matched protocol, NLLog achieves higher scores than two reproduced baselines (DeepLog and LogBERT); we also report published results from recent systems as refer-ence points rather than direct head-to-head comparisons. On AIT-ADS, NLLog maintains high precision and low false-positive rates on a more operational alert corpus. In addition, NLLog generates human-readable explanations intended to support analyst triage. NLLog is complementary to provenance-graph intru-sion detection systems such as ORTHRUS, PROGRAPHER, and ThreatRace [29]–[31]: those systems target richer au-dit telemetry and system-wide attack tracing with graph-construction overhead and heavier instrumentation, whereas NLLog targets sessionized, line-oriented logs available in 
+
+> arXiv:2606.04957v1 [cs.CR] 3 Jun 2026
+
+lightweight SOC pipelines. A protocol-matched comparison would require either adapting NLLog to system-call traces or evaluating provenance systems on a line-log corpus, which is outside the scope of the current evaluation. 
+
+Contributions: This work makes the following key contri-butions:  
+
+> •
+
+Deterministic language-aligned rewriting. NLLog shows that deterministic WWS rewriting can make line-oriented logs more model-compatible and analyst-readable without fine-tuning or prompting; Section 4.2 reports an 8.47 pp F 1 gain on BGL over raw template inputs (HDFS is near-ceiling for all variants), and a coverage and fallback-only ablation (Table 4) quanti-fies when generic fallback rewriting is sufficient and when deterministic corpus-specific lexical refinement is needed.  
+
+> •
+
+Lightweight SOC deployment path. Frozen MiniLM, TF–IDF pooling, and tree classifiers achieve compet-itive matched-protocol results while remaining CPU-deployable at ∼10 ms/session with no GPU require-ment.  
+
+> •
+
+Attribution as structured triage evidence. TreeSHAP back-projection returns ranked WWS sentences rather than causal root-cause explanations; faithfulness and mimicry-padding tests quantify when the evidence re-mains decision-relevant and where dilution begins to degrade it. Analyst-perceived utility remains to be val-idated in a controlled study.  
+
+> •
+
+Conservative evaluation framing. Reproduced base-lines are separated from published reference points, and AIT-ADS chronological and sessionization checks ex-tend evaluation beyond widely used HDFS/BGL bench-mark scores. 
+
+2. Background and Threat Model 
+
+This section frames the deployment context that NLLog targets and the threat model under which it is evaluated. We first describe the operational SOC pipeline NLLog plugs into, then state the adversary’s capabilities, the attack classes in scope, and what NLLog does not defend against. 
+
+2.1. Operational Context and System Design 
+
+Enterprise systems emit millions of timestamped events per day. Each log line adheres to a rigid template in which runtime variables (e.g., IP addresses, block IDs) are substituted, producing terse, cryptic messages that lack syntactic structure. SOC analysts face three compounding challenges: volume , heterogeneity , and semantic opacity .NLLog addresses the last by deterministically generating a self-contained WWS sentence for each template (Table 1), preserving core semantics while masking high-cardinality tokens. The framework inserts a lightweight preprocessing layer into existing security information and event man-agement (SIEM) pipelines (Fig. 1) and is intended to sit between SIEM output and Level-1 analyst triage. 
+
+2.2. Threat Model 
+
+Goal: The adversary seeks to perform malicious actions (e.g., lateral movement, privilege escalation, data exfiltra-tion) while avoiding detection by NLLog. 
+
+Capabilities: The attacker may generate logs via normal system APIs and manipulate free-variable values (e.g., IPs, filenames). We assume that the logging infrastructure’s in-tegrity is maintained: the attacker does not alter hard-coded template strings embedded in binaries, disable logging, mod-ify NLLog binaries or model weights, or interfere with its execution environment. This bounds our focus to adversaries who operate through legitimate execution paths. Section 6 discusses mitigations when this assumption is violated. 
+
+Scope: NLLog is a lightweight front-end SOC triage detector for environments with trusted log generation. We focus on semantic evasion attacks , where adversaries intro-duce log events whose content deviates from learned benign distributions. Two classes of attack are explicitly out of scope. First, because NLLog uses TF–IDF weighted pooling (Section 3.3), it detects deviations in event frequency and composition rather than temporal ordering; attacks whose anomalous signature lies purely in the sequence of individ-ually benign events (for example, some lateral-movement and living-off-the-land patterns) require a complementary sequence-aware detector. Second, NLLog does not model cross-session or cross-host correlations. NLLog is intended to run alongside such detectors in a layered SOC architec-ture. We empirically characterize long-horizon retraining-time contamination and deliberate IDF poisoning (Sec-tion 4.10, Appendix D), without claiming full robustness; IDF weights are computed on the training split and frozen at test time. Mitigations against template-manipulating insider threats (template integrity attestation, cross-host correlation) are discussed in Section 6. 
+
+3. Methodology 
+
+NLLog comprises four stages (Fig. 1): (1) canonicalize raw logs, (2) parse templates and rewrite each event as a WHO–WHAT–SEVERITY (WWS) sentence, (3) embed and TF–IDF pool sentences into session vectors, and (4) classify sessions and attribute decisions back to top-k sentences using TreeSHAP. 
+
+3.1. Raw Log Canonicalization 
+
+Raw production logs contain volatile fields (e.g., times-tamps, IPs, ports, block identifiers, and numeric offsets) that inflate the vocabulary and obscure semantic structure [5], [7]. NLLog transforms each log line into a canonicalized form emi that preserves core semantics while masking these fields; Appendix A summarizes the substitutions. 
+
+3.2. Natural-Language Log Generation 
+
+Motivation for the WWS design choice. Raw Drain3 template identifiers are compact but semantically opaque: a 1. Canonicalization   
+
+> Raw event ℓi
+> Mask timestamps, IPs, IDs, ports, and other volatile fields
+> Template tk
+
+2. WWS Rewriting   
+
+> Template tk
+> Parse template into a WHO–WHAT–SEVERITY sentence
+> Sentence si
+
+3. Semantic Embedding     
+
+> Sentence stream {si}
+> Frozen sentence encoder with TF–IDF weighted session pooling
+> Session vector uj∈Rd
+
+4. Detection & Attribution              
+
+> Session vector uj
+> Lightweight classifier with TreeSHAP-based sentence ranking
+> Prediction y+top-kevidence μ
+> templates WWS sentences session vectors
+> Deterministic WWS refinement
+> LOG DISTILLATION SEMANTIC REPRESENTATION DETECTION AND XAI
+> Figure 1. NLLog pipeline from canonicalized logs to anomaly predictions and top-ksentence evidence.
+
+token such as E23 carries no information about actor, action, or severity without a separate lookup table, and pre-trained sentence encoders were never exposed to this vocabulary during pre-training. The WHO–WHAT–SEVERITY (WWS) rewrite trades that opacity for an analyst-readable surface form, e.g., “DataNode received block 〈BLOCK_ID 〉 from 
+
+〈IP 〉:〈PORT 〉 (info)” , while remaining fully deterministic and requiring no model fine-tuning or prompt construction. This normalization is central to NLLog for three reasons: (1) it puts log vocabulary into a natural-language-like form better suited to frozen sentence encoders; (2) it produces the self-describing sentences that TreeSHAP later returns as triage evidence; and (3) its fallback behavior is operationally measurable before deployment (Table 4). Each canonicalized log emi is transformed into a styl-ized natural-language sentence si using a WWS schema. Structurally similar log lines are grouped into canonical event templates via Drain3 [4]; Appendix A summarizes the parsing setup. We define the mapping 
+
+si = Φ( tk, c i, lvl i) = WHO (ci) ∥ WHAT (tk) ∥ SEV (lvl i),
+
+where Φ : T × C × L → S maps each template–component– level triple to a sentence, making the input surface form more regular [7], [9]. The WWS rendering is deterministic once the template is available. The mappings are governed by three interpretable functions:  
+
+> •
+
+WHO (ci): component role (e.g., “NameNode”, “DataN-ode”), derived directly from the emitting component name.  
+
+> •
+
+WHAT (tk): verb-object clause generated from template structure using simple heuristics. A small number of op-tional deterministic lexical refinements improve the read-ability of the WHAT clause; Table 4 isolates their contri-bution to detection accuracy via a fallback-only ablation. If the heuristic fails on a new or malformed template, NLLog falls back to wrapping the raw canonicalized string in a minimal WWS frame (WHO + raw template + SEV).  
+
+> •
+
+SEV (lvl i): severity marker obtained from the log level. As shown in Fig. 1, the stylized sentence si becomes the unit of semantic embedding; Table 1 illustrates representa-tive rewrites. Anchoring the rewrite on Drain3 templates keeps outputs reproducible and auditable; automating this layer while preserving those properties remains future work. 
+
+3.3. Semantic Embedding and Session Pooling 
+
+The stylized sentences si produced in Section 3.2 are embedded into dense vectors via a lightweight language model. We adopt MiniLM-L6 [19], a distilled 6-layer trans-former with 22M parameters, because it offers a favorable accuracy–latency trade-off for CPU deployment. Each sentence si is subword-tokenized and bracketed with special tokens: 
+
+si 7 −→ ⟨ [CLS] , t i, 1, . . . , t i,ℓ i , [SEP] ⟩.
+
+MiniLM produces contextual embeddings hi,j ∈ R384 at each token position j. To obtain a fixed-size vector, we apply mean pooling over all non-padding tokens: 
+
+vi = 1
+
+ℓi + 2 
+
+> ℓi+1
+
+X
+
+> j=0
+
+hi,j ∈ R384 . (1) We use mean pooling instead of the [CLS] embedding for its greater stability in embedding-based settings [32]. Session-Level Aggregation. To analyze complete sessions, we embed each log line individually, then aggre-gate the results. For session j, let: 
+
+Sj = {sj1, . . . , s jn j }
+
+denote its stylized sentence set. For each stylized sentence 
+
+sji ∈ Sj , we write vji ∈ R384 for its MiniLM embedding TABLE 1. R EPRESENTATIVE WHO–WHAT–SEVERITY (WWS) REWRITES .Dataset Class Raw log fragment WWS sentence                     
+
+> BGL Normal RAS IO INFO link-chip reconfigured successfully I/O Subsystem reconfigured alink-chip successfully (info).
+> Anomaly RAS KERNEL FATAL rts panic! – stopping execution Kernel runtime system encountered a panic and halted execution (fatal).
+> HDFS Normal DataXceiver: Receiving block blk_. . . src . . . dest . . . DataNode Data Receiver received block <BLOCK_ID> from <IP>:<PORT> destined for <IP>:<PORT> (info).
+> Anomaly Pending Replication Monitor: Block . . . replication timed out Replication Monitor reported a replication timeout for block <BLOCK_ID> (warning).
+> AIT-ADS Normal Wazuh: IDS event. Wazuh IDS logged an IDS event (info).
+> Anomaly Suricata: Alert - ET INFO Observed DNS Query to .biz TLD Suricata IDS observed a DNS query to the .biz top-level domain (alert).
+
+obtained via mean pooling in equation (1). A naive average would treat all lines equally, inflating the impact of repetitive boilerplate logs. Instead, we apply TF–IDF weighting to prioritize rare, security-relevant messages. Let N = |S| be the number of sentences in the corpus, 
+
+ft,s the frequency of token t in sentence s, and df (t) the number of sentences containing t. TF–IDF is computed as: 
+
+tfidf( t, s ) = ft,s · log 
+
+ N 
+
+> 1+ df (t)
+
+
+
+.
+
+We then define a sentence-level weight [23]: 
+
+wji = 1
+
+|sji |
+
+X  
+
+> t∈sji
+
+log 
+
+ N 
+
+> 1+ df (t)
+
+
+
+, (2) favoring semantically rare tokens that often signify error conditions or anomalies. The final session vector is the TF– IDF-weighted average of its sentence embeddings: 
+
+uj =
+
+Pnj 
+
+> i=1
+
+wji vji 
+
+Pnj 
+
+> i=1
+
+wji + ε , ε ≈ 10 −8. (3) This aggregation amplifies influential sentences while reduc-ing noise from redundant status logs. By design, TF–IDF pooling discards temporal order: if two events are swapped chronologically, the resulting session vector uj remains identical. This is an intentional trade-off that prioritizes rare-event detection over sequence awareness; Section 6 discusses its consequences. 
+
+3.4. Session Classification and Explainability 
+
+After computing TF–IDF-weighted session embeddings 
+
+uj ∈ R384 from Eq. (3), each session j is associated with a binary label yj ∈ { 0, 1}. We train tree-based classifiers, including Random Forest (RF) [33], XGBoost (XGB) [34], and LightGBM (LGBM) [35], to estimate the anomaly probability ˆpj = f (uj ), followed by a threshold decision 
+
+ˆyj = 1[ˆ pj ≥ τ ], with τ = 0 .5 by default. Class imbalance is handled with standard class-balancing options and 3-fold cross-validated hyperparameter search. We report Precision, Recall, F 1, false positive rate (FPR), and area under the precision-recall curve (AUC-PR). We augment classification with a lightweight explain-ability layer that highlights the log lines within each session that most influenced the prediction, combining TF–IDF-weighted embeddings with TreeSHAP contribution scores. 
+
+3.4.1. Feature Attribution via TreeSHAP. TreeSHAP [36] computes exact, consistent Shapley values for tree-based models using the path-dependent algorithm, which runs in 
+
+O(T LD 2) time for T trees of maximum depth D with L
+
+leaves. For our LGBM configurations (300 trees, depth ≤ 6), this yields sub-millisecond per-session computation. We use it to explain each session’s anomaly score in log-odds space: 
+
+logit(ˆ pj ) = ϕj, 0 +
+
+> 384
+
+X
+
+> k=1
+
+ϕj,k , (4) where ϕj, 0 is the expected output and ϕj,k denotes the contribution of embedding dimension k to session j’s pre-diction. This yields a feature attribution vector ϕj ∈ R384 .
+
+3.4.2. Back-Projection to Log Lines. To map these con-tributions back to individual log lines, we define a respon-sibility matrix Aj ∈ Rnj ×384 :
+
+Aji,k = wji 
+
+P 
+
+> i′
+
+wji ′
+
+· vji,k 
+
+uj,k + ε , (5) where vji,k is the k-th MiniLM embedding dimension for sentence i in session j, and wji is its TF–IDF weight. The small constant ε stabilizes dimensions whose pooled value is close to zero. This quantity is used as a ranking-oriented attribution score rather than as an exact sentence-level Shapley decomposition. We then compute the total contribution of sentence i to the model’s decision via: 
+
+ψji =
+
+> 384
+
+X
+
+> k=1
+
+Aji,k · ϕj,k . (6) Positive ψji values indicate anomaly-promoting log lines and negative values normality-promoting lines, identifying the most anomaly-driving sentences at the line level. Be-cause this projection is used only for ranking, large ratios near small pooled dimensions are treated as ranking signals rather than calibrated Shapley values. 3.4.3. Template-Level Aggregation. For higher-level in-sights, we aggregate ψji across lines that share the same template. Let tpl (sji ) = t be the Drain3 template of sentence 
+
+sji . Then: 
+
+Ψj,t = X 
+
+> {i:tpl (sji )= t}
+
+ψji , ¯ψj,t = Ψj,t 
+
+#{i : tpl (sji ) = t} . (7) Here, Ψj,t captures the total contribution of template t,while ¯ψj,t represents its per-occurrence average impact. We compute Ψj,t and ¯ψj,t at inference time and expose them through the released artifact for SOC-dashboard auditing, including optional per-class aggregation (TP, FP, TN, FN) that surfaces high-impact templates even when infrequent; the main-paper evaluation focuses on per-sentence evidence (ψji ), which is what the analyst sees. All explainability stages run on CPU within the deployment profile evaluated in this paper. 
+
+4. Evaluation 
+
+We evaluate NLLog along three axes: detection accu-racy, generalizability across classifiers and data regimes, and operational robustness with explainability. 
+
+4.1. Experimental Setup 
+
+All experiments were performed on a 32-core Intel Xeon Gold 6242 CPU @ 2.80 GHz (64 threads, 22 MB L3 cache), in a CPU-only environment with no GPU acceleration. Transformer inference used half precision (FP16) where supported by the local inference stack; otherwise FP32 was used. End-to-End Latency. We profiled the full NLLog pipeline on the same host; Table 2 reports median and 95th-percentile (p95) cumulative latency per session. 
+
+TABLE 2. M EDIAN AND P 95 END -TO -END LATENCY (MS / SESSION ). 
+
+Stage Median p95 
+
+Canonicalization 0.026 0.047 WWS assembly 0.001 0.001 MiniLM embedding 8.473 10.657 TF–IDF aggregation 0.189 0.220 
+
+predict_proba 1.031 1.266 TreeSHAP top-k 0.202 0.219 
+
+End-to-end 9.92 12.41 
+
+Note: The p95 entry reports the latency below which 95% of sessions complete. 
+
+We evaluated six frozen encoders ranging from MiniLM-L6 (22M parameters) to BERT-large (335M), all with mean pooling [32]. DeepLog [6] and LogBERT [22] are repro-duced under our protocol; LogAnomaly [37], LogLLM [38], LogLLaMA [13], and LogGPT [17] values are published results included as contextual reference points. Deep-CASE [39] is reproduced only for the data-fraction analysis (Section 4.7). 0          
+
+> 20
+> 40
+> 60
+> 80
+> 100
+> Performance (%)
+> AIT-ADS: Chronological Evaluation by Temporal Bin
+> No Attacks
+> (F1 Undef.) F1 Score (%)
+> FPR (%)
+> 12345678910
+> Chronological Timeline (Sequential Bins)
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Attack Rate (%)
+> Dataset Prevalence Shift (The Temporal Tail)
+
+Figure 2. AIT-ADS chronological evaluation. 
+
+We report Precision, Recall, F 1, FPR, and AUC-PR (emphasizing AUC-PR on skewed datasets) over five ran-dom seeds (42, 1337, 31415, 2025, 8675309), using an 80:20 stratified split with 3-fold stratified cross-validation for model selection. Table 3 summarizes the datasets. HDFS sessions are block-level traces; BGL uses 100-line non-overlapping win-dows [5]; AIT-ADS comprises 2.65M IDS alerts from Suri-cata, Wazuh, and AMiner across eight multi-stage attack scenarios, sessionized by source host and fixed-length time windows following the dataset’s labeling scheme. For HDFS and BGL, WWS is a template-to-sentence rewrite; for AIT-ADS, NLLog uses the normalized alert signature as an alert-name WWS analogue, with richer non-leaky sparse baselines evaluated in Section 4.3 (Tables 6 and 7). Evaluation Hygiene. All corpus-derived statistics (Drain3 templates, IDF weights, and deterministic lexical refinements) are computed on the training split and frozen at test time. Chronological evaluation on AIT-ADS. In addition to the 80/20 stratified split, we report a chronological evalua-tion on AIT-ADS (oldest 80% train, newest 20% test). Light-GBM reaches 93.90% F 1, 98.40% precision, 89.80% recall, 0.90% FPR, and 95.50% AUC-PR, compared with 92.93%, 99.18%, 87.43%, 0.14%, and 92.38% under the stratified split. Because the test tail has much higher anomaly preva-lence (37.37% vs. 10.51% in training), this is a deployment-tail stress test rather than a pure temporal-drift measurement; Fig. 2 summarizes the temporal behavior. AIT-ADS sessionization sensitivity. AIT-ADS test F 1
+
+ranges from 80.00% to 90.93% across maximum session durations of 5–120 minutes (60 minutes best), with the 300 s idle timeout fixed; Appendix E details the sweep. 
+
+4.2. Effect and Coverage of Semantic Normaliza-tion 
+
+To assess the effect of semantic normalization, we com-pare two input formats: raw Drain3 template identifiers (T) and natural-language WWS sentences. Both are encoded TABLE 3. S UMMARY OF BGL, HDFS, AND AIT-ADS DATASET STATISTICS .Dataset #Logs #Sessions Training Data Testing Data #Sess. Anomaly Imb(%) #Sess. Anomaly Imb(%) BGL 4,747,963 47,479 37,983 3,842 10.12 9,496 960 10.11 HDFS 11,175,629 575,061 460,048 13,470 2.93 115,013 3,368 2.93 AIT-ADS 2,655,821 12,983 10,386 1,650 15.89 2,597 412 15.86 
+
+Note: Imb(%) is the percentage of anomalous sessions. 
+
+with three pre-trained transformers (MiniLM, BERT, and MPNet) and classified with LGBM. The headline compari-son is summarized in Table 5: on BGL, WWS normalization lifts mean F 1 from 88.53% (T-MiniLM) to 97.00% (WWS-MiniLM), a gain of 8.47 percentage points. Figure 3 extends this comparison across encoders, with less than 0.02 s addi-tional per-session training time on BGL. WWS coverage and fallback-only ablation. To as-sess portability and isolate the contribution of deterministic lexical refinements, Table 4 characterizes each dataset by the fraction of units served by (a) general heuristic rules, (b) optional deterministic lexical refinements, and (c) the automatic fallback frame, and reports the F 1 of the full WWS pipeline versus a fallback-only variant that suppresses lexical and heuristic refinements where applicable. The ablation separates the effect of full WWS rewriting from the automatic fallback representation, and the answer is corpus-dependent. On BGL, fallback-only WWS preserves performance (97.49% → 97.46% F 1), suggesting that the canonicalized BGL templates already expose enough com-ponent, severity, and action structure for the frozen encoder. On HDFS, fallback-only WWS reduces F 1 from 99.82% to 69.50%, indicating that deterministic lexical refinements carry substantial detection-relevant signal for that corpus. AIT-ADS differs in kind: its WWS analogue is the normal-ized alert name rather than a template rewrite, so the full and fallback variants coincide by construction. These results make WWS portability measurable rather than automatic. In practice, Table 4 serves as an enrollment-time coverage report: before deploying on a new corpus, operators run the WWS pipeline on training-split logs and inspect the heuristic, lexical, and fallback fractions. For HDFS, 36 of 44 templates required deterministic lexical refinements; for BGL, 95 of 481 templates have such refinements, though the fallback-only ablation shows they are not needed for detection on that corpus. The effort therefore scales with the number of distinct templates, not with log volume. 
+
+TABLE 4. WWS COVERAGE AND FALLBACK -ONLY ABLATION .                        
+
+> Dataset #Units Heur.% Lex.% Fall.% Full F 1(%) Fall. F 1(%)
+> HDFS 44 18.18 81.82 0.00 99.82 (0.07) 69.50 (1.80) BGL 481 66.11 19.75 14.14 97.49 (0.30) 97.46 (0.23) AIT-ADS 92 100.00 0.00 0.00 92.75 (0.69) 92.75 (0.69)
+
+Note: #Units counts Drain3 templates for HDFS and BGL and canonical alert names for AIT-ADS. Heur. = general heuristic rules; Lex. = deterministic lexical refinements; Fall. = automatic fallback (WHO + raw template + SEV). Values are mean (std) across five seeds. miniLM  
+
+> (22M)
+> BERT
+> (109M)
+> MPNet
+> (109M)
+> Transformer Backbone (Param. Size)
+> 80
+> 85
+> 90
+> 95
+> 100
+> Mean F1 Score (%)
+> 88.53
+> 97.00
+> +8.47%
+> 88.39
+> 96.97
+> +8.58%
+> 88.60
+> 96.97
+> +8.37%
+> Template (Baseline) WHO-WHAT-SEV (NLLog)
+
+Figure 3. Template IDs (T) versus WWS representations across three encoders on BGL. HDFS results are omitted because near-ceiling F 1
+
+(> 99 .7% for all variants) compresses the visual comparison. 
+
+4.3. TF–IDF Representation Weighting 
+
+We assess the impact of semantic weighting by compar-ing three representation strategies: (i) raw template identi-fiers with mean pooling, (ii) WWS sentence embeddings with uniform mean pooling, and (iii) TF–IDF weighted WWS embeddings (denoted W–WWS). All configurations use MiniLM as the encoder and LGBM as the classifier. As shown in Table 5, W–WWS yields the best perfor-mance among the compared representation modes on both datasets. On HDFS, it achieves the highest F 1 (99.82%) and the lowest FPR (0.008%); on BGL, W–WWS raises precision from 82.01% to 98.22% and reduces FPR from 2.37% to 0.197%, a 12 × reduction in false alarms. Sparse text versus dense pipeline. To isolate dense embedding gains from sparse text alternatives, we add raw-template TF–IDF and WWS-text TF–IDF baselines with logistic regression (LR) under the same 80/20 stratified split and five seeds. Table 6 reports the comparison across the three corpora, and the picture is dataset-dependent. On BGL, replacing the raw-template surface with WWS text alone lifts sparse F 1 from 81.64% to 91.86% and cuts FPR from 4.05% to 0.87%, and the full dense pipeline reaches 97.49% F1 at 0.18% FPR. On HDFS, however, sparse WWS text 
+
+underperforms sparse raw templates (84.71% versus 94.33% F1), so some discriminative cues are not preserved by the sparse WWS surface alone; the dense pipeline closes that gap (99.82% F 1). On AIT-ADS, the alert-name sparse base-line reaches 91.30% F 1 (precision 95.55%, recall 87.43%, FPR 0.77%), while the dense pipeline reaches 92.93% F 1
+
+at the same recall but precision 99.18% and FPR 0.14%; TABLE 5. C OMPARISON OF LOG REPRESENTATION STRATEGIES ON HDFS AND BGL DATASETS .                             
+
+> Dataset Mode F1(%) Precision(%) Recall(%) FPR(%)
+> HDFS Template 99.76 (0.05) 99.67 (0.13) 99.86 (0.07) 0.010 (0.004) WWS 99.80 (0.03) 99.69 (0.12) 99.91 (0.09) 0.009 (0.004) W–WWS 99.82 (0.05) 99.73 (0.06) 99.91 (0.04) 0.008 (0.002) BGL Template 88.53 (0.54) 82.01 (0.96) 96.17 (0.27) 2.37 (0.15) WWS 97.00 (0.25) 98.15 (0.74) 95.88 (0.49) 0.204 (0.083) W–WWS 97.13 (0.26) 98.22 (0.76) 96.06 (0.41) 0.197 (0.086)
+
+the gain is therefore precision- and FPR-driven, not recall-driven. Across the three corpora, the full dense pipeline is consistently strongest. AIT-ADS sparse alert representations. Table 7 further tests richer non-leaky AIT-ADS sparse alert representations using detector source, event type, and rule-tier (Suricata priority class) tokens. These variants do not improve over alert-name-only sparse TF–IDF, and removing rule-tier has negligible effect, indicating that the AIT-ADS dense result is not caused by an under-specified sparse baseline. We exclude label, attack-stage, timestamp, filename, IP, host, and other high-cardinality identifiers; the AIT-ADS schema has no MITRE tactic or technique fields. 
+
+4.4. Encoder Size and Efficiency 
+
+Fig. 4 compares six frozen encoders on BGL with W– WWS inputs. All models reach F 1 ≥ 96 .9% ; MiniLM-L6 is the most favorable accuracy-latency point, matching the larger encoders at roughly 60% lower per-sentence latency (consistent with Table 2). 
+
+4.5. Comparison Against Baselines 
+
+We compare NLLog against two reproduced baselines under the matched HDFS/BGL protocol (DeepLog and Log-BERT) and report published results from four additional sys-tems (LogAnomaly, LogLLM, LogGPT, and LogLLaMA) for context. Results are summarized in Table 8. On BGL , NLLog reaches 97.67% F 1 with the highest precision among the matched-protocol methods (99.46%); this is 11.6 pp above reproduced DeepLog and 6.8 pp above reproduced LogBERT. On HDFS , NLLog attains 99.81% F 1
+
+with 99.62% precision and 100.00% recall, again improving over both reproduced baselines. 
+
+4.6. Effect of Classifier Choice 
+
+We evaluated nine classifiers spanning classical ma-chine learning (ML) and deep learning (DL) using W– WWS embeddings on BGL, HDFS, and AIT-ADS. Ensem-ble tree models (LGBM, XGB, RF) consistently deliver the highest F 1 across all datasets, with low FPRs and sub-millisecond inference latency; Appendix B (Fig. 8) shows the full accuracy–latency trade-off. Deep models (multilayer perceptron, MLP; deep neural network, DNN) approach tree-based performance on HDFS and BGL but degrade on AIT-ADS, while support vector machines (SVM), logistic regression (LR), convolutional neural networks (CNN), and long short-term memory networks (LSTM) underperform in this pooled-embedding setting. 
+
+4.7. Data-Fraction Robustness 
+
+We measured F 1 as a function of training size on BGL (20%, 40%, 60%, 80%) using NLLog’s best configuration (WWS + TF–IDF + MiniLM) against three reproduced base-lines: DeepLog (RNN-based), DeepCASE [39] (attention-based), and LogBERT (transformer-based). Figure 5 shows that under our matched protocol NLLog achieves higher F 1 than the three reproduced baselines at every training fraction. At 20% training data, NLLog reaches 95.9% F 1, ahead of reproduced DeepLog (87.2%), Deep-CASE (84.3%), and LogBERT (83.9%); performance rises steadily to 97.3% at 80%, while the baselines plateau earlier. 
+
+4.8. Detection under Alert Budgets 
+
+SOC operations often impose strict alert-volume limits, often framed as false-positive budgets such as ≤2% FPR [1], [3]. We therefore evaluate NLLog under a 2% FPR cap using five classifiers on BGL. Appendix C plots the ROC and precision-recall curves. Table 9 quantifies the results. At the selected LGBM operating point, NLLog reaches 97.67% F 1,99.46% precision, 95.94% recall, and 0.06% FPR; under the FPR ≤ 2% constraint, LGBM achieves 99.69% recall. XGB and RF follow closely, whereas SVM and LR produce higher FPRs. 
+
+4.9. Interpretability and Analyst-Facing Evidence 
+
+NLLog augments the LGBM classifier with (i) exact TreeSHAP log-odds attributions ϕj (Eq. (4)) and (ii) a responsibility matrix that projects those attributions to in-dividual sentences, yielding ψji and template-level scores 
+
+Ψj,t (Eqs. (6)–(7)). The analyst-facing artifact is a ranked top-k list ( k ≤ 15 ) of WWS sentences with signed contri-bution scores, formatted as a compact alert-evidence record. Each row uses ↑ for an anomaly-promoting and ↓ for a normality-promoting contribution, with the bracketed SHAP value ϕi and the template frequency “ ×k”; from the base value ϕ0 = −14 .76 , a positive cumulative total yields an anomalous prediction. Listings 1 and 2 show condensed TABLE 6. S PARSE TEXT VERSUS DENSE REPRESENTATION ABLATION .
+
+Dataset Representation F1(%) Precision(%) Recall(%) FPR(%) AUC-PR(%) 
+
+HDFS Raw template TF–IDF + LR 94.33 (0.28) 89.35 (0.52) 99.91 (0.05) 0.36 (0.02) 96.05 (0.25) WWS text TF–IDF + LR 84.71 (0.24) 87.46 (0.45) 82.13 (0.12) 0.36 (0.01) 81.30 (0.20) WWS MiniLM + TF–IDF + LGBM 99.82 (0.07) 99.75 (0.08) 99.89 (0.09) 0.01 (0.00) 100.00 (0.00) 
+
+BGL Raw template TF–IDF + LR 81.64 (0.83) 72.25 (0.74) 93.83 (1.10) 4.05 (0.12) 91.82 (0.87) WWS text TF–IDF + LR 91.86 (0.85) 92.21 (0.85) 91.52 (1.03) 0.87 (0.10) 97.08 (0.61) WWS MiniLM + TF–IDF + LGBM 97.49 (0.30) 98.37 (0.56) 96.62 (0.61) 0.18 (0.06) 99.70 (0.07) 
+
+AIT-ADS Alert-name TF–IDF + LR 91.30 (0.66) 95.55 (0.68) 87.43 (1.01) 0.77 (0.12) 92.39 (0.52) Alert-name MiniLM + TF–IDF + LGBM 92.93 (0.37) 99.18 (0.57) 87.43 (0.68) 0.14 (0.10) 92.38 (0.84) TABLE 7. AIT-ADS REPRESENTATION ABLATION .
+
+Representation Classifier F1(%) Precision(%) Recall(%) FPR(%) AUC-PR(%) Train–Test Gap(%) 
+
+Alert-name TF–IDF LR 91.30 (0.66) 95.55 (0.68) 87.43 (1.01) 0.77 (0.12) 92.39 (0.52) 0.23 (0.85) Rich alert TF–IDF LR 90.80 (0.27) 94.68 (0.26) 87.23 (0.63) 0.92 (0.05) 92.40 (0.66) 0.21 (0.60) Rich alert TF–IDF, no severity LR 90.94 (0.56) 95.03 (0.42) 87.18 (0.82) 0.86 (0.07) 92.41 (0.62) 0.19 (0.76) Alert-name MiniLM + TF–IDF LGBM 92.93 (0.37) 99.18 (0.57) 87.43 (0.68) 0.14 (0.10) 92.38 (0.84) 0.44 (0.51) TABLE 8. P ERFORMANCE COMPARISON OF ANOMALY DETECTORS .Model BGL HDFS Prec.(%) Rec.(%) F1(%) Prec.(%) Rec.(%) F1(%) 
+
+Reproduced under matched protocol 
+
+DeepLog [6] 89.74 82.78 86.12 88.44 69.49 77.34 LogBERT [22] 89.40 92.32 90.83 87.02 78.10 82.32 
+
+NLLog [Ours] 99.46 95.94 97.67 99.62 100.00 99.81 
+
+Published results (different protocols, included for context) 
+
+LogAnomaly [37] 97.00 94.00 96.00 96.00 94.00 95.00 LogLLM [38] 86.10 97.90 91.60 99.40 100.00 99.70 LogLLaMA [13] 92.75 99.33 95.93 93.90 85.25 89.36 LogGPT [17] 94.00 97.70 95.80 88.40 92.10 90.10 
+
+Note: Tables 5–11 use different fixed, ablation, budget-tuned, and stress-test LGBM configurations; values should be compared within each table. TABLE 9. P ERFORMANCE ON BGL UNDER AN FPR ≤ 2% ALERT BUDGET .Classifier F1(%) Precision(%) Recall(%) Recall@FPR ≤2% FPR(%) AUC-PR(%) LGBM 97.67 99.46 95.94 99.69 0.06 99.71 XGB 97.12 99.45 94.90 99.66 0.06 99.66 RF 95.96 99.33 92.81 99.60 0.07 99.60 SVM 94.80 98.76 91.15 99.20 0.13 99.20 LR 94.27 96.10 92.50 98.51 0.42 98.52 
+
+HDFS examples; Appendix F (Fig. 11) gives the matching waterfall views, including a contrasting false positive. 
+
+Listing 1. HDFS true-negative SHAP explanation (top-4 by |ϕ|).                   
+
+> "session_idx": 0, "label": 0, "pred": 0, "prob": 1.5e-07, "category": "TN"
+> ↓[-0.1649] datanode data receiver: received block < block_id> from <ip><port> destined for <ip><port> ( info) ×3
+> ↓[-0.0943] datanode packet responder: received block < block_id> of size <num> from <ip> (info) ×3
+> ↓[-0.0885] datanode packet responder: <*> for block < block_id> <status> (info) ×3
+> ↓[-0.0720] filesystem namespace manager: delete <block_id> is added to invalid set of <ip> <port> ( info) ×3
+
+Listing 2. HDFS true-positive SHAP explanation (top-4 by |ϕ|).                
+
+> "session_idx": 22, "label": 1, "pred": 1, "prob": 0.9999998, "category": "TP"
+> ↑[+2.1169] filesystem namespace manager: delete <block_id> is added to invalid set of <ip> <port> (info) ×4
+> ↑[+1.8128] filesystem dataset manager: deleting block <block_id> file <*> (info) ×4
+> ↑[+1.5827] filesystem namespace manager: block map updated <ip> <port> is added to <block_id> size <num> (info) ×4
+> ↑[+1.1394] filesystem namespace manager: received aredundant addstoredblock request for block <block_id> on <ip><port> size <*> (warning) ×1
+
+In the TN, routine DataNode packet-handling tem-plates dominate with downward contributions; in the TP, namespace- and dataset-manager deletion templates con-tribute large positive ϕi, pushing the log-odds well above zero ( p ≈ 0.9999998 ). MiniLM-L6 
+
+> (22M)
+> MiniLM-L12
+> (33M)
+> DistilBERT
+> (66M)
+> BERT-base
+> (109M)
+> MPNet
+> (109M)
+> BERT-large
+> (335M)
+
+96.8 
+
+96.9 
+
+97.0 
+
+97.1 
+
+97.2 
+
+97.3  
+
+> Percentage (%)
+> 97.00
+> 97.00
+> 97.05
+> 96.97
+> 96.97 97.00
+
+F1 Score 
+
+> MiniLM-L6
+> (22M)
+> MiniLM-L12
+> (33M)
+> DistilBERT
+> (66M)
+> BERT-base
+> (109M)
+> MPNet
+> (109M)
+> BERT-large
+> (335M)
+
+97.2 
+
+97.4 
+
+97.6 
+
+97.8 
+
+98.0 
+
+98.2 
+
+98.4 
+
+98.6 
+
+98.8  
+
+> Percentage (%)
+> 98.15
+> 97.81
+> 98.09
+> 98.06
+> 98.23 98.23
+
+Precision 
+
+> MiniLM-L6
+> (22M)
+> MiniLM-L12
+> (33M)
+> DistilBERT
+> (66M)
+> BERT-base
+> (109M)
+> MPNet
+> (109M)
+> BERT-large
+> (335M)
+
+95.4 
+
+95.6 
+
+95.8 
+
+96.0 
+
+96.2 
+
+96.4 
+
+96.6  
+
+> Percentage (%)
+> 95.88
+> 96.21
+> 96.04
+> 95.90
+> 95.75 95.81
+
+Recall 
+
+> MiniLM-L6
+> (22M)
+> MiniLM-L12
+> (33M)
+> DistilBERT
+> (66M)
+> BERT-base
+> (109M)
+> MPNet
+> (109M)
+> BERT-large
+> (335M)
+
+0.125 
+
+0.150 
+
+0.175 
+
+0.200 
+
+0.225 
+
+0.250 
+
+0.275 
+
+0.300 
+
+0.325  
+
+> Time (ms)
+> 0.154 0.154
+> 0.176
+> 0.189
+> 0.233
+> 0.250
+
+Inference Latency Figure 4. Encoder accuracy–latency trade-off on BGL. 20% 40% 60% 80% 
+
+Training Data Fraction (BGL Dataset) 
+
+0.800 
+
+0.825 
+
+0.850 
+
+0.875 
+
+0.900 
+
+0.925 
+
+0.950 
+
+0.975 
+
+1.000 
+
+> F1 Score
+
+NLLog 
+
+DeepLog 
+
+DeepCASE 
+
+LogBERT 
+
+Figure 5. BGL F 1 versus training-data fraction. 
+
+Faithfulness of sentence attribution. We assess de-cision faithfulness of the TreeSHAP sentence-attribution layer using deletion, insertion, and sufficiency tests with random and bottom-k controls on anomalous test sessions. On BGL, we report deletion-based area over the pertur-bation curve (AOPC) on the true-positive subset because anomalous sessions that are already false negatives under the base classifier have near-zero baseline anomaly probability and can destabilize normalized deletion scores. On this subset, removing TreeSHAP top-ranked sentences yields a mean normalized drop of 0.552 and an unnormalized drop 1 3 5 10 15             
+
+> 0.988
+> 0.990
+> 0.992
+> 0.994
+> 0.996
+> 0.998
+> 1.000
+> Mean Prob Drop (Higher = Better)  HDFS: Deletion (Comprehensiveness)
+> Top (TreeSHAP)
+> Random
+> Bottom
+> 13510 15
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> Mean Prob Recovery (Higher = Better)  HDFS: Insertion (Sufficiency)
+> 13510 15
+> Sentences Removed ( k)
+> 0.540
+> 0.541
+> 0.542
+> 0.543
+> 0.544
+> 0.545
+> 0.546
+> 0.547
+> 0.548
+> Mean Prob Drop
+> BGL: Deletion (TP Subset)
+> 13510 15
+> Sentences Inserted ( k)
+> 0.42
+> 0.43
+> 0.44
+> 0.45
+> 0.46
+> 0.47
+> 0.48
+> Mean Prob Recovery
+> BGL: Insertion (All Anomalies)
+
+Figure 6. Faithfulness tests for TreeSHAP sentence attribution. 
+
+of 0.547. The top-versus-random insertion gap is strictly positive at every k ∈ { 1, 3, 5, 10 , 15 }, with a 95% paired-bootstrap confidence interval excluding zero at k = 1 (gap 0.029, CI [0 .013 , 0.046] ). On HDFS, all anomalous test sessions are true positives, both AOPC forms are effec-tively identical at 1.000, and the k = 1 insertion gap is 0.072 with CI [0 .066 , 0.079] . Figure 6 shows that top-ranked sentences consistently dominate random and bottom-ranked controls, supporting the claim that the back-projected Tree-SHAP scores capture decision-relevant evidence on HDFS and BGL; analogous faithfulness tests for AIT-ADS remain future work. 4.10. Adversarial Evaluation 
+
+To stress-test detection and the compact top-k evidence window under benign-noise dilution, we introduce mimicry padding and top-k hit-rate analyses. Mimicry padding in-serts p% benign WWS lines into anomalous sessions, sim-ulating a lightweight adversary that dilutes anomaly signals without modifying templates. As shown in Fig. 7, HDFS recall drops from 100% to 93.5% at 50% padding while FPR remains negligible ( ≈ 0.01% ), indicating that dilution can reduce recall without materially changing false-positive behavior. BGL shows the same qualitative pattern more mildly: recall stays above 92% and F 1 above 95% even at 50% padding. To evaluate explanation robustness, we compute Hit@ k: the fraction of anomalous sessions where at least one anomaly-labeled or anomaly-associated line appears in the top-k SHAP-ranked lines (BGL uses corpus line-level labels; HDFS uses anomaly-associated templates as a proxy). Anomalies manifest as distributed patterns 
+
+across correlated log lines rather than single sentinel events, with the first anomaly-associated line at median rank 8; the ranking is therefore a compact evidence window rather than a pinpoint localization mechanism. Table 10 shows that Hit@15 stays at or above 90% and the median first-anomaly rank at or below 9 across the tested padding levels; Hit@1 and Hit@5 are near-zero for the same distributional reason (see table footnote). To separate test-time dilution from retraining-time corpus-statistics contamination, Appendix D (Table 11) reports an IDF-poisoning stress test in which only the TF–IDF fit corpus is contaminated while held-out session text remains unchanged. Headline metrics de-grade only slightly (HDFS F 1: 99.81% → 99.79%; BGL: 97.72% → 97.51%), but representation drift and probability shifts remain measurable, supporting the use of frozen clean IDF statistics during deployment. 0 10 25 50     
+
+> Benign Padding (%)
+> 85.00
+> 87.50
+> 90.00
+> 92.50
+> 95.00
+> 97.50
+> 100.00
+> Performance (%)
+> HDFS: Mimicry Padding Stress-Test
+> 100.00
+> 99.81
+> 98.75
+> 99.18 97.42
+> 98.50
+> 93.50
+> 96.45
+> Recall (%)
+> F1 Score (%)
+> 010 25 50
+> Benign Padding (%)
+> BGL: Mimicry Padding Stress-Test
+> 97.72
+> 96.15
+> 96.18
+> 93.23
+> 95.57
+> 92.08
+> 95.68
+> 92.29
+
+Figure 7. Mimicry padding sweep on HDFS and BGL. 
+
+5. Related Work 
+
+Log anomaly detection has developed along several dis-tinct lines. Classical approaches emphasize parsing, template extraction, and invariant mining [4], [5], [7]–[9], [40]. These methods are often interpretable and efficient, but they typi-cally operate on event IDs, counts, or mined rules rather than semantically richer text, and they may require substantial feature engineering or retuning as log formats evolve. 
+
+TABLE 10. T OP -k EXPLANATION STABILITY UNDER MIMICRY PADDING 
+
+(BGL). Padding (%) Hit@15 (%) Median Rank 0 100.00 8.00 10 100.00 8.00 25 90.00 8.00 50 90.00 9.00 
+
+Note: Hit@1 is 0.00% at every padding level; Hit@5 is 0.00% at 0% and 10% padding and 10.00% at 25% and 50% padding. Both stay near zero because anomalies appear as correlated line clusters (median first-anomaly rank 8) rather than as single sentinel events. 
+
+Sequence-oriented deep models such as DeepLog and LogAnomaly [6], [37] model temporal regularities over template streams, while semantic models such as PLELog, NeuralLog, and LogBERT [14], [15], [22] introduce transformer-style representations into the pipeline. More recent systems including LogLLaMA [13], LogPrompt [16], LogGPT [17], and LogLLM [38] explore prompt-based or decoder-based formulations. NLLog is closest to this semantic family, but it makes a different systems trade-off: rather than relying on raw-log language modeling or heavier decoder-style inference, it first applies deter-ministic template-to-language normalization and then uses lightweight pooled representations, tree ensembles, and TreeSHAP attribution. We therefore emphasize the end-to-end normalization, pooling, and attribution pipeline rather than encoder scale. Interpretability for log analysis remains comparatively underdeveloped. Attention-based or contextual systems such as DeepCASE and DeepEAD [39], [41] offer analyst-facing cues, while broader interpretable ML work [42], [43] pro-vides general techniques for tracing model behavior. NL-Log returns ranked WWS sentences from a pooled session representation via TreeSHAP and an explicit responsibility projection, framed as anomaly attribution rather than causal reconstruction. Provenance-graph systems such as ORTHRUS, PRO-GRAPHER, and ThreatRace [29]–[31] target richer audit telemetry and system-wide attack tracing, often with graph construction overhead, heavier instrumentation, and GPU-backed training; they are useful context but not protocol-matched baselines for sessionized line logs. Recent em-pirical critiques also show that log-anomaly results can depend strongly on dataset construction and evaluation protocol [20], [44], which motivates our matched-protocol comparisons and explicit separation of reproduced baselines from published reference points. 
+
+6. Discussion 
+
+We close with a synthesis of the design choices that drive NLLog’s behavior, the limitations and threats to validity revealed by the evaluation, and the operational posture under which the system should be deployed. 6.1. Synthesis of Key Findings 
+
+Two design choices drive most of NLLog’s be-havior. First, deterministic WWS rewriting supplies the analyst-readable surface form returned as evidence, with corpus-dependent fallback sufficiency characterized by the enrollment-time coverage report (Section 4.2, Table 4). Sec-ond, dense MiniLM embeddings with TF–IDF pooling and LGBM consistently outperform sparse TF–IDF alternatives (Table 6), cutting FPR by an order of magnitude or more on HDFS and BGL and raising AIT-ADS precision while lowering FPR at matched recall. Together, the auditable deterministic rewrite combined with lightweight dense en-coding provides a measurable representation layer for SOC triage whose coverage assumptions are surfaced before de-ployment. 
+
+6.2. Limitations and Threats to Validity 
+
+Scope and Threat Assumptions. NLLog does not defend against adversaries who can modify log contents, inject fabricated templates, or suppress logging; such attacks violate the trusted-logging assumption and require com-plementary log-integrity or provenance mechanisms. The sequence-only and cross-host attack classes excluded by NLLog’s design are stated in Section 2.2. Analyst utility and time savings remain to be measured in a controlled user study. Mitigations beyond our current scope include template integrity attestation, cross-host corroboration, and freezing IDF statistics from a clean enrollment period. Evasion by Dilution. Because session vectors are TF–IDF weighted averages, the architecture is inherently vulnerable to flooding attacks . Section 4.10 and Appendix D quantify this under mimicry padding and IDF poisoning: test-time mimicry padding is the stronger operational threat, while retraining-time corpus contamination is mitigated by frozen lexical statistics from a clean enrollment period. Evaluation scope and refinement effort. Chronolog-ical and sessionization evaluations on AIT-ADS and faith-fulness tests on HDFS/BGL provide deployment-oriented checks; analogous temporal splits for HDFS and BGL, broader sessionization sweeps, and AIT-ADS faithfulness remain future work. The fallback-only ablation also limits claims of zero-effort portability; the enrollment-time cov-erage check discussed next surfaces this requirement. Ap-pendix G (Table 12) summarizes these and other limitations with planned mitigations. 
+
+6.3. Portability and Operational Posture 
+
+Deployments should run the enrollment-time coverage report described in Section 4.2 before relying on fallback behavior. The WWS layer is fail-soft because no event is dropped, but fallback-only rewriting is not always sufficient. Overfitting risk is limited by design: WWS rewriting is de-terministic, TF–IDF weighting uses unlabeled corpus statis-tics, and only the final classifier is learned (Appendix H); all stages scale linearly in the number of log events. Our evaluation runs on a 32-core Xeon Gold 6242 with no GPU and under 2 GB of peak memory, with Drain3 and TF–IDF in streaming mode and outputs emitted as JavaScript Object Notation (JSON) records compatible with standard SIEM alert pipelines. Live deployment validation remains future work. 
+
+7. Ethical Considerations and Artifact Avail-ability 
+
+NLLog is evaluated on public benchmark datasets and does not involve human-subject experimentation. Canoni-calization masks high-cardinality tokens such as IPs, ports, and identifiers, which reduces direct exposure of volatile or potentially sensitive values in downstream representations. Deployment errors nevertheless remain possible: false posi-tives can increase analyst workload, and false negatives can defer investigation of real incidents. We therefore position NLLog as a triage aid rather than an autonomous decision maker, and recommend analyst oversight for any operational use. NLLog is intentionally self-contained: local encoders, no external API calls, and commodity CPUs suffice for inference. Artifact-release details appear in Appendix H. NLLog itself does not use external LLM services during detection; editorial LLM use is disclosed in the LLM Usage Statement at the end of the paper. 
+
+8. Conclusion 
+
+We introduced NLLog , a log-to-language pipeline that deterministically rewrites parsed templates into analyst-readable WWS sentences, embeds them with a frozen en-coder, pools them with TF–IDF, and back-projects tree-ensemble decisions to ranked evidence. Across HDFS, BGL, and AIT-ADS, NLLog achieves high F 1 and low false-positive rates at roughly 10 ms median CPU latency, with chronological, sessionization, and faithfulness checks supporting the headline results. Fallback and sparse ab-lations identify when generic rewriting is sufficient and when corpus-specific deterministic refinement is needed, yielding a focused systems claim: deterministic, language-aligned rewriting provides an auditable representation layer for lightweight SOC anomaly triage. 
+
+References           
+
+> [1] S. Axelsson, “The base-rate fallacy and the difficulty of intrusion detection,” ACM Transactions on Information and System Security ,vol. 3, no. 3, pp. 186–205, 2000. [2] R. Sommer and V. Paxson, “Outside the closed world: On using ma-chine learning for network intrusion detection,” in IEEE Symposium on Security and Privacy .IEEE, 2010, pp. 305–316. [3] S. Sharma, B. B. Gupta, and K. Ali, “A survey on intrusion detection systems and techniques,” Journal of Network and Computer Appli-cations , vol. 181, p. 103082, 2021. [4] P. He, J. Zhu, Z. Zheng, and M. R. Lyu, “Drain: An online log parsing approach with fixed depth tree,” in IEEE International Conference on Web Services (ICWS) .IEEE, 2017, pp. 33–40.
+
+[5] S. He, J. Zhu, P. He, and M. R. Lyu, “Experience report: System log analysis for anomaly detection,” in IEEE 27th International Symposium on Software Reliability Engineering (ISSRE) . IEEE, 2016, pp. 207–218. [6] M. Du, F. Li, G. Zheng, and V. Srikumar, “Deeplog: Anomaly detection and diagnosis from system logs through deep learning,” in Proceedings of the ACM SIGSAC Conference on Computer and Communications Security . ACM, 2017, pp. 1285–1298. [7] J. Zhu, S. He, and J. Liu, “A survey on log anomaly detection,” 
+
+Journal of Systems and Software , vol. 193, p. 111477, 2022. [8] J.-G. Lou, Q. Fu, S. Yang, Y. Xu, and J. Li, “Mining invariants from console logs for system problem detection,” in Proceedings of the USENIX Annual Technical Conference . USENIX Association, 2010, pp. 1–14. [9] W. Meng, Y. Liu, and Q. Zhu, “A survey on log analysis for anomaly detection,” Computers & Security , vol. 97, p. 101945, 2020. [10] X. Zhang, Y. Xu, Q. Lin, B. Qiao, H. Zhang, Y. Dang, C. Xie, X. Yang, Q. Cheng, Z. Li, J. Chen, and D. He, “Robust log-based anomaly detection on unstable log data,” in Proceedings of the ACM SIGSOFT International Symposium on Software Testing and Analysis .ACM, 2019, pp. 807–810. [11] S. Nedelkoski, J. Bogatinovski, A. Acker, J. Cardoso, and O. Kao, “Self-supervised log parsing,” arXiv preprint arXiv:2003.07905 ,2020. [12] G. Pang, C. Shen, L. Cao, and A. v. d. Hengel, “Deep learning for anomaly detection: A review,” ACM Computing Surveys , vol. 54, no. 2, pp. 1–38, 2021. [13] Z. Yang and I. G. Harris, “Logllama: Transformer-based log anomaly detection with llama,” 2025. [Online]. Available: https://arxiv.org/abs/2503.14849 [14] L. Yang, J. Chen, Z. Wang, W. Wang, J. Jiang, X. Dong, and W. Zhang, “Semi-supervised log-based anomaly detection via prob-abilistic label estimation,” in 2021 IEEE/ACM 43rd International Conference on Software Engineering (ICSE) . IEEE, 2021, pp. 1448– 1460. [15] V.-H. Le and H. Zhang, “Log-based anomaly detection without log parsing,” in 2021 36th IEEE/ACM International Conference on Au-tomated Software Engineering (ASE) . IEEE, 2021, pp. 492–504. [16] Y. Liu, S. Tao, W. Meng, F. Yao, X. Zhao, and H. Yang, “Logprompt: Prompt engineering towards zero-shot and interpretable log analy-sis,” in 2024 IEEE/ACM 46th International Conference on Software Engineering: Companion Proceedings (ICSE-Companion) , 2024, pp. 364–365. [17] X. Han, S. Yuan, and M. Trabelsi, “Loggpt: Log anomaly detection via gpt,” in 2023 IEEE International Conference on Big Data (Big-Data) , 2023, pp. 1117–1122. [18] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “Bert: Pre-training of deep bidirectional transformers for language understand-ing,” in Proceedings of NAACL-HLT , 2019, pp. 4171–4186. [19] W. Wang, F. Wei, L. Dong, H. Bao, N. Yang, and M. Zhou, “Minilm: Deep self-attention distillation for task-agnostic compression of pre-trained transformers,” in Advances in Neural Information Processing Systems (NeurIPS) , 2020, pp. 5776–5788. [20] V.-H. Le and H. Zhang, “Log-based anomaly detection with deep learning: how far are we?” Journal of Systems and Software , vol. 188, p. 111300, 2022. [21] X. Yang, P. Chen, Z. He, Y. Gao, J. Liu, B. Qiao, Y. Dang, and Q. Lin, “Semi-supervised log anomaly detection through semantic context extraction,” in Proceedings of the International Conference on Software Engineering (ICSE) . IEEE, 2021, pp. 1176–1187. [22] H. Guo, S. Yuan, and X. Wu, “Logbert: Log anomaly detection via bert,” in Proceedings of the International Joint Conference on Neural Networks (IJCNN) . IEEE, 2021, pp. 1–8. [23] G. Salton and C. Buckley, “Term-weighting approaches in automatic text retrieval,” Information processing & management , vol. 24, no. 5, pp. 513–523, 1988. [24] W. Xu, L. Huang, A. Fox, D. Patterson, and M. I. Jordan, “Detecting large-scale system problems by mining console logs,” in Proceedings of the ACM SIGOPS 22nd Symposium on Operating Systems Principles , ser. SOSP ’09. New York, NY, USA: Association for Computing Machinery, 2009, pp. 117–132. [Online]. Available: https://doi.org/10.1145/1629575.1629587 [25] J. Zhu, S. He, P. He, J. Liu, and M. R. Lyu, “Loghub: A large collection of system log datasets for ai-driven log analytics,” 2023. [Online]. Available: https://arxiv.org/abs/2008.06448 [26] A. Oliner and J. Stearley, “What supercomputers say: A study of five system logs,” in 37th Annual IEEE/IFIP International Conference on Dependable Systems and Networks (DSN’07) , 2007, pp. 575–584. [27] M. Landauer, F. Skopik, and M. Wurzenberger, “Introducing a new alert data set for multi-step attack analysis,” in 
+
+Proceedings of the 17th Cyber Security Experimentation and Test Workshop , ser. CSET ’24. New York, NY, USA: Association for Computing Machinery, 2024, pp. 41–53. [Online]. Available: https://doi.org/10.1145/3675741.3675748 [28] M. Landauer, F. Skopik, M. Frank, W. Hotwagner, M. Wurzenberger, and A. Rauber, “Maintainable log datasets for evaluation of intrusion detection systems,” IEEE Transactions on Dependable and Secure Computing , vol. 20, no. 4, pp. 3466–3482, 2023. [29] B. Jiang, T. Bilot, N. El Madhoun, K. Al Agha, A. Zouaoui, S. Iqbal, X. Han, and T. Pasquier, “Orthrus: achieving high quality of attribu-tion in provenance-based intrusion detection systems,” in Proceedings of the 34th USENIX Conference on Security Symposium , ser. SEC ’25. USA: USENIX Association, 2025. [30] F. Yang, J. Xu, C. Xiong, Z. Li, and K. Zhang, “PROGRAPHER: An anomaly detection system based on provenance graph embedding,” in 
+
+Proceedings of the 32nd USENIX Conference on Security Symposium ,ser. SEC ’23. USA: USENIX Association, 2023. [31] S. Wang, Z. Wang, T. Zhou, H. Sun, X. Yin, D. Han, H. Zhang, X. Shi, and J. Yang, “Threatrace: Detecting and tracing host-based threats in node level through provenance graph learning,” IEEE Transactions on Information Forensics and Security , vol. 17, pp. 3972–3987, 2022. [32] N. Reimers and I. Gurevych, “Sentence-bert: Sentence embeddings using siamese bert-networks,” 2019. [Online]. Available: https://arxiv.org/abs/1908.10084 [33] L. Breiman, “Random forests,” Mach. Learn. , vol. 45, no. 1, pp. 5–32, Oct. 2001. [34] T. Chen and C. Guestrin, “Xgboost: A scalable tree boosting system,” in Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining , ser. KDD ’16. New York, NY, USA: Association for Computing Machinery, 2016, pp. 785–794. [35] G. Ke, Q. Meng, T. Finley, T. Wang, W. Chen, W. Ma, Q. Ye, and T.-Y. Liu, “Lightgbm: a highly efficient gradient boosting decision tree,” in Proceedings of the 31st International Conference on Neural Information Processing Systems , ser. NIPS’17. Red Hook, NY, USA: Curran Associates Inc., 2017, pp. 3149–3157. [36] S. M. Lundberg, G. Erion, H. Chen, A. DeGrave, J. M. Prutkin, B. Nair, R. Katz, J. Himmelfarb, N. Bansal, and S.-I. Lee, “From local explanations to global understanding with explainable ai for trees,” Nature machine intelligence , vol. 2, no. 1, pp. 56–67, 2020. [37] W. Meng, Y. Liu, Y. Zhu, S. Zhang, D. Pei, Y. Liu, Y. Chen, R. Zhang, S. Tao, P. Sun, and R. Zhou, “Loganomaly: Unsupervised detection of sequential and quantitative anomalies in unstructured logs,” in 
+
+Proceedings of the 28th International Joint Conference on Artificial Intelligence (IJCAI) , 2019, pp. 4739–4745. [38] W. Guan, J. Cao, S. Qian, J. Gao, and C. Ouyang, “Logllm: Log-based anomaly detection using large language models,” arXiv preprint arXiv:2411.08561 , 2024. [39] T. van Ede, H. Aghakhani, N. Spahn, R. Bortolameotti, M. Cova, A. Continella, M. van Steen, A. Peter, C. Kruegel, and G. Vigna, “Deepcase: Semi-supervised contextual analysis of security events,” in Proceedings of the IEEE Symposium on Security and Privacy (SP) .IEEE, 2022. [40] Q. Lin, H. Zhang, J.-G. Lou, Y. Zhang, and X. Chen, “Log clustering based problem identification for online service systems,” in Proceed-ings of the 38th International Conference on Software Engineering (ICSE) . ACM, 2016, pp. 102–111. [41] X. Wang, K. J. Kim, Y. Wang, T. Koike-Akino, and K. Parsons, “Deepead: Explainable anomaly detection from system logs,” in ICC 2023 - IEEE International Conference on Communications , 2023, pp. 771–776. [42] C. Chen, O. Li, D. Tao, A. Barnett, C. Rudin, and J. K. Su, “This looks like that: deep learning for interpretable image recognition,” 
+
+Advances in neural information processing systems , vol. 32, 2019. [43] P. W. Koh and P. Liang, “Understanding black-box predictions via influence functions,” in Proceedings of the 34th International Con-ference on Machine Learning - Volume 70 , ser. ICML’17. JMLR.org, 2017, pp. 1885–1894. [44] S. Ali, C. Boufaied, D. Bianculli, P. Branco, and L. Briand, “A comprehensive study of machine learning techniques for log-based anomaly detection,” Empirical Software Engineering , vol. 30, no. 5, p. 129, 2025. 
+
+Appendix A. Canonicalization and Template Determination 
+
+NLLog applies a fixed sequence of regular-expression substitutions, following prior log-analysis practice [4], [5], that replaces volatile tokens with canonical placeholders such as <IP> , <PORT> , <BLOCK> , <NUM> , and <EXC> .This preserves the message skeleton while removing high-cardinality noise and scrubbing potentially sensitive values. We use Drain3 with depth d = 4 and 
+
+max_children =100. Canonicalized logs are routed through the fixed-depth parse tree, exact matches are preferred over wildcards, and a new cluster is created only when similarity to an existing template falls below the configured threshold. Each cluster stores its event_id ,frequency, and representative template. 
+
+Appendix B. Classifier Comparison Details 
+
+Figure 8 reports F 1 with inference time (top row) and false-positive rate (bottom row, log scale) for the nine clas-sifiers compared in Section 4.6. 
+
+Appendix C. Alert-Budget Curves 
+
+Figure 9. ROC and precision-recall curves on BGL under the FPR ≤ 2% alert budget. 
+
+Figure 9 accompanies the BGL alert-budget analysis in Section 4.8. 
+
+Appendix D. IDF-Poisoning Stress Test 
+
+Table 11 reports the full IDF-poisoning numbers behind the summary in Section 4.10, including the clean baseline, contaminated IDF, and frozen-clean-IDF settings on HDFS and BGL. 
+
+Appendix E. AIT-ADS Sessionization Sensitivity 5 15 30 60 120  
+
+> Maximum Session Duration (minutes)
+> 75
+> 80
+> 85
+> 90
+> 95
+> 100
+> Performance (%)
+> 80.0
+> 87.9
+> 89.5
+> 90.9 90.5
+> AIT-ADS Sessionization Sensitivity
+> F1 Score (%)
+> AUC-PR (%)
+
+Figure 10. AIT-ADS sessionization sensitivity across maximum session durations with a fixed 300 s idle timeout. 
+
+Figure 10 plots the AIT-ADS sessionization sweep sum-marized in Section 4.1: test F 1 and AUC-PR across maxi-mum session durations of 5, 15, 30, 60, and 120 minutes with the idle timeout fixed at 300 s. 
+
+Appendix F. Waterfall Views of Sentence Attribution 
+
+Figure 11 provides graphical waterfall views comple-menting Listings 1 and 2 in Section 4.9, contrasting the same LGBM 
+
+> XGB
+> RF
+> SVM
+> LR
+> MLP
+> DNN
+> CNN
+> LSTM
+
+60 
+
+70 
+
+80 
+
+90 
+
+100 
+
+> F1 Score (%)
+
+BGL: F1 & Time 
+
+> 97.67
+> T:0.002
+> 97.12
+> T:0.012
+> 95.96
+> T:0.025
+> 94.80
+> T:0.298
+> 94.27
+> T:0.001
+> 96.47
+> T:0.035
+> 94.37
+> T:0.037
+> 86.69
+> T:0.063
+> 84.58
+> T:1.171
+> LGBM
+> XGB
+> RF
+> SVM
+> LR
+> MLP
+> DNN
+> CNN
+> LSTM
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+90 
+
+100 
+
+> F1 Score (%)
+
+HDFS: F1 & Time 
+
+> 99.81
+> T:0.001
+> 99.79
+> T:0.001
+> 99.82
+> T:0.007
+> 97.87
+> T:0.137
+> 94.33
+> T:0.001
+> 98.72
+> T:0.028
+> 99.47
+> T:0.033
+> 99.12
+> T:0.035
+> 31.39
+> T:0.832
+> LGBM
+> XGB
+> RF
+> SVM
+> LR
+> MLP
+> DNN
+> CNN
+> LSTM
+
+60 
+
+70 
+
+80 
+
+90 
+
+100 
+
+> F1 Score (%)
+
+AIT-ADS: F1 & Time 
+
+> 93.42
+> T:0.005
+> 93.33
+> T:0.022
+> 91.00
+> T:0.034
+> 93.16
+> T:0.189
+> 90.36
+> T:0.002
+> 92.75
+> T:0.189
+> 92.31
+> T:0.186
+> 89.67
+> T:0.219
+> 88.72
+> T:1.586
+> LGBM
+> XGB
+> RF
+> SVM
+> LR
+> MLP
+> DNN
+> CNN
+> LSTM
+
+10 3
+
+10 2
+
+10 1
+
+10 0
+
+10 1
+
+> FPR (%) [log scale]
+
+BGL: False Positive Rate 
+
+> 0.06
+> 0.06
+> 0.07
+> 0.13  0.42
+> 0.08
+> 0.07  0.38
+> 0.50
+> LGBM
+> XGB
+> RF
+> SVM
+> LR
+> MLP
+> DNN
+> CNN
+> LSTM
+
+10 3
+
+10 2
+
+10 1
+
+10 0
+
+10 1
+
+> FPR (%) [log scale]
+
+HDFS: False Positive Rate 
+
+> 0.01
+> 0.01
+> 0.01
+> 0.12  0.36
+> 0.02
+> 0.02
+> 0.03
+> 0.00
+> LGBM
+> XGB
+> RF
+> SVM
+> LR
+> MLP
+> DNN
+> CNN
+> LSTM
+
+10 3
+
+10 2
+
+10 1
+
+10 0
+
+10 1
+
+> FPR (%) [log scale]
+
+AIT-ADS: False Positive Rate 
+
+> 0.05  0.18  1.10
+> 0.09
+> 1.19
+> 0.09
+> 0.05
+> 1.19
+> 1.47
+
+Figure 8. Classifier evaluation: F 1 with per-session inference time (top) and false-positive rate on log scale (bottom) across the three datasets. TABLE 11. IDF-POISONING STRESS TEST ON HDFS AND BGL. 
+
+Dataset Setting Prec. (%) Rec. (%) F1 (%) FPR (%) 
+
+HDFS Clean train / clean test 99.62 100.00 99.81 0.01 Contaminated IDF 99.62 99.97 99.79 0.01 Frozen clean IDF 99.62 100.00 99.81 0.01 BGL Clean train / clean test 99.35 96.15 97.72 0.07 Contaminated IDF 99.03 96.04 97.51 0.11 Frozen clean IDF 99.35 96.15 97.72 0.07 
+
+Note: Mean L2 session drift under contamination is 0.002280 (HDFS) and 0.008316 (BGL); maximum absolute probability change is 0.781591 (HDFS) and 0.606948 (BGL). 
+
+HDFS true-positive session with a false positive (#10543, 
+
+ˆp = 0 .997 ); each waterfall shows at most 15 sentences. Full per-session JSON explanations are included in the artifact package. 
+
+Appendix G. NLLog Limitations 
+
+Table 12 summarizes the main limitations of NLLog together with corresponding mitigations or future work di-rections. (a) FP sample session 
+
+(b) TP sample session Figure 11. HDFS sentence-level log-odds attribution for a false positive and a true positive. Positive bars increase the anomaly score; negative bars decrease it. TABLE 12. K EY LIMITATIONS AND PLANNED MITIGATIONS .Dimension Limitation Mitigation / Future Work Template fidelity Unseen or attacker-injected templates may lack deterministic lexical refinements Drain3 flags them as <UNKNOWN> (surfaced via SHAP); harden with signed binaries and cross-source corroboration; explore deterministic rule induction or audited template-to-WWS sug-gestion tools Loss of rare value signals Canonicalization masks outlier IPs/IDs Combine value-frequency baselines with semantic scores Dataset bias Public corpora may not reflect proprietary logs Field deployments and continuous-learning studies Streaming drift Temporal robustness is only evaluated on AIT-ADS Extend chronological splits and drift studies to HDFS/BGL; explore incremental TF–IDF and sliding-window SHAP caching Human factors Analyst utility not measured in a controlled user study Controlled SOC usability studies 
+
+Appendix H. Hyper-parameters and Artifact Availability 
+
+Complete JSON dumps of selected non-default hyperpa-rameters are included in the reproducibility package under 
+
+artifacts/hparams/ . If accepted, we will submit an anonymized artifact package for ACSAC artifact evaluation, including code, configuration files, canonicalization rules, WWS mappings, hyperparameter files, and scripts needed to reproduce the reported tables and figures. For third-party datasets, we will provide acquisition and preprocessing instructions rather than redistributing material whose license prohibits repackaging. Any optional repository provided during review will be anonymized to preserve the dual-anonymous submission process. 
+
+LLM Usage Statement 
+
+LLMs were used for editorial purposes in this manuscript, and all outputs were inspected by the authors to ensure accuracy and originality. No LLM was used to gen-erate experimental results, numerical findings, or scientific claims.
