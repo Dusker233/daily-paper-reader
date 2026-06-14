@@ -1,0 +1,633 @@
+Title: Sample-Efficient LLM-Based Detection of Malicious Web Server Logs with Forensically Explainable Reasoning
+
+URL Source: https://arxiv.org/pdf/2606.08649v1
+
+Published Time: Tue, 09 Jun 2026 01:38:10 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+> 1
+
+# Sample-Efficient LLM-Based Detection of Malicious Web Server Logs with Forensically Explainable Reasoning 
+
+Bernhard Kneip, Nhien-An Le-Khac and Hong-Hanh Nguyen-Le 
+
+Abstract —Forensic analysis of web server logs demands both accurate detection and human-readable explanations that can satisfy legal requirements. We present CEF-Log, a context-enhanced few-shot chain-of-thought prompting strategy for Large Language Models that addresses this dual requirement. CEF-Log embeds expert investigative methodology through a struc-tured five-step reasoning template, enabling the model to learn 
+
+how to analyze logs rather than what patterns to memorize. Experimental evaluation demonstrates that CEF-Log achieves an F1-score of 0.99 on the CSIC 2010 dataset using only four examples while providing a 10 × improvement in sample efficiency compared to other prompting-based methods. We also introduce ForenWebLog, a new dataset that incorporates real-world attacks and multi-step attack sequences for comprehensive evaluation. Qualitative analysis confirms that CEF-Log generates traceable, accurate explanations suitable for forensic documenta-tion, addressing the critical ”black-box” limitation of traditional machine learning approaches. 
+
+I. I NTRODUCTION 
+
+Web server logs constitute essential evidence in cybercrime investigations, capturing detailed traces of HTTP requests in-cluding client IP addresses, requested resources, and response codes [1]–[3]. When organizations discover security breaches, often days after the initial attack, forensic investigators must rapidly sift through these logs to identify evidence linking malicious actions to perpetrators [4], [5]. This triage process is critically time-sensitive: data protection regulations impose strict limits on the retention of IP-related data [6], and cross-border investigations introduce procedural delays. If leads are not pursued promptly, evidence may be irretrievably lost. The scale of modern web server logs, often millions of entries daily, renders manual analysis impractical [2], [3], [7]. Tra-ditional automation approaches rely on forensic experts using custom scripts and predefined rule sets, such as YARA [8] and Sigma [9], to identify known attack patterns. However, these methods are inherently limited by the rules applied; without prior knowledge of the specific attack vector, identifying the correct ruleset remains a significant challenge. Machine Learning (ML) and Deep Learning (DL) techniques such as Decision Trees, SVMs, and Hidden Markov Models have shown promise in anomaly detection [10]–[13], but present significant limitations in forensic contexts. These supervised methods require substantial labeled training data, which is scarce given the sensitive nature of attack logs and continuous emergence of new patterns [14]. Additionally, the opacity of ML models, commonly known as the ”black box” problem, poses fundamental challenges where reasoning must be trans-parent, reproducible, and legally admissible [15]. Large Language Models (LLMs) [16] present a compelling alternative for forensic log analysis. LLMs can process un-structured textual data while generating human-readable expla-nations, which is valuable when investigators must articulate reasoning to legal stakeholders [17]. Moreover, LLMs demon-strate few-shot learning capabilities, potentially enabling effec-tive analysis without extensive labeled datasets [18]. Recent studies have explored LLM applications in digital forensics, including memory forensics triage [19], system log anomaly detection [20]–[22], and report generation [23], through fine-tuning-based and prompt engineering-based strategies. However, these methods exhibit fundamental limitations when applied to web server log analysis. First, existing LLM-based methods target operational system logs (e.g., HDFS [24], BGL [25], Thunderbird [25]) rather than web server logs, addressing fundamentally different detection challenges. System logs record internal runtime events with structured templates, where anomalies manifest as deviations from ex-pected execution sequences [26]. In contrast, web server logs capture external HTTP requests containing adversarial pay-loads that are deliberately crafted to evade detection, including SQL injection, cross-site scripting, and path traversal attacks, often employing sophisticated obfuscation techniques. Second, fine-tuning-based methods require tens of thousands of la-beled training samples, conflicting with forensic investigations where labeled attack examples are scarce during initial triage. Third, prompt engineering-based methods suffer from high false positive rates due to limited domain-specific knowledge, failing to provide structured, forensically sound reasoning. Our experimental results in Table I summarize the limitations of standard prompting techniques when evaluating on CSIC 2010 [27]. To address these challenges, we propose CEF-Log , a context-enhanced few-shot chain-of-thought prompting strategy, which systematically integrates expert forensic knowledge into the reasoning process. Our approach constructs domain-specific reasoning templates guiding the LLM through structured analysis: log parsing, forensic feature extraction, contextual interpretation, and classification with justification. Each few-shot example includes detailed reasoning traces demonstrating expert analysis, from identifying suspicious URL patterns to recognizing obfuscation techniques. This effectively transfers domain expertise to the LLM, enabling expert-level analysis with minimal examples. Our experiments demonstrate that CEF-CoT achieves performance comparable to 40-example few-shot prompting using only 4 examples, representing a 10 ×
+
+improvement in sample efficiency. Furthermore, to demon-strate the effectiveness of our proposed method, we also                                   
+
+> arXiv:2606.08649v1 [cs.CR] 7 Jun 2026 2
+> TABLE I LIMITATIONS OF STANDARD PROMPTING PARADIGMS IN FORENSIC WEB LOG TRIAGE
+> Prompting Paradigm Data Requirement Average Recall Average F1-Score Primary Forensic Limitation
+> Zero-Shot None 0.59 0.73 High rate of false negatives; lacks contextual depth for complex attacks Few-Shot (Standard) High (40 examples) 0.96 0.98 Requires excessive pre-labeled data, which is rarely available in active investigations Role-Based None 0.52 0.68 Marginal improvement over zero-shot; fails to provide signif-icant performance gains
+> Ours Low (4 examples) 0.95 0.99 -
+
+collect a new realistic dataset derived from current web server logs, synthetically enriched with multi-step attack patterns that better represent modern threat landscapes. 
+
+Contributions. Our contributions include:  
+
+> •
+
+A novel CEF-Log prompting method achieving F1-score of 0.99 on the CSIC 2010 dataset with only four exam-ples, outperforming traditional ML and existing prompt-ing strategies;  
+
+> •
+
+A new realistic dataset, namely ForenWebLog, derived from current web server logs, synthetically enriched with multi-step attack patterns such as web shell execution and sophisticated Denial of Service (DoS) attempts. We also validate CEF-Log on this dataset to show its effetiveness against real-world attacks;  
+
+> •
+
+A structured evaluation of LLM reasoning, confirming that these models can generate detailed, human-readable justifications that overcome the ”black-box” limitations inherent in earlier automated systems;  
+
+> •
+
+Comprehensive comparison against ML baselines (SVM, Random Forest) and prompting techniques (zero-shot, few-shot, CoT) on two datasets using accuracy, precision, recall, and F1-score metrics. 
+
+Paper Organization. The remainder of this paper is organized as follows. Section II provides background on web server logs, forensic triage, and the anomaly detection problem formula-tion. Section III reviews related work in ML/DL-based web at-tack detection and LLM-based log analysis. Section IV details the CEF-Log methodology, including the reasoning template design, few-shot example construction, and the ForenWebLog dataset collection framework. Section V presents experimental results and analysis. Section VI concludes the paper. II. B ACKGROUND 
+
+This section provides foundational concepts essential for un-derstanding the challenges of malicious web server log detec-tion. We first distinguish web server logs from system logs, then introduce the forensic triage process, and finally formalize the anomaly detection problem with particular attention to the distinction between stable and unstable log distributions. 
+
+A. Web Server Logs 
+
+Web server logs are generated by HTTP servers (e.g., Apache, Nginx, IIS) that capture details of client requests and server responses. A typical log entry in Common Log Format (CLF) or Combined Log Format contains the following fields: client IP address, timestamp of the request, request line, response code (HTTP status code returned by the server), response size, referrer (the URL from which the request originated), and User-Agent (client software identification string) [28]. An example log entry is shown in Fig. 1. 
+
+192.168.1.100 - - [15/Dec/2024:10:15:32 +0000] "GET /search?q=admin’%20OR%201=1-- HTTP/1.1" 200 5234 "http://example.com" "Mozilla/5.0"  
+
+> Fig. 1. Example web server log entry in Combined Log Format containing a SQL injection attempt in the query parameter.
+
+Web server logs differ fundamentally from system logs (e.g., HDFS [7], BGL, Thunderbird [25]) in several critical aspects, as summarized in Table II. System logs record internal runtime events generated by software components, typically following predefined templates where dynamic values (e.g., process IDs, memory addresses) are inserted into static text patterns [29]. Anomalies in system logs manifest as deviations from expected execution sequences, which are an unusual ordering of events or the presence of unexpected log templates.                    
+
+> TABLE II COMPARISON BETWEEN SYSTEM LOGS AND WEB SERVER LOGS
+> Characteristic System Logs Web Server Logs
+> Source Internal application/OS events External HTTP requests Structure Template-based with pa-rameters Semi-structured with free-form payloads Content Runtime states, errors, diagnostics URLs, parameters, head-ers, user input Threat Model Operational anomalies, system failures Adversarial attacks, de-liberate evasion Anomaly Type Sequence deviations, unexpected events Malicious payloads, in-jection attacks
+
+In contrast, web server logs capture external requests that may contain adversarial payloads deliberately crafted to evade detection. Attack payloads such as SQL injection (’ OR 1=1--), cross-site scripting (<script>alert(1)</script> ), and path traversal (../../etc/passwd ) are intentionally obfuscated using encoding techniques (URL encoding, Unicode normalization, case manipulation) to bypass security controls. This adversarial nature necessitates detection approaches that 3
+
+understand attack semantics rather than merely pattern matching against known templates. 
+
+B. Anomaly Detection on Web Server Logs Training Data  Testing Data       
+
+> Web App v1.0 Web App v2.0
+> GET /search?q=phone
+> GET /product/123
+> POST /login
+> GET /search?q=' OR 1=1--
+> GET /../../../etc/passwd
+> POST /api/v2/search
+> GET /product/456
+> GET /graphql?query=...
+> {"q":"admin'--"}
+> GET /?q=%27%4F%52...
+> Unseen
+> pattern
+> Normal Attack
+> Legend:
+> Distribution Shift
+> New endpoint
+> New API
+> Attack in JSON
+> New
+> obfuscation
+> Fig. 2. Illustration of unstable web server logs. Training data from Web App v1.0 follows distribution Ptrain , while testing data from v2.0 follows a different distribution Ptest due to application updates, evolving attack techniques, and new obfuscation methods. Dashed boxes indicate patterns not present in training data.
+
+Anomaly detection in web server logs constitutes a binary classification task: given a log entry or sequence of entries, determine whether it represents normal traffic or malicious activity. We formalize the distinction between stable and 
+
+unstable log distributions, adapting concepts from recent work in system log analysis [29] to the web server domain. 
+
+Definition 1 (Stable Logs) . Web server logs are stable when both training and testing data are drawn from the same underlying distribution P. The distribution encompasses the set of legitimate endpoints and their usage patterns, normal parameter value distributions, typical user-agent distributions and access patterns, and known attack types and their mani-festations. 
+
+In stable conditions, a detection model trained on historical data encounters test instances that reflect the same web appli-cation structure, user behavior, and threat landscape. 
+
+Definition 2 (Unstable Logs) . Web server logs are unstable when training Ptrain and testing Ptest data are drawn from different underlying distributions ( Ptrain ̸ = Ptest ). 
+
+Definition 3 (Anomaly Detection on Stable Logs) . Let Dtrain 
+
+denote the training dataset and Dtest S denote the testing dataset, both sampled from the same distribution P. The stable anomaly detection task aims to learn a classifier f : X → {0, 1} from Dtrain that accurately predicts labels on Dtest S .
+
+Definition 4 (Anomaly Detection on Unstable Logs) . Let 
+
+Dtrain be sampled from distribution Ptrain and Dtest U be sam-pled from a different distribution Ptest where Ptrain ̸ = Ptest .The unstable anomaly detection task aims to learn a classifier 
+
+f from Dtrain that generalizes to Dtest U despite the distribution shift. 
+
+The unstable log detection problem is substantially more chal-lenging because models must generalize beyond their training distribution. Traditional ML approaches, which learn decision boundaries optimized for the training distribution, often fail catastrophically when distributions shift. This motivates our approach of leveraging LLMs with domain-specific prompting, which can reason about attack semantics rather than relying solely on statistical patterns that may not transfer across distributions. Fig. 4 illustrates unstable web server logs. III. R ELATED WORK 
+
+A. Machine Learning (ML) and Deep Learning (DL) in Web-based Attack Detection 
+
+Researchers have utilized ML techniques for anomaly detec-tion in log data. Early statistical approaches employed textual feature extraction methods to model attack patterns. Ren et al. [30] pioneered the use of Bag-of-Words representations for web payload analysis, subsequently applying Hidden Markov Models (HMMs) to capture sequential dependencies in normal traffic behavior. Building on this idea, Cao et al. [11] intro-duced a hierarchical classification framework that combines a decision tree with HMM-based behavioral modeling. Their two-stage architecture first discriminates between benign and suspicious entries using structural features before employing trained HMMs to identify deviations from legitimate traffic distributions. Complementary work by Saleem [10] demon-strated the efficacy of term frequency-inverse document fre-quency (TF-IDF) vectorization for multiclass attack classifi-cation. The emergence of DL has enabled more sophisticated rep-resentation learning for web attack detection. Tekerek [31] proposed a payload-based anomaly detection system that iden-tifies anomalous patterns in HTTP traffic. By translating HTTP payloads into binary pixel maps, this method leverages the powerful pattern-recognition capabilities of CNNs to detect unknown threats that signature-based systems might miss. Eunaicy et al. [32] explored the use of the Long Short-Term Memory model for capturing temporal dependencies in web at-tack sequences. Pan et al. [33] designed an autonomic intrusion detection system using end-to-end DL with stacked denoising autoencoders to recognize anomalies without manual feature engineering. By leveraging the Robust Software Modeling Tool, the system calculates reconstruction errors to establish a threshold between normal execution and malicious activities such as SQL injection and cross-site scripting. Despite these advances, empirical evaluations [34], [35] con-sistently reveal a fundamental limitation: both traditional ML classifiers (e.g., SVMs, k-NN) and DL architectures require substantial quantities of labeled training data to achieve ac-ceptable detection rates. This requirement poses significant challenges in forensic contexts where ground-truth labels are scarce, and attack patterns continuously evolve. 4
+
+B. Large Language Models (LLMs) for Anomaly System Log Detection 
+
+Recent studies have explored LLM applications in log anal-ysis through two primary paradigms: fine-tuning-based and prompting-based approaches. 
+
+Fine-tuning-based methods adapt pre-trained LLMs to spe-cific log datasets through supervised learning. LogLLM [20] employs a dual-encoder architecture combining BERT for semantic vector extraction with Llama for sequence classi-fication. This method requires a three-step training procedure across tens of thousands of samples. LLMeLog [36] utilizes ChatGPT 3.5 to enrich log events with domain knowledge and anomaly tendency through a structured prompt designed for in-context learning. These enriched events are then used to fine-tune a pre-trained BERT model via a hierarchical met-ric loss, which subsequently generates event representations for training a transformer-based anomaly detection model. LLM-LADE [22] fine-tunes LLaMA3-8B using Low-Rank Adaptation (LoRA) with GPT-4-augmented training data. To maintain performance in dynamic environments, LLM-LADE incorporates focal loss to address class imbalance and an online knowledge base for continuous optimization. Moreover, LLM-LADE also explains anomalies by outputting label-cause pairs that associate a detection label with a natural language description of the anomaly’s underlying cause. FLEXLOG [29] is a hybrid approach that integrates a fine-tuned Mistral with traditional ML models using ensemble learning. To han-dle unstable system logs effectively, the method incorporates Retrieval-Augmented Generation to provide contextual infor-mation and a cache mechanism to enhance inference efficiency. FLEXLOG effectively uses only 500 fine-tuning samples, but can achieve up to a 13 percentage point increase in F1 score. 
+
+Prompting-based methods leverage the zero-shot or few-shot capabilities of LLMs through carefully designed prompts. LogGPT [37] utilizes a prompt construction strategy consisting of a task description, format statement, human knowledge injection, and input sequences to guide ChatGPT in identifying anomalies and providing explanations. However, this approach encounters significant scalability bottlenecks; as log grouping windows expand, the context window limitations of the LLM often lead to information loss. RAGLog [38] addresses these constraints by incorporating a Retrieval-Augmented Genera-tion framework. Specifically, RAGLog dynamically retrieves semantically similar historical logs and known anomaly pat-terns from a vector database to provide the model with ”in-context” grounding without over-leveraging the prompt’s token limit. Building on this, LogPrompt [21] employs Chain-of-Thought (CoT) prompting to improve anomaly detection by guiding the model through reasoning steps. While avoiding the training data requirements of fine-tuning approaches, these methods remain prone to high false-positive rates. This is primarily due to the LLMs’ lack of domain-specific knowledge and their tendency to hallucinate under ambiguous log syntax [39]. Our work fills the current gaps of existing prompting-based ap-proaches by integrating structured forensic domain knowledge through context-enhanced reasoning templates. Our work also achieves sample efficiency comparable to zero-shot methods while maintaining detection performance approaching fine-tuning approaches, requiring only 4 annotated examples com-pared to the tens of thousands needed by LogLLM or LLM-LADE. IV. M ETHODOLOGY 
+
+A. Problem Formulation 
+
+We formalize the task of malicious web server log detection as a binary classification problem augmented with explainability requirements essential for forensic investigations. 
+
+Input Representation. Let L = {l1, l 2, . . . , l n} denote a sequence of web server log entries. Each log entry li is represented as a tuple: 
+
+li = ( ip i, t i, m i, u i, s i, r i, a i, H i), (1) where ip i, t i, m i ∈ { GET , POST , PUT , DELETE , · · · } , u i,si, r i, a i, H i = {(kj , v j )}|Hi| 
+
+> j=1
+
+denotes the client IP address, the timestamp, the HTTP status code, the referrer URL, the User-Agent string, and additional HTTP headers as key-value pairs (e.g., cookies, content-type, custom headers), respectively. 
+
+Output Specification. Unlike conventional anomaly detection systems that produce only binary labels, forensic triage de-mands interpretable outputs. We define the output for each log entry li as a pair: 
+
+oi = ( yi, e i), (2) where yi ∈ { Benign , Attack } is the classification label, and ei
+
+is a natural language explanation from LLM that explains the reasoning behind the classification. The explanation ei must satisfy the following forensic requirements: 1) Traceability : ei must reference specific elements within 
+
+li that influenced the classification decision. 2) Accuracy : ei must correctly identify attack vectors (e.g., SQL injection, XSS, path traversal) when present. 
+
+Classification Objective. Given a log sequence L and a small set of labeled examples Df ew = {(lj , y j , e j )}kj=1 where k ≪|L| , the objective is to learn a classification function: 
+
+f : L × D f ew → { (ˆ yi, ˆei)}ni=1 (3) In our approach, k = 4 , representing a significant reduction compared to traditional few-shot methods requiring k ≥ 40 
+
+examples. Following Definition 4, web server log analysis inherently op-erates under unstable conditions. The training examples Df ew 
+
+are drawn from distribution Ptrain representing known attack patterns, while the test logs L may follow a different distribu-tion Ptest due to: (1) Novel attack variants not represented in training examples; (2) Application-specific URL structures and parameter schemas; and (3) Evolving obfuscation techniques designed to evade known signatures. 5Few-shot 
+
+> Examples Reasoning Templates
+
+Context-Enhanced Prompt 
+
+> Output
+> classification label
+> explanation
+> Output
+> classification label
+> explanation
+> Output
+> classification label
+> explanation
+> Output
+> classification label
+> explanation
+> 1. URL Structure
+> Analysis
+> 2. Request Parameter
+> Examination
+> 3. Header Analysis
+> 4. Attack Pattern
+> Recognition
+> 5. Contextual
+> Interpretation
+
+# LLM Output Classification 
+
+> (Benign, Attack) Explanation
+> Forensic Reasoning
+
+Fig. 3. Overview of CEF-Log for forensic web log classification. Few-shot examples paired with a five-step reasoning template guide the LLM through structured analysis, producing classifications with forensically sound explanations. 
+
+Our approach addresses this distribution shift by encoding transferable forensic reasoning principles rather than mem-orizing specific attack signatures, enabling generalization to previously unseen attack patterns. 
+
+B. CEF-Log: Context-Enhanced Few-Shot Chain-of-Thought Prompting 
+
+This section presents CEF-Log, our proposed prompting strat-egy that systematically integrates forensic domain expertise into LLM-based log analysis. 
+
+1) Overview: CEF-Log combines three complementary tech-niques: (1) chain-of-thought prompting to encourage struc-tured reasoning, (2) few-shot learning to demonstrate expert analysis patterns, and (3) domain-specific context enhance-ment to inject forensic knowledge. Fig. 3 illustrates the overall architecture. The prompt construction pipeline consists of four stages. First, we define a reasoning template T that decomposes log analysis into discrete analytical steps reflecting expert investigative methodology. Second, we construct a few-shot example set Df ew containing representative attack instances paired with detailed reasoning traces. Third, we assemble the complete prompt by combining task instructions, the reasoning template, few-shot examples, and the target log entries. Finally, the LLM processes this prompt to generate classifications with accompanying explanations. Formally, let M denote the LLM, T the reasoning template, 
+
+Df ew = {(lj , r j , y j )}kj=1 the few-shot examples where rj
+
+represents the reasoning trace for log entry lj , and Ltest 
+
+the target log entries. The CEF-Log classification function is defined as: 
+
+fCEF (Ltest ) = M(P(T , Df ew , Ltest )) (4) where P(·) denotes the prompt assembly function that con-structs the complete input prompt. 
+
+2) Reasoning Template Design: The reasoning template T
+
+structures the analytical process into five sequential steps. This designed template serves two purposes: it guides the LLM through systematic examination of all relevant features, and it produces explanations that align with forensic documentation standards. These five steps are derived from established forensic in-vestigation practices, reflecting the cognitive workflow that experienced analysts follow when triaging web server logs. By encoding this domain expertise directly into the prompt structure, we achieve two objectives: guiding the LLM toward systematic and thorough analysis that minimizes oversight of subtle attack indicators, while simultaneously ensuring that the generated explanations align with forensic documentation standards required for legal proceedings. 
+
+Step 1: HTTP Method and URL Structure Analysis. The first analytical step examines the request line components. The LLM evaluates whether the HTTP method is appropriate for the target resource, presence of suspicious patterns in the URL path (e.g., directory traversal sequences such as 
+
+../ , access attempts to sensitive files like .htaccess or 
+
+web.config ), anomalous URL encodings that may indicate obfuscation attempts, and query parameter structure and nam-ing conventions. This step addresses static attacks that attempt to access restricted resources and identifies obvious structural anomalies. 
+
+Step 2: Request Parameter Examination. The second step performs a deep inspection of all request parameters, en-compassing URL query strings, POST body data, and other payload-carrying fields. The analysis includes extraction and decoding of URL-encoded content, identification of injection patterns (i.e., SQL keywords, script tags, system commands), detection of parameter tampering (i.e., modified field names, unexpected data types), and recognition of fuzzing indicators (i.e., boundary values, malformed inputs). This step targets dynamic attacks that exploit input validation vulnerabilities. 
+
+Step 3: HTTP Header Analysis. The third step examines HTTP headers for anomalous content, including cookie values 
+
+for session manipulation or injection attempts, User-Agent strings for known malicious tools or inconsistencies, referrer 6
+
+headers for cross-site request patterns, and custom headers 
+
+that may carry attack payloads (e.g., Log4Shell attacks via 
+
+X-Forwarded-For ). 
+
+Step 4: Attack Pattern Recognition. The fourth step synthe-sizes observations from previous steps to identify known and unknown attack categories:  
+
+> •
+
+SQL Injection : presence of SQL syntax, logical operators, comment sequences  
+
+> •
+
+Cross-Site Scripting (XSS) : script tags, event handlers, JavaScript URIs  
+
+> •
+
+Path Traversal : directory navigation sequences, absolute path references  
+
+> •
+
+Command Injection : shell metacharacters, command chaining operators  
+
+> •
+
+Authentication Attacks : credential stuffing patterns, ses-sion fixation attempts  
+
+> •
+
+Suspicious Attacks : target unknown attacks, but LLM suspects it is an attack The LLM leverages its pre-trained knowledge of attack signa-tures while remaining alert to obfuscated variants. 
+
+Step 5: Contextual Interpretation. It considers whether the observed patterns could result from legitimate user behavior and evaluates the plausibility of the request within normal application workflows. The analysis also examines correlation with other requests from the same source for multi-step attack detection. Finally, an overall risk assessment integrates all preceding observations. This step is critical for reducing false positives by distinguishing genuine attacks from benign anomalies. 
+
+3) Few-shot Example Construction: Unlike conventional few-shot learning [37], [38], where examples provide a represen-tative sample for pattern memorization, CEF-Log’s examples serve to demonstrate the application of the reasoning method-ology. The primary objective is to teach the LLM how to systematically analyze logs rather than what specific patterns to detect. This fundamental shift, from pattern memorization to forensic analysis , explains why CEF-Log requires only 4 examples compared to the 40+ typically needed for standard few-shot prompting. 
+
+Example Structure. Each few-shot example (lj , r j , y j ) ∈Df ew comprises three components:  
+
+> •
+
+Log Entry lj : The complete HTTP request in structured format (JSON representation preserving all fields)  
+
+> •
+
+Reasoning Trace rj : Step-by-step analysis following tem-plate T , explicitly documenting observations and infer-ences at each step  
+
+> •
+
+Classification yj : Final label with summary justification The reasoning trace rj is critical for effective knowledge transfer. Rather than merely providing input-output pairs, the detailed reasoning demonstrates how to analyze logs, enabling the LLM to generalize the analytical methodology to novel instances. 
+
+Example Set Composition. We identify four fundamental detection challenges that, when addressed through examples, enable generalization across the attack landscape: (1) payload decoding , recognizing obfuscated content through URL encod-ing or other techniques; (2) structural anomaly detection , iden-tifying subtle parameter modifications indicative of automated tools; (3) semantic validation , detecting inputs that violate domain constraints; and (4) injection pattern recognition , iden-tifying embedded executable content. By providing examples that represent these four challenges, we provide a sufficient demonstration of the reasoning methodology for the LLM to generalize effectively. Our experimental results in Section V validate this design: CEF-Log with k = 4 examples achieves an F1-score of 0.98 , matching the performance of standard few-shot prompting with k = 40 examples while requiring 
+
+10 × fewer labeled samples. 
+
+4) Prompt Assembly: The complete prompt is assembled by concatenating four components in sequence: task instructions, reasoning template with few-shot examples, analysis directive, and target log entries. 
+
+Component 1: Task Instructions. The prompt begins with a clear task specification: 
+
+“Analyze the following HTTP requests to determine if they are malicious. First, I will provide you with examples demonstrating step-by-step analysis methodology.” 
+
+This establishes the classification objective and signals that worked examples will follow. 
+
+Component 2: Reasoning Template with Examples. Each few-shot example is presented with its complete reasoning trace, structured according to template T . The reasoning explicitly labels each analytical step: 
+
+“Step 1: URL Analysis — The URL http://... con-tains...” “Step 2: Analyze request data — The method is POST, examining Post-Data reveals...” “...” “Final Classification: Attack” 
+
+This structured presentation reinforces the analytical method-ology and provides concrete instantiations of each reasoning step. 
+
+Component 3: Analysis Directive. Following the examples, we include instructions for analyzing the target data: 
+
+“Now, analyze the following data using the same step-by-step reasoning process and provide a final classification. Also incorporate your own knowledge about additional attack patterns not covered in the examples.” 
+
+The final sentence is important: it explicitly authorizes the LLM to leverage its pre-trained knowledge of attack patterns 7
+
+Algorithm 1 CEF-Log Classification 
+
+Require: Log entries Ltest = {l1, . . . , l n}, Few-shot exam-ples Df ew , Reasoning template T , LLM M
+
+Ensure: Classifications with explanations {(ˆ yi, ˆei)}ni=1 
+
+1: prompt ← TASK INSTRUCTION () 
+
+2: for each (lj , r j , y j ) ∈ D f ew do 
+
+3: prompt ← prompt ∥ FORMAT EXAMPLE (lj , r j , y j , T )
+
+4: end for 
+
+5: prompt ← prompt ∥ ANALYSIS DIRECTIVE () 
+
+6: prompt ← prompt ∥ FORMAT LOG ENTRIES (Ltest )
+
+7: response ← M (prompt )
+
+8: {(ˆ yi, ˆei)}ni=1 ← PARSE RESPONSE (response )
+
+9: return {(ˆ yi, ˆei)}ni=1 
+
+beyond those demonstrated in the examples, enabling gener-alization to novel attack types. 
+
+Component 4: Target Log Entries. The log entries requiring classification are provided in structured JSON format, preserv-ing all fields from the original log representation. Each entry includes a unique record identifier to enable unambiguous mapping between inputs and outputs. 
+
+Output Format Specification. To facilitate automated pro-cessing of results, we constrain the LLM output to struc-tured JSON format containing, for each log entry: the record identifier, classification label, and concise reasoning summary. We enforce this format using the native structured output capabilities of the target LLM APIs (e.g., Pydantic schemas for Google Gemini, tool-based formatting for Anthropic Claude). Algorithm 1 summarizes the complete CEF-Log classification procedure. 
+
+C. ForenWebLog Dataset Collection Framework Web Hosting Environment         
+
+> FreeBSD
+> Server
+> nginx HTTP
+> Server php-fpm MariaDB/P
+> ostgreSQL
+> Redis/Me
+> mcached
+> WordPress
+> Installation
+> Benign Data
+> Page navigation
+> Resource loading
+> Crawler access
+> Real-world Attacks
+> SQL Injection, XSS
+> Path traversal
+> Log4Shell attempts
+> Brute force attacks
+> Real-world Attacks
+> Web shell deployment
+> Credential brute forcing
+> DoS sequences
+> Attack chains
+> Privacy-Preserving Anonymization
+> IP Pseudonymization Temporal Preservation Content Filtering
+> Deterministic mapping
+> Exclude reserved
+> ranges
+> Maintain inter-request
+> intervals for attacks
+> Remove credentials
+> Preserve attack
+> payloads
+> ForenWebLog Dataset
+> Benign
+> 500
+> False Positives Stand-alone Attacks Multi-step Attacks
+> 25 32,281 175
+
+Fig. 4. Illustration of ForenWebLog Dataset Collection Framework. 
+
+Existing web server log datasets exhibit significant limitations for evaluating LLM-based forensic analysis. The CSIC 2010 dataset [27], while widely adopted, lacks temporal informa-tion essential for detecting time-based attacks such as DDoS and brute force attempts. Furthermore, each request stands in isolation without contextual relationships to subsequent entries, limiting the evaluation of multi-step attack detec-tion capabilities. The ECML/PKDD 2007 dataset [40] suffers from excessive randomization that renders legitimate traffic indistinguishable from attacks without ground-truth labels. To address these gaps, we constructed a new dataset derived from production web server logs, incorporating both authentic attack traffic and synthetically generated multi-step attack sequences. 
+
+1) Collection Framework: Our data collection leverages a production web hosting environment operational for several years. The server runs FreeBSD [41] with nginx as the HTTP server and php-fpm for dynamic content, with MariaDB/Post-greSQL backends [42], [43] and Redis/Memcached caching [44]. The logging configuration generates separate log files for each hosted web application, stored in a centralized location with automated rotation managed by the operating system. Logs follow the Combined Log Format, capturing: client IP address, request timestamp with timezone, HTTP method and URI, response status code, response size in bytes, referrer URL, and User-Agent string. This standardized format ensures compatibility with common analysis tools while preserving all fields necessary for forensic investigation. The primary data source is a WordPress installation serving the local volunteer fire department website—selected because it serves only informational content (preserving privacy) while attracting substantial attack traffic as a high-value target. Data extraction employed Unix utilities and custom Python scripts over a multi-month collection period. 
+
+2) Data Sources: The primary data source is a WordPress installation serving as the public website for a local vol-unteer fire department. There are two primary reasons for this choice: (1) it serves exclusively informational content with no user-specific URL patterns that could compromise privacy; (2) WordPress installations are high-value targets due to widespread deployment and frequently outdated configura-tions, attracting substantial attack traffic. Our dataset integrates three complementary data sources to ensure comprehensive coverage of both common and sophis-ticated attack patterns: 
+
+Benign Data. Legitimate requests including page navigation, resource loading, and crawler access from established services (Googlebot, GPTBot, AhrefsBot). 
+
+Real-World Attack Traffic. Authentic attacks harvested from production logs: SQL injection, cross-site scripting, path traversal, command injection, Log4Shell attempts, and brute force attacks with varying obfuscation levels. 
+
+Synthetic Multi-Step Attacks. While real-world logs con-tained various attack types, certain sophisticated multi-step attack patterns were underrepresented due to log rotation policies and the tendency of automated attack tools to abort upon initial failure. We therefore synthesized additional attack sequences based on documented exploitation techniques, in-cluding: 8 
+
+> •
+
+Web shell deployment : Path traversal or file upload ex-ploitation followed by remote code execution via the uploaded script  
+
+> •
+
+Credential brute forcing : Repeated authentication at-tempts against login endpoints with varying credentials  
+
+> •
+
+Denial of Service : High-frequency requests targeting resource-intensive endpoints (e.g., XML-RPC, search functionality) These synthetic sequences preserve realistic timing charac-teristics and request structures derived from observed attack patterns. 
+
+3) Privacy-preserving Anonymization: Our anonymization pipeline implements: (1) IP pseudonymization , (2) temporal preservation , and (3) content filtering .
+
+IP Address Pseudonymization. All client IP addresses are replaced with randomly generated addresses using a determin-istic mapping within each log file. This approach preserves the critical property that requests from the same source maintain consistent identifiers, enabling detection of multi-step attacks and behavioral patterns. Generated addresses explicitly ex-clude reserved ranges (private networks, multicast, loopback) to prevent false attribution of suspicious characteristics. 
+
+Temporal Preservation. For single-request entries, times-tamps are randomized independently. However, for multi-step attack sequences, we preserve relative timing by randomizing only the initial timestamp while maintaining inter-request intervals. This design choice is critical: temporal patterns often distinguish malicious automation (sub-second intervals between requests) from human behavior, and serve as essential features for detecting DDoS and brute force attacks. 
+
+Content Filtering. URL paths and query parameters are retained to preserve attack payload semantics. However, we manually reviewed entries to remove any inadvertently cap-tured credentials or session tokens, replacing them with place-holder values while maintaining structural validity. The anonymization process is formally defined as: 
+
+l′ 
+
+> i
+
+= A(li) = ( ϕ(ip i), τ (ti, Si), m i, u i, s i, r i, a i, H i) (5) where ϕ : IP → IP ′ is the IP pseudonymization function with consistent mapping, τ adjusts timestamps based on se-quence membership Si, and remaining fields are preserved unchanged.                 
+
+> TABLE III MULTI -S TEP ATTACK CATEGORIES IN OUR DATASET
+> Category Steps Variants Key Indicators
+> DoS 50+ 3Request frequency, payload size Brute Force 20–50 3Login endpoints, same source IP Web Shell 23Upload then execute pattern
+
+4) Multi-Step Attack Enrichment: We categorize multi-step attacks into three categories. A distinguishing feature of our dataset is the inclusion of multi-step attack sequences that require contextual analysis across multiple log entries. We define three categories of enriched attack patterns:  
+
+> •
+
+Denial of Service (DoS) Sequences. (1) XML-RPC abuse targeting WordPress installations with repeated POST requests to /xmlrpc.php ; (2) application-layer flooding via oversized POST payloads to dynamic end-points; and (3) resource exhaustion through rapid requests to computationally expensive pages. Each sequence con-tains 50 attack requests interspersed with legitimate traffic to evaluate detection under realistic conditions.  
+
+> •
+
+Brute Force Sequences. Authentication attacks are represented through repeated login attempts against WordPress ( wp-login.php ) and webmail interfaces (Roundcube).  
+
+> •
+
+Web Shell Attack Chains. The most sophisticated cate-gory involves two-phase attacks: initial exploitation fol-lowed by execution of the deployed payload. Exploitation vectors include: (1) path traversal combined with PEAR command injection [45] to write PHP files; (2) WebDAV PUT [46] requests to upload executable content; and (3) exploitation of vulnerable file upload endpoints (e.g., Gravity Forms plugin). 
+
+5) Dataset Composition and Statistics: The final dataset com-prises 32,981 log entries organized into four categories as detailed in Table IV.             
+
+> TABLE IV DATASET COMPOSITION
+> Category Count Description
+> Benign 500 Legitimate traffic False Positives 25 HTTPS-on-HTTP attempts Stand-alone Attacks 32,281 Single-request attacks Multi-step Attacks 175 Attack sequences
+> Total 32,981
+
+V. E XPERIMENTS 
+
+A. Experiments Setup 1) Datasets: We evaluate CEF-Log on two datasets represent-ing distinct forensic scenarios. 
+
+CSIC 2010 Dataset [27]. This dataset contains over 36,000 HTTP requests targeting an e-commerce application, labeled as normal or anomalous. We use stratified sampling to extract balanced test sets of 100 entries (50 normal, 50 anomalous) across five random seeds, ensuring reproducibility while main-taining class distribution. 
+
+ForenWebLog Dataset . We also evaluate our proposed method against real-world attacks in our collected dataset -ForenWebLog. For each experimental seed, we sample: 50 benign requests, 40 stand-alone attacks, 2 multi-step attack sequences (comprising multiple log entries each), and 5 false positive candidates (HTTPS-on-HTTP connection attempts that appear suspicious but are benign). This composition specifically tests the model’s ability to distinguish sophisti-cated attacks from benign anomalies. 
+
+2) LLM Models: We conduct experiments with two popular LLMs via API. For Google Gemini Flash 2.5 , we use it for all experiments. The model supports up to 1,048,576 input tokens 9
+
+and 8,192 output tokens, enabling analysis of substantial log batches. We also use Claude 3.7 Sonnet for cross-validation on selected experiments to confirm that improvements stem from our proposed prompting CEF-Log method. 
+
+3) Metrics: We adopt standard classification metrics derived from the confusion matrix: Accuracy (Acc.) = T P + T N T P + T N + F P + F N (6) Precision (Prec.) = T P T P + F P , Recall (Rec.) = T P T P + F N 
+
+(7) F1-Score = 2 · Precision · Recall Precision + Recall (8) where T P , T N , F P , and F N denote true positives, true negatives, false positives, and false negatives, respectively. In the forensic context, Recall measures the proportion of actual attacks correctly identified (critical for ensuring no threats are missed), while Precision measures the reliability of attack classifications (important for minimizing investigator workload on false alarms). All experiments are repeated across five random seeds, and we report mean and standard deviation to assess stability. 
+
+4) Baselines: We compare CEF-Log against both prompting-based and machine learning baselines. 
+
+Prompting Baselines . We compare with zero-shot, role-based zero-shot, and few-shot prompting baselines. For the few-shot method, we evaluate with different k values (k ∈{1, 5, 10 , 15 , 20 , 25 , 30 , 35 , 40 }). We also compare our method with other prompting-based method for log data, including: LogPrompt [20] and LogGPT [37]. 
+
+Machine Learning (ML) Baselines . We compare with Sup-port Vector Machine (SVM), Random Forest (RF), and Logis-tic Regression (LR). Note that, ML baselines are trained on 40 labeled examples per seed (20 benign, 20 attack) to enable fair comparison with few-shot prompting at equivalent data requirements. 
+
+5) Prompts: Detailed prompts used for the zero-shot prompt-ing, role-based prompting, and few-shot prompting are:  
+
+> •
+
+Zero-shot prompting: ”Analyze the following HTTP re-quests and decide, if it is malicious or not. Use the words ’Benign’ and ’Attack’ for classification. Here is the data: 
+
+{experimental data }” 
+
+> •
+
+Role-based prompting: You are a {role name }. Analyze the following HTTP requests and decide, if it is mali-cious or not. Use the words ’Benign’ and ’Attack’ for classification. Here is the data: {experimental data }.We test with three main roles: computer forensic expert (Forensic ), cybercrime investigator ( Cybercrime ), and security specialist ( Security ).  
+
+> •
+
+Few-shot prompting: Analyze the following HTTP re-quests and decide, if it is malicious or not. Use the words ’Benign’ and ’Attack’ for classification. The following is a list of examples that you should refer to before giving the final decision: {list of examples }.
+
+6) Implementation Details: Our framework is implemented in Python using Google Generative AI SDK and Anthropic API. Structured JSON outputs are enforced via Pydantic schemas (Gemini) and tool-based formatting (Claude). Log entries are converted to JSON to preserve all HTTP fields, with custom parsers for each dataset format. Each condition is evaluated across five random seeds with stratified sampling; we report mean and standard deviation. 
+
+B. Experimental Results                                                                                         
+
+> TABLE V PERFORMANCE COMPARISON OF PROMPTING STRATEGIES ON CSIC 2010 D ATASET (G EMINI FLASH 2.5)
+> Method Acc. Prec. Rec. F1
+> Zero-Shot 0.79 0.99 0.59 0.73 Role-Based (Forensic) 0.76 0.99 0.52 0.68 Role-Based (Cybercrime) 0.76 1.00 0.53 0.68 Role-Based (Security) 0.75 0.99 0.50 0.66 Few-Shot ( k=10) 0.88 0.99 0.76 0.86 Few-Shot ( k=20) 0.89 0.99 0.78 0.87 Few-Shot ( k=40) 0.98 0.99 0.96 0.98
+> CEF-Log ( k=4) 0.98 0.99 0.98 0.98
+> TABLE VI CROSS -V ALIDATION : G EMINI FLASH 2.5 VS . C LAUDE 3.7 S ONNET ON
+> CSIC 2010
+> Method Model Acc. Prec. Rec. F1
+> Zero-Shot Gemini 0.79 0.99 0.59 0.73 Claude 0.76 0.99 0.53 0.67 Role-Based Gemini 0.76 0.99 0.52 0.68 Claude 0.77 0.99 0.54 0.68 CoT (Refined) Gemini 0.95 0.94 0.97 0.95 Claude 0.84 0.98 0.69 0.78
+> CEF-Log ( k=4) Gemini 0.98 0.99 0.98 0.98
+> Claude 0.97 0.99 0.95 0.97
+
+1) Performance Comparison with Standard Prompting Base-lines: In this section, we compare our method (CEF-Log) with standard and state-of-the-art (SoTA) prompting methods on the CSIC 2010 dataset using Gemini Flash 2.5. Additionally, we conduct cross-validation with Claude 3.7 Sonet to confirm the effectiveness of our proposed method. From Tables V-VII, we observe the following key findings::  
+
+> •
+
+CEF-Log achieves superior performance with min-imal examples. As shown in Table V, standard few-shot prompting requires k = 40 examples to reach 96% 
+
+recall and 98% F1-score. In contrast, CEF-Log achieves comparable performance using only four examples, repre-senting a 10 × improvement in sample efficiency through structured reasoning methodology rather than pattern memorization.  
+
+> •
+
+Cross-model validation confirms method general-izability. Table VI demonstrates that CEF-Log’s im-provements transfer across LLM architectures. The re-fined Chain-of-Thought baseline without domain-specific context shows substantial divergence between models (F1=0.95 for Gemini vs. 0.78 for Claude), indicating 10 
+
+that generic reasoning prompts are insufficient without forensic domain knowledge integration.  
+
+> •
+
+CEF-Log outperforms existing prompting-based methods. Table VII shows that, compared to LogGPT [37] and LogPrompt [21], CEF-Log can achieve perfect performance while requiring only 4 log examples.                    
+
+> TABLE VII PERFORMANCE COMPARISON OF STATE -OF -THE -ART PROMPTING
+> METHODS
+> Method Samples Prec. Rec. F1
+> LogGPT 10 0.587 1.0 0.74 LogPrompt 20 0.31 0.87 0.65 CEF-Log (Ours) 40.99 0.98 0.98
+
+2) Performance Comparison with ML Baselines: Table VIII compares CEF-Log against traditional ML classifiers trained on 40 labeled examples per seed. All ML baselines exhibit substantially lower performance: Random Forest achieves the highest ML accuracy at 67.2%, followed by Logistic Regres-sion (63.8%) and SVM (62.4%). The performance gap is particularly pronounced in F1-score, where CEF-Log (0.97) outperforms Random Forest (0.67) by 30 percentage points. This disparity stems from the fundamental limitation of ML approaches on small training sets: 40 examples provide insuf-ficient coverage of the diverse attack patterns in web server logs. In contrast, CEF-Log leverages the LLM’s pre-trained knowledge of attack semantics, using few-shot examples to demonstrate analytical methodology rather than exhaustively enumerate attack signatures.                           
+
+> TABLE VIII COMPARISON WITH MACHINE LEARNING BASELINES (G EMINI FLASH
+> 2.5, 40 T RAINING EXAMPLES )
+> Method Acc. Prec. Rec. F1
+> SVM 0.624 0.648 0.624 0.595 Random Forest 0.672 0.683 0.672 0.667 Logistic Regression 0.638 0.646 0.638 0.633
+> CEF-Log ( k=4) 0.97 0.99 0.95 0.97
+
+3) Sample Efficiency Comparison with Few-shot Prompting Baseline: A critical advantage of CEF-Log is sample effi-ciency while achieving high performance with minimal labeled data. Fig. 5 illustrates the relationship between example count and detection performance for standard few-shot prompting versus CEF-Log. Few-shot prompting exhibits monotonic improvement with example count: F1-score increases from 0.67 ( k=1) to 0.98 (k=40), with diminishing returns beyond k=30. CEF-Log achieves comparable performance (F1=0.98) with only four examples, which is a 10 × reduction in labeling requirements. This efficiency gain is attributed to the reasoning template, which teaches the LLM how to analyze logs rather than what 
+
+patterns to memorize. 
+
+4) Performance on ForenWebLog Dataset: We evaluate CEF-Log on the ForenWebLog dataset using only four examples. Table IX presents results across five sampling seeds. CEF-Log achieves 96% mean accuracy with perfect recall (100%), correctly identifying all attack instances. The 4% ac-curacy gap stems from false positives on benign traffic patterns 1 5 10 15 20 25 30 35 40 
+
+Number of Examples ( k)
+
+0.6 
+
+0.7 
+
+0.8 
+
+0.9 
+
+1.0 
+
+> F1-Score
+
+Few-Shot 
+
+CEF-Log (Ours)                                             
+
+> Fig. 5. Sample efficiency comparison between standard few-shot prompting and CEF-Log. Few-shot requires k=40 examples to achieve F1=0.98, while CEF-Log matches this performance with only k=4 examples. Shaded regions indicate standard deviation across five seeds. TABLE IX CEF-L OG PERFORMANCE ON FOREN WEB LOG DATASET
+> Seed Acc. Prec. Rec. F1
+> Seed 1 1.00 1.00 1.00 1.00 Seed 2 0.96 0.93 1.00 0.96 Seed 3 0.95 0.90 1.00 0.95 Seed 4 0.95 0.90 1.00 0.95 Seed 5 0.95 0.90 1.00 0.95
+> Mean ±Std 0.96 ±0.02 0.93 ±0.04 1.00 ±0.00 0.96 ±0.02
+
+not represented in CSIC 2010 examples. Notably, the model correctly classifies all false positive candidates (HTTPS-on-HTTP attempts), demonstrating robust discrimination between suspicious-appearing benign traffic and actual attacks. 
+
+C. Analysis 
+
+This section provides an analysis of CEF-Log’s performance characteristics, examining temperature sensitivity, reasoning quality, and multi-step attack detection capabilities. 
+
+1) Analysis on Temperature Tuning: We evaluated the effect of the temperature parameter τ on classification performance, varying from 0.2 to 2.0 across five random seeds per config-uration (Table X). Results show that accuracy remains stable (97 − 99% ) across all temperature values, with precision con-sistently near 100%. However, higher temperatures correlate with increased output variability, as evidenced by standard deviation in recall increasing from 0.05 ( τ = 1 .0) to 0.14 (τ = 2.0). We adopt τ = 1.0 for all experiments, as it provides the lowest variance while maintaining competitive performance. 
+
+2) Analysis on LLM-Reasoning: A distinguishing feature of LLM-based forensic analysis is the generation of human-readable explanations accompanying each classification. To evaluate reasoning quality, we conducted a qualitative assess-ment using 20 manually selected log entries (10 benign, 10 malicious) from the ForenWebLog dataset, representing di-11                                                                     
+
+> TABLE X EFFECT OF TEMPERATURE ON CLASSIFICATION PERFORMANCE ON
+> FOREN WEB LOG DATASET
+> Temp. Acc. Prec. Rec. F1
+> 0.2 0.97 ±0.05 1.00 ±0.00 0.95 ±0.09 0.96 ±0.08 0.6 0.97 ±0.04 1.00 ±0.00 0.95 ±0.07 0.97 ±0.06 1.0 0.96 ±0.02 1.00 ±0.00 0.93 ±0.05 0.95 ±0.04 1.4 0.99 ±0.06 1.00 ±0.00 0.96 ±0.13 0.96 ±0.10 2.0 0.99 ±0.06 1.00 ±0.00 0.98 ±0.12 0.98 ±0.10
+
+verse attack categories including Log4Shell exploitation, SQL injection, XSS, command injection, and web shell deployment. A forensic investigation expert evaluated each explanation using a 5-point scale: (1) incorrect or absent reasoning, (2) partially correct but leading to wrong classification, (3) partially correct with correct classification, (4) correct with adequate detail, and (5) correct, detailed, and forensically sound. Table XI summarizes the reasoning quality assessment. Both models demonstrated strong reasoning capabilities, with average scores of 4.65 (Gemini) and 4.55 (Claude) out of 5.0. Notably, both models correctly identified sophisticated attack patterns, including:  
+
+> •
+
+Log4Shell (CVE-2021-44228) : Both models recognized JNDI lookup patterns ( ${jndi:ldap://... }) across multiple HTTP fields and correctly attributed the attack to Log4j exploitation.  
+
+> •
+
+Shellshock (CVE-2014-6271) : Models identified bash vulnerability exploitation in User-Agent headers with command injection payloads.  
+
+> •
+
+Obfuscated XSS : Despite heavy URL encoding, both models decoded and identified JavaScript injection at-tempts.  
+
+> •
+
+Time-based SQL Injection : Models correctly identified 
+
+sleep() functions as blind SQL injection techniques.                                       
+
+> TABLE XI REASONING QUALITY ASSESSMENT (M EAN SCORE ±STD )
+> Attack Category Gemini Claude
+> Injection Attacks (SQL, XSS, Cmd) 4.80 ±0.45 4.40 ±0.89 Known CVEs (Log4Shell, Shellshock) 5.00 ±0.00 5.00 ±0.00 Web Shell Sequences 4.00 ±0.82 4.50 ±0.58 Benign Traffic 5.00 ±0.00 4.70 ±0.48
+> Overall 4.65 ±0.49 4.55 ±0.60
+
+The explanations generated by CEF-Log satisfy key forensic requirements: they reference specific elements within the log entry (traceability), correctly identify attack vectors when present (accuracy), and provide reasoning that could be pre-sented in legal proceedings (admissibility). This represents a significant advantage over traditional ML approaches, which provide only binary labels without interpretable justification. 
+
+3) Analysis on Multi-step Attack Patterns Recognition: We designed experiments to assess CEF-Log’s contextual reason-ing capabilities across three attack categories: Denial of Ser-vice (DoS), brute force authentication attacks, and web shell deployment sequences. For each attack category, we created three scenario variants with attack requests interspersed among 50 benign entries. Both Gemini Flash 2.5 and Claude 3.7 Sonnet correctly clas-sified all attack instances across all scenarios (100% recall). More significantly, the reasoning traces demonstrated genuine contextual understanding rather than isolated pattern matching. 
+
+DoS Detection : Both models identified the coordinated nature of flooding attacks. Gemini’s reasoning for DOS01 stated: “Repeated POST requests to /xmlrpc.php from the same IP, indicative of a brute-force or denial-of-service attempt against a WordPress site. ” Claude similarly noted the pattern con-tinuation: “ Part of the ongoing flood attack pattern from IP 167.138.163.110 targeting /impressum. ”
+
+Brute Force Detection : Models correctly identified authenti-cation attack patterns by correlating multiple login attempts from identical source addresses. For BRUTEFORCE03, Claude’s reasoning explicitly referenced the attack sequence: “Continued login attempts from IP 225.65.201.243 with very short time interval from previous attempt. ”
+
+Web Shell Detection : This category tested the most sophis-ticated contextual reasoning, requiring correlation between an initial exploitation phase and subsequent payload execution. Results were mixed regarding cross-reference quality:  
+
+> •
+
+SHELL01 (path traversal + execution): Claude correctly linked the execution attempt to the prior upload: “ Follow-up attempt to the attack in Record ID 66, trying to access a potentially created malicious file in the temp directory. ” 
+
+> •
+
+SHELL02 (WebDAV + execution): Both models classi-fied correctly but did not explicitly reference the relation-ship between upload and execution phases.  
+
+> •
+
+SHELL03 (Gravity Forms exploit + execution): Gemini demonstrated superior cross-referencing: “ GET request for ’/uploads/picture.jpg.php’ [...] is likely an attempt to activate a web shell, likely an attempt to activate a web shell. ”Table XII summarizes the multi-step attack detection results.                   
+
+> TABLE XII MULTI -STEP ATTACK DETECTION PERFORMANCE
+> Scenario Detection Context Cross-Ref Type Rate Aware Quality
+> DoS (3 variants) 100% Yes High Brute Force (3 variants) 100% Yes High Web Shell (3 variants) 100% Partial Medium
+
+VI. C ONCLUSION 
+
+This paper presented CEF-Log, a context-enhanced few-shot chain-of-thought prompting strategy that enables LLMs to perform forensic web server log analysis with high accuracy and explainable reasoning. By encoding expert investigative methodology through a structured five-step reasoning template, CEF-Log teaches the model how to analyze logs rather than what patterns to memorize. Experimental results demonstrate that CEF-Log achieves an F1-score of 0.99 on CSIC 2010 using only four examples, a 10 × improvement in sample efficiency over standard few-shot prompting. Furthermore, our method also substantially outperform traditional ML baselines. 12 
+
+Cross-validation across Gemini Flash 2.5 and Claude 3.7 Sonnet confirms that gains stem from the methodology rather than model-specific characteristics. We also introduced Foren-WebLog, a realistic dataset with multi-step attack sequences, on which CEF-Log achieved perfect recall. Qualitative eval-uation confirmed that generated explanations satisfy forensic traceability and accuracy requirements for legal proceedings. Future work will address current limitations, including broader dataset validation, improved cross-referencing in multi-step attack detection, and reduced inference costs through model distillation. We also plan to integrate retrieval-augmented generation for dynamic threat intelligence incorporation and extend the methodology to additional forensic domains. REFERENCES [1] S. Davidoff and J. Ham, Network forensics: tracking hackers through cyberspace . Prentice hall Upper Saddle River, 2012, vol. 2014. [2] G. Qi, W.-T. Tsai, W. Li, Z. Zhu, and Y. Luo, “A cloud-based triage log analysis and recovery framework,” Simulation Modelling Practice and Theory , vol. 77, pp. 292–316, 2017. [3] J. Chen, X. He, Q. Lin, Y. Xu, H. Zhang, D. Hao, F. Gao, Z. Xu, Y. Dang, and D. Zhang, “An empirical investigation of incident triage for online service systems,” in 2019 IEEE/ACM 41st International Conference on Software Engineering: Software Engineering in Practice (ICSE-SEIP) .IEEE, 2019, pp. 111–120. [4] K. Kent, S. Chevalier, T. Grance, and H. Dang, Guide to integrating forensic techniques into incident response . NIST Special Publication, 2006. [Online]. Available: http://dx.doi.org/10.6028/nist.sp.800-86 [5] C. Zhong, J. Yen, P. Liu, and R. F. Erbacher, “Learning from experts’ experience: toward automated cyber security data triage,” IEEE Systems Journal , vol. 13, no. 1, pp. 603–614, 2018. [6] E. Union, “eur-lex.europa.eu,” https://eur-lex.europa.eu/legal-content/ DE/TXT/PDF/?uri=CELEX:32016R0679, [Accessed 30-12-2025]. [7] W. Xu, L. Huang, A. Fox, D. Patterson, and M. I. Jordan, “Detecting large-scale system problems by mining console logs,” in Proceedings of the ACM SIGOPS 22nd symposium on Operating systems principles ,2009, pp. 117–132. [8] VirusTotal, “YARA - The pattern matching swiss knife for malware re-searchers — virustotal.github.io,” https://virustotal.github.io/yara/, 2024, [Accessed 12-12-2025]. [9] SigmaHQ, “Explore Sigma - generic signature format for siem systems,” https://sigmahq.io/, 2017, [Accessed 3-12-2025]. [10] S. Saleem, M. Sheeraz, M. Hanif, and U. Farooq, “Web server attack detection using machine learning,” in 2020 International Conference on Cyber Warfare and Security (ICCWS) . IEEE, 2020, pp. 1–7. [11] Q. Cao, Y. Qiao, and Z. Lyu, “Machine learning to detect anomalies in web log analysis,” in 2017 3rd IEEE international conference on computer and communications (ICCC) . IEEE, 2017, pp. 519–523. [12] S. He, J. Zhu, P. He, and M. R. Lyu, “Experience report: System log analysis for anomaly detection,” in 2016 IEEE 27th international symposium on software reliability engineering (ISSRE) . IEEE, 2016, pp. 207–218. [13] S. Nedelkoski, J. Bogatinovski, A. Acker, J. Cardoso, and O. Kao, “Self-attentive classification-based anomaly detection in unstructured logs,” in 
+
+2020 IEEE International Conference on Data Mining (ICDM) . IEEE, 2020, pp. 1196–1201. [14] M. Landauer, S. Onder, F. Skopik, and M. Wurzenberger, “Deep learning for anomaly detection in log data: A survey,” Machine Learning with Applications , vol. 12, p. 100470, 2023. [15] V.-H. Le and H. Zhang, “Log-based anomaly detection with deep learning: How far are we?” in Proceedings of the 44th international conference on software engineering , 2022, pp. 1356–1367. [16] Y. Chang, X. Wang, J. Wang, Y. Wu, L. Yang, K. Zhu, H. Chen, X. Yi, C. Wang, Y. Wang et al. , “A survey on evaluation of large language models,” ACM transactions on intelligent systems and technology ,vol. 15, no. 3, pp. 1–45, 2024. [17] M. Scanlon, F. Breitinger, C. Hargreaves, J.-N. Hilgert, and J. Sheppard, “Chatgpt for digital forensic investigation: The good, the bad, and the unknown,” Forensic Science International: Digital Investigation , vol. 46, p. 301609, 2023. [18] T. Brown, B. Mann, N. Ryder, M. Subbiah, J. D. Kaplan, P. Dhariwal, A. Neelakantan, P. Shyam, G. Sastry, A. Askell et al. , “Language mod-els are few-shot learners,” Advances in neural information processing systems , vol. 33, pp. 1877–1901, 2020. [19] D. B. Oh, D. Kim, and H. K. Kim, “volgpt: Evaluation on triaging ransomware process in memory forensics with large language model,” 
+
+Forensic Science International: Digital Investigation , vol. 49, p. 301756, 2024. [20] W. Guan, J. Cao, S. Qian, J. Gao, and C. Ouyang, “Logllm: Log-based anomaly detection using large language models,” arXiv preprint arXiv:2411.08561 , 2024. [21] Y. Liu, S. Tao, W. Meng, F. Yao, X. Zhao, and H. Yang, “Logprompt: Prompt engineering towards zero-shot and interpretable log analysis,” in 
+
+Proceedings of the 2024 IEEE/ACM 46th International Conference on Software Engineering: Companion Proceedings , 2024, pp. 364–365. [22] Z. Zhang, S. Li, L. Zhang, J. Ye, C. Hu, and L. Yan, “Llm-lade: Large language model-based log anomaly detection with explanation,” 
+
+Knowledge-Based Systems , vol. 326, p. 114064, 2025. [23] G. Michelet and F. Breitinger, “Chatgpt, llama, can you write my report? an experiment on assisted digital forensics reports written using (local) large language models,” Forensic Science International: Digital Investigation , vol. 48, p. 301683, 2024. [24] W. Xu, L. Huang, A. Fox, D. Patterson, and M. Jordan, “Online system problem detection by mining patterns of console logs,” in 2009 ninth IEEE international conference on data mining . IEEE, 2009, pp. 588– 597. [25] A. Oliner and J. Stearley, “What supercomputers say: A study of five system logs,” in 37th annual IEEE/IFIP international conference on dependable systems and networks (DSN’07) . IEEE, 2007, pp. 575– 584. [26] M. Du, F. Li, G. Zheng, and V. Srikumar, “Deeplog: Anomaly detection and diagnosis from system logs through deep learning,” in Proceedings of the 2017 ACM SIGSAC conference on computer and communications security , 2017, pp. 1285–1298. [27] C. Torrano-Gimenez, A. Perez-Villegas, and G. Alvarez, “A self-learning anomaly-based web application firewall,” in Computational Intelligence in Security for Information Systems: CISIS’09, 2nd International Work-shop Burgos, Spain, September 2009 Proceedings . Springer, 2009, pp. 85–92. [28] K. Suneetha and D. R. Krishnamoorthi, “Identifying user behavior by analyzing web server access log file,” International Journal of Computer Science and Network Security , vol. 9, no. 4, pp. 327–332, 2009. [29] F. Hadadi, Q. Xu, D. Bianculli, and L. Briand, “Llm meets ml: Data-efficient anomaly detection on unstable logs,” ACM Transactions on Software Engineering and Methodology , 2025. [30] X. Ren, Y. Hu, W. Kuang, and M. B. Souleymanou, “A web attack detection technology based on bag of words and hidden markov model,” in 2018 IEEE 15th International Conference on Mobile Ad Hoc and Sensor Systems (MASS) . IEEE, 2018, pp. 526–531. [31] A. Tekerek, “A novel architecture for web-based attack detection using convolutional neural network,” Computers & Security , vol. 100, p. 102096, 2021. [32] J. C. Eunaicy and S. Suguna, “Web attack detection using deep learning models,” Materials Today: Proceedings , vol. 62, pp. 4806–4813, 2022. 13 
+
+[33] Y. Pan, F. Sun, Z. Teng, J. White, D. C. Schmidt, J. Staples, and L. Krause, “Detecting web attacks with end-to-end deep learning,” 
+
+Journal of Internet Services and Applications , vol. 10, no. 1, pp. 1– 22, 2019. [34] M. M. Inuwa and R. Das, “A comparative analysis of various machine learning methods for anomaly detection in cyber attacks on iot net-works,” Internet of Things , vol. 26, p. 101162, 2024. [35] N. Elmrabit, F. Zhou, F. Li, and H. Zhou, “Evaluation of machine learn-ing algorithms for anomaly detection,” in 2020 international conference on cyber security and protection of digital services (cyber security) .IEEE, 2020, pp. 1–8. [36] M. He, T. Jia, C. Duan, H. Cai, Y. Li, and G. Huang, “Llmelog: An approach for anomaly detection based on llm-enriched log events,” in 2024 IEEE 35th International Symposium on Software Reliability Engineering (ISSRE) . IEEE, 2024, pp. 132–143. [37] J. Qi, S. Huang, Z. Luan, S. Yang, C. Fung, H. Yang, D. Qian, J. Shang, Z. Xiao, and Z. Wu, “Loggpt: Exploring chatgpt for log-based anomaly detection,” in 2023 IEEE International Conference on High Performance Computing & Communications, Data Science & Systems, Smart City & Dependability in Sensor, Cloud & Big Data Systems & Application (HPCC/DSS/SmartCity/DependSys) . IEEE, 2023, pp. 273–280. [38] J. Pan, W. S. Liang, and Y. Yidi, “Raglog: Log anomaly detection using retrieval augmented generation,” in 2024 IEEE World Forum on Public Safety Technology (WFPST) . IEEE, 2024, pp. 169–174. [39] L. Huang, W. Yu, W. Ma, W. Zhong, Z. Feng, H. Wang, Q. Chen, W. Peng, X. Feng, B. Qin et al. , “A survey on hallucination in large language models: Principles, taxonomy, challenges, and open questions,” 
+
+ACM Transactions on Information Systems , vol. 43, no. 2, pp. 1–55, 2025. [40] R. Chedy, B. Johan, D. G´ erard, and R. Mathieu, “Analyzing web traffic ecml/pkdd 2007 discovery challange,” https://www.lirmm.fr/ pkdd2007-challenge/index.html, 2007, [Accessed 03-01-2026]. [41] T. T. Dinh-Trong and J. M. Bieman, “The freebsd project: A replication case study of open source development,” IEEE Transactions on Software Engineering , vol. 31, no. 6, pp. 481–494, 2005. [42] E. Kenler and F. Razzoli, MariaDB Essentials . Packt Publishing Birmingham, UK, 2015. [43] B. PostgreSQL, “Postgresql,” Web resource: http://www. PostgreSQL. org/about , 1996. [44] J. Carlson, Redis in action . Simon and Schuster, 2013. [45] A. Stasinopoulos, C. Ntantogian, and C. Xenakis, “Commix: automating evaluation and exploitation of command injection vulnerabilities in web applications,” International Journal of Information Security , vol. 18, no. 1, pp. 49–72, 2019. [46] Y. Goland, E. Whitehead, A. Faizi, S. Carter, and D. Jensen, “Http extensions for distributed authoring–webdav,” Tech. Rep., 1999.

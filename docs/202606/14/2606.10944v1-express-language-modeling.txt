@@ -1,0 +1,2146 @@
+Title: Express Language Modeling
+
+URL Source: https://arxiv.org/pdf/2606.10944v1
+
+Published Time: Wed, 10 Jun 2026 01:09:50 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# Express Language Modeling 
+
+Albert Gong 
+
+Cornell Tech 
+
+agong@cs.cornell.edu 
+
+Annabelle Michael Carrell 
+
+University of Cambridge 
+
+ac2411@cam.ac.uk 
+
+Raaz Dwivedi 
+
+Cornell Tech 
+
+dwivedi@cornell.edu 
+
+Lester Mackey 
+
+Microsoft Research 
+
+lmackey@microsoft.com 
+
+## Abstract 
+
+We introduce a new tool, Express, for converting a non-causal attention approximation into a causal approximation with matching approximation guarantees. When combined with the state-of-the-art Thinformer approximation, Express improves upon the best known causal attention guarantees, delivering 
+
+log 3/2(n)/s approximation error with only O(s) memory and O(s2 log 2(n)) 
+
+compression overhead for a sequence of length n. We pair these developments with an efficient I/O-aware Triton implementation, demonstrate substantial speedups over FlashAttention 2, and use Express to overcome four resource bottlenecks in the language modeling pipeline: long-context prefill, KV cache compression, long-form memory-constrained decoding, and long-form compute-constrained decoding. 
+
+## 1 Introduction 
+
+Attention [ 31 ] scales quadratically with the sequence length n, a cost that is especially acute for language models processing large contexts, generating large token counts, or operating under resource constraints [ 2 , 14 , 7]. A variety of practical sub-quadratic attention approximations are now available with strong guarantees for reconstructing the attention output [ 34 , 15 , 4, 19 , 26 ], but the majority, including the state-of-the-art thinning approximation [ 4], only tackle the unmasked attention problem. The harder case, central to language modeling, is attention with causal masking where each query attends only over an evolving context of prior key-value pairs. This setting governs every stage of language model inference: prefilling long contexts, sequentially decoding new tokens, and managing the key-value cache that grows with each generated token. 
+
+Our contributions To bridge this gap, we introduce a new meta-procedure, E XPRESS , that efficiently turns a high-quality unmasked attention approximation into a high-quality masked approximation. More generally, E XPRESS transforms any offline approximation based on thinning (i.e., subselecting) input points into an efficiently updatable weighted cache with streaming approximation guarantees. We pair E XPRESS with the state-of-the-art non-causal thinning approximation, Thinformer [ 4], and derive causal attention guarantees that improve upon the best in the literature [ 15 , 19 ]: for bounded inputs, Thinformer Express yields log 3/2(n)/s approximation error with only O(s) memory and O(s2 log( s) log( n/s )) compression overhead. Inspired by FlashAttention 2 [ 7 , 6], we then develop an efficient I/O-aware Triton [ 30 ] implementation and benchmark Thinformer Express in four resource-constrained language modeling settings: 1. Long-context prefill : Thinformer Express achieves an 82 × speedup over FlashAttention 2 [ 6 ] at 512K tokens and uniformly improves both the perplexity and speedup of HyperAttention [15]. 
+
+> Preprint.
+> arXiv:2606.10944v1 [cs.LG] 9 Jun 2026
+
+2. Accelerated KV cache compression : Pairing Thinformer Express with each of three leading KV cache compression methods—SnapKV [ 21 ], StreamingLLM [ 32 ], and PyramidKV [ 3]—reduces total attention runtime on LongBench-E long-context language understanding tasks [ 2] without sacrificing accuracy. 3. Memory-efficient long-form decoding : On competition-level MATH-500 problems that benefit from step-by-step reasoning [ 22 ], Thinformer Express dominates the accuracy-vs.-cache-size tradeoff curves of five leading alternatives, matching the accuracy of exact attention with only 
+
+61% of the cache size. 4. Accelerated long-form decoding : On MATH-500, Thinformer Express also dominates the accuracy-vs.-runtime tradeoff curves of five leading alternatives, matching the accuracy of exact attention with only 56% of the computation time. 
+
+Paper organization Sec. 2 provides a formal introduction to thinning algorithms and the causal attention problem. Sec. 3 presents the E XPRESS meta-procedure and Thinformer Express, along with their quality, space, and runtime guarantees. Sec. 4 presents our Triton implementation and empirical evaluation. Sec. 5 closes with a discussion of limitations and broader impact. 
+
+Notation We define [n] ≜ {1, . . . , n }, EE [X] ≜ E[XI[E]] for any probability event E and integrable random variable X, and (∥·∥ op , ∥·∥ F , ∥·∥ 2,∞) as the spectral, Frobenius, and maximum Euclidean row norm of a matrix respectively. 
+
+## 2 Background on Attention and Thinning 
+
+2.1 Unmasked attention 
+
+Unmasked scaled dot-product attention takes as input a sequence of query, key, and value vectors 
+
+(qi, ki, vi)ni=1 in Rd and computes, for each j ∈ [n], the unmasked attention output [31] ATTENTION (qj , (ki, vi)ni=1 ) ≜ 1      
+
+> n
+> Pni=1 exp( ⟨qj,ki⟩/√d)vi
+> 1
+> n
+> Pni=1 exp( ⟨qj,ki⟩/√d)
+
+, (1) a ratio of two query-specific averages taken over all key-value pairs. To avoid the Θ( n2d) cost of computing each output exactly, prior work attended only over a relatively small coreset of key-value pairs designed to accurately approximate the attention output (1) for all queries [ 4 ]. To achieve this, Carrell et al. [4] employed sub-Gaussian thinning algorithms which generate coresets guaranteed to accurately preserve the sorts of averages that arise in the attention computation. 
+
+Definition 1 (Sub-Gaussian thinning and halving ). A thinning algorithm ALG takes a dataset 
+
+Xin = ( xi)nin  
+
+> i=1
+
+as input and outputs a weighted coreset Xout of nout points x ∈ X in paired with positive weights w that sum to 1. When nout = ⌊n/ 2⌋ and all weights are equal, we call ALG a
+
+halving algorithm . We say ALG is (κ, ν, δ )-sub-Gaussian given Xin if ν ≥ 0, δ ∈ [0 , 1) , κ is a kernel with reproducing kernel Hilbert space (RKHS) Hκ and norm ∥·∥ κ [ 29 , Def. 4.18], and there exists an event E with probability at least 1 − δ/ 2 such that 
+
+EE
+
+h
+
+exp 
+
+ 1
+
+> nin
+
+Pnin  
+
+> i=1
+
+f (xi) − P 
+
+> (x,w )∈X out
+
+w f (x)
+
+i 
+
+≤ exp 
+
+ ν2 
+
+> 2
+
+∥f ∥2
+
+> κ
+
+
+
+for all f ∈ H κ. (2) 
+
+For any event E, we say ALG is (κ, ν )-sub-Gaussian on E given Xin if (2) holds. 
+
+The sub-Gaussian constant ν controls the error of a thinning algorithm, ensuring that, with high probability, expensive averages over the input are O(ν)-close to cheap averages over the coreset. Perhaps the most familiar sub-Gaussian thinning algorithm is uniform subsampling: sampling 
+
+nout equal-weighted points without replacement is (κ, ν, 0) -sub-Gaussian for any kernel κ with 
+
+ν = p∥κ∥n/n out and ∥κ∥n ≜ max i∈[n] κ(xi, xi) [ 4, Prop. B.1]. However, uniform summaries are not especially concise as they require nout = 10000 points for 1% relative error [ 4, Prop. 1]. Fortunately, substantially more accurate thinning algorithms are also available. For example, kernel halving [ KH (δ), 11 , 10 , 4 ] achieves (κ, ν, δ )-sub-Gaussianiaty for ν = p∥κ∥n log(2 nin /δ )/n out by balancing kernel averages using non-uniform randomness. The kernel κ in Def. 1 dictates which types of averages are approximated well. Carrell et al. [4 ,Thm. 2] introduced a key-value kernel that mimics the summands in the attention mechanism (1), 
+
+κatt (( k, v), (k′, v′)) ≜ exp( ⟨k, k′⟩/√d)( ⟨v, v′⟩ + v2max ) for vmax ≜ max i∈[n] ∥vi∥∞, (3) 2and showed that thinning the set of key-value pairs Xin = ( ki, vi)ni=1 with κatt provides an 
+
+O(ν)-accurate approximation to the unmasked attention output (1) for all queries simultaneously. Our aim is to extend this strong guarantee to the more challenging causal masking setting that arises in language modeling. 
+
+2.2 Attention with causal masking 
+
+Scaled dot-product attention with causal masking computes, for each j ∈ [n], the masked output [ 31 ]
+
+oj ≜ ATTENTION (qj , (ki, vi)ji=1 ) ≜ 1      
+
+> j
+> Pji=1 exp( ⟨qj,ki⟩/√d)vi
+> 1
+> j
+> Pji=1 exp( ⟨qj,ki⟩/√d)
+
+, (4) where each query qj now attends only over key-value pairs with indices i ≤ j. Two variants of this problem commonly arise in language modeling. In the prefill or context-processing phase, we observe and hence can process all n query-key-value tuples at once, as each corresponds to a token in a fully observed context sequence. In the even more challenging decoding or generation phase, we must generate outputs incrementally as each tuple (qj , kj , vj ) is generated on-the-fly based on the prior output scores (oi)j−1 
+
+> i=1
+
+. In this setting, even the sequence length n may not be known in advance. In either case, computing all n outputs (oi)ni=1 using standard matrix multiplication requires 
+
+Θ( d n 2) computation, a cost that quickly becomes prohibitive as n grows. Moreover, by default, in the decoding phase, all prior keys and values are stored in a KV cache to allow future tokens to attend over them. This Θ( d n ) memory cost also quickly becomes prohibitive for models deployed on resource-constrained devices. To overcome both resource bottlenecks, we would ideally exploit sub-Gaussian thinning once again to generate a small key-value coreset suitable for approximating each attention output (4). However, the causal mask and the incremental constraint of decoding imply that a single coreset will no longer suffice. Instead we will generate a sequence of coresets (Xout (j)) nj=1 and use Xout (j) to form a weighted attention approximation of the j-th attention output: 
+
+boj ≜        
+
+> P
+> (( k,v),w )∈X out (j)wexp( ⟨qj,k⟩/√d)v
+> P
+> (( k,v),w )∈X out (j)wexp( ⟨qj,k⟩/√d)
+
+.
+
+The key challenge lies in efficiently updating each coreset in a manner that controls coreset size, memory usage, runtime, and output approximation error across the entire sequence of inputs. To achieve this, we introduce a new meta-procedure, E XPRESS , that efficiently converts any sub-Gaussian halving algorithm into a streaming sub-Gaussian thinning algorithm suitable for causal attention approximation. 
+
+## 3 Express Language Modeling 
+
+3.1 Express 16 32 48 64 80 96 112 128  
+
+> Key-value pairs ( ki,vi)
+> 16
+> 32
+> 48
+> 64
+> 80
+> 96
+> 112
+> 128
+> Queries  qj
+> Relative weight in cache
+> 1
+> 2
+> 4
+> 8
+> 16
+
+EXPRESS (Alg. 1) can be viewed as an updatable weighted cache object that is initialized with a target cache size nout ,an inflation factor m, and a halving algorithm HALVE .Initially, the cache is empty, and updates proceed in three phases. In the exact phase, the first nout points processed are stored directly in the E XPRESS coreset E. In the thin phase, points are batched into groups of size 2mnout and incrementally thinned down to size nout before entering 
+
+E. Whenever the size of E reaches 4nout , we thin its size back down to nout by applying H ALVE twice (the H ALVE 
+
+phase) and increase the thinning factor m.In the thin phase, one could imagine directly applying H ALVE to carry out the thinning, but high-quality halving algorithms like KH (δ) have a quadratic complexity that would render the update too slow. Instead we develop a more efficient strategy: we first uniformly S UBSAMPLE 
+
+from size 2mnout to 2mnout and then incrementally thin from 2mnout to nout using C OMPRESS 2, a generalization of the C OMPRESS algorithm of Shetty et al. [28] that reduces thinning time while preserving quality by only applying H ALVE to small groups of points with geometrically increasing 3Algorithm 1: EXPRESS (nout , m, HALVE ): Streaming compression with target cache size nout , inflation factor m 
+
+> 1
+
+// Initialize the thinning factor m, datapoint counter n, C OMPRESS 2 counter ℓ, and empty E XPRESS coreset  
+
+> 2
+
+m ← 0; n ← 0; ℓ ← 0; E ← {}  
+
+> 3
+
+// Initialize thinning objects: S thins from size 2mnout to 2m∧mnout ; C thins from size 2m∧mnout to nout  
+
+> 4
+
+S ← SUBSAMPLE (m, m ); C ← COMPRESS 2(m ∧ m, 2m∧mnout , HALVE m) 
+
+> 5
+
+def update (x): 
+
+> 6
+
+// Exact phase: store initial nout points in E XPRESS coreset  
+
+> 7
+
+n ← n + 1 ; if n ≤ nout then E. append (x); return  
+
+> 8
+
+// Thin phase: thin next 2mnout points down to nout with S UBSAMPLE + C OMPRESS 2 
+
+> 9
+
+ℓ ← ℓ + 1 ; if S. keep (x) then C. update (x); if ℓ == 2 mnout then E ← E ∪ C. Sm∧m; ℓ ← 0 
+
+> 10
+
+// H ALVE phase: H ALVE EXPRESS coreset twice to reach size nout and update thinning factor m 
+
+> 11
+
+if n == 4 · 2mnout then E ← HALVE m,m (HALVE m,m (E)) ; m ← m + 2  
+
+> 12
+
+// Reset thinning objects  
+
+> 13
+
+if ℓ == 0 then S ← SUBSAMPLE (m, m ); C ← COMPRESS 2(m ∧ m, 2m∧mnout , HALVE m) 
+
+> 14
+
+def wtd_cache () : 
+
+> 15
+
+return C. wtd_cache () .concatenate (( E, 1)) // Cache of coresets with associated weights 
+
+Algorithm 2: COMPRESS 2(m, n in , HALVE ) 
+
+> 1
+
+// H ALVE points in groups of size   2inin 
+
+> 4m−1
+
+mi=0  
+
+> 2
+
+// Initialize counter and coresets for each halving level  
+
+> 3
+
+n ← 0; for i = 0 , 1, . . . , m do Si ← {}  
+
+> 4
+
+def update (x): 
+
+> 5
+
+n ← n + 1 ; S0 ← S 0 ∪ { x} 
+
+> 6
+
+for i = 0 , . . . , m − 1 do  
+
+> 7
+
+if |S i| == nin · 2i/4m−1 then  
+
+> 8
+
+Si+1 ← S i+1 ∪ HALVE i(Si); Si ← {}  
+
+> 9
+
+def wtd_cache () : 
+
+> 10
+
+return [( Si, 2i−m)] mi=0 // Weighted cache 
+
+Algorithm 3: SUBSAMPLE (m, m ) 
+
+> 1
+
+// Keep one uniform index from each group of 2m−m 
+
+> 2
+
+n ← 0; i ← 0 
+
+> 3
+
+def keep (x): 
+
+> 4
+
+n ← n + 1  
+
+> 5
+
+if m ≤ m then return True  
+
+> 6
+
+if (n − 1) mod 2 m−m == 0 then  
+
+> 7
+
+i ← Unif ([ n, n + 2 m−m))  
+
+> 8
+
+return n == i
+
+size. Throughout, we choose the inflation factor m ∈ N so that 2m = Θ( nout ) and 2m−1 divides nout 
+
+evenly. Our first theorem, proved in Sec. B, bounds the maximum cache size, space complexity, and runtime of E XPRESS in terms of its halving algorithm. 1
+
+Theorem 1 (E XPRESS memory and runtime) . Consider running EXPRESS (Alg. 1) with n updates. If HALVE with input size nin has space complexity sH(nin ) and runtime rH(nin ), then EXPRESS has weighted cache size at most 6nout , space complexity at most 6nout d + sH(4 nout ), and runtime 
+
+rE(n) ≤ (rH(4 nout ) + rH(2 nout ) + 3 rC(m) + 2 m3nout ) ⌈log 4(n/n out )⌉ I[n ≥ 4nout ] (5) 
+
+where rC(m) ≜ Pm−1 
+
+> j=0
+
+4j rH
+
+ 21−j nout 
+
+ is the runtime of COMPRESS 2(m, 2mnout , HALVE ).
+
+Notably, the maximum cache size of E XPRESS is 6nout , a quantity independent of the sequence length 
+
+n. Moreover, since m ≤ log 2(2 nout ), the E XPRESS runtime (5) has at most a logarithmic explicit dependence on n.
+
+Corollary 1 (E XPRESS runtime with polynomial-time H ALVE ). Under the conditions of Thm. 1, if 
+
+rH(nin ) ≤ ρn τ 
+
+> in
+
+for some τ ≥ 0 and all nin ∈ [4 nout ] then 
+
+rE(n) = 
+
+(O ρ n 2 
+
+> out
+
+log( n/n out ) log( nout ) if τ = 2 , and 
+
+O
+
+
+
+ρ 4τ |(2 nout )τ −(2 nout )2||2τ −22| log( n/n out )
+
+
+
+if τ̸ = 2 .
+
+Cor. 1, proved in Sec. C, also reveals the runtime benefits of E XPRESS when nout grows with n. For example under heavy square-root compression with nout = √n, E XPRESS converts a non-causal 
+
+> 1
+
+For prefill, we provide a complementary memory bound for a recursive offline version of E XPRESS in Sec. H. 
+
+4quadratic-time halving algorithm into a causal, near-linear O(n log 2(n)) time thinning algorithm. Similarly, E XPRESS offers a quadratic speed-up (from Θ( nτ ) to O(nτ / 2 log n)) for super-quadratic halving algorithms with τ > 2 like Gram-Schmidt Thinning [4]. Our next theorem, proved in Sec. D, bounds the sub-Gaussian constants of E XPRESS in terms of its halving algorithm. 
+
+Theorem 2 (Quality of E XPRESS ). For each j ∈ [n], let Xout (j) denote the weighted coreset obtained by updating EXPRESS (Alg. 1) with (xi)ji=1 , and suppose each HALVE m,i call invoked within the first 
+
+j updates is (κ, ν Hj(nin ), δ m,i )-sub-Gaussian with nin νHj(nin ) non-decreasing in nin and j. Then, for all j ∈ [n], Xout (j) is (κ, ν E(j)) -sub-Gaussian with mj ≜ 2⌈log 4(j/ (4 nout )) ⌉ and 
+
+ν2
+
+> E
+
+(j) ≤ 16(16+3( mj ∧m)) 15 (ν2
+
+> Hj
+
+(4 nout ) + ν2
+
+> Hj
+
+(2 nout )) I[j ≥ 4nout ] + 16 ∥κ∥j I[mj >m ]5nout 2m
+
+on a common event E of probability 1 − Pmn 
+
+> even m=0
+
+(δm,m + 38
+
+P(m∧m)−1 
+
+> i=0
+
+4(m∧m)−iδm,i ).
+
+An important implication is that non-causal to causal conversion with E XPRESS inflates sub-Gaussian error by at most a factor of 
+
+q 16 15 (16 + 3 m) ≤ 2plog 2(nout ) + 6 relative to a single H ALVE phase. In our experiments, we instantiate E XPRESS with the kernel halving algorithm [ KH (δ), 11 , 10 , 4 ], which has quadratic runtime and sH(nin ) = nin d space complexity. The following corollary, proved in Sec. E, bounds the runtime, space, and quality of the resulting algorithm. 
+
+Corollary 2 ( KH-E XPRESS (δ) guarantees) . For δ ∈ (0 , 1) , define KH-E XPRESS (δ) as EXPRESS 
+
+with each HALVE m,m ≜ KH ( δm 
+
+> 2
+
+) and HALVE m,i ≜ KH (δm,i ) for δm ≜ δ 
+
+> 2
+
+( 1log 2(m/ 2+2) − 
+
+> 1log 2(m/ 2+3)
+
+) and δm,i ≜ 4i+1 −(m∧m)δm 
+
+> 3( m∧m)
+
+. Updating KH-E XPRESS (δ) n times requires at most 
+
+rE(n) = O(dn 2 
+
+> out
+
+log( n/n out ) log( nout )) (6) 
+
+runtime and 10 nout d space. Moreover, for all n ∈ N, the weighted coreset Xout (n) obtained by updating KH-E XPRESS (δ) with (xi)ni=1 is (κ, ν E(n)) -sub-Gaussian with mn ≜ 2⌈log 4( n 
+
+> 4nout
+
+)⌉ and 
+
+ν2
+
+> E
+
+(n) ≤ 4(16+3( mn∧m)) I[n≥4nout ]3 
+
+> ∥κ∥nlog(5 nout m(mn+5) log 22(mn/2+3)4 m/δ )
+> n2
+> out
+
++ 16 ∥κ∥nI[mn>m ]5nout 2m (7) 
+
+= O
+
+ ∥κ∥n log( nout ) log( nout log( nnout )/δ )
+
+> n2
+> out
+
++ ∥κ∥n
+
+> 2mnout
+
+
+
+on a common event E of probability 1 − δ/ 2.
+
+3.2 Thinformer Express 
+
+Algorithm 4: Thinformer Express ( h, m, δ ) 
+
+> 1
+
+// Initialize KH-E XPRESS with attention kernel (3)  
+
+> 2
+
+C ← KH-E XPRESS (δ, κ att )(2 h, m ) 
+
+> 3
+
+def attend (qn, kn, vn): 
+
+> 4
+
+bon ← WTD ATTENTION (( qn, kn, vn), C ) 
+
+> 5
+
+C. update (( kn, vn))  
+
+> 6
+
+return bon
+
+Algorithm 5: WTD ATTENTION 
+
+Input: Token (q, k, v), weighted cache object C 
+
+> 1
+
+[( Si, w i)] Li=0 ← C. wtd_cache () // Unpack cache  
+
+> 2
+
+S0 ← S 0 ∪ { (k, v)} // Incorporate input token  
+
+> 3
+
+return        
+
+> PLi=0
+> P
+> (ek,ev)∈S iwiexp( ⟨q,ek⟩/√d)ev
+> PLi=0
+> P
+> (ek,ev)∈S iwiexp( ⟨q,ek⟩/√d)
+
+Next, we introduce Thinformer Express (Alg. 4), our solution to the causal attention approximation problem. Thinformer Express first initializes a KH-E XPRESS (δ) weighted cache object C with the key-value attention kernel κatt (3) and a target cache size nout = 2 h. For each new token (qn, kn, vn),Alg. 4 uses W TD ATTENTION to attend only over (kn, vn) and the key-value pairs in C and finally updates the weighted cache with the latest key-value pair. Prop. G.1 shows that the total query time of Alg. 4, i.e., the cost of running W TD ATTENTION atop the weighted cache C, is only O(nout nd ), a significant improvement over Θ( n2d)-time exact attention whenever the target cache size nout ≪ n. Remarkably, by Cor. 2, the compression time of Alg. 4, i.e., the cost of maintaining the weighted cache, is even smaller: O(dn 2 
+
+> out
+
+log( nout ) log( n/n out )) with only a logarithmic explicit dependence on the sequence length n. Our final result, proved in Sec. F, provides a strong attention approximation guarantee for Thinformer Express. 5Theorem 3 (Quality of Thinformer Express) . With probability at least 12 , Thinformer Express (Alg. 4) with δ = 12 and nout ≜ 2h satisfies bon = on for all n ≤ 4nout and, for all n > 4nout ,
+
+∥bon − on∥∞ ≤ 2 exp( 2R2 
+
+> n√d
+
+)plog(2( d + 1) /δ ′
+
+> n
+
+) ∥Vn∥2,∞
+
+×
+
+q 4(16+3( mn∧m)) 3log(10 nout m(mn+5) log 22(mn/2+3)4 m)
+
+> n2
+> out
+
++ 16 I[mn>m ]5nout 2m
+
+= O
+
+ exp(2 R2
+
+> n/√d)
+
+√log(( d+1) n) log( nout ) log( nout log( nnout )) 
+
+√2mnout 
+
+∥Vn∥2,∞
+
+
+
+,
+
+where mn ≜ 2
+
+l
+
+log 4( n 
+
+> 4nout
+
+)
+
+m
+
+, δ′ 
+
+> n
+
+≜ 14
+
+ 1log 2(n+1) − 1log 2(n+2) 
+
+
+
+, Rn ≜ max i∈[n] max( ∥ki∥2, ∥qi∥2),and Vn ≜ [vi]ni=1 .
+
+It is instructive to compare this result with the best guarantees for practical causal attention approximation in the literature [ 15 , 19 ]. HyperAttention [ 15 ] uses a combination of independent key-value subsampling, locality sensitive hashing (to identify large output entries), and divide-and-conquer recursion to approximate causal attention in the prefill stage. Under the 
+
+γ-boundedness assumption [ 4 ], R2 
+
+> n
+
+≤ γ√d log n, HyperAttention with only causal masking [ 15 ,Thm. 1, Lems. 1-2] provides the following guarantee for the ⌈n/ 2⌉-th causal attention output with 
+
+O(dn 1+ a) runtime and probability at least 12 :
+
+∥bohyp ,⌈n/ 2⌉ − o⌈n/ 2⌉∥max = O
+
+ n 17 γ    
+
+> 3(log n)16
+> na/ 6
+
+· ∥ Vn∥op 
+
+
+
+,
+
+as this estimate coincides with the unmasked approximation analyzed in [ 26 , Sec. J.5]. Meanwhile, under the same conditions, Thinformer Express with 2m = Θ( nout ) and nout = na guarantees 
+
+max j∈[n] ∥boexp ,j − oj ∥max ≤ O  n2γ log n√log( dn ) 
+
+> na
+
+· ∥ Vn∥2,∞),
+
+by Thm. 3, Prop. G.1, and Cor. 2. This new guarantee provides several improvements over the former: a substantially faster error decay rate ( n−a vs. n−a/ 6) for a given sub-quadratic runtime dn 1+ a, a milder dependence on the error inflation factor γ, and an improved dependence on the value matrix 
+
+Vn as ∥Vn∥op can be as large as √n∥Vn∥2,∞.To approximate causal attention in a streaming fashion, BalanceKV [ 19 ] uses the quadratic-time self-balancing walk of Alweiss et al. [1] to select key-value coresets and the classical merge-reduce technique [ 23 , 5, 25 ] to reduce time and memory requirements. In the notation of Thm. 3, BalanceKV [19, Thm. 3.1] with batch size nout guarantees [26, Sec. J.3] 
+
+max j∈[n] ∥bobal ,j − oj ∥max ≤ O
+
+ exp(2 R2  
+
+> n/√d) log( n/n out )√dlog( dn )
+> nout
+
+· ∥ Vn∥F
+
+
+
+with high probability using Θ( dn out log( n/n out )) space, Θ( dnn out log( n/n out )) query time, and 
+
+Θ( dnn out log( n/n out )) compression time. Thinformer Express with 2m = Θ( nout ) introduces several improvements over this state-of-the-art guarantee. First, for the same fixed cache size nout , Thinformer Express offers a space complexity independent of n and a query complexity improved by a factor of log( n/n out ). Second, our Thinformer Express error analysis yields an improved dependence on the value matrix Vn as ∥Vn∥F can be as large as √n∥Vn∥2,∞. Finally, the Θ( dnn out log( n/n out )) 
+
+compression overhead of BalanceKV is substantially larger than the Θ( dn 2 
+
+> out
+
+log( nout ) log( n/n out )) 
+
+overhead of Thinformer Express. For example, selecting a heavily compressed cache size of 
+
+nout = √n introduces only O(dn log 2(n)) compression overhead for Thinformer Express but order 
+
+dn 3/2 log( n) overhead for BalanceKV. 
+
+## 4 Experiments 
+
+We next complement our methodological and theoretical development with an empirical evaluation across a suite of standard approximate attention benchmarks. We consider four potential language modeling applications of Thinformer Express—accelerating long-context prefill, accelerating KV cache compression, memory-constrained long-form decoding, and accelerating long-form decoding—and in each case demonstrate its benefits over existing solutions. We release our 6(a) Unmasked prefill 1k 2k 4k 8k 16k 32k                              
+
+> Sequence length n
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> Speed-up over FlashAttention 2
+> Thinformer (Triton)
+> Thinformer (Original) (b) Masked prefill 32k 64k 128k 256k 512k
+> Sequence length n
+> 0
+> 20
+> 40
+> 60
+> 80
+> Speed-up over FlashAttention 2
+> Thinformer Express ( h= 9)
+> Thinformer Express ( h= 10)
+> HyperAttention
+> (c) Masked prefill ( n= 32768 )04812 16 20 24 28
+> Number of layers replaced
+> 1
+> 2
+> 3
+> 4
+> Speed-up over FlashAttention 2
+> Exact
+> Thinformer Express ( h= 9)
+> Thinformer Express ( h= 10)
+> HyperAttention
+> 04812 16 20 24 28
+> Number of layers replaced
+> 1.00
+> 1.05
+> 1.10
+> 1.15
+> 1.20
+> Relative perplexity
+> Exact
+> Thinformer Express ( h= 9)
+> Thinformer Express ( h= 10)
+> HyperAttention
+
+Figure 1: Accelerating long-context prefill. For masked attention, Thinformer Express attains larger speed-ups over FlashAttention 2 than the Triton HyperAttention algorithm (b) while improving the runtime-perplexity trade-off on LongBench-E tasks (c). (a) For unmasked attention, our I/O-aware Triton implementation also provides speed-ups over the original Torch-compiled Thinformer. open-source code at https://github.com/microsoft/thinformer and provide supplementary experiment details in Sec. I. 
+
+An efficient I/O-aware Triton implementation To translate the favorable runtime and space complexity of Cor. 2 and Prop. G.1 into real-world gains, we implement Thinformer Express using Triton [ 30 ]. Specifically, we write the core KH (Alg. A.1) and W TD ATTENTION (Alg. 5) procedures as Triton kernels and call them from PyTorch code that implements the rest of the Thinformer Express algorithm. As in FlashAttention [ 7], to maximize GPU utilization, we use tiling to reduce slow high bandwidth memory (HBM) reads and writes and avoid materializing the kernel matrices used in Alg. A.1. We also parallelize across batch, head, and row blocks of input query tensors as in FlashAttention 2 [ 6]. When processing long contexts, we leverage two additional optimizations. Since all query-key-value tuples are observed at once and available on HBM, we parallelize all HALVE calls on same-sized groups in Alg. 2 and avoid unnecessary data copies by using double dereferencing to index into the key and value vectors. Fig. 1a demonstrates the substantial speed-ups of our Triton Thinformer implementation over the torch.compile PyTorch implementation of Carrell et al. [4] when approximating unmasked attention over long contexts with cache size nout = 256 . At context length 32k, Thinformer (Original) is already 15 × faster than the highly-optimized FlashAttention 2 kernel for exact attention, but Thinformer (Triton) is 27 × faster, highlighting the value of our I/O-aware optimizations. 7Accelerating long-context prefill In language modeling, the input context must be fully processed before generation can begin—a stage known as prefill. Prefill cost grows quadratically with context length, making it a key bottleneck for long sequences. Leveraging our I/O-aware Triton implementation, we evaluate the speed-up of Thinformer Express over FlashAttention 2 for masked attention across a range of sequence lengths up to 512k tokens following the experimental setup of Han et al. [15 , Fig. 4(a) ] . Fig. 1b shows the speed-up of Thinformer Express over FlashAttention 2 growing with sequence length n, reaching 82 × speed-up for h = 9 and 31 × speed-up for h = 10 at 
+
+n = 512 K tokens. Notably, the state-of-the-art context approximation method HyperAttention [ 15 ]runs out of memory at the longest sequence length of 512k on an A6000 GPU, while Thinformer Express does not. To measure the trade-off between runtime and quality, Fig. 1c recreates the benchmark of Han et al. [15 , Fig. 3 ] by assessing both runtime and perplexity when replacing exact attention in the last k
+
+layers of the ChatGLM2-6B-32K language model [12]. Here, all methods preserve the first and last 
+
+32 context tokens and compress the intermediate tokens. We find that both settings of Thinformer Express offer a better speed-up-vs.-perplexity trade-off than HyperAttention, that Thinformer Express (h = 10 ) uniformly improves both the perplexity and speed-up of HyperAttention, and that, even with all layers replaced, all methods evaluated preserve the perplexity of exact attention up to a factor of 1.06 .
+
+Accelerating KV cache compression In transformer-based autoregressive models, the keys and values from prior tokens are stored in a KV cache to avoid recomputation during generation. As the context length grows, this cache quickly becomes a memory bottleneck. Leading KV cache compression methods address the memory bottleneck by preserving only a smaller set of representative key-value pairs [ 21 , 32 , 3], but exactly computing all input keys and values prior to compression still incurs a quadratic attention cost. To accelerate KV cache compression, one could instead cheaply generate the input keys and values using Thinformer Express and then compress the resulting cache using any high-quality compressor. Here, we instantiate this general recipe using three leading cache compression methods—SnapKV [ 21 ], StreamingLLM [ 32 ], and PyramidKV [ 3 ]—applied to three benchmark long-context language understanding tasks [ 2]: TREC-E [ 20 ] (question classification across 50 fine-grained classes), TriviaQA-E [ 18 ] (few-shot question answering), and HotpotQA-E [ 33 ](multi-hop question answering). In Fig. 2, we vary KV cache size and compare the accuracy-runtime trade-off curves induced by using exact attention versus Thinformer Express ( h = 9 ) in all layers of the Llama 3.1 8B Instruct model [ 13 ]. Remarkably, in each case, Thinformer Express preserves KV cache compression quality while substantially reducing total attention runtime. 
+
+Memory-efficient long-form decoding A second memory bottleneck in language modeling arises 300 400 500   
+
+> Runtime (ms)
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Accuracy
+> HotpotQA-E
+> PyramidKV
+> PyramidKV-Express
+> 300 400
+> Runtime (ms)
+> 0.86
+> 0.88
+> 0.90
+> 0.92
+> TriviaQA-E
+> StreamingLLM
+> StreamingLLM-Express
+> 400 500
+> Runtime (ms)
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> TREC-E
+> SnapKV
+> SnapKV-Express
+
+Figure 2: Accelerating KV cache compression. Across leading KV cache compression methods and LongBench-E tasks, Thinformer Express substantially reduces runtime while preserving quality. Error bands display ±1 standard error across all benchmark questions. See Sec. 4 for more details. 80 500 1000 1500 2000      
+
+> Mean Cache Size
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Accuracy
+> Exact
+> Thinformer Express
+> Expected Attention
+> SnapKV
+> KeyDiff
+> StreamingLLM
+> Knorm
+> 40000 60000 80000 100000
+> Runtime (ms)
+> 0.7
+> 0.8
+> 0.9 h= 10
+> Exact
+> Thinformer Express
+> Expected Attention
+> SnapKV
+> KeyDiff
+> StreamingLLM
+> Knorm
+
+Figure 3: Memory- and compute-efficient long-form decoding. On competition-level MATH-500 problems that benefit from step-by-step reasoning, Thinformer Express improves both the cache size-accuracy trade-off (left) and time-accuracy trade-off (right) of long-form decoding. Error bands display ±1 standard error across all 500 benchmark questions. See Sec. 4 for more details. from long-form decoding as each newly generated token contributes an additional key and value vectors to the ever-growing KV cache. For example, on competition-level MATH-500 problems that benefit from step-by-step reasoning [ 16 , 22 ], the DeepSeek-R1-Distill-Llama-8B model [ 14 ]generates over 4k tokens on average even though the input questions are only 75 tokens long on average. In such scenarios, Thinformer Express can be used to maintain a substantially smaller, dynamically-updated KV cache that preserves the quality of exact attention. To benchmark this streaming cache compression quality, we compare Thinformer Express with five leading KV cache compression methods: StreamingLLM [ 32 ], SnapKV [ 21 ], ExpectedAttention [ 9], KeyDiff [ 24 ], and Knorm [ 8]. StreamingLLM is a natively streaming cache compression method, while the other four use the batch-to-online conversion scheme of Devoto et al. [9] .2 For each method, Fig. 3 (left) displays the cache size-vs.-accuracy trade-off curves for DeepSeek-R1-Distill-Llama-8B on MATH-500. Notably, Thinformer Express achieves the highest accuracy at nearly every cache size and matches the accuracy of exact attention while preserving only 61% of the cache elements. 
+
+Accelerating long-form decoding When runtime is the primary bottleneck, Thinformer Express can also be used to alleviate the computational burden of quadratic-time long-form decoding by reducing runtime per token while accurately preserving the exact attention output. To evaluate its potential for accelerating long-form decoding, we benchmark the runtime and accuracy of Thinformer Express applied to DeepSeek-R1-Distill-Llama-8B on competition-level MATH-500 reasoning problems. In Fig. 3 (right), we find that the Thinformer Express trade-off curve strongly dominates those of the five leading alternatives—StreamingLLM, SnapKV, ExpectedAttention, KeyDiff, and Knorm—and matches the accuracy of exact attention with only 56% of the computation time. In line with our theory, we further find that the runtime overhead of maintaining the Thinformer Express cache is quite low when compared with the query cost of attending over the cache. For instance, across all benchmark questions, Thinformer Express ( h = 10 ) expends 35000 ms on average calling W TD ATTENTION ,compared with only 470 ms calling KH-E XPRESS .update(). 
+
+## 5 Conclusion 
+
+We introduced E XPRESS , a meta-procedure for causal masking, and Thinformer Express, a new causal attention approximation with per-token accuracy guarantees, constant memory, sub-quadratic query time, low compression overhead, and an efficient I/O-aware Triton GPU kernel. In theory, we provide sharper and more resource-efficient guarantees than prior work, and, in practice, we demonstrate improved performance across four bottlenecks in the language modeling pipeline: long-context prefill, KV cache compression, long-form memory-constrained decoding, and long-form compute-constrained decoding. 
+
+> 2Knorm also admits a streaming version, but it underperformed the batch-to-online conversion in our experiments.
+
+9Limitations However, this work is not without its limitations. For example, our experiments only cover English language modeling, Chinese language modeling, and mathematical reasoning and have not yet evaluated the strengths and weaknesses of E XPRESS for other languages or domains. Moreover, our Triton implementation does not yet exploit warp specialization, the Tensor Memory Accelerator supported in newer GPU architectures, persistent kernels, or FP8 support as in FlashAttention 2 and 3 [ 6, 27 ]; each is directly applicable and expected to yield further practical speed-ups. Finally, while we have focused on combining E XPRESS with the state-of-the-art kernel halving algorithm, E XPRESS 
+
+is compatible with any halving algorithm, even those that have no known guarantees but perform well in practice. We leave an in-depth evaluation other base algorithms for future work. 
+
+Broader impact By reducing the computational cost of attention, E XPRESS may lower the energy footprint of large-scale language model inference. However, following Jevons paradox, efficiency improvements could also increase total usage, offsetting environmental gains. More positively, lower inference cost broadens access to capable language models for users and devices with limited computational resources. 
+
+## Acknowledgments and Disclosure of Funding 
+
+The authors thank Amir Zandieh and Insu Han for valuable advice concerning the long-context prefill experiments. AG gratefully acknowledges support from the AI Research Institutes program of the National Science Foundation and Intel Corporation under NSF Award DMR-2433348. 
+
+## References 
+
+[1] Ryan Alweiss, Yang P Liu, and Mehtaab Sawhney. Discrepancy minimization via a self-balancing walk. In Proceedings of the 53rd Annual ACM SIGACT Symposium on Theory of Computing , pages 14–20, 2021. (Cited on page 6.) 
+
+[2] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, Yuxiao Dong, Jie Tang, and Juanzi Li. Longbench: A bilingual, multitask benchmark for long context understanding. In Proceedings of the 62nd annual meeting of the association for computational linguistics (volume 1: Long papers) , pages 3119–3137, 2024. (Cited on pages 1, 2, and 8.) 
+
+[3] Zefan Cai, Yichi Zhang, Bofei Gao, Yuliang Liu, Yucheng Li, Tianyu Liu, Keming Lu, Wayne Xiong, Yue Dong, Junjie Hu, et al. Pyramidkv: Dynamic kv cache compression based on pyramidal information funneling. In Second Conference on Language Modeling , 2025. (Cited on pages 2 and 8.) 
+
+[4] Annabelle Michael Carrell, Albert Gong, Abhishek Shetty, Raaz Dwivedi, and Lester Mackey. Low-rank thinning. In International Conference on Machine Learning , pages 6811–6848. PMLR, 2025. (Cited on pages 1, 2, 5, 6, 7, 13, 16, and 17.) 
+
+[5] Bernard Chazelle and Jiri Matousek. On linear-time deterministic algorithms for optimization problems in fixed dimension. Journal of Algorithms , 21(3):579–597, 1996. (Cited on page 6.) 
+
+[6] Tri Dao. Flashattention-2: Faster attention with better parallelism and work partitioning. In The Twelfth International Conference on Learning Representations , 2024. URL https: //openreview.net/forum?id=mZn2Xyh9Ec . (Cited on pages 1, 7, and 10.) 
+
+[7] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. Flashattention: Fast and memory-efficient exact attention with io-awareness. Advances in Neural Information Processing Systems , 35:16344–16359, 2022. (Cited on pages 1 and 7.) 
+
+[8] Alessio Devoto, Yu Zhao, Simone Scardapane, and Pasquale Minervini. A simple and effective l_2 norm-based strategy for kv cache compression. In Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing , pages 18476–18499, 2024. (Cited on page 9.) 
+
+[9] Alessio Devoto, Maximilian Jeblick, and Simon Jégou. Expected attention: Kv cache compression by estimating attention from future queries distribution. arXiv preprint arXiv:2510.00636 , 2025. (Cited on pages 9 and 21.) 
+
+[10] Raaz Dwivedi and Lester Mackey. Generalized kernel thinning. In International Conference on Learning Representations , 2022. (Cited on pages 2 and 5.) 
+
+10 [11] Raaz Dwivedi and Lester Mackey. Kernel thinning. Journal of Machine Learning Research , 25 (152):1–77, 2024. (Cited on pages 2, 5, and 15.) 
+
+[12] Team Glm, Aohan Zeng, Bin Xu, Bowen Wang, Chenhui Zhang, Da Yin, Dan Zhang, Diego Rojas, Guanyu Feng, Hanlin Zhao, et al. Chatglm: A family of large language models from glm-130b to glm-4 all tools. arXiv preprint arXiv:2406.12793 , 2024. (Cited on page 8.) 
+
+[13] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Alex Vaughan, et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 , 2024. (Cited on page 8.) 
+
+[14] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, et al. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature , 645(8081):633–638, 2025. (Cited on pages 1 and 9.) 
+
+[15] Insu Han, Rajesh Jayaram, Amin Karbasi, Vahab Mirrokni, David Woodruff, and Amir Zandieh. Hyperattention: Long-context attention in near-linear time. In The Twelfth International Conference on Learning Representations , 2024. URL https://openreview.net/forum? id=Eh0Od2BJIM . (Cited on pages 1, 6, and 8.) 
+
+[16] Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathematical problem solving with the MATH dataset. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 2) , 2021. URL https://openreview.net/forum?id=7Bywt2mQsCe . (Cited on pages 9 and 21.) 
+
+[17] Wassily Hoeffding. Probability inequalities for sums of bounded random variables. Journal of the American Statistical Association , 58(301):13–30, 1963. ISSN 01621459, 1537274X. URL 
+
+http://www.jstor.org/stable/2282952 . (Cited on page 15.) 
+
+[18] Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer. Triviaqa: A large scale distantly supervised challenge dataset for reading comprehension. In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 1601–1611, 2017. (Cited on page 8.) 
+
+[19] Ekaterina Kochetkova, Kshiteej Sheth, Insu Han, Amir Zandieh, and Michael Kapralov. Streaming attention approximation via discrepancy theory. In Advances in Neural Information Processing Systems , 2025. (Cited on pages 1 and 6.) 
+
+[20] Xin Li and Dan Roth. Learning question classifiers. In COLING 2002: The 19th International Conference on Computational Linguistics , 2002. (Cited on page 8.) 
+
+[21] Yuhong Li, Yingbing Huang, Bowen Yang, Bharat Venkitesh, Acyr Locatelli, Hanchen Ye, Tianle Cai, Patrick Lewis, and Deming Chen. Snapkv: Llm knows what you are looking for before generation. In Advances in Neural Information Processing Systems , volume 37, 2024. 
+
+> (Cited on pages 2, 8, and 9.)
+
+[22] Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harrison Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. Let’s verify step by step. In The twelfth international conference on learning representations , 2023. (Cited on pages 2, 9, and 21.) 
+
+[23] Jiri Matousek. Approximations and optimal geometric divide-and-conquer. Journal of Computer and System Sciences , 50(2):203–208, 1995. (Cited on page 6.) 
+
+[24] Junyoung Park, Dalton Jones, Matthew J Morse, Raghavv Goel, Mingu Lee, and Christopher Lott. Keydiff: Key similarity-based kv cache eviction for long-context llm inference in resource-constrained environments. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. (Cited on page 9.) 
+
+[25] Jeff M Phillips. Algorithms for ε-approximations of terrains. In International Colloquium on Automata, Languages, and Programming , pages 447–458. Springer, 2008. (Cited on page 6.) 
+
+[26] Tobias Schröder and Lester Mackey. Wildcat: Near-linear attention in theory and practice. 
+
+arXiv preprint arXiv:2602.10056 , 2026. (Cited on pages 1 and 6.) 
+
+[27] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, and Tri Dao. Flashattention-3: Fast and accurate attention with asynchrony and low-precision. Advances in Neural Information Processing Systems , 37:68658–68685, 2024. (Cited on page 10.) 
+
+[28] Abhishek Shetty, Raaz Dwivedi, and Lester Mackey. Distribution compression in near-linear time. In International Conference on Learning Representations , 2022. (Cited on pages 3 and 14.) 
+
+11 [29] Ingo Steinwart and Andreas Christmann. Support vector machines. Wiley Interdisciplinary Reviews: Computational Statistics , 1, 2008. URL https://api.semanticscholar.org/ CorpusID:661123 . (Cited on pages 2 and 15.) 
+
+[30] Philippe Tillet, Hsiang-Tsung Kung, and David Cox. Triton: an intermediate language and compiler for tiled neural network computations. In Proceedings of the 3rd ACM SIGPLAN International Workshop on Machine Learning and Programming Languages , pages 10–19, 2019. (Cited on pages 1 and 7.) 
+
+[31] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. In Proceedings of the 31st International Conference on Neural Information Processing Systems , NIPS’17, page 6000–6010, Red Hook, NY, USA, 2017. Curran Associates Inc. ISBN 9781510860964. (Cited on pages 1, 2, and 3.) 
+
+[32] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike Lewis. Efficient streaming language models with attention sinks. In International Conference on Learning Representations ,2024. URL https://openreview.net/forum?id=NG7sS51zVF . (Cited on pages 2, 8, and 9.) 
+
+[33] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christopher D Manning. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In Proceedings of the 2018 conference on empirical methods in natural language processing , pages 2369–2380, 2018. (Cited on page 8.) 
+
+[34] Amir Zandieh, Insu Han, Majid Daliri, and Amin Karbasi. Kdeformer: Accelerating transformers via kernel density estimation. In International Conference on Machine Learning ,pages 40605–40623. PMLR, 2023. (Cited on page 1.) 
+
+12 A Kernel Halving 
+
+For completeness, we reproduce the KH (δ) halving algorithm of Carrell et al. [4, Alg. B.1].  
+
+> Algorithm A.1:
+
+KH (δ): Kernel halving with simplified swapping thresholds and failure probability δ/ 2
+
+Input: point sequence Xin = ( xi)nin  
+
+> i=1
+
+with even nin , kernel κ 
+
+> 1
+
+S(1) , S(2) ← {} ; bmax ,0 ← 0 // Initialize empty coresets and max function norm  
+
+> 2
+
+for i = 1 , 2, . . . , n in /2 do  
+
+> 3
+
+// Construct kernel difference function using next two points  
+
+> 4
+
+(x, x′) ← (x2i−1, x2i); fi ← κ(x2i−1, ·) − κ(x2i, ·) 
+
+> 5
+
+// Compute swapping threshold ai 
+
+> 6
+
+b2 
+
+> i
+
+= ∥fi∥2 
+
+> κ
+
+= κ(x, x)+ κ(x′, x′)−2κ(x, x′); bmax ,i = max( bi, bmax ,i −1) 
+
+> 7
+
+ai ← bibmax ,i ( 12 + log(2 nin /δ ))  
+
+> 8
+
+// Compute the balancing score for the next pair  
+
+> 9
+
+αi ← P2i−2 
+
+> j=1
+
+(κ(xj , x) − κ(xj , x′)) − 2 P 
+
+> z∈S (1)
+
+(κ(z, x) − κ(z, x′))  
+
+> 10
+
+// Assign one point to each coreset after probabilistic swapping  
+
+> 11
+
+(x, x′) ← (x′, x) with probability min(1 , 12 (1 − αi 
+
+> ai
+
+)+) 
+
+> 12
+
+S(1) .append (x); S(2) .append (x′) 
+
+> 13
+
+return Xout ≜ S(1) , coreset of size nout = nin /2
+
+## B Proof of Thm. 1: E XPRESS memory and runtime 
+
+Proof of runtime claim (5). For n < 4nout , E XPRESS has not yet called H ALVE , and C OMPRESS 2with m = 0 stores every point without halving, so rE(n) = 0 .Next suppose n ≥ 4nout . Fix any E XPRESS round m ∈ { 0, 2, 4, . . . }, and let m⋆ ≜ m ∧ m. If 
+
+m ≤ m, then S. keep (x) is always true, so S UBSAMPLE does not filter any points. If m > m ,SUBSAMPLE (Algs. 3 and H.1) partitions the level-m block into 2mnout strata, each of size 2m−m,and draws one point from each stratum. Since the sampler draws one index per output stratum, the total cost to subsample 2mnout points from 2mnout is 2mnout uniform sampling operations. Since 
+
+rC(m⋆) is the cost of COMPRESS 2(m⋆, 2m⋆ nout , HALVE m), rH(4 nout ) + rH(2 nout ) is the cost of the HALVE phase, and three Thin phases (each thinning 2mnout points) occur in E XPRESS prior to the HALVE phase, rE satisfies the recursion rE(nout ) = 0 and 
+
+rE(2 m+2 nout ) = rE(2 mnout ) + 3 I{m > m }2mnout + 3 rC(m⋆) + rH(4 nout ) + rH(2 nout ). (8) Unrolling the recursion (8) yields the runtime 
+
+rE(n) = I[n ≥ 4nout ] PKn−1
+
+> k=0
+
+ rH(4 nout ) + rH(2 nout ) + 3 rC((2 k) ∧ m) + 3 Ik > m
+
+> 2
+
+2mnout 
+
+
+
+≤ I[n ≥ 4nout ]Kn
+
+ rH(4 nout ) + rH(2 nout ) + 3 rC(m) + 3 · 2mnout 
+
+
+
+for Kn ≜ ⌈log 4(n/n out )⌉ whenever n = 2 2Kn nout . Finally, for intermediate values of n, we have 
+
+rE(n) ≤ rE(2 2Kn nout ) since rE is non-decreasing. 
+
+Proof of space claim. For n ≤ nout , E XPRESS stores all input points and the space claim follows immediately. Now suppose n > n out . A convenient way of computing the weighted cache size is to consider numbers in base 4. At the end of an update call in Alg. 1, let m be the current thinning factor, q ≜ m ∧ m, and b be the completed Thin phases since the last H ALVE phase. After an update returns, three completed Thin phases trigger a H ALVE phase, so b ≤ 2. At this point, E contains nout 
+
+points (from the Exact or most recent H ALVE phase) plus bn out points from the concatenation event at the end of each Thin phase (Line 9), so |E| = ( b + 1) nout .Let u = Pq−1 
+
+> i=0
+
+|S i| be the number of points retained in C. wtd_cache () and uE = u + |E|. Define 
+
+x, a to be the integers satisfying u = nout 22−q x + a and 0 ≤ a < n out 22−q . Let x = Pq−1 
+
+> i=1
+
+4i−1di,13 where di ∈ { 0, 1, 2, 3} for all i. Then the current C OMPRESS 2 cache satisfies |S 0| = a and 
+
+|S i| = nout 2i−q di for i = 1 , . . . , q − 1. Thus 
+
+uE = ( b + 1) nout + a + Pq−1 
+
+> i=1
+
+nout 2i−q di. (9) If q = 0 , then u ≤ nout points, so uE ≤ 4nout because b ≤ 2. If q ≥ 1, then the worst case has b = 2 ,
+
+a arbitrarily close to nout 22−q , and di = 3 for all i. In that case, 
+
+u = nout 22−q + 3 nout 
+
+Pq−1 
+
+> i=1
+
+2i−q =  3 − 21−q nout .
+
+Adding |E| gives (6 − 21−q )nout < 6nout . Hence, for all n ∈ N,
+
+uE = (4 + b − 21−q )nout < 6nout . (10) Now suppose H ALVE with input size nin uses at most sH(nin ) space for nondecreasing sH. Since EXPRESS calls H ALVE sequentially, it can reuse the same memory for each H ALVE call. The COMPRESS 2 calls at level q invoke H ALVE on inputs of size nout 22−q+i for i = 0 , . . . , q − 1, which are at most 2nout , while the two warm-start H ALVE calls in Alg. 1 have input sizes 4nout and 2nout .Thus the temporary halving workspace is bounded by sH(4 nout ), and 
+
+sE(n) ≤
+
+nd if n ≤ nout ,uEd + sH(4 nout ) otherwise .
+
+Combining this display with (10) yields our claim. 
+
+## C Proof of Cor. 1: E XPRESS runtime with polynomial-time H ALVE 
+
+Suppose rH(nin ) ≤ ρn τ 
+
+> in
+
+for all nin ∈ [4 nout ]. The claim is immediate for n < 4nout , so suppose 
+
+n ≥ 4nout with Kn ≜ ⌈log 4(n/n out )⌉ and Ln ≜ Kn ∧ (⌊m/ 2⌋ + 1) . Thm. 1 and the constraint 
+
+2m ≤ 2nout imply that 
+
+rE(n) ≤ ρK n(4 τ + 2 τ )nτ 
+
+> out
+
++ 6 Knn2 
+
+> out
+
++ 3 KnrC(m). (11) It remains to bound rC. If τ = 2 , our claim follows from (11) and the estimate 
+
+rC(m) ≤ Pm−1 
+
+> j=0
+
+4j ρ nout 21−j 2 = 4 ρmn 2 
+
+> out
+
+≤ 4ρ log 2(2 nout )n2
+
+> out
+
+.
+
+Next suppose τ̸ = 2 . Then, since 2m ≤ 2nout ,
+
+rC(m) ≤ Pm−1 
+
+> j=0
+
+4j ρ nout 21−j τ = ρ(2 nout )τ Pm−1 
+
+> j=0
+
+2(2 −τ )j = ρ (2 nout )τ |1−2(2 −τ )m||1−22−τ |
+
+≤ ρ (2 nout )τ |1−(2 nout )2−τ ||1−22−τ | = ρ2τ |(2 nout )τ −(2 nout )2||2τ −22| . (12) Our τ̸ = 2 claim now follows immediately from the estimates (11) and (12). 
+
+## D Proof of Thm. 2: Quality of E XPRESS 
+
+We begin by recalling the definition of sub-Gaussianity on an event E [28, Def. 5]. 
+
+Definition D.1 (Sub-Gaussian on an event ). We say a random variable X is ν-sub-Gaussian on an event E if ν ≥ 0 and 
+
+EE [exp( tX )] ≤ exp 
+
+ ν2t2
+
+> 2
+
+
+
+for all t ∈ R.
+
+For each j ∈ [n], we note that mj is the associated thinning factor at the start of the EXPRESS .update (xj ) call and define its truncation qj ≜ mj ∧ m. Within the first j EXPRESS 
+
+update calls, HALVE m,m is called at most twice and each (HALVE m,i )m∧m−1 
+
+> i=0
+
+is called at most 
+
+3 · 4(m∧m)−i−1 times for each even m ∈ { 0, . . . , m j }. Therefore, by our sub-Gaussian thinning assumptions and the union bound, there exists an event E of probability at least 
+
+1 − 12
+
+Pmn 
+
+> even m=0
+
+(2 δm,m + 3 P(m∧m)−1 
+
+> i=0
+
+4(m∧m)−i−1δm,i )
+
+14 on which, for all j ∈ [n], each HALVE m,i call invoked within the first j update calls is νHj(nin )
+
+sub-Gaussian on E given its input. Now fix any j ∈ [n]. If j < 4nout , then the E XPRESS approximation is exact and hence νE(j) = 0 ,so assume j ≥ 4nout . Our ultimate goal is to bound the E-sub-Gaussian constant, 
+
+νE(j) = sup   
+
+> f∈H κ:∥f∥κ=1
+
+q 2 
+
+> ∥f∥2
+> κ
+
+log( EE [exp( 1
+
+> j
+
+Pji=1 f (xi) − P 
+
+> (x,w )∈X out (j)
+
+w f (x))]) .
+
+To achieve this, we fix f ∈ H κ with ∥f ∥κ = 1 and define, for each (κ, ν, E)-sub-Gaussian thinning algorithm A LG acting on an input dataset Xin , the unnormalized discrepancy 
+
+ψALG = nin ( 1
+
+> nin
+
+P 
+
+> x∈X in
+
+f (x) − P 
+
+> (x,w )∈X out (j)
+
+w f (x)) .
+
+Notably, by Defs. 1 and D.1, ψALG is σ = nin ν sub-Gaussian on E given Xin .We will bound νE(j) by first controlling the E-sub-Gaussian constant σE(j) of the E XPRESS 
+
+unnormalized discrepancy 
+
+ψE(j) ≜ j( 1
+
+> j
+
+Pji=1 f (xi) − P 
+
+> (x,w )∈X out (j)
+
+w f (x)) .
+
+Our primary insight is that ψE(j) decomposes into the error contributed by each H ALVE call and each stratified subsampling operation. That is, 
+
+ψE(j) = Pmj 
+
+> even m=0
+
+2mψHm,m (4 nout ) + 2 m+1 ψHm,m (2 nout ) + Pcm 
+
+> k=1
+
+ψSm,k I[m > m ]+ P(m∧m)−1
+
+> i=0
+
+Pcm,i  
+
+> k=1
+
+2i+m−(m∧m)ψ(k)
+
+> Hm,i
+
+
+
+where • ψHm,m (4 nout ) and ψHm,m (2 nout ) are the unnormalized discrepancies associated with the first and second E XPRESS calls to H ALVE m,m ,• cm,i is the number of times H ALVE m,i is called within the first j EXPRESS updates , • ψ(k) 
+
+> Hm,i
+
+is the unnormalized discrepancy associated with the k-th H ALVE m,i call, • cm is the number of strata of size Nm ≜ 2m−m previously processed or being processed by SUBSAMPLE (m, m ) by the end of the j-th update, • Xm,k ≜ (xm,k,i )Nm 
+
+> i=1
+
+is the subsequence of points corresponding to the k-th stratum of size Nm
+
+processed by S UBSAMPLE (m, m ),• nm,k is the number of points from Xm,k processed by SUBSAMPLE (m, m ) by the end of the j-th update, • Im,k ∼ Unif ([ Nm]) is the index of the point selected by S UBSAMPLE (m, m ) from Xm,k , and • ψSm,k = ( PNm 
+
+> i=1
+
+I[i ≤ nm,k ]f (xm,k,i )) − NmI[Im,k ≤ nm,k ]f (xm,k,I m,k ) is the unnormalized discrepancy from subsampling Xm,k at the end of the j-th update. Since I[Im,k ≤ nm,k ]f (xm,k,I m,k ) is a uniform subsample, Hoeffding [17 , (4.16) ] and Steinwart and Christmann [29, (4.8)] imply that ψSm,k is sub-Gaussian with 
+
+σSm ≤ Nm max i∈[j] |f (xi)| ≤ Nm∥f ∥κ max i∈[j]
+
+pκ(xi, xi) = Nm
+
+p∥κ∥j .
+
+Moreover, since each successive HALVE m,i call is νHj(nin ) sub-Gaussian on E given its input, each ψHm,m (nin ) is σm(nin ) = nin νHj(nin ) sub-Gaussian on E given its input, and each ψ(k) 
+
+> Hm,i
+
+is 
+
+σm,i = 2 i−(m∧m)+2 nout νHj(2 i−(m∧m)+2 nout ) on E given its input. Sub-Gaussian additivity [ 11 , Lem. 14] and the bounds cm ≤ 3 · 2mnout and cm,i ≤ 3 · 4(m∧m)−i−1
+
+therefore imply that ψE(j) is sub-Gaussian on E with 
+
+σ2
+
+> E
+
+(j) ≤ Pmj 
+
+> even m=0
+
+cmσ2 
+
+> Sm
+
+I[m > m ] + 4 mσ2
+
+> m
+
+(4 nout ) + 4 m+1 σ2
+
+> m
+
+(2 nout )+ P(m∧m)−1
+
+> i=0
+
+Pcm,i  
+
+> k=1
+
+4i+m−(m∧m)σ2
+
+> m,i
+
+
+
+≤ Pmj 
+
+> even m=0
+
+ 4m3∥κ∥j nout I[m>m ]2m + 4 mσ2
+
+> m
+
+(4 nout ) + 4 m+1 σ2
+
+> m
+
+(2 nout ) + 3 P(m∧m)−1 
+
+> i=0
+
+4m−1σ2
+
+> m,i
+
+
+
+15 ≤ 4mj +2 ∥κ∥j nout I[mj >m ]2m5 + Pmj  
+
+> even m=0
+
+4m+2 n2
+
+> out
+
+ν2
+
+> Hj
+
+(4 nout ) + ν2
+
+> Hj
+
+(2 nout )+ 3 P(m∧m)−1 
+
+> i=0
+
+4i−(m∧m)−1ν2
+
+> Hj
+
+(2 i−(m∧m)+2 nout ). (13) Since the final bound is independent of the arbitrary test function f , the same upper bound holds for 
+
+j2ν2
+
+> E
+
+(j).Now, define ν2 
+
+> j
+
+≜ ν2
+
+> Hj
+
+(4 nout ) + ν2
+
+> Hj
+
+(2 nout ). Our monotonicity assumptions imply 
+
+ν2
+
+> Hj
+
+(4 nout ) + ν2
+
+> Hj
+
+(2 nout ) ≤ ν2 
+
+> j
+
+, and 
+
+4i−(m∧m)+2 ν2
+
+> Hj
+
+(2 i−(m∧m)+2 nout ) ≤ 4ν2
+
+> Hj
+
+(2 nout ) ≤ 4ν2 
+
+> j
+
+for all i ≤ (m ∧ m) − 1.
+
+Therefore, by the bound (13), the definition Kj ≜ (mj + 2) /2, and the constraint m ≤ log 2(2 nout ),
+
+ν2
+
+> E
+
+(j) ≤ 4mj +2 ∥κ∥j nout I[mj >m ]2m5j2 + I[j≥4nout ]
+
+> j2
+
+Pmj  
+
+> even m=0
+
+4m+2 n2
+
+> out
+
+ν2 
+
+> j
+
+(1 + 316 (m ∧ m)) 
+
+≤ 16 Kj ∥κ∥j nout I[mj >m ]2m5j2 +n2
+
+> out
+
+ν2 
+
+> j
+
+(1 + 316 qj ) I[j≥4nout ]
+
+> j2
+
+PKj 
+
+> k=1
+
+16 k
+
+= 16 Kj ∥κ∥j nout I[mj >m ]2m5j2 +n2
+
+> out
+
+ν2 
+
+> j
+
+(1 + 316 qj ) 16 15 16 Kj −1
+
+> j2
+
+≤ 16 ∥κ∥j I[mj >m ]5nout 2m +ν2 
+
+> j
+
+(16 + 3 qj ) 16 15 ≤ 16 ∥κ∥j I[mj >m ]5nout 2m +ν2 
+
+> j
+
+(16 + 3 log 2(2 nout )) 16 15 
+
+= 16 ∥κ∥j I[mj >m ]5nout 2m +ν2 
+
+> j
+
+(1 + 3 log 2(64 nout )) 16 15 ≤ 16 ∥κ∥j I[mj >m ]5nout 2m +4 log 2(64 nout )ν2 
+
+> j
+
+.
+
+## E Proof of Cor. 2: KH-E XPRESS (δ) guarantees 
+
+Proof of runtime claim (6). The KH (δ) implementation used in KH-E XPRESS (δ) has runtime 
+
+rH(nin ) = O(dn 2
+
+> in
+
+). Hence, the runtime claim follows immediately from Cor. 1 with τ = 2 .
+
+Proof of space claim. Thm. 1 and the sH(nin ) = nin d space complexity of KH (δ) imply that 
+
+sE(n) ≤ 6nout d + sH(4 nout ) ≤ 10 nout d. 
+
+Proof of quality claim (7). For each n < 4nout , Xout (n) represents the first n points exactly, so νE(n) = 0 . For each n ≥ 4nout , let mn be the associated thinning factor at the start of the EXPRESS .update (xn) call, and let δ⋆n represent the smallest failure probability used by any KH call within the first n updates. Since δm is decreasing in m and m ≥ 1, we have 
+
+δ⋆n ≥ min( 12 , 41−(mn ∧m) 
+
+> 3( mn∧m)
+
+)δmn ≥ 43m4m δmn = δ
+
+> 243m4m
+> log 2(1+2 /(mn+4)) log 2(mn/2+2) log 2(mn/2+3)
+
+≥ 4δ 
+
+> 3m4m(mn+5) ln(2) log 2(mn/2+2) log 2(mn/2+3)
+
+, (14) where the final inequality follows from Lem. E.1. 
+
+Lemma E.1 (Logarithm lower bound) . For all x > 0, log 2(1 + x) ≥ 2(1+2 /x ) ln(2) .
+
+Proof. Let h(x) ≜ ln(1 + x) − 2x 
+
+> 2+ x
+
+for x > −1. Since h(0) = 0 and 
+
+h′(x) = 11+ x − 4(2+ x)2 = x2 
+
+> (1+ x)(2+ x)2
+
+≥ 0 for all x > 0
+
+we have h(x) ≥ 0 for all x > 0. Hence log 2(1 + x) ln(2) = ln(1 + x) ≥ 2x 
+
+> 2+ x
+
+.Now, for each η ∈ (0 , 1) and n ≥ 4nout , Prop. B.2 of Carrell et al. [4] implies that KH (η) is 
+
+(κ, ν Hn(nin , η ), η )-sub-Gaussian with 
+
+ν2
+
+> Hn
+
+(nin , η ) ≜ 4∥κ∥n log(2 nin /η )
+
+> n2
+> in
+
+on any input of size nin from (xi)ni=1 . Setting ν2
+
+> Hn
+
+(nin ) ≜ ν2
+
+> Hn
+
+(nin , δ ⋆n), we find that nin νHn(nin ) is nondecreasing in nin and n. Therefore, by Thm. 2, the E XPRESS sub-Gaussianity bound 
+
+ν2
+
+> E
+
+(n) ≜ 16 15 (16 + 3( mn ∧ m)) ( ν2
+
+> Hn
+
+(4 nout ) + ν2
+
+> Hn
+
+(2 nout )) + 16 ∥κ∥nI[mn>m ]5nout 2m
+
+16 ≤ 43 (16 + 3( mn ∧ m)) ∥κ∥n log(8 nout /δ ⋆n)
+
+> n2
+> out
+
++ 16 ∥κ∥nI[mn>m ]5nout 2m
+
+holds for all n ∈ N on an event E of probability at least 
+
+1 − P∞ 
+
+> even m=0
+
+( δm 
+
+> 2
+
++ 38
+
+P(m∧m)−1 
+
+> i=0
+
+4(m∧m)−iδm,i ) = 1 − P∞  
+
+> even m=0
+
+δm
+
+= 1 − δ
+
+> 2
+
+P∞ 
+
+> even m=0
+
+  1log 2(m/ 2+2) − 1log 2(m/ 2+3) 
+
+ = 1 − δ 
+
+> 2
+
+.
+
+The claim (7) now follows from the estimates (14), m ≤ log 2(nout ), and 6 ln(2) ≤ 5.
+
+## F Proof of Thm. 3: Quality of Thinformer Express 
+
+By Cor. 2, for all n ∈ N, the weighted coreset Xout (n) obtained by updating KH-E XPRESS (δ) with 
+
+(( ki, vi)) ni=1 is (κatt , ν E(n)) -sub-Gaussian on an event E of probability at least 1 − 14 where νE(n)
+
+satisfies 
+
+ν2
+
+> E
+
+(n) ≤ 4(16+3( mn∧m)) I[n≥4nout ]3 
+
+> ∥κatt ∥nlog(10 nout m(mn+5) log 22(mn/2+3)4 m)
+> n2
+> out
+
++ 16 ∥κatt ∥nI[mn>m ]5nout 2m (15) 
+
+= O
+
+ ∥κatt ∥n log( nout ) log( nout log( nnout )) 
+
+> n2
+> out
+
++ ∥κatt ∥n
+
+> 2mnout
+
+
+
+. (16) Since Thinformer Express attends over (qn, kn, vn) prior to updating its KH-E XPRESS cache C
+
+with (kn, vn), the weighted coreset employed by the n-th W TD ATTENTION call is (κatt , ν W(n)) ,sub-Gaussian on E with νW(n) = n−1 
+
+> n
+
+νE(n − 1) .Now fix any n ∈ N. The sub-Gaussian attention analysis of Carrell et al. [4 , Thm. 1 and Lems. F.1, F.2, and F.3] implies that, on E,
+
+∥bon − on∥∞ ≤ νW(n) exp( 3R2 
+
+> n
+> 2√d
+
+)p2 log(2( d + 1) /δ ′
+
+> n
+
+) (17) with probability at least 1 − δ′
+
+> n
+
+. Moreover, by Carrell et al. [4, Lem. F.3], 
+
+p∥κatt ∥n−1 ≤ exp( R2 
+
+> n−1
+> 2√d
+
+)
+
+q
+
+∥Vn−1∥22,∞ + ∥Vn−1∥2max ≤ exp( R2 
+
+> n
+> 2√d
+
+)√2∥Vn∥2,∞. (18) The advertised inequality now follows from the estimates (15), (17) and (18); the relations νW(n) =  
+
+> n−1
+> n
+
+νE(n − 1) , mn−1 ≤ mn, and ∥κatt ∥n−1 ≤ ∥ κatt ∥n; and the union bound as P∞ 
+
+> n=1
+
+δ′ 
+
+> n
+
+= 14 .The final big O expression additionally uses the estimate (16) and the inequality 
+
+δ′ 
+
+> n
+
+= 12log 2(1+1 /(n+1)) log 2(n+1) log 2(n+2) ≥ 141(2 n+3) log 2(n+1) log 2(n+2) 
+
+justified by Lem. E.1. 
+
+## G Proof of Prop. G.1: Cost of W TD ATTENTION 
+
+Proposition G.1 (Cost of WTD ATTENTION ). When attending over (qi, ki, vi)ni=1 with Thinformer Express (Alg. 4), the runtime contributed by WTD ATTENTION satisfies, for mn ≜
+
+2⌈log 4(n/ (4 nout )) ⌉,
+
+rW(n) ≤
+
+ 
+
+> d
+> 2
+
+n(n + 1) if n ≤ 4nout , 
+
+> d
+> 2
+
+(4 nout )(4 nout + 1) +   72 n2 
+
+> out
+
+− 12 nout 
+
+(2 mn+2 − 4) 
+
+− 3 mn 
+
+> 2
+
+n2
+
+> out
+
+if 4nout < n and mn ≤ m,  
+
+> d
+> 2
+
+(4 nout )(4 nout + 1) + 6 nout (n − 4nout ) if 4nout < n and mn > m. 
+
+(19) 
+
+Proof. When n ≤ 4nout , the cache passed to the i-th W TD ATTENTION call contains the preceding 
+
+i−1 key-value pairs exactly, and Alg. 5 incorporates the input token before computing attention. Thus the i-th query attends over i points exactly, and the total query cost is rW(n) = Pni=1 i = 12 n(n + 1) .Now suppose n > 4nout , so mn + 2 = 2 ⌈log 4(n/n out )⌉. We first consider the case mn ≤ m. Since the total query cost is non-decreasing in n, it suffices to consider endpoints n = nout 2s for s ∈ 2N
+
+with 2 ≤ s ≤ m + 2 . Let Rs ≜ rW(nout 2s) for even s. For 2 ≤ s ≤ m, the round from nout 2s to 
+
+nout 2s+2 consists of three sibling blocks, each containing nout 2s queries and no subsampling. By (9), 17 the query cost during sibling j ∈ { 1, 2, 3} after u points have been added to the current C OMPRESS 2instance is 
+
+jn out + au + Ps−1 
+
+> ℓ=1
+
+nout 2ℓ−sdu,ℓ ,
+
+where u = nout 22−sxu + au, 0 ≤ au < n out 22−s, and xu = Ps−1 
+
+> ℓ=1
+
+4ℓ−1du,ℓ . Therefore, 
+
+Rs+2 − Rs = P3
+
+> j=1
+
+Pnout 2s−1
+
+> u=0
+
+
+
+jn out + au + Ps−1 
+
+> ℓ=1
+
+nout 2ℓ−sdu,ℓ 
+
+
+
+.
+
+The completed E XPRESS and sibling summaries contribute 
+
+P3
+
+> j=1
+
+Pnout 2s−1 
+
+> u=0
+
+jn out = 6 n2
+
+> out
+
+2s.
+
+For the current C OMPRESS 2 cache, each value of xu ∈ 0, . . . , 4s−1 − 1 appears with nout 22−s
+
+values of au, so 
+
+Pnout 2s−1 
+
+> u=0
+
+au = 2 n2 
+
+> out
+
+− 12 nout 2s,
+
+and, for each digit place ℓ, the digits 0, 1, 2, 3 appear equally often, giving 
+
+Pnout 2s−1 
+
+> u=0
+
+du,ℓ = 32 nout 2s.
+
+Combining these identities yields 
+
+Pnout 2s−1
+
+> u=0
+
+
+
+au + Ps−1 
+
+> ℓ=1
+
+nout 2ℓ−sdu,ℓ 
+
+
+
+=   32 2s − 1n2 
+
+> out
+
+− 12 nout 2s.
+
+Hence 
+
+Rs+2 − Rs = 21 2 n2
+
+> out
+
+2s − 3n2 
+
+> out
+
+− 32 nout 2s.
+
+Unrolling over s = 2 , 4, . . . , m n gives 
+
+Rmn+2 = 12 (4 nout )(4 nout + 1) + Pmn/2
+
+> k=1
+
+ 21 2 n2
+
+> out
+
+22k − 3n2 
+
+> out
+
+− 32 nout 22k
+
+= 12 (4 nout )(4 nout + 1) +   72 n2 
+
+> out
+
+− 12 nout 
+
+(2 mn+2 − 4) − 3 mn 
+
+> 2
+
+n2
+
+> out
+
+.
+
+Since rW(n) ≤ Rmn+2 , this proves the second case of (19). For the remaining case, mn > m and each query after the exact phase attends over at most the weighted cache returned by E XPRESS , which has size at most 6nout by (10). Thus 
+
+rW(n) ≤ 12 (4 nout )(4 nout + 1) + 6 nout (n − 4nout ),
+
+which proves the final case. 
+
+## H Offline-E XPRESS 
+
+In this section we introduce and analyze an offline version of E XPRESS that can be used when the input points (xi)ni=1 are all observable in advance. 
+
+H.1 Offline-S UBSAMPLE 
+
+The streaming S UBSAMPLE algorithm of Alg. 3 is equivalent to the following offline procedure (detailed in Alg. H.1): partition the input sequence of length 2mnout into 2m∧mnout equal-sized groups and pick one uniformly random point from each group. 
+
+Algorithm H.1: Offline-S UBSAMPLE 
+
+Input: Halving level m ∈ N, inflation factor m ∈ N, nin input points Xin 
+
+Output: Stratified subset of size min( nin , n in /2m−m) 
+
+> 1
+
+if m ≤ m then return Xin ; 
+
+> 2
+
+Partition Xin into G groups (S(m,i ) 
+
+> S
+
+)Gi=1 , each of size 2m−m 
+
+> 3
+
+for i = 1 , . . . , G do  
+
+> 4
+
+si ← uniformly draw one point from S(m,i ) 
+
+> S
+> 5
+
+return (si)Gi=1 
+
+18 H.2 Offline-C OMPRESS 2
+
+The streaming C OMPRESS 2 algorithm of Alg. 2 is equivalent to the following recursive offline procedure (detailed in Alg. H.2): partition the input into 4m−1 groups of equal size, halve each group, concatenate the outputs, and recurse. The base case ( m = 0 ) returns the input unchanged. 
+
+Algorithm H.2: Offline-C OMPRESS 2
+
+Input: Halving level m ∈ N, nin = 2 mnout input points Xin , H ALVE = HALVE 0:( m−1) 
+
+Output: Coreset of size nout  
+
+> 1
+
+if m = 0 then return Xin ; 
+
+> 2
+
+Partition Xin into 4m−1 groups (S(m,k ))4m−1 
+
+> k=1
+
+, each of size nin /4m−1 
+
+> 3
+
+return Offline-C OMPRESS 2 m − 1, S4m−1 
+
+> k=1
+
+HALVE 0(S(m,k )), HALVE 1:( m−1) 
+
+
+
+H.3 Offline-E XPRESS 
+
+The streaming E XPRESS algorithm of Alg. 1 is equivalent to the recursive offline procedure detailed in Alg. H.3. 
+
+Algorithm H.3: Offline-E XPRESS 
+
+Input: Target cache size nout , inflaction factor m, nin = 2 m+2 nout input points Xin with even m ≥ − 2, HALVE 
+
+Output: Coreset of size nout  
+
+> 1
+
+if nin ≤ nout then return Xin // Exact phase: preserve the first nout points ;  
+
+> 2
+
+Partition Xin into 4 groups (S(m,j ) 
+
+> in
+
+)3
+
+> j=0
+
+, each of size nin /4 
+
+> 3
+
+// Process first group with Offline-E XPRESS  
+
+> 4
+
+S(m) 
+
+> E
+
+← Offline-E XPRESS (nout , m, S(m, 0)  
+
+> in
+
+, HALVE ) 
+
+> 5
+
+// Thin phase: process remaining groups with Offline-S UBSAMPLE + Offline-C OMPRESS 2 
+
+> 6
+
+for j = 1 , 2, 3 do  
+
+> 7
+
+S(m,j ) ← Offline-S UBSAMPLE (m, m, n out , S(m,j ) 
+
+> in
+
+) ; // |S (m,j )| = 2 m∧mnout  
+
+> 8
+
+S(m,j ) 
+
+> C
+
+← Offline-C OMPRESS 2(m ∧ m, S(m,j ), HALVE m) ; // |S (m,j ) 
+
+> C
+
+| = nout  
+
+> 9
+
+// H ALVE phase  
+
+> 10
+
+return S(m+2)  
+
+> E
+
+≜ HALVE m,m (HALVE m,m (S(m) 
+
+> E
+
+∪ S (m, 1)  
+
+> C
+
+∪ S (m, 2)  
+
+> C
+
+∪ S (m, 3)  
+
+> C
+
+)) ; // |S (m+2)  
+
+> E
+
+| = nout 
+
+When the input points Xin are observed in advance, we can implement Alg. H.3 by processing the three C OMPRESS 2 calls in each round sequentially, while running the H ALVE calls at each level of Alg. H.2 in parallel. The next result bounds the storage cost of such a procedure. 
+
+Proposition H.1 (Storage cost of Offline-E XPRESS ). Suppose HALVE with input size nin uses at most sH(nin ) space for nondecreasing sH. Excluding input point storage, Offline-E XPRESS (Alg. H.3) can be implemented using at most 
+
+sE(nin ) ≤ I[nin > n out ](4 nout + hnin ) (20) 
+
+space where mn ≜ 2⌈log 4(n/ (4 nout )) ⌉, qn ≜ mn ∧ m, and 
+
+hn ≜ max max 0≤q≤qn max 0≤i<q 4q−1−isH(nout 22−q+i), s H(4 nout ) .
+
+Proof. In the exact phase (with nin ≤ nout ), Alg. H.3 uses no additional storage. Now suppose 
+
+nin > n out . Prior to the H ALVE phase, Alg. H.3 stores the Offline-E XPRESS coreset S(m) 
+
+> E
+
+and the three completed Offline-C OMPRESS 2 sibling coresets S(m,j ) 
+
+> C
+
+using pointers to at most 4nout data points. For a Offline-C OMPRESS 2 call at level q ≤ qnin , recursion level i runs 4q−1−i calls to H ALVE 
+
+in parallel, each with input size nout 22−q+i. Thus the parallel compression workspace is bounded by 
+
+max 0≤q≤qnin max 0≤i<q 4q−1−isH(nout 22−q+i).
+
+The two H ALVE calls made during the H ALVE phase have input sizes 4nout and 2nout , so the monotonicity of sH bounds their temporary workspace by sH(4 nout ). Adding the stored summaries and the largest temporary workspace gives (20). 19 Remark H.1 (Offline storage cost with linear-space H ALVE ). If KH uses sH(nin ) = nin space (e.g., to store pointers to its input points), then, apart from input point storage, Alg. H.3 can be implemented using at most 
+
+4nout + max(2 mnin ∧m, 4) nout 
+
+space where mn ≜ 2⌈log 4(n/ (4 nout )) ⌉.
+
+## I Supplementary Experiment Details 
+
+Each experiment was run on an Ubuntu 24.04.4 LTS node with 4 Intel Xeon Gold 5218 cores @ 2.30 GHz, 64 GB RAM, and a single NVIDIA RTX A6000 GPU (48 GB memory, CUDA 12.8, driver version 570.124.06). In all experiments, Thinformer Express used δ = 12 .
+
+I.1 Configurations for accelerating prefill 
+
+The accelerating prefill experiments of Fig. 1 were run using Python 3.12.11 and PyTorch 2.8.0. The implementation and default settings of HyperAttention were taken from hyper-attn ,3 and our experiment builds on this open-source repository. For the LongBench-E prefill experiment in Fig. 1c, we use zai-org/chatglm2-6b-32k .4 For the single-layer runtime experiment in Fig. 1a, we replace the second attention layer in ChatGLM2-6B-32K with Thinformer and measure prefill runtime over varying context lengths. We report speedup of the methods over 
+
+torch.nn.functional.scaled_dot_product_attention with the FlashAttention 2 backend. We use 100 warm-up runs and 20 timed runs for all accelerating prefill experiments. We set m = h−2
+
+for Thinformer Express. Table I.1: Configurations for the attention methods of Fig. 1a. Attention Algorithm Configuration Thinformer (Original) nout = 256 
+
+Thinformer (Triton) nout = 256 
+
+Table I.2: Configurations for the attention methods of Fig. 1b. Attention Algorithm Configuration HyperAttention 
+
+lsh_num_projs=7 , block_size=256 ,
+
+sample_size=256 , min_seq_len=4096 ,
+
+n_sinks=0 , n_window=0 
+
+Thinformer Express (Ours) n_sinks=0 , n_window=0 
+
+Table I.3: Configurations for the attention approximation methods of Fig. 1c. Attention Algorithm Configuration HyperAttention 
+
+lsh_num_projs=7 , block_size=256 ,
+
+sample_size=256 , min_seq_len=4096 ,
+
+n_sinks=32 , n_window=32 
+
+Thinformer Express (Ours) n_sinks=32 , n_window=32 
+
+I.2 Configurations for accelerating KV cache compression 
+
+The KV cache compression experiments of Fig. 2 were run using Python 3.13.9 and PyTorch 2.10.0. We use meta-llama/Llama-3.1-8B-Instruct for all KV cache compression experiments. 5
+
+> 3https://github.com/insuhan/hyper-attn
+> 4https://huggingface.co/zai-org/chatglm2-6b-32k
+> 5https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct
+
+20 We use greedy decoding for all methods and set max_new_tokens per dataset following the LongBench-E settings of Devoto et al. [9] . The implementations and default settings of all baseline methods were taken from kvpress version 0.3.0, 6 and our experiment builds on this open-source repository. During prefill, PyramidKV, StreamingLLM, and SnapKV use 
+
+torch.nn.functional.scaled_dot_product_attention with the FlashAttention 2 backend to compute the keys and values exactly; PyramidKV-Express, StreamingLLM-Express, and SnapKV-Express use Thinformer Express with n_sink=32 and n_window=32 to compute the approximate context keys and values. Runtime in Fig. 2 is the sum of key-value computation during prefill, KV cache compression, and query attention during decoding over all 32 layers. We use one warm-up run and one timed run for all accelerating KV cache compression experiments. We set 
+
+m = h − 2 for Thinformer Express. Table I.4: Configurations for the attention approximation methods of Fig. 2. Attention Algorithm Configuration PyramidKV window_size=64 , kernel_size=5 ,
+
+beta=20 
+
+StreamingLLM n_sink=4 
+
+SnapKV window_size=64 , kernel_size=5 
+
+I.3 Configurations for long-form decoding 
+
+The long-form decoding experiments of Fig. 3 were run using Python 3.13.9 and PyTorch 2.10.0. For the cache size-accuracy trade-off curve, we sweep over the target cache sizes 
+
+{250 , 500 , 1k , 1.5k , 2k , 3k , 4k } for all non-Thinformer Express baselines. To form the curves in Fig. 3 (left), we vary the threshold and compute the average accuracy and realized cache size over all math problems, where for each threshold and problem, we use the target cache size (for alternative methods) or the h value (for Thinformer Express) with the largest realized cache size less than the given threshold. For Thinformer Express, we sweep over h ∈ { 6, 7, 8, 10 , 12 },corresponding to target cache sizes nout = 2 h. For the accuracy-time trade-off curve, we sweep over the target cache sizes {1k , 1.5k , 2k , 3k , 4k } for Expected Attention, SnapKV, and KeyDiff and 
+
+{1.5k , 2k , 3k , 4k } for StreamingLLM and Knorm. We generate with max_new_tokens=32768 and use the recommended sampling parameters of temperature=0.6 and top_p=0.95 from the official DeepSeek-R1-Distill-Llama-8B model card. 7 We evaluate on the MATH-500 dataset 8 [16 , 22 ] and score answers using the grader from the PRM800K codebase 9 of Lightman et al. [22]. We use torch.nn.functional.scaled_dot_product_attention with the FlashAttention 2 backend for all exact attention calls. Runtime in Fig. 3 (right) is the sum of exact prefill attention, query attention during decoding, and compression time during decoding over all 32 layers. Because MATH-500 prompts are short, we compute the context keys and values with exact attention for all methods and apply the attention approximation methods only during decoding. We use one warm-up run and one timed run for all long-form decoding experiments. We set m = h for Thinformer Express. 
+
+> 6https://github.com/NVIDIA/kvpress/tree/main
+> 7https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+> 8https://huggingface.co/datasets/HuggingFaceH4/MATH-500
+> 9https://github.com/openai/prm800k
+
+21 Table I.5: Configurations for the attention approximation methods of Fig. 3. Attention Algorithm Configuration StreamingLLM n_sink=4 , compression_interval=1 
+
+SnapKV window_size=64 , kernel_size=5 ,
+
+compression_interval=128 
+
+ExpectedAttention 
+
+n_future_positions=512 , n_sink=4 ,
+
+use_covariance=True , use_vnorm=True ,
+
+epsilon=0.01 , compression_interval=128 
+
+KeyDiff compression_interval=128 
+
+Knorm compression_interval=128 
+
+Thinformer Express (Ours) n_sink=32 , n_window=32 
+
+22
