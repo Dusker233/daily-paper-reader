@@ -1,0 +1,1113 @@
+Title: WHET: Welding Homomorphic Encryption to Accelerator Architectures
+
+URL Source: https://arxiv.org/pdf/2606.11541v1
+
+Published Time: Thu, 11 Jun 2026 00:22:55 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# WHET: Welding Homomorphic Encryption to Accelerator Architectures 
+
+# Jongmin Kim ∗
+
+Seoul National University Seoul, South Korea jongmin.kim@snu.ac.kr 
+
+# Hyesung Ji ∗
+
+Seoul National University Seoul, South Korea kevin5188@snu.ac.kr 
+
+# Wonseok Choi 
+
+Seoul National University Seoul, South Korea wonseok.choi@snu.ac.kr 
+
+# Hyunah Yu 
+
+Seoul National University Seoul, South Korea yhyuna@snu.ac.kr 
+
+# Jung Ho Ahn 
+
+Seoul National University Seoul, South Korea gajh@snu.ac.kr 
+
+## Abstract 
+
+Fully homomorphic encryption (FHE) enables computations on encrypted data without decryption, offering strong data privacy at the expense of substantial computational and memory overheads. Prior efforts have steadily improved FHE performance through cryptographic and algorithmic enhancements or hardware acceler-ation, yet these two directions have progressed largely in isolation, hindering the full exploitation of available hardware capabilities. This work presents WHET, which introduces memory-centric, architecture-aware optimizations to better align cryptographic and algorithmic constructions with FHE accelerator architectures. We identify conventional FHE constructions as major sources of exces-sive working sets and heavy off-chip memory traffic. We propose accelerator-specific techniques, including fine-grained coefficient-to-slot transformation, plaintext compression, and intermediate modulus raising, to reduce the on-chip data footprint by minimizing temporary ciphertexts and plaintext loads. With these techniques applied, we observe additional opportunities to improve on-chip memory efficiency; hence, we introduce lightweight architectural refinements, including a special-purpose buffer and functional unit extensions. With these optimizations, WHET achieves 1.38–8.74 ×
+
+per-area performance improvements over state-of-the-art FHE ac-celerators and the first-ever sub-millisecond CKKS bootstrapping. 
+
+## 1 Introduction 
+
+Homomorphic encryption (HE [ 4]) enables computations on en-crypted data without decrypting them, thereby providing true end-to-end data privacy. HE holds great potential for secure cloud computing, privacy-preserving machine learning (ML), and confi-dential data analytics, as exemplified by Apple’s HE-based private visual search service [ 7]. While early HE schemes supported only a limited number of operations, fully homomorphic encryption (FHE) schemes have opened up a new era by introducing bootstrap-ping ( Boot ), which enables unlimited computations on encrypted data [ 36 ]. This work focuses on CKKS [ 21 ], one of the most popular FHE schemes. CKKS is well-suited for ML tasks as it efficiently supports arithmetic on complex or real numbers. Despite its potential, FHE induces substantial computational and memory overheads, making current FHE applications prohibitively                        
+
+> ∗Both authors contributed equally to this research. 0%
+> 20%
+> 40%
+> 60%
+> 80%
+> 100%
+> 036912 15 18 21 24 27
+> KS c omputation cost
+> Level
+> NTT BConv Others
+> CtS EvalMod StC
+> (a) Level vs. computational cost 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 036912 15 18 21 24 27
+> Data size ( MiB )
+> Level
+> Evk Ciphertext Plaintext
+> CtS EvalMod StC (b) Level vs. data size
+
+Figure 1: (a) KS computational cost breakdown and (b) data size by level. Computational costs are weighted sums of in-teger multiplication and modular reduction counts [ 1 ]. A random seed replaces half of an evk [ 85 ]. Higher levels are reserved for CtS, EvalMod, and StC, which comprise Boot .
+
+expensive for practical use. For instance, convolutional neural net-work (CNN) inference that takes a fraction of a second on CPUs can take up to 1,447 seconds [ 32 ] under FHE—over 30,000 × slower (see Table 1). Numerous studies have explored FHE acceleration on readily available hardware, including CPUs [ 11 , 56 ], GPUs [ 25 , 33 , 35 , 55 ], and FPGAs [ 3 , 45 , 94 ]. However, conventional hardware designs are not built to maximize the efficiency of modular integer arithmetic required by FHE. More critically, due to the limited on-chip memory capacity and bandwidth, they become memory-bottlenecked [63]. The limitations of existing hardware have motivated numerous custom ASIC accelerator proposals [ 30 , 34 , 61 , 62 , 66 , 67 , 85 , 95 ]. While their designs differ in detail, they share several common structural characteristics. First, they aim to maximize the through-put of number-theoretic transform (NTT), which accounts for over half of the total computational cost (see Fig. 1a). Second, to miti-gate memory bottlenecks in conventional hardware, they dedicate nearly half of their chip area to large on-chip memory (>200MiB), which significantly restricts architectural efficiency and flexibility. In this paper, we question whether existing accelerators effectively capitalize on their substantial hardware resources. Our analysis (§3) reveals that large working sets stemming from conventional cryp-tographic and algorithmic constructions limit effective utilization of accelerator hardware. We focus on the coefficient-to-slot trans-formation (CtS), a major contributor to FHE runtime. CtS operates at the highest levels where data object sizes are largest (see Fig. 1b), 
+
+> 1
+> arXiv:2606.11541v1 [cs.CR] 10 Jun 2026 Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn
+
+whereas lower levels are largely free from working-set constraints. Well-known techniques such as the baby-step giant-step (BSGS) algorithm [ 13 , 38 ] and CtS matrix decomposition [ 39 ] reduce the computational complexity of CtS. However, their use in prior FHE accelerators largely follows cryptographic and algorithmic con-ventions without accounting for hardware capabilities. As a result, their constructions inflate the CtS working set, forcing accelerators to either provision even larger on-chip memory or suffer from off-chip memory bandwidth bottlenecks, leaving both on-chip memory bandwidth and computational units severely underutilized. Motivated by these challenges, we introduce WHET , a set of cryptographic and algorithmic techniques tailored for accelerator execution (§4). First, we develop fine-grained CtS (fg-CtS), which decomposes CtS into many levels and avoids the use of BSGS. This creates only a small number of temporary ciphertexts (up to 24MiB each) and thereby significantly reduces the working set. Second, we discover a repetitive structure in CtS plaintexts, exploiting it to compress the plaintexts by up to 8,192 ×. Finally, we introduce intermediate ModRaise, which complements these two techniques by reducing the level consumption of fg-CtS while shrinking the size of non-compressible CtS plaintexts through modulus reduc-tion. Together, these techniques preserve limited on-chip memory capacity and significantly reduce off-chip memory traffic while maintaining 128-bit security guarantees [5]. As part of WHET, we also introduce two lightweight architec-tural modifications to improve on-chip resource utilization (§5). These modifications are motivated by our analysis of the perfor-mance limits of accelerator architectures under WHET’s crypto-graphic and algorithmic enhancements. First, we add a special-purpose buffer that stores frequently accessed intermediate results produced by evaluation key multiplication (KeyMult) to mitigate memory bandwidth limitations. Second, we introduce instruction extensions for the functional unit responsible for element-wise op-erations to alleviate data dependency stalls. These enhancements also provide useful insights for future accelerator designs. We evaluate WHET on SHARP8+, built upon SHARP [ 61 ] with key improvements from recent architectural efforts (§5.2). WHET achieves 2.01 × mean speedup and 2.29 × mean energy-delay-product improvement over the strong SHARP8+ baseline while using smaller on-chip memory capacity and chip area. WHET delivers 1.38–8.74 ×
+
+higher performance per area than state-of-the-art FHE ASIC accel-erators. Highlights of our results include the first sub-millisecond CKKS full-slot ( 215 complex numbers) Boot and encrypted CNN inference latency of 33.1–239ms, enabling practical real-time en-crypted inference compared to the original 301–1,447s runtime [ 32 ]on a single-threaded CPU (see Table 1). The key contributions of WHET are summarized below: 
+
+• We propose fine-grained CtS (fg-CtS) . By aggressively decompos-ing CtS and avoiding the baby-step giant-step algorithm (BSGS), fg-CtS significantly reduces the CtS working set, enabling effi-cient accelerator execution. 
+
+• We introduce plaintext compression and intermediate ModRaise 
+
+algorithms that reduce the size of plaintexts and the amount of off-chip memory traffic. 
+
+• We design lightweight architectural enhancements, including a special-purpose buffer and functional unit instruction extensions, to improve on-chip resource utilization. 
+
+Table 1: Evaluation of various CNN workloads based on the implementation of Orion [32]. SiLU activations are used.                                           
+
+> Model SHARP8+ WHET WHET CPU (1-thread) (180MiB) (128MiB) (180MiB) Orion †Plain ‡
+> VGG-16 92.6ms 94.9ms 76.6ms 397s 11.9ms (CIFAR-10) (5.32J) (5.16J) (4.68J) ResNet-20 50.8ms 33.1ms 28.8ms 301s 2.30ms (CIFAR-10) (3.93J) (3.15J) (3.18J) MobileNet 159ms 98.5ms 87.0ms 892s 3.12ms (Tiny ImNet) (12.2J) (9.55J) (9.45J) ResNet-18 304ms 239ms 216ms 1447s 45.6ms (Tiny ImNet) (21.9J) (18.7J) (18.4J)
+> †Reported from the Orion paper [32] on Intel Xeon Platinum 8581C.
+> ‡Unencrypted inference with PyTorch 2 [6] on Intel Xeon Platinum 8358.
+
+## 2 FHE Basics 
+
+Homomorphic encryption (HE) enables servers to perform com-putations directly on clients’ ciphertexts without decryption. We introduce CKKS [ 19 , 21 , 41 ], which offers the highest throughput among HE scheme [ 8] and supports fixed-point arithmetic, making it well-suited for numerous real-world tasks. Notations and symbols are summarized in Appendix A. 
+
+## 2.1 Basic CKKS function evaluations 
+
+CKKS [ 21 ] operates on polynomials, denoted in plain lowercase (e.g., 𝑎 or 𝑎 (X) with the variable X specified). A client encodes a complex vector u ∈ C𝑁 /2 into a plaintext polynomial 𝑢 = ⟨u⟩,then encrypts it into a ciphertext [⟨ u⟩] , which comprises a pair or polynomials. The following are server-side function evaluations of additions, element-wise multiplications ( ⊙), and cyclic rotations ( ≪) on vec-tors encrypted as [⟨ u⟩] = (𝑎, 𝑏 ), [⟨ v⟩] = (𝑎 ′, 𝑏 ′):
+
+• HAdd : [⟨ u + v⟩] ← ( 𝑎 + 𝑎 ′, 𝑏 + 𝑏 ′)• PMult : [⟨ p ⊙ u⟩] ← ( 𝑝 · 𝑎, 𝑝 · 𝑏 ) for plaintext 𝑝 = ⟨p⟩• HMult : [⟨ u ⊙ v⟩] ← ( 𝑎 · 𝑏 ′ + 𝑎 ′ · 𝑏, 𝑏 · 𝑏 ′) + KS (𝑎 · 𝑎 ′, evk ⊙ )• HRot : [⟨ u ≪ 𝑅 ⟩] ← ( 0, 𝑏 (X 5𝑅 
+
+)) + KS (𝑎 (X 5𝑅 
+
+), evk 𝑅 )
+
+Here, KS (key-switching) dominates CKKS computations, in-volving dozens of polynomial operations [ 55 ]. KS requires client-provided evaluation keys ( evk s), each comprising 2 × 𝛽 polynomials (e.g., 𝛽 = 4) [ 41 ]. HMult requires an evk ⊙ , and each HRot with a different distance 𝑅 requires a distinct evk 𝑅 .
+
+## 2.2 Polynomial operations 
+
+We focus on polynomial operations constituting CKKS function evaluations. The main polynomial domain is a ring R𝑄 = Z𝑄 [𝑋 ]/( 𝑋 𝑁 +
+
+1). A polynomial in R𝑄 has 𝑁 (typically 216 ) integer coefficients modulo huge 𝑄 , reaching 21747 under standard 128-bit security constraints [12]. Modern HE uses the residue number system (RNS) to handle 𝑄 
+
+efficiently [ 19 ]. 𝐿 number of small (e.g., < 232 ) prime sub-moduli 
+
+Q0, · · · , Q𝐿 −1 satisfying 𝑄 = Î𝐿 −1 
+
+> 𝑖 =0
+
+Q𝑖 are chosen. For a polynomial 
+
+𝑎 ∈ R 𝑄 , we obtain (𝑎 Q0 , · · · , 𝑎 Q𝐿 −1 ) by taking the residues modulo 
+
+Q𝑖 for each coefficient of 𝑎 .
+
+> 2WHET: Welding Homomorphic Encryption to Accelerator Architectures
+
+Each 𝑎 Q𝑖 is referred to as a limb [2 ] of 𝑎 . A polynomial 𝑎 ∈ R 𝑄 
+
+with 𝐿 limbs forms an 𝐿 × 𝑁 matrix, where the 𝑖 -th row corresponds to 𝑎 Q𝑖 . With RNS, polynomial additions and multiplications are performed per limb, leveraging hardware-friendly small-integer (e.g., int32) arithmetic. There are four types of polynomial operations: 
+
+• Number-theoretic transform (NTT) . Multiplying 𝑎 Q𝑖 with 
+
+𝑏 Q𝑖 requires a negacyclic convolution of their coefficients ( O( 𝑁 2)). NTT uses fast Fourier transform (FFT) [ 27 ] ( O( 𝑁 log 𝑁 )) to con-vert this into an element-wise multiplication ( O( 𝑁 )): NTT (𝑎 Q𝑖 ·
+
+𝑏 Q𝑖 ) = NTT (𝑎 Q𝑖 ) ⊙ NTT (𝑏 Q𝑖 ). We apply NTT per limb and keep polynomials in NTT form by default. NTT dominates HE computations, accounting for over half the costs as shown in Fig. 1a. 
+
+• Base conversion (BConv) . BConv changes the polynomial mod-ulus through a matrix-matrix multiplication [ 62 ]. A polynomial 
+
+𝑎 ∈ R 𝑄 with 𝐿 limbs ( 𝐿 × 𝑁 matrix) is multiplied by an 𝐿 ′ × 𝐿 ma-trix of precomputed constants, yielding 𝐿 ′ output limbs ( 𝐿 ′ × 𝑁 
+
+matrix). 
+
+• Automorphism . Automorphism maps 𝑎 (X) to 𝑎 (X 5𝑅 
+
+), induc-ing a permutation of the coefficients of 𝑎 .
+
+• Element-wise operations . The remaining operations, such as 
+
+𝑎 ±𝑏 and 𝑎 ·𝑏 (excluding NTT), are inherently element-wise over the 𝐿 × 𝑁 elements in a polynomial. 
+
+## 2.3 Bootstrapping: The defining feature of FHE 
+
+High-throughput HE schemes are leveled . Applications start with a large modulus (e.g., 𝑄 top ≃ 21400 ), but multiplicative functions, such as HMult and PMult , require modulus reductions to control error growth [ 21 ]. Each reduced 𝑄 corresponds to a unique level from 
+
+top (𝑄 top ) to 0 (e.g., 𝑄 bot ≃ 250 ). At level 0, we cannot perform more function evaluations. Bootstrapping ( Boot ) is the defining feature of fully HE (FHE), a class of HE schemes with unlimited function evaluation capabilities. 
+
+Boot restores the modulus (and the level) of a ciphertext at level 0 to continue function evaluations. CKKS Boot comprises four sequential steps [13, 14, 20, 41]: (1) ModRaise . Raising the modulus to 𝑄 top from 𝑄 bot , introduc-ing unwanted 𝑄 bot multiples into the encrypted data, which subsequent steps remove. (2) CtS . Coefficient-to-slot transformation, which performs an en-crypted linear transform evaluation multiplying the top -level ciphertext with an 𝑁  
+
+> 2
+
+× 𝑁  
+
+> 2
+
+matrix. (3) EvalMod . Evaluating an approximate mod-𝑄 bot function, which primarily requires HMult evaluations. (4) StC . Slot-to-coefficient transformation, which is another en-crypted linear transform evaluation at lower levels. The number of remaining levels after Boot is referred to as the effective level ( 𝐿 eff ) [ 61 ]. Increasing 𝐿 eff may reduce the frequency of Boot .
+
+## 3 The Working Set Problem in CtS 3.1 Overview 
+
+CtS at the highest levels is the most computationally demanding step of Boot , accounting for 60.3% of total Boot time on a conven-tional accelerator configuration (SHARP8+ in Fig. 7a). As Boot is a vital FHE functionality, usually dominating workload execution times [ 54 , 62 , 70 ], inefficiencies in CtS represent a fundamental performance bottleneck. We discover that the excessive working set of conventional CtS becomes a critical hurdle for modern FHE accelerators .Prior work has hinted at this issue. SHARP [61] observes that “we have to look out for the working set size only at high levels—that is, only while bootstrapping.” The working set grows superlinearly with the level, primarily due to the increase in evk size, which reaches up to 60MiB as shown in Fig. 1b. Consequently, while lower levels have modest working sets, CtS can require hundreds of MBs. This constraint forces architects to provision hundreds of MBs of on-chip memory to enable effective data reuse in CtS. In turn, accelerators become heavily memory-dominated and limited in architectural flexibility. For example, ARK [ 62 ] allocates 54.8% of its chip area to 588MiB of on-chip memory, SHARP [ 61 ] dedicates 48.9% to approximately 200MiB, and the more recent FAST [ 34 ]devotes 43.7% to 281MiB. Although the Boot fraction varies across workloads (35.1–97.1% in our evaluation), this architectural burden imposed by CtS is fun-damental. Even workloads with modest Boot proportions suffer from substantial performance degradations and energy overheads when on-chip memory capacity is reduced from our 200MiB base-line (SHARP8+), as the large CtS working set induces frequent off-chip memory accesses. These observations motivate a deeper examination of conven-tional CtS configurations to identify the root causes of this ineffi-ciency and uncover opportunities to overcome it. 
+
+## 3.2 CtS optimizations 
+
+We start from a simple linear transform example that evaluates 
+
+[⟨ M · u⟩] with a ciphertext [⟨ u⟩] and a 4 × 4 unencrypted matrix M
+
+shown below. First, we extract the “diagonals” of M and encode them as plaintexts ⟨d0⟩, ⟨d1⟩, ⟨d2⟩, ⟨d3⟩ ∈ R 𝑄 .
+
+
+
+0 1 2 34 5 6 78 9 10 11 12 13 14 15 
+
+
+
+→
+
+
+
+0510 15 
+
+
+
+1611 12 
+
+
+
+27813 
+
+
+
+34914 
+
+
+
+Then, we can use the property that 
+
+M · u ← d0 ⊙ u + d1 ⊙ ( u ≪ 1) + d2 ⊙ ( u ≪ 2) + d3 ⊙ ( u ≪ 3) (1) to compute [⟨ M · u⟩] = ⟨d0⟩ × [⟨ u⟩] + ⟨ d1⟩ × HRot ([⟨ u⟩] , 1) + ⟨ d2⟩ × 
+
+HRot ([⟨ u⟩] , 2) + ⟨ d3⟩ × HRot ([⟨ u⟩] , 3), where × represents PMult 
+
+and + represents HAdd . For a general linear transform with #diag non-zero diagonals in M, we require (#diag −1) HRot s and #diag 
+
+PMult s with plaintexts. 
+
+• Minimum key-switching (Min-KS) [38 , 62 ]. The above process requires HRot s by distances 𝑅 = 1, 2, 3, requiring three separate 
+
+evk 𝑅 ’s. Instead, Min-KS obtains [⟨ u ≪ 2⟩] by performing HRot by 1 on [⟨ u ≪ 1⟩] = HRot ([⟨ u⟩] , 1). Likewise, [⟨ u ≪ 3⟩] is obtained from 
+
+> 3
+
+Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn 0 8 4 12  2 10  6 14  1 9 5 13  3 11  7 15                                                                                                                                                                                                                                                                                                                                  
+
+> 040 20 60 10 50 30 6545 25 115 55 35 11
+> 0836 44 50 58 22 30 25 33 61 511 19 47 55
+> 040 52 28 58 34 46 22 61 37 49 25 55 31 43 19
+> 08412 34 42 38 46 49 57 53 61 19 27 23 31
+> 040 20 60 42 18 62 38 53 29 949 31 751 27
+> 0836 44 18 26 54 62 917 45 53 27 35 63 7
+> 040 52 28 26 214 54 45 21 33 9747 59 35
+> 08412 210 614 33 41 37 45 35 43 39 47
+> 040 20 60 10 50 30 637 13 57 33 47 23 343
+> 0836 44 50 58 22 30 57 129 37 43 51 15 23
+> 040 52 28 58 34 46 22 29 517 57 23 63 11 51
+> 08412 34 42 38 46 17 25 21 29 51 59 55 63
+> 040 20 60 42 18 62 38 21 61 41 17 63 39 19 59
+> 0836 44 18 26 54 62 41 49 13 21 59 331 39
+> 040 52 28 26 214 54 13 53 141 39 15 27 3
+> 0213
+> 010 515
+> 050 25 11
+> 058 61 55
+> 034 49 19
+> 042 53 31
+> 018 927
+> 026 45 7
+> 0233 35
+> 010 37 47
+> 050 57 43
+> 058 29 23
+> 034 17 51
+> 042 21 63
+> 018 41 59
+> 026 13 39
+> 08412
+> 040 20 60
+> 0836 44
+> 040 52 28
+> 08412
+> 040 20 60
+> 0836 44
+> 040 52 28
+> 08412
+> 040 20 60
+> 0836 44
+> 040 52 28
+> 08412
+> 040 20 60
+> 0836 44
+> 040 52 28
+
+𝜁 ^ 𝜁 ^ 𝜁 ^
+
+> Decomposition
+
+×           
+
+> 820 44 820 44 820 44 820 44
+
+𝜁 ^ 
+
+> CKKS encoding
+> +NTT
+
+𝒕 𝒬 1                                                                     
+
+> Plaintext with 𝑳 limbs
+> Original CtS /StC matrix Decomposed CtS /StC matrices with reduced # of diagonals
+> Discard via compression Repeated 4 times
+> Diagonal
+> A1B1C1D1E1F1G1H1A1B1C1D1E1F1G1H1A1B1C1D1E1F1G1H1A1B1C1D1E1F1G1H1
+> ALBLCLDLELFLGLHLALBLCLDLELFLGLHLALBLCLDLELFLGLHLALBLCLDLELFLGLHL
+> ⋯
+
+𝒕 𝒬 𝐿                                 
+
+> Repeated 4 times
+> A2B2C2D2E2F2G2H2A2B2C2D2E2F2G2H2A2B2C2D2E2F2G2H2A2B2C2D2E2F2G2H2
+
+𝒕 𝒬 2
+
+> ⋯
+
+Figure 2: CtS/StC matrix decomposition [ 39 ] and plaintext compression simplified for 𝑁 = 32 . The original dense CtS/StC matrix, composed of powers of 𝜁 = 𝑒 𝜋𝑖 /𝑁 , is decomposed into two sparse matrices with reduced #diag (16 → 4 & 7). Empty slots in each matrix represent zero values. The rightmost matrix contains diagonals with repetitions, allowing plaintext compression. 
+
+[⟨ u ≪ 2⟩] . Thus, Min-KS enables evaluating the linear transform with only evk 1.
+
+• Baby-step giant-step algorithm (BSGS) [ 13 , 38 ]. Eq. 1 can be alternatively evaluated in two steps using precomputed d′ 
+
+> 2
+
+= (d2 ≫
+
+2), d′ 
+
+> 3
+
+= (d3 ≫ 2):BS: v ← ( u ≪ 1)
+
+GS: M · u ← ( d0 ⊙ u + d1 ⊙ v) + ( d′ 
+
+> 2
+
+⊙ u + d′ 
+
+> 3
+
+⊙ v) ≪ 2 (2) To generalize, the first baby-step (BS) performs iterative HRot s by 1 (Min-KS) to produce √︁ #diag “baby” ciphertexts :
+
+[⟨ u⟩] , [⟨ u ≪ 1⟩] , · · · , [⟨ u ≪ ( √︁ #diag − 1)⟩] .
+
+With these, the second giant-step (GS) generates √︁ #diag partial re-sults (e.g., [⟨ d0 ⊙ u + d1 ⊙ v⟩] and [⟨ d′ 
+
+> 2
+
+⊙ u + d′ 
+
+> 3
+
+⊙ v⟩] for Eq. 2), which are accumulated into a single ciphertext with HRot s by a larger dis-tance (another Min-KS). Although BSGS requires two evk s for a linear transform, BSGS significantly reduces the computational cost for large #diag. Most of the computational cost stems from KS in HRot evaluations. Counting the total number of KS (# KS ), BSGS reduces # KS from (#diag − 1) to 
+
+2(√︁ #diag − 1).
+
+• CtS/StC matrix decomposition [39 ]. The CtS/StC linear trans-form matrix can be decomposed into multiple matrices, each with a small number of non-zero diagonals. Fig. 2 shows an example for 
+
+𝑁 = 32 , where a 16 × 16 matrix is decomposed into two matrices with four/seven #diag. To generalize, a 𝑁  
+
+> 2
+
+× 𝑁  
+
+> 2
+
+CtS/StC matrix is decomposed into 𝐷 tr matrices, each with O( log 𝐷 tr 𝑁 ) diagonals. As the number of diagonals determines both the computation cost ( #KS = O( √︁ #diag )) and the memory traffic ( O( #diag ) plaintext loads), increasing 𝐷 tr is desirable for large 𝑁 (e.g., 216 ). However, as a trade-off, this decomposition consumes 𝐷 tr levels during CtS. 
+
+## 3.3 Excessive working set in conventional CtS 
+
+• Min-KS is essential for accelerators . State-of-the-art FHE accelerators [ 30 , 34 , 61 , 62 , 66 , 67 , 85 , 95 ] provision hundreds of MBs of on-chip memory, enabling extensive reuse of evk s under Min-KS. Without Min-KS, BTS [ 66 ] shows that off-chip memory accesses for evk s dominate FHE runtime, effectively negating the benefits of hardware acceleration. 
+
+• Capacity-aware BSGS fine-tuning [ 61 ]. With #baby = O( √︁ #diag )
+
+baby ciphertexts, efficient BSGS requires the following working set (WS BSGS ) to fit within on-chip memory: WS BSGS = (#baby + 1) · Size ciphertext + Size evk + WS KS . (3) This capacity allows all baby ciphertexts to remain on-chip for the entire giant step (GS in Eq. 2). GS multiplies the baby ciphertexts with streamed diagonal plaintexts to produce partial results, each immediately accumulated into the output ciphertext and followed by an HRot evaluation [ 62 ]. At the highest level, the ciphertext size ( Size ciphertext ) reaches 24MiB and the evk size ( Size evk ) reaches 60MiB. To fit WS BSGS within its on-chip memory, SHARP [ 61 ] intro-duces BSGS fine-tuning, restricting #baby ≤ 4 for approximately 200MiB of on-chip memory. This restricts the size of the working set: WS BSGS ≤ 180MiB + WS KS . With memory-efficient scheduling (e.g., MAD [ 2]) for KS , WS BSGS can be held on-chip for the entire linear transform. 
+
+• Modest 𝐷 tr for CtS matrix decomposition . The choice of 𝐷 tr 
+
+remained between 2–4 across various FHE algorithm [ 13 , 16 , 60 , 74 ], application [ 31 , 32 , 70 , 75 ], and hardware [ 3 , 45 , 61 , 63 ] studies. Such 𝐷 tr choices allow moderately small #diag values, such as 15–31 for 4-level ( 𝐷 tr = 4) CtS (baseline throughout this paper) 
+
+4WHET: Welding Homomorphic Encryption to Accelerator Architectures 
+
+shown in Table 2. This aligns well with BSGS fine-tuning because #baby = 4 ≃ O( √︁ #diag ).
+
+• Problems of conventional CtS . Despite optimizations such as BSGS fine-tuning, the large working set in Eq. 3 remains a major constraint on performance and hardware efficiency. Prior acceler-ators adopt decoupled data orchestration [ 85 ] to enable software prefetching. However, under tight on-chip memory budgets as in SHARP [ 61 ], limited capacity leaves little room for prefetching, exposing off-chip memory access latency that incurs substantial overheads. Later in the evaluation (Fig. 7c), we quantitatively show that these memory bottlenecks severely limit hardware utilization. In our baseline with over 200MiB of on-chip memory (SHARP8+), NTT units, which are the core compute engines of the architecture, achieve only 25.4% utilization during Boot , while off-chip memory (HBM) is utilized at 92.6%. Increasing on-chip memory capacity is a straightforward solu-tion. However, this approach increases area and energy costs and further entrenches memory-dominated designs (see §3.1). Thus, rather than scaling memory capacity, we seek a principled solution that reduces the CtS working set and improves hardware efficiency at its root. 
+
+## 4 WHET: Cryptographic & Algorithmic Enhancements 
+
+We challenge conventional practices in cryptographic and algo-rithmic design of FHE, proposing novel algorithms and optimized parameter choices tailored to the memory capacity and bandwidth limitations in FHE accelerators. Table 2 compares a conventional 4-level CtS configuration ( 𝐷 tr = 4) with our optimized 6(+1)-level configuration ( 𝐷 tr = 7). 
+
+## 4.1 Fine-grained CtS (fg-CtS) 
+
+We depart from the conventions in §3.3; we set 𝐷 CtS aggressively high (up to seven) and also eliminate the use of BSGS , resorting back to the basic linear transform method based on Eq. 1. We refer to this approach as fine-grained CtS (fg-CtS). Through fine-grained de-composition of the CtS matrix, we limit each CtS level to handle at most eight non-zero diagonals, making its computation sufficiently inexpensive even without BSGS. At first glance, this appears disad-vantageous, as fg-CtS increases the total KS count and consumes two additional levels compared to the baseline 4-level CtS. Nonetheless, in systems constrained by memory capacity and bandwidth, the performance gains from eliminating BSGS out-weigh the disadvantages. Removing BSGS is equivalent to setting #baby = 1 in Eq. 3, substantially reducing the working set per linear transform. This frees on-chip memory for aggressive software data prefetching for the next CtS level, which significantly decreases off-chip memory stalls in Boot (shown later in Fig. 5). Also, fg-CtS requires only one evk per CtS level and fewer diagonal plaintexts, reducing the total off-chip memory accesses to these data objects by 46.8% ( (1008 + 448 ) → ( 451 + 324 ) in Table 2). Table 3 presents our optimized parameter selection for fg-CtS, which ensures 128-bit security [ 5 , 12 ]. The additional level consump-tion of fg-CtS reduces 𝐿 eff , potentially increasing the frequency of 
+
+Boot . However, state-of-the-art FHE ML studies [ 32 , 54 , 59 , 72 , 79 ,
+
+Table 2: Required number of plaintexts (#ptxt), evk s (# evk ), and KS computations (# KS ) as well as plaintext compression ratio (compr.) for CtS with Min-KS.                                                                          
+
+> Level Baseline: 4-level CtS Optimized: 6(+1)-level fg-CtS #KS #ptxt #evk #KS #ptxt (compr.) #evk
+> intmd .---08 (1 ×)0
+> top 616 267 (8 ×)1
+> top −1615 267 (32 ×)1
+> top −210 31 267 (128 ×)1
+> top −310 31 267 (512 ×)1
+> top −4---67 (2048 ×)1
+> top −5---77 (8192 ×)1Total (#) 32 93 837 50 6(MiB) -1008 448 -451 →23.5 324
+
+Table 3: Baseline (Base) and optimized (Opt) FHE parameter sets. Boot consumes 11–12 more levels in addition to CtS levels. 𝐿 eff is computed assuming scale Δ ≃ 240 after Boot .All prime sub-moduli are chosen smaller than 231 , following Cheddar’s methodology [ 25 ]. 𝛽 (dnum in [ 41 ]) is chosen to be four, but can be increased to further increase 𝐿 eff .                              
+
+> Param 𝑁 𝑄 top (# Q𝑖 )𝑃 (# P𝑖 )𝛽 CtS levels 𝐿 eff
+> Base 216 ∼21373 (47) ∼2372 (12) 4412–13 Opt 216 ∼21374 (47) ∼2372 (12) 46(+1) 09–10
+
+96 ] show a clear trend toward low 𝐿 eff (≤ 10 , down to two [ 54 ]), with limited ability to exploit the extra levels of the baseline. Moreover, 
+
+𝐿 eff can be increased under fg-CtS if necessary (e.g., by increasing 
+
+𝛽 ). 
+
+## 4.2 Plaintext compression 
+
+We find repetitive data patterns in CtS/StC plaintexts, which allow compression and decompression almost free of cost. Unlike en-crypted ciphertexts and evk s, which must be indistinguishable from random values, plaintexts are unencrypted vectors encoded in a spe-cific format and may exhibit data patterns amenable to compression. Suppose a vector includes repetitions; e.g., u = [𝑋, 𝑌, 𝑋, 𝑌 ] ∈ C𝑁 /2
+
+for 𝑁 = 8. We identify that, when we encode u into a plaintext polynomial 𝑢 = ⟨u⟩ and apply NTT to it, we get a data pattern of 
+
+NTT (𝑢 Q𝑖 ) = [𝐴, 𝐵, 𝐶, 𝐷, 𝐴, 𝐵, 𝐶, 𝐷 ] for each limb. This is formalized as Theorem 1 (proof in Appendix B). If the original vector contains 𝑆 distinct values repeated 𝑁  
+
+> 2𝑆
+
+times, the encoded polynomial has limbs with 2𝑆 values repeated 𝑁  
+
+> 2𝑆
+
+times, enabling 𝑁  
+
+> 2𝑆
+
+× plaintext compression. 
+
+Theorem 1. Suppose u ∈ C𝑁 /2 satisfies u[ 𝑗 ] = u[ 𝑗 + 𝑆 ] for all 
+
+0 ≤ 𝑗 < 𝑁  
+
+> 2
+
+− 𝑆 , where 𝑆 | 𝑁  
+
+> 2
+
+. Let 𝑢 = ⟨u⟩ ∈ R 𝑄 be its CKKS encoding, and let tQ𝑖 = NTT (𝑢 Q𝑖 ) ∈ Z𝑁  
+
+> Q𝑖
+
+be the NTT of each limb. Then for all 
+
+0 ≤ 𝑗 < 𝑁 − 2𝑆 , tQ𝑖 [ 𝑗 ] = tQ𝑖 [ 𝑗 + 2𝑆 ].
+
+Due to the special structure of CtS/StC matrix decomposition, most of the CtS/StC plaintexts are compressible. For example, each diagonal of the rightmost decomposed matrix in Fig. 2 contains four values repeated four times ( 𝑆 = 4 and 𝑁 = 32 ), which allows a 4 ×       
+
+> 5Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn 𝑄 intmd 𝑄 𝑡𝑜𝑝 𝒫 0𝒫 1𝑄 𝑡𝑜𝑝 𝑄 bot
+> StC EvalMod
+> Modulus
+> (∝level)
+> StC CtS EvalMod
+> StC EvalMod
+> CtS
+> CtS
+> Basic
+> Over
+> ModRaise
+> Intermediate
+> ModRaise
+> ModRaise
+> First CtS
+> level
+
+Figure 3: Boot modulus change across ModRaise methods. 
+
+compression of its corresponding plaintext. As shown in Table 2, our parameters enable up to an 8192 × compression of CtS plaintexts, reducing the total off-chip memory traffic for plaintexts to just 23.5MiB. WPC [ 88 ] independently observes the same property as The-orem 1 and applies compression to ML weight plaintexts. Our plaintext compression is an extension to CtS/StC, where the mem-ory impact is greater due to the high levels. Also, we also make accelerator-aware modifications; for instance, storing limbs in bit-reversed order for efficient automorphisms as in ARK [ 62 ] changes the repetition pattern (e.g., [𝐴, 𝐴, 𝐶, 𝐶, 𝐵, 𝐵, 𝐷, 𝐷 ]) but preserves compressibility with an appropriate hardware support (§5.6). 
+
+## 4.3 Intermediate ModRaise 
+
+We introduce intermediate ModRaise, a redesign of conventional ModRaise in Boot that mitigates the limitations of fg-CtS and plain-text compression. It executes the first CtS level at a separate in-termediate modulus 𝑄 intmd (e.g., 2140 ) instead of the top modulus 
+
+𝑄 top (e.g., 21400 ), effectively reducing the level consumption of fg-CtS by one. Moreover, the first-level CtS plaintexts use 𝑄 intmd ; as these plaintexts are not compressible (see Table 2), shrinking their modulus directly reduces their size and off-chip memory traffic. Intermediate ModRaise requires several cryptographic adjust-ments. Before Boot , we switch to a ternary sparse secret [ 14 ] (Ham-ming weight: 48) from a subring of degree 𝑁 ′ = 213 [ 74 ], which maintains 128-bit security based on our analysis with Lattice Esti-mator [ 5]. The subring structure allows skipping KS during the first CtS level [ 74 ]. We extend the idea of OverModRaise [ 60 ] to realize intermediate ModRaise. Instead of raising the modulus above 𝑄 top 
+
+(e.g., to P0 P1𝑄 top as in Fig. 3), we utilize a dedicated intermedi-ate modulus 𝑄 intmd . If the first CtS level involves #ptxt plaintexts, whose absolute coefficient values are smaller than 𝐵 ptxt , Eq. 4 is a sufficient condition for correctness (see Appendix C). 
+
+𝑄 intmd ≥ #ptxt · 𝐵 ptxt · 𝑄 bot · 𝑁 (4) 
+
+## 5 WHET: Refining the Architecture 
+
+Starting from a baseline architecture resembling SHARP [ 61 ] (SHARP8+), we analyze its bottlenecks under WHET ’s cryptographic and al-gorithmic techniques (§4) and propose architectural refinements to address them with minimal hardware overheads. SHARP has likewise served as the baseline for Trinity [ 30 ], FAST [ 34 ], and HAWK [67]. 
+
+## 5.1 Typical FHE accelerator architecture 
+
+SHARP builds on prior designs: its vector cluster architecture and NTT unit (NTTU) follow F1 [ 84 ], the BConv (BConvU) and au-tomorphism (AutoU) units are adopted from ARK [ 62 ], and its decoupled data orchestration and scheduling methods derive from CraterLake [ 85 ]. Notably, F1’s vector cluster and NTTU architec-ture [ 84 ] has since been widely adopted by numerous following studies [30, 34, 61, 62, 67, 85]. The vector cluster architecture deploys clusters with √𝑁 vec-tor lanes, enabling √𝑁 -way parallelism for its functional units (FUs). The NTTU implements a four-step FFT datapath [ 9], inter-preting a length-𝑁 limb as a √𝑁 × √𝑁 matrix. It employs a long pipeline for the first row-wise √𝑁 -point NTTs and the subsequent column-wise NTTs, with inter-lane and inter-cluster data transfers to handle the required transposition in between. The BConvU is composed of multiply-and-add (MAD) units arranged as a small output-stationary systolic array ( 2 × 6 in our baseline) within each lane, adequate for the matrix-matrix multiplications in BConv [ 62 ]. SHARP introduces an element-wise engine (EWE) to support com-pound element-wise operations sharing input and output operands, reducing on-chip memory traffic. The SHARP memory system includes a 180MiB main scratchpad shared by all FUs and an 18MiB BConv buffer dedicated to the NTTUs and BConvUs. Two HBM stacks provide 1TB/s of off-chip memory bandwidth; 1TB/s has served as a reference point across nu-merous accelerator proposals. HERACLES, a recently taped-out FHE accelerator from Intel, similarly employs two HBM3 stacks [37]. 
+
+## 5.2 Enhanced baseline architecture: SHARP8+ 
+
+We develop SHARP8+, an enhanced baseline reflecting recent FHE advances. In particular, SHARP8+ adopts a conventional 32-bit word size instead of SHARP’s 36-bit design, aligning with the rational-scaling approach of BitPacker [ 86 ]. It enhances hardware efficiency and enables flexible parameter selection. We further adopt Ched-dar’s 25-30 prime system [ 25 ], an efficient BitPacker-based prime selection strategy. Although SHARP originally includes four clusters, we scale SHARP8+ to eight clusters to better balance computational through-put with memory bandwidth. This configuration was also explored in the original SHARP paper and achieves a lower/better energy-delay product (EDP). To avoid fragmentation with more clusters, we adopt the overall data organization and parallelization strategy from CraterLake [ 85 ], which ensures a completely equal distribution of jobs across the clusters and the lanes. As in CraterLake, we employ fixed-wire on-chip networks (NoCs) for this data organization. 
+
+## 5.3 Bottleneck analysis 
+
+F1-based architectures aim at maximizing NTTU utilization, as NTT is the dominant polynomial operation in FHE and entails both heavy computation and costly chip-wide data movement. By adopting a very long instruction word (VLIW) architecture, they overlap other polynomial operations with NTT execution to hide their latency. Nevertheless, NTTUs still exhibit frequent idle periods. Using our simulation framework (§6.1), we analyze the sources of NTTU idle 
+
+> 6WHET: Welding Homomorphic Encryption to Accelerator Architectures
+
+cycles in SHARP8+. Fig. 5 shows the analysis results. We identify four primary causes: 
+
+• Off-chip memory bandwidth (BW) stall: NTTU waits for data from the off-chip memory. 
+
+• Data dependency stall: NTTU waits for FU outputs. 
+
+• Main scratchpad BW stall: All the ports in the main scratchpad are occupied by the EWE or the AutoU. 
+
+• NTT/INTT transition overhead: Switching between NTT and inverse NTT (INTT) introduces pipeline bubbles. For SHARP8+, off-chip memory bandwidth stalls dominate NTTU idle cycles, 70% of which are eliminated by our techniques in §4. Once this bottleneck is resolved, data dependencies and the limited bandwidth of on-chip memory (main scratchpad) emerge as new bottlenecks. In the following sections, we propose two architectural refine-ments to address these issues. 
+
+## 5.4 KeyMult buffer & reduced on-chip memory 
+
+While prior work has focused on NTT and BConv, element-wise op-erations dominate on-chip memory bandwidth usage. Specifically, multiplying a polynomial ( 𝑑 ) with an evk , referred to as KeyMult, is a frequent, memory-intensive step in every KS . KeyMult is defined as: KeyMult: (𝑎, 𝑏 ) ← 
+
+ 𝛽 −1∑︁ 
+
+> 𝑖 =0
+
+𝑑 · evk [0] [ 𝑖 ], 
+
+> 𝛽 −1
+
+∑︁ 
+
+> 𝑖 =0
+
+𝑑 · evk [1] [ 𝑖 ]
+
+
+
+(5) An evk is composed of 2 × 𝛽 (e.g., 𝛽 = 4 [41 ]) polynomials. Half of them ( evk [0] [ 𝑖 ]) are deterministic random polynomials that can be generated by a hardware pseudo-random number generator (PRNG) [ 85 ]. Due to PRNG throughput and scratchpad bandwidth limits, KeyMult is executed iteratively over 𝛽 steps in the EWE, computing (𝑎, 𝑏 ) ← ( 𝑎 + 𝑑 · evk [0] [ 𝑖 ], 𝑏 + 𝑑 · evk [1] [ 𝑖 ]) .As the (𝑎, 𝑏 ) data is frequently accessed for output accumula-tion, we introduce KeyMult buffer, a dedicated on-chip memory for the (𝑎, 𝑏 ) data. This separate hardware buffer provides additional input/output ports to the FUs (see Fig. 4), boosting the aggregate on-chip memory bandwidth. To offset the KeyMult buffer’s hardware overhead, we reduce the main scratchpad size. The smaller fg-CtS working set enables this with minimal performance impact. Based on design space ex-ploration, we shrink the scratchpad from 180MiB in SHARP [ 61 ]to 128MiB in WHET. The 128MiB scratchpad plus 32MiB KeyMult buffer is sufficient to hold the CtS working set (Eq. 3 with #baby = 1
+
+for fg-CtS), leaving capacity for aggressive software prefetching. The KeyMult buffer lowers the average energy per memory access and eliminates most of the main scratchpad bandwidth stalls (Fig. 5). However, data dependency stalls, previously masked by bandwidth stalls, become more pronounced. 
+
+## 5.5 Element-wise engine (EWE) extensions 
+
+Most data dependency stalls originate from waiting on the EWEs. The EWE design of SHARP deploys four modular MAD (MMAD) units per lane, which can collaborate to execute various compound element-wise instructions. However, the EWEs are seldom fully utilized due to the limited bandwidth of the main scratchpad. For Constant scratchpad + PRNG   
+
+> HBM interface  Cluster
+> 0
+> Cluster
+> 1
+> Cluster
+> 2
+> Cluster
+> 3
+> Cluster
+> 4
+> Cluster
+> 5
+> Cluster
+> 6
+> Cluster
+> 7
+> HBM interface
+> NoC
+> Entire system
+> Main scratchpad
+> NTTU
+> AutoU
+> ⋮
+> HBM
+> channel
+> HBM
+> channel
+> Extended EWE
+> BConv  buffer
+> KeyMult  buffer
+> BConvU
+> NoC
+> interface
+> Cluster
+> NTTU
+> NTTU NoC
+> Main scratchpad
+> Extd .
+> EWE
+> KeyMult
+> buffer
+> Constant
+> scratchpad
+> + PRNG
+> Lane
+> Per 8
+> lanes
+> BConv
+> buffer
+> BConvU
+> AutoU NoC
+> AutoU
+> : 4B / cycle
+> : 8B / cycle
+> : MUX/DEMUX
+
+Figure 4: Applying WHET to an accelerator with eight clus-ters, each with √𝑁 = 256 vector lanes and functional units for NTT (NTTU), BConv (BConvU), automorphism (AutoU), and element-wise operations (EWE). WHET’s architectural refinements are highlighted in red. 0 0.1  0.2  0.3  0.4 
+
+> +EWE extensions
+> +KeyMult buffer
+> +Alg./Param. opt.
+> SHARP8+
+> Normalized NTTU idle cycles
+> Main scratchpad BW
+> NTT/INTT transition
+> Data dependencies
+> Off-chip memory BW
+> 1.0 ⋯
+
+Figure 5: Breakdown of the NTTU idle cycles during Boot .We start from SHARP8+ using the baseline parameters in Table 3. We gradually add our algorithmic and parameter optimizations (§4), KeyMult buffer, and EWE extensions. 
+
+instance, executing four independent MMADs would require load-ing 12 operands and storing 4 results per lane per cycle, whereas the main scratchpad can supply only 7 (see Fig. 4). Therefore, dis-covering compound instructions that share operands is crucial for maximizing the effective throughput of the EWEs. We leverage the KeyMult buffer’s additional bandwidth to pro-pose the following instruction extensions for the EWE: (1) 𝑑 res ← ( 𝑝 · 𝑎 + 𝑎 ′) &
+
+(𝑎 res , 𝑏 res ) ← ( 𝑑 res · evk [0] [ 𝑖 ], 𝑑 res · evk [1] [ 𝑖 ] + ( 𝑝 · 𝑏 + 𝑏 ′)) 
+
+(2) 𝑎 res ← ( 𝐶 · 𝑎 − 𝑎 ′) · 𝐶 ′ for constants 𝐶 and 𝐶 ′
+
+The first instruction combines PMult and HAdd with KeyMult by leveraging all four MMAD units in an EWE. It is heavily used for evaluating Eq. 1 for fg-CtS or other linear transform evalua-tions. Here, the KeyMult buffer handles the input 𝑏 ′ and the output 
+
+(𝑎 res , 𝑏 res ). The second instruction implements an operation fusion technique in Cheddar [25]. While these two extensions eliminate 23% of the data depen-dency stalls for the NTTUs (see Fig. 5), our focus is on demon-strating potential architectural efficiency improvements from such instruction extensions, which only incur minimal hardware over-head from slight control logic complications. As shown in Table 4, WHET’s two EWE extensions add only 0.4mm 2 to a total chip area of ∼190mm 2. Future work could explore additional EWE extensions based on common computational patterns. 
+
+> 7Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn
+
+Table 4: Hardware configuration and chip area breakdown: SHARP8+ vs. WHET.                                 
+
+> SHARP8+ WHET
+> Overall 8 clusters with a total of 2048 vector lanes: + 8 NTTUs (31.25M NTT/s) w/ dedicated NoC + BConvU: 2×6plain MAD units per lane (24576 GOPS) + 8 AutoUs (31.25M automorphism/s) w/ dedicated NoC + EWE: 4 MMAD units per lane (8192 GOPS) SRAM 180MiB (Main, 64TB/s) + 18MiB (BConv, 40TB/s) + 6MiB (Constant) 128MiB (Main, 64TB/s) + 32MiB (KeyMult, 48TB/s) + 18MiB (BConv, 40TB/s) + 6MiB (Constant) HBM 1024GB/s (2 HBM3 stacks) 1024GB/s (2 HBM3 stacks)
+> Area (mm 2)
+> NTT BConv Auto EWE PRNG NoC SRAM HBM Total SH8+ 31.4 23.8 6.8 6.3 2.3 16.6 76.2 29.6 193.1 WHET 31.4 23.8 6.8 6.7 2.3 16.6 73.0 29.6 190.2
+
+## 5.6 Supporting the WHET algorithms 
+
+We provide architectural support to maximize the benefits of plain-text compression and intermediate ModRaise. First, a small (6MiB) scratchpad, implicitly used for constants in SHARP, is also em-ployed to store compressed plaintexts. Each group of eight lanes contain SRAM for the constant scratchpad, which broadcasts to all the eight lanes. We exploit the same datapath for compressed plaintexts. Four groups of SRAM are connected to an HBM channel (or pseudo-channel), making each channel handle 32 lanes. This design supports compression rates from 8 × to 32 × with minimal hardware overhead while enabling plaintexts to be loaded at full HBM bandwidth via all channels. While it may be tempting to sup-port higher compression rates, we consider it unnecessary due to diminishing returns. Further, intermediate ModRaise requires performing an RNS re-construction with an input polynomial having 2–3 limbs, which recovers large coefficients from their residues modulo Q𝑖 . To enable this, we extend the BConvU to incorporate the necessary recon-struction logic. 
+
+## 6 Evaluation 6.1 Experimental setup and area 
+
+To evaluate the performance of WHET, we developed a simulator (and scheduler) for our architecture, which runs at a minimum granularity of eight cycles. Upon receiving a list of instructions to process, our simulator maps the instructions to the FUs while avoiding structural and data hazards. We adopted a decoupled data orchestration [ 81 ], following CraterLake [ 85 ]. After the timing of all the instructions are determined, our simulator attempts to pro-duce the best data scheduling between the off-chip memory and the on-chip memory using the Belady’s MIN policy [ 10 ]. The simulator uses software prefetching to prepare data before each instruction. If prefetching before the desired timing fails from insufficient time, the simulator inserts static deterministic stalls. Our simulator col-lects statistics of the system for the given list of instructions and calculates utilization and energy consumption of each resource. For energy and area estimation, we synthesized the core logic units in RTL using the ASAP7 7.5-track 7nm predictive process design kit (PDK) [ 26 ]. Most hardware components operate at 1GHz but the NoCs and a few small buffers run at 2GHz. We estimated the energy for mm-scale global wires based on Dally et al. [ 28 ]. SRAM components were modeled using FinCACTI [ 87 ], which we vastly modified to reflect published data for 7nm technologies [ 15 ,46 , 51 , 53 , 76 , 90 , 92 ]. All SRAM components are single-ported; we used bank interleaving to achieve high bandwidth at the cost of coarser access granularity. Two HBM3 stacks, each with 512GB/s of bandwidth [ 49 ], were employed, whose energy and PHY area were estimated using prior studies [53, 78]. Table 4 summarizes the hardware configuration and area break-down of WHET and SHARP8+. Owing to minimal architectural overheads and reduced on-chip memory, WHET reduces the total chip area from 193.1mm 2 to 190.2mm 2.
+
+## 6.2 Workloads and parameters 
+
+We used the following four workloads, which have been widely used in prior work: 
+
+• Boot denotes bootstrapping with 215 complex numbers. 
+
+• HELR [ 40 ] performs a binary classification model training using logistic regression on 14 ×14 grayscale images for 32 iterations, each with a batch size of 1,024. 
+
+• Sorting [43 ] is an implementation of a two-way bitonic sorting network for 214 real numbers. 
+
+• ResNet-20 (RN-20) is an implementation of CNN inference by Lee et al. [ 70 ] on a 32 × 32 × 3 CIFAR-10 [ 68 ] image using the ResNet-20 [42] model. We used the baseline/optimized parameters listed in Table 3 for SHARP8+/WHET. The respective 𝐿 eff values for Boot are 12 and 9. For the other workloads, 𝐿 eff is adjusted as appropriate (8–10) based on each workload’s requirement. For HELR, a much smaller 
+
+28 × 28 CtS matrix can be used instead of the full 𝑁  
+
+> 2
+
+× 𝑁  
+
+> 2
+
+matrix. Thus, we used fewer matrices to decompose it, resulting in a 4-level CtS even for fg-CtS. 
+
+## 6.3 WHET vs. prior ASIC accelerators 
+
+Table 5 demonstrates that WHET achieves significant improve-ments in performance compared to state-of-the-art FHE accelera-tors [ 30 , 34 , 61 , 62 , 67 , 85 , 95 ]. Also, compared to the GPU perfor-mance reported in Cheddar [ 25 ] with an NVIDIA RTX 5090, WHET demonstrates 18.2–21.6 × performance improvements. Notably, we achieve the first-ever sub-millisecond CKKS boot-strapping (𝐿 eff = 9), which corresponds to a 1.51 × acceleration over the previous state-of-the-art (FAST [ 34 ]). Compared to prior ASIC accelerators, WHET achieves 2.14–4.35 × and 1.56–3.23 × speedups for sorting and ResNet-20, respectively. As our optimizations pri-marily target Boot (specifically, CtS), WHET shows smaller im-provements on HELR, which contains a lower Boot portion (see Fig. 7b) and utilizes a reduced CtS matrix size. When also accounting for area, WHET shows 1.38–8.74 × re-ductions in area-delay product (ADP), measured as the geometric 
+
+> 8WHET: Welding Homomorphic Encryption to Accelerator Architectures
+
+Table 5: Performance comparison with prior ASIC FHE accel-erators. We also calculate area-delay product (ADP), calculate its relative value compared to that of WHET, and show its geometric mean across the workloads (vs. WHET). 
+
+Hardware Boot HELR Sorting RN-20 Area vs. WHET (ms) (ms/it) (s) (ms) (mm 2) (1 / ADP) GPU † 19.800 25.50 *- 720.0 - -CrLake [85] 6.330 *3.81 *- *321.0 223 08.08 ×
+
+ARK [62] 3.560 7.42 1.990 125.0 418 08.74 ×
+
+SHARP [61] 3.120 2.53 1.380 99.0 179 02.38 ×
+
+UFC [95] 2.640 2.10 1.160 *87.6 198 02.21 ×
+
+Trinity [30] 1.920 1.37 *- 89.0 ‡157 01.38 ×
+
+FAST [34] 1.380 1.33 *- 60.5 284 01.95 ×
+
+HAWK [67] 2.150 1.96 0.980 74.9 186 01.81 ×
+
+SHARP8+ 2.500 1.85 1.060 75.6 193 02.01 ×
+
+WHET 0.915 1.40 0.457 38.7 190 01.00 ×                               
+
+> *We excluded these from the “vs. WHET” geometric mean calculation due to sub-stantial differences in workload implementations or missing data.
+> †Based on Cheddar [25] on RTX 5090, which showed the best performance.
+> ‡Trinity’s 36-bit NTTUs occupy 39.5% of the area of our 32-bit NTTUs at the same throughput, and its 180MiB main scratchpad area is 64.1% of that of SHARP8+, implying substantial differences in evaluation settings. 030 60 90 120 150
+> ResNet-20
+> Sorting
+> HELR
+> Boot
+> WHET power consumption (W)
+> NTT BConv Auto EWE+PRNG HBM SRAM Delay Energy EDP EDAP
+> 2.05 ×1.15 ×2.36 ×2.40 ×
+> 1.32 ×1.20 ×1.58 ×1.61 ×
+> 2.15 ×1.38 ×2.97 ×3.02 ×
+> 1.96 ×1.28 ×2.50 ×2.54 ×
+> 1.84 ×1.25 ×2.30 ×2.33 ×
+> Improvements vs. SHARP8+
+> Geometric mean
+
+Figure 6: (Left) Delay, energy, energy-delay product (EDP), and energy-delay-area product (EDAP) improvements from applying WHET on SHARP8+. (Right) Average power con-sumption breakdown of WHET for the workloads. NTT and automorphism include NoC power. 
+
+mean across the workloads. While on-chip memory accounts for the largest area portion (38.4%) in WHET, its total capacity (184MiB, see Table 4) is smaller compared to recent accelerators, such as UFC (274MiB), FAST (281MiB) and HAWK (212MiB), allowing WHET to achieve a compact area while maintaining high performance. 
+
+## 6.4 Energy and efficiency of WHET (vs. SHARP8+) 
+
+Fig. 6 (right) shows the power consumption breakdown of WHET across the workloads. WHET consumes 117.1–147.7W of power in total. While differences in evaluation settings make direct com-parison difficult, the power consumption of WHET is within a comparable range with prior ASIC proposals, including SHARP (97W for Boot ), Trinity (229W peak), and FAST (120–160W for the workloads). NTT is the largest contributor, accounting for 33.9– 38.0% of the total power. This is consistent with Fig. 1a, where NTT accounts for over half of the computational complexity in KS .Next, the memory system (HBM + SRAM) accounts for 26.0–27.9%, highlighting the importance of our memory optimizations. As shown in Fig. 6 (left), we compare WHET with a controlled baseline, SHARP8+, which ensures a fair evaluation of hardware efficiency. WHET achieves geometric mean reductions of 1.25 × in energy, 2.30 × in energy-delay product (EDP), and 2.33 × in energy-delay-area product (EDAP [ 71 ]). Combined with 1.32–2.15 × speedups, this demonstrates that WHET enables efficient execution of various FHE workloads. 
+
+## 6.5 Sensitivity study: from SHARP8+ to WHET 
+
+For a more detailed analysis of performance, energy, and hardware utilization of WHET compared to SHARP8+, we evaluate the impact of our contributions (§4 and §5) by incrementally incorporating each optimization on SHARP8+ and measuring its effects. The results are shown in Fig. 7. Our cryptographic and algorithmic optimizations result in sig-nificant improvements for SHARP8+ with combined benefits of 1.30–2.27 × speedups and 1.09–1.29 × energy reductions. Despite the reduced 𝐿 eff (12 to 9), fg-CtS delivers a 1.65 × speedup in combined ModRaise+CtS execution time as well as 1.12 × faster per-𝐿 eff Boot 
+
+time. This translates to 1.08–1.32 × speedups for the other three workloads. Plaintext compression reduces both execution time and energy consumption, resulting in 1.29–1.73 × EDP improvements. Intermediate ModRaise accelerates ModRaise by 3.81 ×, yielding an overall 8.2% Boot performance improvement. The architectural refinements result in additional 1.06–1.27 ×
+
+EDP improvements. Introduction of the KeyMult buffer and the EWE extensions respectively achieve 4.2–5.3% and 0.8–1.4% en-ergy savings. Together, they result in 1.01–1.20 × speedups for the workloads. Fig. 7c shows that our optimizations deliver consistent improve-ments in FU utilization. In SHARP8+, all FUs are severely underuti-lized due to the off-chip memory bandwidth bottleneck, with all utilization rates below 36.2%. With our optimizations applied, uti-lization increases to 65.3%, 48.4%, and 76.5% for the NTTU, BConvU, and EWE, respectively. We also achieve 81.3% HBM utilization, indi-cating that WHET maintains a well-balanced use of computational resources and memory bandwidth. 
+
+## 6.6 Alternative WHET hardware configurations 
+
+We also tested how the number of clusters, HBM bandwidth, and main scratchpad capacity affects performance and efficiency of WHET (Fig. 8). Increasing any single component exhibits dimin-ishing returns; performance plateaus near the values currently employed in WHET, which are eight, 1024GB/s, and 128MiB. Dou-bling each value results in only 1.20 ×, 1.16 ×, and 1.09 × performance improvements in geometric mean. Conversely, the current configu-ration shows 1.67 ×, 1.65 ×, and 1.99 × enhanced performance when compared to a configuration with each value halved. This again indicates that the WHET design is well balanced. 
+
+Scaling WHET. Scaling WHET requires increasing computational throughput and memory bandwidth together. For scale-up, HBM bandwidth can be increased to several TB/s while adding more clusters to form a larger chip, similar to recent NVIDIA GPU de-signs. For scale-out, prior multi-chip FHE acceleration efforts can      
+
+> 9Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn 915μ s
+> 0.136J
+> 0.5
+> 1
+> 1.5
+> 2
+> 2.5
+> 3
+> 0
+> 0.5
+> 1
+> 1.5
+> 2
+> 2.5
+> Time/Energy/EDP improv.
+> Execution time ( ms )
+> 𝐿 eff / Energy
+> 𝐿 eff
+> 2/ EDP
+> 𝐿 eff / Time
+> StC EvalMod
+> CtS ModRaise
+> (a) Time & energy (
+
+Boot )1.40ms          
+
+> 0.164J
+> 521ms
+> 66.6J
+> 38.7ms
+> 5.06J
+> 0.5
+> 1
+> 1.5
+> 2
+> 2.5
+> 3
+> 0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1
+> Energy/EDP improv.
+> Exeuction time (norm.)
+> Boot Non-Boot 1 / Energy 1 / EDP
+> Sorting HELR ResNet -20 (b) Time & energy (workloads) 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Utilization (%)
+> NTTU BConvU AutoU
+> EWE DRAM (c) Utilization (
+
+Boot )
+
+Figure 7: Execution time, energy consumption, and energy-delay product (EDP) of (a) Boot and (b) the other three workloads when we incrementally apply fg-CtS (+ fg-CtS), plaintext compression (+ Ptxt. Comp.), intermediate ModRaise (+ Intmd. MR), KeyMult buffer (+ KM buffer), and EWE extensions (+ EWE ext.). Boot time and energy are divided by 𝐿 eff for a fair comparison. (c) Utilization of the hardware resources depending on the configuration during Boot is also shown. To reflect the fact that lower is better for energy and EDP, we plot their reciprocals. WHET                        
+
+> 0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1
+> 1.2
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> 24816
+> Energy/EDP improv.
+> Relative time
+> # clusters
+> (a) Number of clusters WHET
+> 0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1
+> 1.2
+> 1.4
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> 7
+> 1/8 1/4 1/2 1248
+> Energy/EDP improv.
+> Relative time
+> HBM bandwidth (TB/s) (b) HBM bandwidth WHET
+> 0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1
+> 1.2
+> 0
+> 0.5
+> 1
+> 1.5
+> 2
+> 2.5
+> 3
+> 64 80 96 112 128 144 160 176 192 208 224 240 256
+> Energy/EDP improv.
+> Relative time
+> Main scratchpad capacity (MiB)
+> Boot
+> HELR
+> Sorting
+> ResNet-20
+> 1 / Energy
+> 1 / EDP (c) Main scratchpad size
+
+Figure 8: Execution time, energy, and energy-delay product (EDP) under varying (a) cluster count (total on-chip memory capacity kept constant), (b) HBM bandwidth, and (c) main scratchpad capacity. 
+
+be leveraged, such as CiFHER (custom ASIC chiplets) [ 65 ], Cinna-mon (custom ASICs) [ 47 ], Cerium (NVIDIA GPUs) [ 48 ], and CROSS (Google TPUs) [91]. 
+
+## 6.7 A wider range of CNN workloads 
+
+We evaluate the practicality of WHET using a more diverse set of CNN models implemented with the state-of-the-art FHE framework Orion [ 32 ]. We follow Orion’s implementation faithfully, incorpo-rating only Min-KS to reduce evk usage. WHET is evaluated with two main scratchpad configurations: the default 128MiB and an expanded 180MiB. The results are shown in Table 1 (page 2). Across ResNet-20 [ 42 ] (CIFAR-10 [ 68 ]), MobileNet [ 44 ] (Tiny Im-ageNet [ 69 ]), and ResNet-18 (Tiny ImageNet), the default 128MiB WHET achieves 1.27–1.61 × speedups and 1.17–1.27 × energy reduc-tions over SHARP8+. VGG-16 [ 89 ] (CIFAR-10) presents a different behavior. Orion’s implementation involves extremely large linear transforms, making BSGS unavoidable and requiring storage of hundreds of baby-step ciphertexts. Under this workload, the reduced 128MiB scratchpad becomes a bottleneck. Increasing the scratchpad to 180MiB restores performance, yielding a 1.24 × speedup for WHET. Overall, WHET substantially narrows the gap between encrypted and unencrypted inference. Orion reports over 30,000 × slowdown on a single-threaded CPU compared to plaintext inference. WHET reduces this gap to 4.74–31.6 ×, demonstrating that FHE can ap-proach practical performance levels for real-world applications with more effective use of FHE accelerator architectures. 
+
+Capacity limitations. Larger CNNs require improved execution strategies for accelerators. Even with HBM4 [ 50 ], two HBM stacks provide at most 128GiB of capacity, whereas Orion materializes hun-dreds of GiBs of plaintexts for large inputs such as ImageNet [ 29 ]. As prior FHE accelerators have very similar off-chip memory sys-tem designs, it would be compelling to use alternative FHE CNN implementations [54, 58, 59] that reduce the number of plaintexts. 
+
+## 7 Related Work 
+
+We summarize previous architectural endeavors in accelerating HE, focusing on those targeted at FHE schemes based on the ring-learning-with-errors (RLWE) problem [73]. Previous studies have attempted to enhance the utilization of GPU hardware resources for FHE. TensorFHE [ 35 ] utilizes tensor cores in recent NVIDIA GPUs to accelerate NTT. WarpDrive [ 33 ]combines the use of tensor cores and regular CUDA cores. NEO [ 52 ]redirects HE kernels to idle FP64 pipelines. Jung et al. [ 55 ] and Ched-dar [ 25 ] apply kernel fusion to improve the memory bandwidth utilization. However, limited on-chip memory capacity and band-width in GPUs remain as bottlenecks for FHE. 
+
+> 10
+
+WHET: Welding Homomorphic Encryption to Accelerator Architectures 
+
+Numerous FPGA solutions have also been proposed. Roy et al. [ 83 ] and HEAX [ 82 ] deploy spatial pipelines for the core primi-tives in HE without the support for Boot . FAB [ 3 ] and Poseidon [ 94 ]improve upon these studies and support full-slot CKKS Boot . Hy-dra [ 93 ] takes a scale-out approach with multiple FPGAs to support large private ML workloads. EFFACT [ 45 ] provides a full-stack plat-form with a compiler and a streaming memory controller for both FPGA and ASIC. For memory-intensive HE workloads, several processing-in-memory (PIM) and near-data processing (NDP) architectures have been pro-posed. Anaheim [ 63 ] offloads memory-bound operations to PIM while keeping compute-heavy kernels on GPUs. FHENDI [ 80 ] lever-ages an HBM-based NDP design for large FHE workloads. CIPHER-MATCH [ 57 ] uses in-flash processing for bulk homomorphic addi-tions. F1 [ 84 ] is the first ASIC FHE accelerator but provides limited support for CKKS Boot with 𝑁 = 214 . BTS [ 66 ], fully supporting CKKS Boot with 𝑁 = 217 , deploys 2,048 small processing units connected by a two-dimensional NoC. CraterLake [ 85 ] realizes a 
+
+Boot -oriented design by creating a large cluster for 𝑁 =216 based on F1. ARK [ 62 ] develops algorithmic optimizations, such as Min-KS, to mitigate off-chip memory bandwidth bottlenecks. SHARP [ 61 ]extensively explores the impact of word size and suggests using 36 bits for FHE accelerators. UFC [95], Trinity [30], and UniFHE [77] modify the architecture to support both RLWE-based (e.g., CKKS) and non-RLWE-based (e.g., TFHE [ 24 ]) FHE schemes. FAST [ 34 ] and HAWK [ 67 ] exploit a new KS method, KLSS [ 64 ], and add hardware support for KLSS on top of SHARP. Intel recently announced the tape-out of HERACLES, a 197mm 2 ASIC FHE accelerator in Intel 3 node [37]. Finally, there have been attempts to better adapt CKKS to hard-ware via efficient scheduling (MAD [ 2 ], CROPHE [ 17 ]), crypto-graphic modification (BitPacker [ 86 ], Grafting [ 18 ]), or Boot -aware compiler development (DaCapo [ 22 ], HALO [ 23 ], ReSBM [ 72 ]). Also, several studies [ 47 , 48 , 65 , 91 ] explore multi-chip scaling for FHE acceleration (§6.6). 
+
+## 8 Conclusion 
+
+We presented WHET, which incorporate cryptographic and algo-rithmic techniques to better align FHE execution with accelerator architectures, along with lightweight architectural refinements to improve hardware utilization. By analyzing the working set at the highest levels, WHET introduces fg-CtS, plaintext compression, and intermediate ModRaise to substantially reduce data footprint and off-chip memory traffic during CKKS Boot . Additional archi-tectural enhancements, including the KeyMult buffer and extended instructions for element-wise operations, further alleviate on-chip memory bandwidth and data dependency bottlenecks. Overall, WHET achieves 1.32–2.72 × speedups over our controlled base-line, SHARP8+, and enables practical private CNN inference with 33.1–239ms latency on representative models. 
+
+## Acknowledgements 
+
+We thank Sehyeon Lee for valuable assistance with the CNN work-load evaluation. 
+
+## References 
+
+[1] Rashmi Agrawal, Jung Ho Ahn, Flavio Bergamaschi, Ro Cammarota, Jung Hee Cheon, Fillipe D. M. de Souza, Huijing Gong, Minsik Kang, Duhyeong Kim, Jong-min Kim, Hubert de Lassus, Jai Hyun Park, Michael Steiner, and Wen Wang. 2023. High-Precision RNS-CKKS on Fixed but Smaller Word-Size Architectures: Theory and Application. In Workshop on Encrypted Computing & Applied Homomorphic Cryptography . doi:10.1145/3605759.3625257 [2] Rashmi Agrawal, Leo de Castro, Chiraag Juvekar, Anantha Chandrakasan, Vinod Vaikuntanathan, and Ajay Joshi. 2023. MAD: Memory-Aware Design Techniques for Accelerating Fully Homomorphic Encryption. In MICRO . doi:10.1145/3613424. 3614302 [3] Rashmi Agrawal, Leo de Castro, Guowei Yang, Chiraag Juvekar, Rabia Yazicigil, Anantha Chandrakasan, Vinod Vaikuntanathan, and Ajay Joshi. 2023. FAB: An FPGA-based Accelerator for Bootstrappable Fully Homomorphic Encryption. In 
+
+HPCA . doi:10.1109/HPCA56546.2023.10070953 [4] Martin Albrecht, Melissa Chase, Hao Chen, Jintai Ding, Shafi Goldwasser, Sergey Gorbunov, Shai Halevi, Jeffrey Hoffstein, Kim Laine, Kristin Lauter, Satya Lokam, Daniele Micciancio, Dustin Moody, Travis Morrison, Amit Sahai, and Vinod Vaikuntanathan. 2021. Homomorphic Encryption Standard. In Protecting Privacy through Homomorphic Encryption . Springer, 31–62. doi:10.1007/978-3-030-77287-1_2 [5] Martin R. Albrecht, Rachel Player, and Sam Scott. 2015. On the Concrete Hardness of Learning with Errors. Journal of Mathematical Cryptology 9, 3 (2015), 169–203. doi:10.1515/jmc-2015-0016 [6] Jason Ansel, Edward Yang, Horace He, Natalia Gimelshein, Animesh Jain, Michael Voznesensky, Bin Bao, Peter Bell, David Berard, Evgeni Burovski, Geeta Chauhan, Anjali Chourdia, Will Constable, Alban Desmaison, Zachary DeVito, Elias Ellison, Will Feng, Jiong Gong, Michael Gschwind, Brian Hirsh, Sherlock Huang, Kshiteej Kalambarkar, Laurent Kirsch, Michael Lazos, Mario Lezcano, Yanbo Liang, Jason Liang, Yinghai Lu, C. K. Luk, Bert Maher, Yunjie Pan, Christian Puhrsch, Matthias Reso, Mark Saroufim, Marcos Yukio Siraichi, Helen Suk, Shunting Zhang, Michael Suo, Phil Tillet, Xu Zhao, Eikan Wang, Keren Zhou, Richard Zou, Xiaodong Wang, Ajit Mathews, William Wen, Gregory Chanan, Peng Wu, and Soumith Chintala. 2024. PyTorch 2: Faster Machine Learning Through Dynamic Python Bytecode Transformation and Graph Compilation. In ASPLOS . doi:10.1145/3620665.3640366 [7] Apple. 2024. Combining Machine Learning and Homomorphic Encryption in the Apple Ecosystem. https://machinelearning.apple.com/research/homomorphic-encryption [8] Ahmad Al Badawi and Yuriy Polyakov. 2023. Demystifying Bootstrapping in Fully Homomorphic Encryption. IACR Cryptology ePrint Archive 149 (2023). https://eprint.iacr.org/2023/149 [9] David H. Bailey. 1989. FFTs in External or Hierarchical Memory. In ACM/IEEE Conference on Supercomputing . doi:10.1145/76263.76288 [10] Laszlo A. Belady. 1966. A Study of Replacement Algorithms for a Virtual-Storage Computer. IBM Systems Journal 5, 2 (1966), 78–101. doi:10.1147/sj.52.0078 [11] Fabian Boemer, Sejun Kim, Gelila Seifu, Fillipe D. M. de Souza, and Vinodh Gopal. 2021. Intel HEXL: Accelerating Homomorphic Encryption with Intel AVX512-IFMA52. In Workshop on Encrypted Computing & Applied Homomorphic Cryptography . doi:10.1145/3474366.3486926 [12] Jean-Philippe Bossuat, Rosario Cammarota, Jung Hee Cheon, Ilaria Chillotti, Benjamin R. Curtis, Wei Dai, Huijing Gong, Erin Hales, Duhyeong Kim, Bryan Kumara, Changmin Lee, Xianhui Lu, Carsten Maple, Alberto Pedrouzo-Ulloa, Rachel Player, Luis Antonio Ruiz Lopez, Yongsoo Song, Donggeon Yhee, and Bahattin Yildiz. 2024. Security Guidelines for Implementing Homomorphic Encryption. IACR Cryptology ePrint Archive 463 (2024). https://eprint.iacr.org/ 2024/463 [13] Jean-Philippe Bossuat, Christian Mouchet, Juan Ramón Troncoso-Pastoriza, and Jean-Pierre Hubaux. 2021. Efficient Bootstrapping for Approximate Homo-morphic Encryption with Non-sparse Keys. In Annual International Confer-ence on the Theory and Applications of Cryptographic Techniques (Eurocrypt) .doi:10.1007/978-3-030-77870-5_21 [14] Jean-Philippe Bossuat, Juan Troncoso-Pastoriza, and Jean-Pierre Hubaux. 2022. Bootstrapping for Approximate Homomorphic Encryption with Negligible Failure-Probability by Using Sparse-Secret Encapsulation. In Applied Cryptogra-phy and Network Security . doi:10.1007/978-3-031-09234-3_26 [15] Jonathan Chang, Yen-Huei Chen, Wei-Min Chan, Sahil Preet Singh, Hank Cheng, Hidehiro Fujiwara, Jih-Yu Lin, Kao-Cheng Lin, John Hung, Robin Lee, Hung-Jen Liao, Jhon-Jhy Liaw, Quincy Li, Chih-Yung Lin, Mu-Chi Chiang, and Shien-Yang Wu. 2017. A 7nm 256Mb SRAM in High-K Metal-Gate FinFET Technology with Write-Assist Circuitry for Low-VMIN Applications. In IEEE International Solid-State Circuits Conference . doi:10.1109/ISSCC.2017.7870333 [16] Hao Chen, Ilaria Chillotti, and Yongsoo Song. 2019. Improved Bootstrapping for Approximate Homomorphic Encryption. In Annual International Conference on the Theory and Applications of Cryptographic Techniques (Eurocrypt) . doi:10. 1007/978-3-030-17656-3_2 [17] Xinhua Chen, Jiangbin Dong, Hongren Zheng, Tian Tang, and Mingyu Gao. 2026. CROPHE: Cross-Operator Dataflow Optimization for Fully Homomorphic 11 Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn 
+
+Encryption Accelerators. In HPCA . doi:10.1109/HPCA68181.2026.11408486 [18] Jung Hee Cheon, Hyeongmin Choe, Minsik Kang, Jaehyung Kim, Seonghak Kim, Johannes Mono, and Taeyeong Noh. 2025. Grafting: Decoupled Scale Factors and Modulus in RNS-CKKS. In ACM Conference on Computer and Communications Security . doi:10.1145/3719027.3765083 [19] Jung Hee Cheon, Kyoohyung Han, Andrey Kim, Miran Kim, and Yongsoo Song. 2018. A Full RNS Variant of Approximate Homomorphic Encryption. In Selected Areas in Cryptography . doi:10.1007/978-3-030-10970-7_16 [20] Jung Hee Cheon, Kyoohyung Han, Andrey Kim, Miran Kim, and Yongsoo Song. 2018. Bootstrapping for Approximate Homomorphic Encryption. In Annual Inter-national Conference on the Theory and Applications of Cryptographic Techniques (Eurocrypt) . doi:10.1007/978-3-319-78381-9_14 [21] Jung Hee Cheon, Andrey Kim, Miran Kim, and Yongsoo Song. 2017. Homo-morphic Encryption for Arithmetic of Approximate Numbers. In International Conference on the Theory and Applications of Cryptology and Information Security (Asiacrypt) . doi:10.1007/978-3-319-70694-8_15 [22] Seonyoung Cheon, Yongwoo Lee, Dongkwan Kim, Ju Min Lee, Sunchul Jung, Taekyung Kim, Dongyoon Lee, and Hanjun Kim. 2024. DaCapo: Automatic Boot-strapping Management for Efficient Fully Homomorphic Encryption. In USENIX Security Symposium . https://www.usenix.org/conference/usenixsecurity24/ presentation/cheon [23] Seonyoung Cheon, Yongwoo Lee, Hoyun Youm, Dongkwan Kim, Sungwoo Yun, Kunmo Jeong, Dongyoon Lee, and Hanjun Kim. 2025. HALO: Loop-aware Bootstrapping Management for Fully Homomorphic Encryption. In ASPLOS .doi:10.1145/3669940.3707275 [24] Ilaria Chillotti, Nicolas Gama, Mariya Georgieva, and Malika Izabachène. 2020. TFHE: Fast Fully Homomorphic Encryption Over the Torus. Journal of Cryptology 
+
+33, 1 (2020), 34–91. doi:10.1007/s00145-019-09319-x [25] Wonseok Choi, Jongmin Kim, and Jung Ho Ahn. 2026. Cheddar: A Swift Fully Homomorphic Encryption Library Designed for GPU Architectures. In ASPLOS .doi:10.1145/3760250.3762223 [26] Lawrence T Clark, Vinay Vashishtha, Lucian Shifren, Aditya Gujja, Saurabh Sinha, Brian Cline, Chandarasekaran Ramamurthy, and Greg Yeric. 2016. ASAP7: A 7-nm FinFET Predictive Process Design Kit. Microelectronics Journal 53 (2016), 105–115. doi:10.1016/j.mejo.2016.04.006 [27] James W. Cooley and John W. Tukey. 1965. An Algorithm for the Machine Calculation of Complex Fourier Series. Math. Comp. 19, 90 (1965), 297–301. doi:10.1090/s0025-5718-1965-0178586-1 [28] William J. Dally, C. Thomas Gray, John Poulton, Brucek Khailany, John Wilson, and Larry Dennison. 2018. Hardware-Enabled Artificial Intelligence. In 2018 IEEE Symposium on VLSI Circuits . doi:10.1109/VLSIC.2018.8502368 [29] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li, and Li Fei-Fei. 2009. Ima-geNet: A Large-Scale Hierarchical Image Database. In IEEE Conference on Com-puter Vision and Pattern Recognition . doi:10.1109/CVPR.2009.5206848 [30] Xianglong Deng, Shengyu Fan, Zhicheng Hu, Zhuoyu Tian, Zihao Yang, Jiangrui Yu, Dingyuan Cao, Dan Meng, Rui Hou, Meng Li, Qian Lou, and Mingzhe Zhang. 2024. Trinity: A General Purpose FHE Accelerator. In MICRO . doi:10.1109/ MICRO61859.2024.00033 [31] DESILO. 2023. Liberate.FHE: A New FHE Library for Bridging the Gap between Theory and Practice with a Focus on Performance and Accuracy. https://github. com/Desilo/liberate-fhe [32] Austin Ebel, Karthik Garimella, and Brandon Reagen. 2025. Orion: A Fully Homomorphic Encryption Framework for Deep Learning. In ASPLOS . doi:10. 1145/3676641.3716008 [33] Guang Fan, Mingzhe Zhang, Fangyu Zheng, Shengyu Fan, Tian Zhou, Xianglong Deng, Wenxu Tang, Liang Kong, Yixuan Song, and Shoumeng Yan. 2025. Warp-Drive: GPU-Based Fully Homomorphic Encryption Acceleration Leveraging Tensor and CUDA Cores. In HPCA . doi:10.1109/HPCA61900.2025.00091 [34] Shengyu Fan, Xianglong Deng, Liang Kong, Guiming Shi, Guang Fan, Dan Meng, Rui Hou, and Mingzhe Zhang. 2025. FAST: An FHE Accelerator for Scalable-parallelism with Tunable-bit. In ISCA . doi:10.1145/3695053.3731407 [35] Shengyu Fan, Zhiwei Wang, Weizhi Xu, Rui Hou, Dan Meng, and Mingzhe Zhang. 2023. TensorFHE: Achieving Practical Computation on Encrypted Data Using GPGPU. In HPCA . doi:10.1109/HPCA56546.2023.10071017 [36] Craig Gentry. 2009. Fully Homomorphic Encryption Using Ideal Lattices. In 
+
+ACM Symposium on Theory of Computing . doi:10.1145/1536414.1536440 [37] Anupam Golder, Raghavan Kumar, Sachin Taneja, Kylan Race, Paolo Aseron, James Greensky, Wen Wang, Huijing Gong, Lalith Kethareswaran, Vikram Suresh, Adish Vartak, AppaRao Challagundla, Jeremy Casas, Poornima Lal-waney, Duhyeong Kim, Christopher N. Gutierrez, Ernesto Zamora Ramos, Won-hee Cho, Jose M. Rojas Chaves, Michael Steiner, Dan Lake, Nataraj Yennam-pelli, Karthik Nivarthi, Kamalakanth Bijinapally, Bala Prasad Talamala, Sra-vanth Valluri, Vasantha Srirambhatla, Chris Wilkerson, Rosario Cammarota, and Sanu Mathew. 2026. HERACLES: 8192-Way SIMD Programmable Scalable Fully-Homomorphic Encryption SoC for Privacy-Preserving Cloud Computing in Intel 3 CMOS. In IEEE International Solid-State Circuits Conference (ISSCC) .doi:10.1109/ISSCC49663.2026.11409291 [38] Shai Halevi and Victor Shoup. 2018. Faster Homomorphic Linear Transformations in HElib. In Annual International Cryptology Conference (CRYPTO) . doi:10.1007/ 978-3-319-96884-1_4 [39] Kyoohyung Han, Minki Hhan, and Jung Hee Cheon. 2019. Improved Homomor-phic Discrete Fourier Transforms and FHE Bootstrapping. IEEE Access 7 (2019), 57361–57370. doi:10.1109/ACCESS.2019.2913850 [40] Kyoohyung Han, Seungwan Hong, Jung Hee Cheon, and Daejun Park. 2019. Lo-gistic Regression on Homomorphic Encrypted Data at Scale. In AAAI Conference on Artificial Intelligence . doi:10.1609/aaai.v33i01.33019466 [41] Kyoohyung Han and Dohyeong Ki. 2020. Better Bootstrapping for Approximate Homomorphic Encryption. In Cryptographers’ Track at the RSA Conference . doi:10. 1007/978-3-030-40186-3_16 [42] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep Residual Learning for Image Recognition. In IEEE Conference on Computer Vision and Pattern Recognition . doi:10.1109/CVPR.2016.90 [43] Seungwan Hong, Seunghong Kim, Jiheon Choi, Younho Lee, and Jung Hee Cheon. 2021. Efficient Sorting of Homomorphic Encrypted Data With k-Way Sorting Network. IEEE Transactions on Information Forensics and Security 16 (2021), 4389–4404. doi:10.1109/TIFS.2021.3106167 [44] Andrew G. Howard, Menglong Zhu, Bo Chen, Dmitry Kalenichenko, Weijun Wang, Tobias Weyand, Marco Andreetto, and Hartwig Adam. 2017. MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications. arXiv preprint (2017). doi:10.48550/arXiv.1704.04861 [45] Yi Huang, Xinsheng Gong, Xiangyu Kong, Dibei Chen, Jianfeng Zhu, Wenping Zhu, Liangwei Li, Mingyu Gao, Shaojun Wai, Aoyang Zhang, and Leibo Liu. 2025. EFFACT: A Highly Efficient Full-Stack FHE Acceleration Platform. In HPCA .doi:10.1109/HPCA61900.2025.00088 [46] IEEE. 2018. International Roadmap for Devices and Systems: 2018 . Technical Report. [47] Siddharth Jayashankar, Edward Chen, Tom Tang, Wenting Zheng, and Dimitrios Skarlatos. 2025. Cinnamon: A Framework for Scale-Out Encrypted AI. In ASPLOS .doi:10.1145/3669940.3707260 [48] Siddharth Jayashankar, Joshua Kim, Michael B. Sullivan, Wenting Zheng, and Dimitrios Skarlatos. 2025. A Scalable Multi-GPU Framework for Encrypted Large-Model Inference. arXiv preprint (2025). doi:10.48550/arXiv.2512.11269 [49] JEDEC. 2022. High Bandwidth Memory DRAM (HBM3) . Technical Report JESD238. [50] JEDEC. 2025. High Bandwidth Memory (HBM4) DRAM . Technical Report JESD270-4. [51] W.C. Jeong, S. Maeda, H.J. Lee, K.W. Lee, T.J. Lee, D.W. Park, B.S. Kim, J.H. Do, T. Fukai, D.J. Kwon, K.J. Nam, W.J. Rim, M.S. Jang, H.T. Kim, Y.W. Lee, J.S. Park, E.C. Lee, D.W. Ha, C.H. Park, H.J. Cho, S.M. Jung, and H.K. Kang. 2018. True 7nm Platform Technology featuring Smallest FinFET and Smallest SRAM cell by EUV, Special Constructs and 3rd Generation Single Diffusion Break. In IEEE Symposium on VLSI Technology . doi:10.1109/VLSIT.2018.8510682 [52] Dian Jiao, Xianglong Deng, Zhiwei Wang, Shengyu Fan, Yi Chen, Dan Meng, Rui Hou, and Mingzhe Zhang. 2025. Neo: Towards Efficient Fully Homomorphic En-cryption Acceleration using Tensor Core. In ISCA . doi:10.1145/3695053.3731408 [53] Norman P. Jouppi, Doe Hyun Yoon, Matthew Ashcraft, Mark Gottscho, Thomas B. Jablin, George Kurian, James Laudon, Sheng Li, Peter C. Ma, Xiaoyu Ma, Thomas Norrie, Nishant Patil, Sushma Prasad, Cliff Young, Zongwei Zhou, and David A. Patterson. 2021. Ten Lessons From Three Generations Shaped Google’s TPUv4i: Industrial Product. In ISCA . doi:10.1109/ISCA52012.2021.00010 [54] Jae Hyung Ju, Jaiyoung Park, Jongmin Kim, Minsik Kang, Donghwan Kim, Jung Hee Cheon, and Jung Ho Ahn. 2024. NeuJeans: Private Neural Network Inference with Joint Optimization of Convolution and FHE Bootstrapping. In 
+
+ACM Conference on Computer and Communications Security . doi:10.1145/3658644. 3690375 [55] Wonkyung Jung, Sangpyo Kim, Jung Ho Ahn, Jung Hee Cheon, and Younho Lee. 2021. Over 100x Faster Bootstrapping in Fully Homomorphic Encryption through Memory-centric Optimization with GPUs. IACR Transactions on Cryptographic Hardware and Embedded Systems 2021, 4 (2021), 114–148. doi:10.46586/tches. v2021.i4.114-148 [56] Wonkyung Jung, Eojin Lee, Sangpyo Kim, Jongmin Kim, Namhoon Kim, Keewoo Lee, Chohong Min, Jung Hee Cheon, and Jung Ho Ahn. 2021. Accelerating Fully Homomorphic Encryption Through Architecture-Centric Analysis and Optimization. IEEE Access 9 (2021), 98772–98789. doi:10.1109/ACCESS.2021. 3096189 [57] Mayank Kabra, Rakesh Nadig, Harshita Gupta, Rahul Bera, Manos Frouzakis, Vamanan Arulchelvan, Yu Liang, Haiyu Mao, Mohammad Sadrosadati, and Onur Mutlu. 2025. CIPHERMATCH: Accelerating Homomorphic Encryption-Based String Matching via Memory-Efficient Data Packing and In-Flash Processing. In 
+
+ASPLOS . doi:10.1145/3676641.3716251 [58] Dongwoo Kim and Cyril Guyot. 2023. Optimized Privacy-Preserving CNN Inference With Fully Homomorphic Encryption. IEEE Transactions on Information Forensics and Security 18 (2023), 2175–2187. doi:10.1109/TIFS.2023.3263631 12 WHET: Welding Homomorphic Encryption to Accelerator Architectures 
+
+[59] Donghwan Kim, Jaiyoung Park, Jongmin Kim, Sangpyo Kim, and Jung Ho Ahn. 2024. HyPHEN: A Hybrid Packing Method and Its Optimizations for Homo-morphic Encryption-Based Neural Networks. IEEE Access 12 (2024), 3024–3038. doi:10.1109/ACCESS.2023.3348170 [60] Jihwan Kim, Jung Hee Cheon, and Yongdong Yeo. 2025. OverModRaise: Reduc-ing Modulus Consumption of CKKS Bootstrapping. IACR Communications in Cryptology 2, 3 (2025). doi:10.62056/a3n5qjp10 [61] Jongmin Kim, Sangpyo Kim, Jaewan Choi, Jaiyoung Park, Donghwan Kim, and Jung Ho Ahn. 2023. SHARP: A Short-Word Hierarchical Accelerator for Robust and Practical Fully Homomorphic Encryption. In ISCA . doi:10.1145/3579371. 3589053 [62] Jongmin Kim, Gwangho Lee, Sangpyo Kim, Gina Sohn, Minsoo Rhu, John Kim, and Jung Ho Ahn. 2022. ARK: Fully Homomorphic Encryption Accelerator with Runtime Data Generation and Inter-Operation Key Reuse. In MICRO . doi:10. 1109/MICRO56248.2022.00086 [63] Jongmin Kim, Sungmin Yun, Hyesung Ji, Wonseok Choi, Sangpyo Kim, and Jung Ho Ahn. 2025. Anaheim: Architecture and Algorithms for Processing Fully Homomorphic Encryption in Memory. In HPCA . doi:10.1109/HPCA61900.2025. 00089 [64] Miran Kim, Dongwon Lee, Jinyeong Seo, and Yongsoo Song. 2023. Accelerating HE Operations from Key Decomposition Technique. In Annual International Cryptology Conference (CRYPTO) . doi:10.1007/978-3-031-38551-3_3 [65] Sangpyo Kim, Jongmin Kim, Jaeyoung Choi, and Jung Ho Ahn. 2024. CiFHER: A Chiplet-Based FHE Accelerator with a Resizable Structure. In International Symposium on Secure and Private Execution Environment Design (SEED) . doi:10. 1109/SEED61283.2024.00022 [66] Sangpyo Kim, Jongmin Kim, Michael Jaemin Kim, Wonkyung Jung, John Kim, Minsoo Rhu, and Jung Ho Ahn. 2022. BTS: An Accelerator for Bootstrappable Fully Homomorphic Encryption. In ISCA . doi:10.1145/3470496.3527415 [67] Liang Kong, Shengyu Fan, Xianglong Deng, Lei Chen, Guang Fan, Guiming Shi, Yilan Zhu, Geng Yang, Shoumeng Yan, and Mingzhe Zhang. 2025. HAWK: Fully Homomorphic Encryption Accelerator with Fixed-Word Key Decomposition Switching. In MICRO . doi:10.1145/3725843.3756123 [68] Alex Krizhevsky and Geoffrey Hinton. 2009. Learning Multiple Layers of Features from Tiny Images . Technical Report. University of Toronto. https://www.cs. toronto.edu/~kriz/learning-features-2009-TR.pdf [69] Ya Le and Xuan Yang. 2015. Tiny ImageNet Visual Recognition Challenge. https://cs231n.stanford.edu/reports/2015/pdfs/yle_project.pdf [70] Eunsang Lee, Joon-Woo Lee, Junghyun Lee, Young-Sik Kim, Yongjune Kim, Jong-Seon No, and Woosuk Choi. 2022. Low-Complexity Deep Convolutional Neural Networks on Fully Homomorphic Encryption Using Multiplexed Par-allel Convolutions. In International Conference on Machine Learning . https: //proceedings.mlr.press/v162/lee22e.html [71] Sheng Li, Jung Ho Ahn, Richard D. Strong, Jay B. Brockman, Dean M. Tullsen, and Norman P. Jouppi. 2009. McPAT: An Integrated Power, Area, and Timing Modeling Framework for Multicore and Manycore Architectures. In MICRO .doi:10.1145/1669112.1669172 [72] Yan Liu, Jianxin Lai, Long Li, Tianxiang Sui, Linjie Xiao, Peng Yuan, Xiaojing Zhang, Qing Zhu, Wenguang Chen, and Jingling Xue. 2025. ReSBM: Region-based Scale and Minimal-Level Bootstrapping Management for FHE via Min-Cut. In ASPLOS . doi:10.1145/3669940.3707276 [73] Vadim Lyubashevsky, Chris Peikert, and Oded Regev. 2010. On Ideal Lattices and Learning with Errors over Rings. In Annual International Conference on the Theory and Applications of Cryptographic Techniques (Eurocrypt) . doi:10.1007/978-3-642-13190-5_1 [74] Shihe Ma, Tairong Huang, Anyu Wang, and Xiaoyun Wang. 2025. Practical Dense-Key Bootstrapping with Subring Secret Encapsulation. In International Conference on the Theory and Application of Cryptology and Information Security (Asiacrypt) . doi:10.1007/978-981-95-5122-4_4 [75] Christian Vincent Mouchet, Jean-Philippe Bossuat, Juan Ramón Troncoso-Pastoriza, and Jean-Pierre Hubaux. 2020. Lattigo: A Multiparty Homomorphic Encryption Library in Go. In Workshop on Encrypted Computing and Applied Homomorphic Cryptography . doi:10.25835/0072999 [76] S. Narasimha, B. Jagannathan, A. Ogino, D. Jaeger, B. Greene, C. Sheraw, K. Zhao, B. Haran, U. Kwon, A. K. M. Mahalingam, B. Kannan, B. Morganfeld, J. Dechene, C. Radens, A. Tessier, A. Hassan, H. Narisetty, I. Ahsan, M. Aminpur, C. An, M. Aquilino, A. Arya, R. Augur, N. Baliga, R. Bhelkar, G. Biery, A. Blauberg, N. Borjemscaia, A. Bryant, L. Cao, V. Chauhan, M. Chen, L. Cheng, J. Choo, C. Christiansen, T. Chu, B. Cohen, R. Coleman, D. Conklin, S. Crown, A. da Silva, D. Dechene, G. Derderian, S. Deshpande, G. Dilliway, K. Donegan, M. Eller, Y. Fan, Q. Fang, A. Gassaria, R. Gauthier, S. Ghosh, G. Gifford, T. Gordon, M. Gribelyuk, G. Han, J.H. Han, K. Han, M. Hasan, J. Higman, J. Holt, L. Hu, L. Huang, C. Huang, T. Hung, Y. Jin, J. Johnson, S. Johnson, V. Joshi, M. Joshi, P. Justison, S. Kalaga, T. Kim, W. Kim, R. Krishnan, B. Krishnan, K. Anil, M. Kumar, J. Lee, R. Lee, J. Lemon, S.L. Liew, P. Lindo, M. Lingalugari, M. Lipinski, P. Liu, J. Liu, S. Lucarini, W. Ma, E. Maciejewski, S. Madisetti, A. Malinowski, J. Mehta, C. Meng, S. Mitra, C. Montgomery, H. Nayfeh, T. Nigam, G. Northrop, K. Onishi, C. Ordonio, M. Ozbek, R. Pal, S. Parihar, O. Patterson, E. Ramanathan, I. Ramirez, R. Ranjan, J. Sarad, V. Sardesai, S. Saudari, C. Schiller, B. Senapati, C. Serrau, N. Shah, T. Shen, H. Sheng, J. Shepard, Y. Shi, M.C. Silvestre, D. Singh, Z. Song, J. Sporre, P. Srinivasan, Z. Sun, A. Sutton, R. Sweeney, K. Tabakman, M. Tan, X. Wang, E. Woodard, G. Xu, D. Xu, T. Xuan, Y. Yan, J. Yang, K.B. Yeap, M. Yu, A. Zainuddin, J. Zeng, K. Zhang, M. Zhao, Y. Zhong, R. Carter, C.H. Lin, S. Grunow, C. Child, M. Lagus, R. Fox, E. Kaste, G. Gomba, S. Samavedam, P. Agnello, and D. K. Sohn. 2017. A 7nm CMOS Technology Platform for Mobile and High Performance Compute Application. In IEEE International Electron Devices Meeting . doi:10.1109/IEDM.2017.8268476 [77] Qingyun Niu, Lutan Zhao, Ming Cai, Kai Li, Dan Meng, and Rui Hou. 2026. UniFHE: Faster Accelerator for FHE with Diverse Algebraic Structure and Bal-anced Memory System. In HPCA . doi:10.1109/HPCA68181.2026.11408438 [78] Mike O’Connor, Niladrish Chatterjee, Donghyuk Lee, John Wilson, Aditya Agrawal, Stephen W Keckler, and William J Dally. 2017. Fine-Grained DRAM: Energy-Efficient DRAM for Extreme Bandwidth Systems. In MICRO . doi:10.1145/ 3123939.3124545 [79] Jaiyoung Park, Sejin Park, Jai Hyun Park, Jung Ho Ahn, Jung Hee Cheon, Guil-laume Hanrot, Jung Woo Kim, Minje Park, and Damien Stehlé. 2026. Scaling up Privacy-Preserving ML: A CKKS Implementation of Llama-2-7B. arXiv preprint 
+
+(2026). doi:10.48550/arXiv.2601.18511 [80] Yongmo Park, Aporva Amarnath, Subhankar Pal, Karthik Swaminathan, Alper Buyuktosunoglu, Hayim Shaul, Ehud Aharoni, Nir Drucker, Wei D. Lu, Omri Soceanu, and Pradip Bose. 2025. FHENDI: A Near-DRAM Accelerator for Compiler-Generated Fully Homomorphic Encryption Applications. In HPCA .doi:10.1109/HPCA61900.2025.00087 [81] Michael Pellauer, Yakun Sophia Shao, Jason Clemons, Neal Crago, Kartik Hegde, Rangharajan Venkatesan, Stephen W. Keckler, Christopher W. Fletcher, and Joel Emer. 2019. Buffets: An Efficient and Composable Storage Idiom for Explicit Decoupled Data Orchestration. In ASPLOS . doi:10.1145/3297858.3304025 [82] M. Sadegh Riazi, Kim Laine, Blake Pelton, and Wei Dai. 2020. HEAX: An Architec-ture for Computing on Encrypted Data. In ASPLOS . doi:10.1145/3373376.3378523 [83] Sujoy Sinha Roy, Furkan Turan, Kimmo Järvinen, Frederik Vercauteren, and Ingrid Verbauwhede. 2019. FPGA-Based High-Performance Parallel Architecture for Homomorphic Computing on Encrypted Data. In HPCA . doi:10.1109/HPCA. 2019.00052 [84] Nikola Samardzic, Axel Feldmann, Aleksandar Krastev, Srinivas Devadas, Ronald Dreslinski, Christopher Peikert, and Daniel Sanchez. 2021. F1: A Fast and Programmable Accelerator for Fully Homomorphic Encryption. In MICRO .doi:10.1145/3466752.3480070 [85] Nikola Samardzic, Axel Feldmann, Aleksandar Krastev, Nathan Manohar, Nicholas Genise, Srinivas Devadas, Karim Eldefrawy, Chris Peikert, and Daniel Sanchez. 2022. CraterLake: A Hardware Accelerator for Efficient Unbounded Computation on Encrypted Data. In ISCA . doi:10.1145/3470496.3527393 [86] Nikola Samardzic and Daniel Sanchez. 2024. BitPacker: Enabling High Arithmetic Efficiency in Fully Homomorphic Encryption Accelerators. In ASPLOS . doi:10. 1145/3620665.3640397 [87] Alireza Shafaei, Yanzhi Wang, Xue Lin, and Massoud Pedram. 2014. FinCACTI: Architectural Analysis and Modeling of Caches with Deeply-Scaled FinFET Devices. In IEEE Computer Society Annual Symposium on VLSI . doi:10.1109/ ISVLSI.2014.94 [88] Guiming Shi, Yuchen Wei, Shengyu Fan, Xianglong Deng, Liang Kong, Xianbin Li, Jingwei Cai, Shuwen Deng, Mingzhe Zhang, and Kaisheng Ma. 2025. WPC: Weight Plaintext Compression for CNN Inference based on RNS-CKKS. In ACM Conference on Computer and Communications Security . doi:10.1145/3719027. 3765022 [89] Karen Simonyan and Andrew Zisserman. 2015. Very Deep Convolutional Net-works for Large-Scale Image Recognition. In International Conference on Learning Representations . https://doi.org/10.48550/arXiv.1409.1556 [90] Taejoong Song, Jonghoon Jung, Woojin Rim, Hoonki Kim, Yongho Kim, Chang-nam Park, Jeongho Do, Sunghyun Park, Sungwee Cho, Hyuntaek Jung, Bongjae Kwon, Hyun-Su Choi, Jaeseung Choi, and Jong Shik Yoon. 2018. A 7nm Fin-FET SRAM Using EUV Lithography with Dual Write-Driver-Assist Circuitry for Low-Voltage Applications. In IEEE International Solid-State Circuits Conference .doi:10.1109/ISSCC.2018.8310252 [91] Jianming Tong, Tianhao Huang, Jingtian Dang, Leo de Castro, Anirudh Itagi, Anupam Golder, Asra Ali, Jeremy Kun, Jevin Jiang, Arvind, G. Edward Suh, and Tushar Krishna. 2026. Leveraging ASIC AI Chips for Homomorphic Encryption. In HPCA . doi:10.1109/HPCA68181.2026.11408507 [92] Shien-Yang Wu, C.Y. Lin, M.C. Chiang, J.J. Liaw, J.Y. Cheng, S.H. Yang, C.H. Tsai, P.N. Chen, T. Miyashita, C.H. Chang, V.S. Chang, K.H. Pan, J.H. Chen, Y.S. Mor, K.T. Lai, C.S. Liang, H.F. Chen, S.Y. Chang, C.J. Lin, C.H. Hsieh, R.F. Tsui, C.H. Yao, C.C. Chen, R. Chen, C.H. Lee, H.J. Lin, C.W. Chang, K.W. Chen, M.H. Tsai, K.S. Chen, Y. Ku, and S.M. Jang. 2016. A 7nm CMOS Platform Technology Featuring 4th Generation FinFET Transistors with a 0.027um2 High Density 6-T SRAM cell for Mobile SoC Applications. In IEEE International Electron Devices Meeting .doi:10.1109/IEDM.2016.7838333 [93] Yinghao Yang, Xicheng Xu, Haibin Zhang, Jie Song, Xin Tang, Hang Lu, and Xiaowei Li. 2025. Hydra: Scale-out FHE Accelerator Architecture for Secure Deep Learning on FPGA. In HPCA . doi:10.1109/HPCA61900.2025.00090 13 Jongmin Kim, Hyesung Ji, Wonseok Choi, Hyunah Yu, and Jung Ho Ahn       
+
+> [94] Yinghao Yang, Huaizhi Zhang, Shengyu Fan, Hang Lu, Mingzhe Zhang, and Xiaowei Li. 2023. Poseidon: Practical Homomorphic Encryption Accelerator. In
+> HPCA . doi:10.1109/HPCA56546.2023.10070984 [95] Minxuan Zhou, Yujin Nam, Xuan Wang, Youhak Lee, Chris Wilkerson, Raghavan Kumar, Sachin Taneja, Sanu Mathew, Rosario Cammarota, and Tajana Rosing. 2024. UFC: A Unified Accelerator for Fully Homomorphic Encryption. In MICRO .doi:10.1109/MICRO61859.2024.00034 [96] Itamar Zimerman, Moran Baruch, Nir Drucker, Gilad Ezov, Omri Soceanu, and Lior Wolf. 2024. Converting Transformers to Polynomial Form for Secure Infer-ence Over Homomorphic Encryption. In International Conference on Machine Learning .https://proceedings.mlr.press/v235/zimerman24a.html
+
+## A Symbols 
+
+Table 6 summarizes the notations and symbols used in this paper. We use uppercase (e.g., 𝑁 ) or Greek letters (e.g., 𝛽 ) for constant numbers, except for iterators (e.g., 𝑖 ). Polynomials are denoted in lowercase, such as 𝑎 or 𝑎 (X) with the variable X specified. Vectors (e.g., u) and matrices (e.g., M) are denoted in boldface. 
+
+Table 6: Notations and symbols. 
+
+Symb. Explanation 
+
+R𝑄 Polynomial ring Z𝑄 [X]/( 𝑋 𝑁 + 1).
+
+𝑁 Degree of R𝑄 (typically, 216 ). 
+
+𝑄 Modulus of R𝑄 .
+
+Q𝑖 𝑖 -th prime sub-modulus of 𝑄 .
+
+𝑃 Additional modulus for evk s. 
+
+P𝑖 𝑖 -th prime sub-modulus of 𝑃 .
+
+𝐿 eff Effective level: the level after Boot .
+
+𝑎 Polynomial in R𝑄 .
+
+𝑎 (X) Polynomial 𝑎 with its variable X specified. 
+
+⟨u⟩ Plaintext encoding a vector u ∈ C𝑁 /2. ⟨u⟩ ∈ R 𝑄 .
+
+[⟨ u⟩] Ciphertext encrypting ⟨u⟩. [⟨ u⟩] ∈ R 2 
+
+> 𝑄
+
+.
+
+evk Evaluation key. evk ∈ R 2×𝛽 𝑃𝑄 .
+
+𝛽 evk decomposition number ( dnum in [41]). 
+
+Δ Scale of a ciphertext, affecting precision and 𝐿 eff .
+
+𝐷 tr CtS/StC matrix decomposition number. 
+
+## B Proof of Theorem 1 
+
+First, we formally define CKKS encoding and NTT. Then, we prove Theorem 1. 
+
+Definition 1. CKKS encoding [19 ]: Given a complex vector 
+
+u ∈ C𝑁 /2, its CKKS encoding is a plaintext polynomial 𝑢 = ⟨u⟩ ∈ R 𝑄 
+
+obtained by polynomial interpolation such that 
+
+∀ 0 ≤ 𝑗 < 𝑁 
+
+2 , 𝑢 (𝜁 5𝑗 
+
+) = u[ 𝑗 ],
+
+where 𝜁 = 𝑒 𝜋𝑖 /𝑁 is a primitive 2𝑁 -th root of unity in C.
+
+Definition 2. Number-theoretic transform (NTT) : Let 𝑢 Q𝑖 ∈RQ𝑖 denote a limb of a polynomial 𝑢 ∈ R 𝑄 . The number-theoretic transform (NTT) of 𝑢 Q𝑖 is the vector tQ𝑖 = NTT (𝑢 Q𝑖 ) ∈ Z𝑁  
+
+> Q𝑖
+
+defined by 
+
+∀ 0 ≤ 𝑗 < 𝑁 , tQ𝑖 [ 𝑗 ] = 𝑢 Q𝑖 (𝜔 2𝑗 +1),
+
+where 𝜔 is a primitive 2𝑁 -th root of unity modulo Q𝑖 .
+
+Theorem (1). Suppose u ∈ C𝑁 /2 satisfies u[ 𝑗 ] = u[ 𝑗 + 𝑆 ] for all 
+
+0 ≤ 𝑗 < 𝑁  
+
+> 2
+
+− 𝑆 , where 𝑆 | 𝑁  
+
+> 2
+
+. Let 𝑢 = ⟨u⟩ ∈ R 𝑄 be its CKKS encoding, and let tQ𝑖 = NTT (𝑢 Q𝑖 ) ∈ Z𝑁  
+
+> Q𝑖
+
+be the NTT of each limb. Then for all 
+
+0 ≤ 𝑗 < 𝑁 − 2𝑆 , tQ𝑖 [ 𝑗 ] = tQ𝑖 [ 𝑗 + 2𝑆 ].
+
+Proof. The CKKS encoding 𝑢 = ⟨u⟩ ∈ R 𝑄 satisfies 
+
+u[ 𝑗 ] = 𝑢 (𝜁 5𝑗 
+
+), 0 ≤ 𝑗 < 𝑁 /2.
+
+By the repetition hypothesis, u[ 𝑗 ] = u[ 𝑗 + 𝑆 ] for all 0 ≤ 𝑗 < 𝑁  
+
+> 2
+
+− 𝑆 ,so 
+
+𝑢 (𝜁 5𝑗 
+
+) = 𝑢 (𝜁 5𝑗 +𝑆 
+
+).
+
+Thus, 𝑢 satisfies the functional equation 𝑢 (𝜁 5𝑗 
+
+) = 𝑢 (𝜁 5𝑗 +𝑆 
+
+) at all evaluation points. As 𝑆 | 𝑁  
+
+> 2
+
+, there exists an integer 𝐾 such that 5𝐾𝑆 ≡ 4𝑆 + 1
+
+(mod 2𝑁 ). To see this, note that the powers of 5 modulo 2𝑁 gener-ate a subgroup of (Z/2𝑁 Z)× containing the desired residue (this follows from the properties of the cyclotomic order and the choice of 5 as a generator in CKKS [19]). Iterating the repetition 𝐾 times gives 
+
+𝑢 (𝜁 5𝑗 
+
+) = 𝑢 (𝜁 5𝑗 +𝑆 
+
+) = 𝑢 (𝜁 5𝑗 +2𝑆 
+
+) = · · · = 𝑢 (𝜁 5𝑗 +𝐾𝑆 
+
+).
+
+Substituting 5𝐾𝑆 ≡ 4𝑆 + 1 (mod 2 𝑁 ), we obtain 
+
+𝑢 (𝜁 5𝑗 
+
+) = 𝑢 (𝜁 5𝑗 ·5𝐾𝑆 
+
+) = 𝑢 (𝜁 5𝑗 · ( 4𝑆 +1) ) = 𝑢 (( 𝜁 5𝑗 
+
+)4𝑆 +1).
+
+As this holds for all evaluation points 5𝑗 , the polynomial identity 
+
+𝑢 (X) = 𝑢 (X 4𝑆 +1) holds in R𝑄 .Now consider tQ𝑖 = NTT (𝑢 Q𝑖 ) ∈ Z𝑁  
+
+> Q𝑖
+
+satisfying 
+
+tQ𝑖 [ 𝑗 ] = 𝑢 Q𝑖 (𝜔 2𝑗 +1), 0 ≤ 𝑗 < 𝑁 . 
+
+For 0 ≤ 𝑗 < 𝑁 − 2𝑆 , compute 
+
+tQ𝑖 [ 𝑗 + 2𝑆 ] = 𝑢 Q𝑖 (𝜔 2( 𝑗 +2𝑆 )+ 1) = 𝑢 Q𝑖 (𝜔 2𝑗 +1+4𝑆 ).
+
+By the polynomial identity 𝑢 Q𝑖 (X) = 𝑢 Q𝑖 (X 4𝑆 +1), which holds limb-wise as RNS is component-wise, 
+
+𝑢 Q𝑖 (𝜔 2𝑗 +1+4𝑆 ) = 𝑢 Q𝑖 (𝜔 2𝑗 +1) = tQ𝑖 [ 𝑗 ].
+
+Thus, tQ𝑖 [ 𝑗 + 2𝑆 ] = tQ𝑖 [ 𝑗 ] for all 0 ≤ 𝑗 < 𝑁 − 2𝑆 . □
+
+## C Correctness of Intermediate ModRaise 
+
+We show that intermediate ModRaise is correct when the following condition (Eq. 4) holds: 
+
+𝑄 intmd ≥ #ptxt · 𝐵 ptxt · 𝑄 bot · 𝑁 . 
+
+With intermediate ModRaise, we first raise the ciphertext modu-lus to 𝑄 intmd , perform the first CtS level, and then raise to 𝑄 top . For an input ciphertext [⟨ u⟩] = (𝑎, 𝑏 ) ∈ R 2 
+
+> 𝑄 bot
+
+, modulus raising to 𝑄 intmd 
+
+involves no arithmetic; we simply reinterpret 𝑎 and 𝑏 in R𝑄 intmd .The first CtS level then produces 
+
+[⟨ u′⟩] =
+
+> #ptxt −1
+
+∑︁ 
+
+> 𝑖 =0
+
+𝑝 𝑖 · 𝑎 (X 5𝑅 𝑖 ),
+
+> #ptxt −1
+
+∑︁ 
+
+> 𝑖 =0
+
+𝑝 𝑖 · 𝑏 (X 5𝑅 𝑖 )
+
+!
+
+∈ R 2 
+
+> 𝑄 intmd
+
+,
+
+where 𝑝 𝑖 are CtS plaintexts and 𝑅 𝑖 are rotation amounts. The use of a subring secret allows skipping KS for the first CtS level [ 74 ]. When using a subring of degree 𝑁 ′ < 𝑁 , KS can be skipped if #ptxt ≤ 𝑁 𝑁 ′ .To ensure correctness, the above computation must yield identi-cal results whether performed modulo 𝑄 intmd or 𝑄 top . This holds if no coefficient overflow occurs modulo 𝑄 intmd .
+
+> 14 WHET: Welding Homomorphic Encryption to Accelerator Architectures
+
+Coefficient growth is bounded as follows. As 𝑎, 𝑏 ∈ R 𝑄 bot , their coefficients are bounded by 𝑄 bot  
+
+> 2
+
+. Rotations are coefficient permuta-tions, so the same bound applies to 𝑎 (X 5𝑅 𝑖 ) and 𝑏 (X 5𝑅 𝑖 ). Let 𝐵 ptxt 
+
+bound the absolute value of CtS plaintext coefficients. A polyno-mial multiplication accumulates at most 𝑁 coefficient products per output coefficient. Therefore, each coefficient of Í𝑖 𝑝 𝑖 · 𝑎 (X 5𝑅 𝑖 ) or 
+
+Í𝑖 𝑝 𝑖 · 𝑏 (X 5𝑅 𝑖 ) is bounded by #ptxt · 𝐵 ptxt · 𝑄 bot 
+
+2 · 𝑁 . 
+
+Thus, if 𝑄 intmd satisfies the stated condition, all the coefficients remain strictly within the modulus range, and the computation over 
+
+𝑄 intmd matches that over 𝑄 top . For the actual implementation, we set 
+
+𝑄 intmd slightly higher than the bound for minor extra computations, which could be required depending on the parameters.
