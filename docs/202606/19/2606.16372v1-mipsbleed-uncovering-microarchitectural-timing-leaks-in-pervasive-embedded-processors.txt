@@ -1,0 +1,369 @@
+Title: MIPSBLEED: Uncovering Microarchitectural Timing Leaks in Pervasive Embedded Processors
+
+URL Source: https://arxiv.org/pdf/2606.16372v1
+
+Published Time: Tue, 16 Jun 2026 02:22:54 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# MIPSBLEED: Uncovering Microarchitectural Timing Leaks in Pervasive Embedded Processors 
+
+Ahmed Najeeb and Billy Bob Brumley 
+
+Rochester Institute of Technology, Rochester, New York, USA 
+
+{an4606,bbbics}@rit.edu 
+
+Abstract. Despite their age, MIPS processors remain deeply embed-ded in routers, industrial controllers, and IoT systems, yet their secu-rity against modern side-channel attacks has received little attention. This paper exposes how Simultaneous Multithreading (SMT), a feature increasingly used to boost performance in these environments, creates powerful cross-core timing channels on MIPS-based platforms. We in-troduce MIPSBLEED, a systematic analysis and exploitation framework that uncovers leakage in three shared microarchitectural components: the L1 data cache, L1 instruction cache, and the execution engine. Through carefully crafted assembly-level probes and quantitative leakage assess-ment, we demonstrate practical, high-resolution timing attacks that op-erate without requiring privileged access. Our evaluation reveals signif-icant information leakage across all three channels and culminates in a single trace key recovery attack on a real elliptic curve cryptographic toolkit. These results position MIPS as an overlooked yet critical target in the study of microarchitectural security and underscore the urgent need for lightweight isolation mechanisms in resource-constrained, SMT-enabled embedded systems. 
+
+Keywords: embedded security · applied cryptography · side-channel analysis · timing attacks · cache-timing attacks · microarchitectural at-tacks · MIPS 
+
+## 1 Introduction 
+
+Side-channel attacks have emerged as a powerful class of implementation ex-ploits, capable of extracting sensitive information by observing subtle variations in timing [26], power [27], or various shared resources [7]. While much of the recent focus has been on x86 [25, 30, 29, 39, 24, 36], and ARM [42, 43, 20, 6, 15] platforms, the MIPS architecture remains a critical and underexamined target. Despite its age, MIPS is far from obsolete: it continues to power a vast array of embedded systems, networking hardware, and industrial controllers, with an estimated 8.5 billion chips shipped as of 2024 [34]. Its longevity, simplicity, and licensing model have made it a mainstay in system-on-chip (SoC) designs for over two decades, and its architectural legacy directly influences the design of  
+
+> arXiv:2606.16372v1 [cs.CR] 15 Jun 2026 2Ahmed Najeeb and Billy Bob Brumley
+
+modern and future open ISAs such as RISC-V [22]. As such, analyzing microar-chitectural side-channel leakage on MIPS is not only relevant but a critical step toward understanding the broader landscape of hardware-level vulnerabilities. This work presents a systematic exploration of timing-based side-channel vulnerabilities in SMT-enabled MIPS processors. We focus on three shared mi-croarchitectural components: the L1 data cache, the L1 instruction cache, and the execution engine. We demonstrate that all three can be exploited to leak in-formation across logical cores. These vulnerabilities arise from the fundamental design of SMT [37], which enables multiple hardware threads to share execution resources without strong isolation guarantees. While SMT is often a desirable feature to improve throughput and resource utilization [38], it also creates new attack surfaces [1, 19, 5] that can be particularly applicable in embedded envi-ronments where isolation boundaries are weaker due to the absence of trusted execution environments (TEE). Our methodology builds on established low-level probing techniques, but adapts them specifically to the MIPS architecture. We develop a suite of assembly-level tools that induce contention on shared resources and measure the resulting latency variations. These probes are designed to be lightweight and conceptu-ally portable, enabling fine-grained characterization of leakage channels without requiring privileged access or speculative execution (out of scope in this work). While similar approaches have been used to study x86 [35, 31, 19, 23, 16] and ARM [28], our work systematically applies them to SMT-enabled MIPS proces-sors, where such leakage has not been characterized. This enables us to expose and quantify side-channel vectors in this platform. A key contribution of this work is the integration of quantitative leakage assessment into the attack development process. While many side-channel studies stop at demonstrating timing variation, we go further by evaluating whether the observed signals are sufficient to support practical attacks. This step is critical: without a quantitative measure of leakage, it is difficult to distinguish between incidental noise and exploitable information flow. Our analysis confirms that the timing variations induced by our probes are not only measurable, but also carry sufficient information to enable fine-grained inference of victim behavior. To illustrate the practical implications of our findings, we apply our tech-niques to real-world cryptographic tooling, recovering secret keys from a widely deployed elliptic curve toolkit. We mount our attack using only a single timing trace. Yet this is just one instantiation of our techniques, which are applicable to a much wider range of scenarios. 
+
+Contributions. Our contributions are as follows: 
+
+– We present the first comprehensive side-channel analysis of SMT-enabled MIPS processors, identifying exploitable leakage in the data cache, instruc-tion cache, and execution engine. 
+
+– We integrate quantitative leakage assessment into the attack workflow, demon-strating that the observed signals are sufficient to support practical behav-ioral inference. MIPSBLEED: Uncovering Microarchitectural Timing Leaks 3
+
+– While general in nature, we demonstrate that our techniques apply to real-world applications by carrying out an end-to-end key-recovery attack on an unmodified version of a packaged open-source cryptographic application. 
+
+Outline. Section 2 provides background on the MIPS microarchitecture, its SMT implementation, and prior work on timing-based microarchitectural side channels, particularly in the SMT setting. Section 3 defines our threat model and attacker capabilities. In Section 4 and Section 5, we present our methodology for probing and measuring leakage originating from the L1 data cache, L1 instruction cache, and execution engine, including our leakage assessment framework, and we also present empirical results demonstrating the viability of each channel. Section 6 discusses the application of our techniques to real-world cryptographic software, illustrating the relevance of our findings. We conclude in Section 7 with a discussion of system security lessons, potential mitigations, and directions for future work. 
+
+## 2 Background 
+
+2.1 Microarchitecture 
+
+This section examines major microarchitectural components of MIPS proces-sors and their behavior under MIPS’s implementation of Simultaneous Multi-threading (SMT). SMT leverages hardware threads to achieve parallelism with-out duplicating all physical microarchitectural components typically present in a dedicated physical processor. As a result, users experience the abstraction of two processors, referred to as logical cores, within a single physical processor. These logical cores share most of the underlying microarchitectural components, enabling efficient resource utilization while maintaining parallel execution capa-bilities. Figure 1 shows a high-level overview of the layout of a MIPS32 processor. The figure depicts two physical cores, each containing two logical cores. In this setting, the OS sees a processor with four cores. Furthermore, as Figure 1 shows, L1 instruction cache and data cache are of equal size and are shared between the two logical cores alongside the execution engine. The shared configuration is significant to our work as the shared nature of these components result in side-channel attacks presented herein. Caches help reduce the time it takes for the CPU to access data stored in memory. Instead of fetching data from the slower main memory (RAM) every time, frequently used data is stored in the cache, which is a smaller, faster memory located closer to the processor. This minimizes latency, allowing the CPU to work more efficiently. However, caches are limited in size due to cost and physical space constraints. Making a larger cache would increase latency and cost, reducing the performance benefits, therefore as a compromise between the two factors multilevel caches are used. The L1 cache in our instance of MIPS32 is 32KB, 4-way set associative with a line size of 32 bytes, this gives us 1024 lines of L1 cache containing 256 sets. In MIPS32 the cache uses least recently used 4 Ahmed Najeeb and Billy Bob Brumley Logical Core Logical Core  
+
+> L1 D Cache
+> L1 I Cache
+> Execution Engine
+> Physical Core 0
+> Logical Core Logical Core
+> L1 D Cache
+> L1 I Cache
+> Execution Engine
+> Physical Core 1
+> L2 Cache
+
+Fig. 1. High-level layout of the MIPS32 1004K processor. Each physical core contains two logical cores sharing L1 data cache, L1 instruction cache, and execution engine. MDU    
+
+> ALU
+> FPU
+> AG RF IT IS IF MS ER WB
+> Thread 1
+> Thread 2
+
+Fig. 2. MIPS32 1004K pipeline stages. Instructions from both logical cores are inter-leaved through the shared 8–9 stage execution engine. MIPSBLEED: Uncovering Microarchitectural Timing Leaks 5
+
+(LRU) cache replacement policy to deal with cache conflicts [33]. Since both the logical cores share the L1 cache and they both can write to it, this can lead to one process evicting the cache lines of the other process running on the same physical core. The execution engine is responsible for execution of instructions and is closely related to the concept of pipelining in computer architecture. In our case the MIPS pipeline consists of 8–9 stages as shown in Figure 2: (1) instruction fetch (IF), (2) instruction fetch second (IS), (3) instruction fetch third (IT), (4) regis-ter file access (RF), (5) Address Generation (AG), (6) Execute/Memory Access (EX), (7) Memory Access Second (MS), (8) Exception Resolution (ER), and (9) write back (WB) [32]. The main goal of the pipeline is to increase instruc-tion throughput by executing multiple instructions simultaneously. Each logical core has its own register file, and the pipeline fetches instructions from memory according to the program counter on each of them. For the sake of processing performance fairness, this fetching is interleaved between the logical cores, this means that instructions from both threads have to share the execution engine. The execution engine of the MIPS processor contains two execution units: the ALU is responsible for all integer arithmetic and logical operations, and the MDU (Multiply/Divide Unit) is responsible for multiplication and division operations. In some variants like the 1004KF, the execution engine includes a floating-point unit (FPU), but our variant does not have this feature [32]. 
+
+Comparison with ARM and x86. As illustrated in Table 1, the MIPS32 architecture adopts a distinctive strategy for supporting high-fidelity timing and cache management compared to ARM and x86 platforms. To measure the clock cycles of each operation we use the RDHWR (Read Hardware Register) in-struction. The instruction moves the contents of a hardware register to a general purpose register. Specifically, in this context, the High-Resolution Cycle Counter (CC), located within coprocessor 0, is accessed to obtain precise cycle counts. Unlike the ARM architecture, which necessitates privileged mode to access the CC, or the x86 architecture, where the CC is accessible from user space via a dedicated built-in RDTSC instruction, MIPS32 takes a different approach. MIPS allows access to CC from user space by default, however this behavior can be restricted by a privileged user limiting user-space access to the CC. Furthermore there is no instruction in MIPS to flush the cache similar to x86 nullifying attacks such as Flush+Reload [40]. Another aspect of MIPS which is similar to x86 is the cache replacement policy, MIPS32 uses a Least Recently Used (LRU) cache re-placement policy similar to x86, while ARM uses a pseudo-random replacement policy [28]. 
+
+2.2 SMT: Timing Attacks 
+
+Simultaneous Multithreading (SMT) technology, introduced to enhance the ef-ficiency of microprocessors, has also exposed systems to timing attacks, a key part of side-channel [37, 2, 17] analysis. By allowing multiple threads to share hardware resources like caches and execution units, SMT can lead to resource 6 Ahmed Najeeb and Billy Bob Brumley              
+
+> Table 1. Comparison of user-space timing, cache flush, and cache replacement features across x86, MIPS32, and ARM architectures.
+> Feature x86 MIPS ARM
+> User-Space High-Fidelity Timing rdtsc rdhwr N/A Cache Flush clflush N/A N/A Cache Replacement Policy LRU LRU Pseudo Random
+
+contention, causing measurable timing variations. These variations can uninten-tionally reveal sensitive information, serving as both covert and side channels for attackers. 
+
+Data Cache. In his groundbreaking work, Percival [37] presented a novel cache-timing attack against RSA’s Sliding Window Exponentiation (SWE) imple-mented in OpenSSL 0.9.7c. He demonstrated that since two threads share the same L1 data cache and Intel processors were using LRU cache policy, one thread can evict cache lines of the other thread. In the attack instance a spy would occupy the entire cache and time each cache set access, a delay would indicate eviction, leaking information about the colocated thread. The behav-ior leads to a side channel that—when exploited in the context of OpenSSL SWE implementation—can lead to correct identification of precomputed multi-pliers resulting in RSA private key recovery. As a countermeasure to this attack OpenSSL included a “constant time” implementation of the SWE algorithm. At the same time, Osvik et al. [35] demonstrated the use of their Prime+Probe technique to carry out an attack on an AES implementation in OpenSSL. In Prime+Probe the attacker first primes the cache by filling it with their own data, then they wait for the victim to execute and finally they probe the cache by accessing the same cache lines. The difference in access time indicates if the victim evicted the attacker’s data from the cache, in this case a delay indicates eviction. Using this technique, the authors were successfully able to recover the AES key from OpenSSL 0.9.8’s implementation. Building on the Prime+Probe primitive and work by Gullasch et al. [21], Yarom and Falkner [40] introduced Flush+Reload as a high-resolution cache side-channel attack specifically targeting the last-level (L3) cache, demonstrat-ing the evolution of cache timing attacks. Unlike Prime+Probe, which infers cache activity by priming sets and probing for evictions, Flush+Reload lever-ages shared memory pages such as those arising from shared libraries or mem-ory deduplication to monitor specific cache lines with much finer granularity. By flushing a targeted cache line using the clflush instruction and subsequently reloading it while measuring access time, the attacker can precisely determine whether the victim accessed the line in the interim. If the reload is fast, the line is present in the cache, implying victim access; otherwise, it must be fetched from main memory, indicating no access. Using this technique, the authors were able to recover private encryption keys from GnuPG 1.4.13’s RSA implementation. MIPSBLEED: Uncovering Microarchitectural Timing Leaks 7
+
+This attack is not possible on MIPS as it does not have the clflush instruction or similar functionality accessible from user space. 
+
+Instruction Cache. Aciiçmez [3] in his pioneering work showcased the first use of the Instruction Cache (Icache) timing side-channel attack. The attack is based on the fact that a spy is able to stop the execution of the victim process just before the execution of the “spied-on” part of cipher code and fill up the Icache set with the dummy instructions. The spy then resumes the victim pro-cess and times the execution of the cipher code which evicts some of the dummy instructions. When the spy executes again it times the access to dummy instruc-tions and if there is a delay it can infer the evicted cache sets. By increasing the number of interruption to the victim process and adding dummy instructions for different sets, the spy can determine which sets the victim is using. Leveraging this information the authors determine that the attack on OpenSSL’s RSA SWE implementation is feasible. Building on [3], Acıiçmez et al. [1] demonstrate that timing side-channel attacks on Icache are not only feasible but also practical. The authors adapt the eviction strategy from Percival [37] to the Icache setting. The strategy is to pollute the Icache with the Spy’s instructions and time the latency of code execution on Intel’s Atom processor. Applying an existing methodology to pro-cess cache-timing data [11], the authors then pass the timing data into a Vector Quantization (VQ) model which classifies the data based on a vector codebook obtained during the profiling stage of the attack. The output of the VQ model is then fed into a hidden Markov Model (HMM) after which the Viterbi algo-rithm is used to predict the most likely state sequence. Finally, a lattice attack is carried out to recover the DSA key, demonstrating that the attack is able to leak critical state from OpenSSL 0.9.8l’s implementation. 
+
+Execution Engine. Besides the data and instruction cache, other shared mi-croarchitectural components such as execution engines are also vulnerable to timing attacks. Aldaya et al. [5] carry out their PortSmash attack on Intel Sky-lake and Kaby Lake chips. The Intel microarchitecture uses ports to schedule instructions for the execution engine. Essentially, ports are a channel to stacks of execution units in the same way that network ports can be channels to different daemons. The authors create a high-resolution timing side-channel due to port contention, enabled by SMT. They demonstrate the recovery of a P-384 elliptic curve private key from an OpenSSL 1.1.0h powered TLS server using a small number of repeated TLS handshake attempts. In a similar vein, Bhattacharyya et al. [10] exploit port contention to carry out a speculative code-reuse attack leaking sshd private keys in OpenSSL libcrypto library (version 1.1.1b). Another example of instruction-level timing leakage arises from the variable latency of division instructions. Bernstein et al. [8] utilize this fact to demon-strate that typically a division with a constant is optimized to multiplication but in some cases such as asking the compiler to optimize for code size, the opti-mization is disabled, creating a timing side-channel. In their KyberSlash attack, the authors are able to successfully leak information about the secret key and 8 Ahmed Najeeb and Billy Bob Brumley 
+
+ciphertext in the Kyber Post-Quantum Key Encapsulation Mechanism reference code. 
+
+2.3 Leakage Assessment 
+
+Several statistical techniques are commonly used in side-channel analysis (SCA) to evaluate information leakage, including Pearson’s correlation coefficient [14], Welch’s T-test, Test Vector Leakage Assessment (TVLA) [18], and Normalized Inter-Class Variance (NICV) [9]. These methods facilitate the detection of leak-age in collected traces for SCA. Pearson’s correlation coefficient quantifies the linear relationship between two random variables and is widely employed in evaluating information leakage [14]. It is particularly useful for identifying Points of Interest (POIs) within side-channel traces, as seen in template attacks [13]. Welch’s T-test is a statistical method used to assess if two sample sets orig-inate from populations with equivalent means. Goodwill et al. [18] introduced Test Vector Leakage Assessment (TVLA), which applies the T-test to evaluate information leakage by comparing trace sets generated using fixed versus random cryptographic keys and input data. Bhasin et al. [9] proposed NICV as a method for leakage assessment. It is based on the Analysis of Variance (ANOVA) F-test, a statistical approach used to determine whether multiple sample sets originate from populations with comparable variances. We use NICV as our metric to assess leakage. 
+
+## 3 Threat Model 
+
+At a high level, our threat model is similar to [1, 41, 19]. We assume an attacker capable of executing unprivileged code on the victim’s system, with SMT en-abled [10]. For all proposed attacks to be effective, the attacker and victim must be co-located on the same physical processor core [17], thereby sharing the L1 data cache, L1 instruction cache, and execution engine. Under this co-residency condition, the attacker can launch any of the three side-channel attacks de-scribed in this work, targeting scenarios where the victim is processing sensitive information such as cryptographic keys or passwords. All of our attacks leverage latency measurements to detect information leak-age. Specifically, the attacker executes a sequence of instructions designed to saturate a shared resource, such as the cache or execution engine, while continu-ously measuring execution time. Any activity from the victim process introduces contention, increasing the observed latency for the attacker. By analyzing these fluctuations, the attacker can infer which specific regions of memory or execution units the victim is utilizing, leading to sensitive information leakage. 
+
+## 4 Cache Side-Channel 
+
+The L1 cache geometry of the MIPS processor used in our setup is as follows: 32 byte cache lines, 32KB total size, 4-way set associative, and 1024 lines divided MIPSBLEED: Uncovering Microarchitectural Timing Leaks 9# set 0, x4 ways rdhwr v0,hwr_cc # set 1, x4 ways rdhwr v0,hwr_cc .. # set 127, x4 wa rdhwr v0,hwr_cc                                
+
+> lw t3,0x0000(t1) # t0 := latency lw t3,0x0020(t1) # t0 := latency lw t3,0x0FE0(t1) # t0 := latency
+> mul t1,t1,t3 subu t0,v0,t6 mul t1,t1,t3 subu t0,v0,t6 mul t1,t1,t3 subu t0,v0,t6
+> lw t3,0x2000(t1) move t6,v0 lw t3,0x2020(t1) move t6,v0 lw t3,0x2FE0(t1) move t6,v0
+> mul t1,t1,t3 # output to buf mul t1,t1,t3 # output to buf mul t1,t1,t3 # output to buf
+> lw t3,0x4000(t1) sw t0,0(a0) lw t3,0x4020(t1) sw t0,4(a0) lw t3,0x4FE0(t1) sw t0,508(a0)
+> mul t1,t1,t3 mul t1,t1,t3 mul t1,t1,t3
+> lw t3,0x6000(t1) lw t3,0x6020(t1) lw t3,0x6FE0(t1)
+> mul t1,t1,t3 mul t1,t1,t3 mul t1,t1,t3
+
+Fig. 3. L1 data cache probe implementation excerpt (MIPS assembly). Three iterations shown for cache sets 0, 1, and 127, each accessing all four ways with a dependency chain to prevent out-of-order execution. 
+
+into 256 associative sets. Each address is split into three parts; offset, index, and tag. The offset is 5 bits used to indicate one of the 32 bytes in each line. The index consists of 8 bits used to indicate one of the 256 sets, and the tag contains the remaining 19 bits to distinguish between different memory regions. 
+
+4.1 Data Cache Side-Channel 
+
+The attacker issues a large number of load accesses to the L1 data cache and measures the time required to carry out each access. During the attack, if the victim also accesses the data cache, the attacker’s cache access time will increase due to contention for the same cache lines [35]. This increase in latency reveals the cache lines accessed by the victim. We implemented our attack in assembly, and Figure 3 shows an excerpt. As discussed in Section 2.1, the MIPS processor in our setup has a 4-way set-associative cache comprising 256 sets with a line size of 32 bytes. Consequently, our spy executes 256 iterations, accessing four cache lines per iteration. Each 0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+120 
+
+> Cache set
+
+Time (samples) 
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+> Latency (clock cycles)
+
+Fig. 4. L1 data cache probe output with the victim accessing set 50. The y-axis denotes cache set index (128 sets monitored) and the x-axis denotes successive probe iterations. The horizontal dark band at set 50 confirms measurable contention. 10 Ahmed Najeeb and Billy Bob Brumley 0     
+
+> 20
+> 40
+> 60
+> 80
+> 100
+> Latency (clock cycles) 0/0
+> 0/1
+> 0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1
+> 6000 8000 10000 12000 14000
+> sqrt(NICV) Time (samples)
+> Fig. 5. Top: averaged L1 data cache traces across two classes (sustained contention vs. contention then idle). Vertical lines correspond to context switches. Bottom: cor-responding NICV values; high NICV confirms significant information leakage through the data cache channel.
+
+cache line within a set is offset by 8KB, leading to the selection of the base addresses shown. The set-0-aligned input buffer ( t1 ) is initialized with all ones, effectively causing the mul operation to function as a no-operation (NOP) instruction. This approach enforces a dependency chain in cache accesses, preventing out-of-order execution (inspired by [12]). Additionally, we use different registers to avoid register contention, ensuring that it does not affect our measurements. Finally, once per set iteration, we record the value of the cycle counter and compute the difference from the previous iteration. This difference corresponds to the measured access latency, which is then stored in an output array for analysis. Figure 3 illustrates three such iterations, for sets 0, 1, and 127. In the excerpt, 
+
+t1 is a 13-bit aligned array, and all values contain the integer 1 as a 4-byte integer. The cache set 0 column (left) is almost identical to the set 1 column (center), the only differences being an extra 32 bytes in each fixed load offset (lines are 32 bytes) to select the cache set, and the fixed store offset increase to account for the persisted latency measurements. Cache set 127 (and all other cache sets) follows this pattern. In the full code, we have control flow logic to gather successive measurements (i.e., loop) following the final cache set. MIPSBLEED: Uncovering Microarchitectural Timing Leaks 11 
+
+To validate the effectiveness of our probe code and confirm the presence of cache contention, we perform an experiment in which a victim process repeat-edly accesses a specific cache set (here, set 50) while the attacker concurrently executes the probe code to monitor access latencies. In this experiment, we only measure the first half of the data cache (i.e., 128 sets) to increase temporal reso-lution. Figure 4 illustrates the result of this experiment. The y-axis denotes the cache set index, and the x-axis represents time over successive probe iterations. As shown, a clear increase in access latency is consistently observed at cache set 50, evidenced by the horizontal streak of darker pixels centered on that set. This elevated latency pattern confirms that the victim’s accesses interfere with the attacker’s probe, validating the probe’s ability to detect contention at a fine granularity. This result demonstrates that our probing code can reliably identify cache sets targeted by a concurrent victim process, meaning data cache is an effective side-channel in MIPS. 
+
+4.2 Instruction Cache Side-Channel 
+
+The attacker issues a large number of instructions, flooding the L1 instruction cache and measures the time required to execute said instructions through the cache. During the attack, if the victim also accesses the instruction cache, the attacker’s cache access time will increase due to contention for the same cache lines [1]. This increase in latency reveals the cache lines accessed by the victim. Figure 6 shows an excerpt of our assembly implementation. It shows two iterations, one for cache set 1 and then follows with another for set 2. This logic repeats for each of the 256 cache sets (see Section 2.1), taking a timing measurement for each set. The code is structured in a similar way to [1]. First we align our code at a 13-bit boundary (here 8000 , and note t7 is initially set to the corresponding virtual address), making it easier to fill up the entire 4-way cache in contiguous 32-byte regions of code. We then access the instruction cache in a certain pattern that evicts each cache set. To illustrate, we step through the control flow in Figure 6. Assume the cache set 0 measurement completed, and the code now jumps to 8020 , i.e., cache set 1 and way 0. The code adds 8KB to the jump target and jumps through the register ( t7 ), arriving at a020 , i.e., cache set 1 and way 1. It then adds another 8KB and jumps to arrive at c020 , i.e., cache set 1 and way 2. It then adds # set 1 way 0 # set 1 way 1 # set 1 way 2 # set 1 way 3 # set 2 way 3                                                    
+
+> 8020: addiu t7,t7,0x2000 a020: addiu t7,t7,0x2000 c020: addiu t7,t7,0x2000 e020: rdhwr v0,hwr_cc e040: rdhwr v0,hwr_cc
+> 8024: jr t7 # a020 a024: jr t7 # c020 c024: jr t7 # e020 # t1 := latency # t1 := latency
+> 8028: nop a028: nop c028: nop e024: subu t1,v0,t6 e044: subu t1,v0,t6
+> ... ... ... e028: move t6,v0 e048: move t6,v0
+> # set 2 way 0 # set 2 way 1 # set 2 way 2 # output to buf # output to buf
+> 8040: addiu t7,t7,0x2000 a040: addiu t7,t7,0x2000 c040: addiu t7,t7,0x2000 e02c: sw t1,0(a0) e04c: sw t1,0(a0)
+> 8044: jr t7 # a040 a044: jr t7 # c040 c044: jr t7 # e040 e030: addiu a0,a0,4 e050: addiu a0,a0,4
+> 8048: nop a048: nop c048: nop e034: addiu t7,t7,-0x5FE0 e054: addiu t7,t7,-0x5FE0
+> ... ... ... # jump back to next set # jump back to next set
+> e038: jr t7 # 8040 e058: jr t7 # 8060
+
+Fig. 6. L1 instruction cache probe implementation excerpt (MIPS assembly). Two iter-ations shown for cache sets 1 and 2, each jumping through all four ways at 8KB offsets before recording the latency measurement. 12 Ahmed Najeeb and Billy Bob Brumley 0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+120 
+
+> Cache set
+
+Time (samples) 
+
+20 
+
+30 
+
+40 
+
+50 
+
+60 
+
+70 
+
+80 
+
+> Latency (clock cycles)
+
+Fig. 7. L1 instruction cache probe output with the victim executing instructions aligned to set 50. The y-axis denotes cache set index (128 sets monitored) and the 
+
+x-axis denotes successive probe iterations. The horizontal dark band at set 50 confirms measurable contention. 0    
+
+> 20
+> 40
+> 60
+> 80
+> 100
+> Latency (clock cycles) 0/0
+> 0/1
+> 0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1
+> 6000 8000 10000 12000 14000
+> sqrt(NICV) Time (samples)
+
+Fig. 8. Top: averaged L1 instruction cache traces across two classes (sustained con-tention vs. contention then idle). Vertical lines correspond to context switches. Bot-tom: corresponding NICV values; high NICV confirms significant information leakage through the instruction cache channel. MIPSBLEED: Uncovering Microarchitectural Timing Leaks 13 
+
+another 8KB and jumps to arrive at e020 , i.e., cache set 1 and way 3. Since the spy has now exhausted all four ways, it stores the latency measurement and continues with cache set 2, subtracting off the added 24KB and then increasing by an extra 32 bytes to increment the cache set from 1 to 2. The code then jumps to 8040 , i.e., cache set 2 and way 0. The code adds 8KB to the jump target and jumps through the register ( t7 ), arriving at a040 , i.e., cache set 2 and way 1. It then adds another 8KB and jumps to arrive at c040 , i.e., cache set 2 and way 2. It then adds another 8KB and jumps to arrive at e040 , i.e., cache set 2 and way 3. Since the spy has now exhausted all four ways, it stores the latency measurement and continues with cache set 3 ( 8060 ). In the full code, we have control flow logic to gather successive measurements (i.e., loop) following the final cache set. To validate our Icache probe code, we run an experiment in which a victim process executes instructions specifically aligned to conflict with set 50 of the L1 instruction cache, while the attacker uses the full Figure 6 code to measure set-wise latency. In this experiment, we only measure the first half of the instruction cache (i.e., 128 sets) to increase temporal resolution. This setup allows us to test whether our probing technique can detect contention caused by concurrent instruction fetches. As shown in Figure 7, a clear and persistent increase in access latency is observed at set 50 across time, indicating that the victim’s activity in the instruction cache introduces measurable contention. This spike confirms that our probe is both accurately targeting individual cache sets and sensitive enough to capture interference caused by external instruction execution. Thus, the experiment not only demonstrates that the instruction cache can be a viable side-channel on our MIPS platform, but also confirms that the probe code correctly reveals cache sets accessed by the victim. 
+
+4.3 Results 
+
+The results of the data and instruction cache attacks are shown in Figure 5 and Figure 8, respectively. For both cases, NICV is measured using the averaged latency for each trace across two classes: the first class involves sustained cache contention, while the second class involves cache contention followed by no con-tention [4]. In the second class, the victim is not executing any code affecting the probed cache lines during the latter half of the trace, this behavior is illustrated in the top halves of Figure 5 and Figure 8. The vertical lines across both figures are a result of context switches during the probe. The bottom halves of both figures show the corresponding NICV values for probed data and instruction caches, with high NICV indicating significant information leakage through the channel. 
+
+## 5 Execution Engine Side-Channel 
+
+The attacker issues a large number of instructions saturating the execution en-gine and measures the time required to retire these instructions. During the 14 Ahmed Najeeb and Billy Bob Brumley # ALU spy # ALU spy (cont.) # MDU spy # MDU spy (cont.)                                                           
+
+> li t1,1 addu a0,a0,t1 li t1,1 mul a0,a0,t1
+> # a2 := start time subu a0,a0,t1 # a2 := start time mul a0,a0,t1
+> rdhwr v0,hwr_cc # a3 := latency rdhwr v0,hwr_cc # a3 := latency
+> move a2,v0 rdhwr v0,hwr_cc move a2,v0 rdhwr v0,hwr_cc
+> # pollute ALU subu a3,v0,a2 # pollute MDU subu a3,v0,a2
+> addu a0,a0,t1 move a2,v0 mul a0,a0,t1 move a2,v0
+> subu a0,a0,t1 # output to buf mul a0,a0,t1 # output to buf
+> addu a0,a0,t1 sw a3,0(a0) mul a0,a0,t1 sw a3,0(a0)
+> subu a0,a0,t1 addiu a0,a0,4 mul a0,a0,t1 addiu a0,a0,4
+> ... # loop ... # loop
+
+Fig. 9. Execution engine probe implementation (MIPS assembly). Left: ALU con-tention via repeated add/sub pairs. Right: MDU contention via repeated mul instruc-tions. Both record per-iteration cycle counts. 0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+> Latency (clock cycles)
+
+0/0 
+
+0/1 
+
+0
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1
+
+0 1000 2000 3000 4000 5000 6000 7000 8000 
+
+> sqrt(NICV)
+
+Time (samples) 
+
+Fig. 10. Top: averaged execution engine traces across two classes (no contention vs. ALU contention in the second half). Bottom: corresponding NICV values; high NICV confirms significant information leakage through the execution engine channel. 
+
+attack, if the victim also issues a similar instruction, the attacker’s execution time will increase due to contention for the same execution unit. This increase in latency reveals the execution units accessed by the victim, an indication of the types and order of instructions being issued by the victim. The assembly code shown in Figure 9 (left) is an excerpt of our implementa-tion. In the attack we repeat a pair of add and sub instructions with a latency MIPSBLEED: Uncovering Microarchitectural Timing Leaks 15 
+
+of 1, 25 times, saturating the execution engine. We take the timing before and after these repeated instructions to calculate latency and store it into an output array. It is important to note that for this attack any instruction can be used to measure latency depending upon the victim’s execution pattern. The Figure 9 (right) code is similar, yet targets the MDU with mul instructions rather than the ALU. 
+
+5.1 Results 
+
+The results of the attack are shown in Figure 10. For measuring NICV we utilize the averaged latency for each trace across two classes. The first class is addition throughout with no contention while the second class is no contention then ALU contention in the second half [4]. This result can be seen in Figure 10 top half. There are no visible lines showing context switches as execution engines are agnostic to them. The bottom half of Figure 10 shows the NICV for the execution engine probe. It can be seen that NICV is very high, demonstrating strong leakage across the channel. 
+
+## 6 End-to-End Attack 
+
+In this section, we demonstrate real-world relevance of our MIPS-based side-channel attacks by carrying out an end-to-end key recovery attack on an un-modified open-source, packaged version of a cryptographic tool. 
+
+6.1 The SECCURE Toolset 
+
+The Secure Elliptic Curve Crypto Utility for Reliable Encryption (SECCURE) is a lightweight elliptic curve cryptography (ECC) toolkit that provides a command-line interface for a range of cryptographic operations. Its functionality includes key generation (seccure-key), public-key encryption and decryption (seccure-en-crypt and seccure-decrypt), digital signature generation and verification (seccure-sign and seccure-verify), and support for Diffie-Hellman key exchange (seccure-dh). SECCURE supports several standardized elliptic curves and is specifically optimized for performance in resource-constrained environments, such as embed-ded systems. Originally released in July 2006—prior to widespread awareness of side-channel vulnerabilities—SECCURE remains actively available, with version 0.5 released in August 2014, employed unaltered in our experiments. SECCURE is available 1 as a package in mainstream Linux distributions, including Debian and Ubuntu. Internally, SECCURE implements custom elliptic curve arithmetic and leverages libgcrypt via dynamic linking to perform multiprecision arithmetic operations. 16 Ahmed Najeeb and Billy Bob Brumley 
+
+Fig. 11. Partial instruction cache trace during SECCURE scalar multiplication on P-256. Darker regions indicate higher latency. Red and green highlights mark point addition and point doubling operations, respectively, directly revealing scalar bits. {
+
+struct jacobian_point r = jacobian_new(); 
+
+struct affine_point R; 
+
+int n = gcry_mpi_get_nbits(exp); 
+
+while (n) { 
+
+jacobian_double(&r, dp); 
+
+if (gcry_mpi_test_bit(exp, --n)) 
+
+jacobian_affine_point_add(&r, p, dp); 
+
+}
+
+R = jacobian_to_affine(&r, dp); 
+
+jacobian_release(&r); 
+
+assert(point_on_curve(&R, dp)); 
+
+return R; 
+
+}
+
+Fig. 12. Vulnerable code segment in SECCURE’s pointmul function. The conditional branch on each scalar bit introduces a data-dependent point addition, creating ex-ploitable timing variation. MIPSBLEED: Uncovering Microarchitectural Timing Leaks 17 
+
+6.2 Key-Recovery Attack 
+
+One security-critical operation with ECC is scalar multiplication, kP , which adds the point P to itself k times (an integer). There are many implementation strategies for scalar multiplication, that are typically based on repeated dou-blings and conditional additions. Scalar multiplication is analogous to modular exponentiation in a multiplicative setting, where doublings are squarings and additions are multiplications. Figure 12 illustrates the vulnerable code segment within SECCURE’s im-plementation of scalar multiplication, specifically within the pointmul function. The vulnerability arises from a conditional branch that performs an elliptic curve point addition only when a corresponding bit in the scalar is set. This data-dependent control flow introduces timing variation that can be exploited via side-channel analysis. The objective of the attack is to recover the sequence of elliptic curve point doubling and addition operations executed during scalar multiplication. Since this sequence is directly correlated with the scalar value, its recovery enables full reconstruction of the private key. To carry out the attack, we execute the seccure-key utility using the P-256 elliptic curve secp256r1, concurrently with a cache probing routine on the same processor core. Our attack monitors the instruction cache activity to infer the program’s execution path. The resulting, partial instruction cache trace is shown in Figure 11. The trace reveals the direct leakage of the scalar multiplication routine. In the trace, which plots cache set access latency over time, darker shades indicate higher memory access latencies. The scalar multiplication algorithm performs a point doubling for every bit of the scalar and a conditional point addition for every 1 bit shown in Figure 12. This creates two distinct execution paths, which are distinguishable in the cache trace. The recurring pattern of alternating dark and light regions corresponds to the code path for a point addition followed by a point doubling (highlighted in red and green, respectively). A continuous sequence of lighter regions (highlighted in green) would represent the path for a point doubling only. The partial trace therefore clearly shows a sequence of eight consecutive “doubling and addition” operations. Since each such operation corresponds to a 1 bit in the private key, we can infer that the initial bits of the scalar are 11111111. This result is consistent with our experimental setup; to create a clear and unambiguous signal for this demonstration, we modified the SECCURE hash_to_exponent function to deterministically generate a key with a highly regular bit pattern 1111111100000000 . . . instead of a random one. This specific, predictable key was chosen to highlight the side-channel leakage, and this partial trace confirms that the initial eight bits are recovered successfully alongside the pattern being repeated, validating the attack. We emphasize that our end-to-end techniques are fully capable of operating on normal, randomly generated keys; however, we selected this predictable key pattern strictly for demonstration pur-poses to make the visual evidence of the leakage unambiguous. Furthermore, the   
+
+> 1http://point-at-infinity.org/seccure/ 18 Ahmed Najeeb and Billy Bob Brumley
+
+true magnitude and resolution of the information leakage extend far beyond this simplified visual demonstration, as quantified by the high NICV scores obtained in Section 4. 
+
+## 7 Conclusion 
+
+In this work, we presented a systematic analysis of microarchitectural timing-based side-channel vulnerabilities in SMT-enabled MIPS processors, demonstrat-ing that shared microarchitectural components—such as the L1 data cache, L1 instruction cache, and the execution engine—can be exploited to leak sensitive information across logical cores. Our methodology combines low-level probing with quantitative leakage assessment, offering a framework for identifying and validating side-channel vectors in embedded systems. These findings have immediate relevance for MIPS-based platforms, which re-main widely deployed in long-lived, high-assurance environments. More broadly, our results offer architectural insights applicable to emerging ISAs such as RISC-V, where similar trade-offs between performance and isolation are being actively explored. Our work provides both a warning and a toolkit for assessing and addressing these challenges on emerging architectures. Looking forward, we see several promising directions for future work. First, our leakage primitives can serve as building blocks for more advanced attacks, including speculative and transient execution techniques that exploit timing at-tack vectors to bypass privilege boundaries. Second, extending our methodology to other architectures and integrating it into automated testing pipelines could support continuous leakage assessment during hardware and firmware develop-ment. Finally, exploring lightweight mitigations in the embedded space specific to SMT, both architectural and software-based. To conclude, our work highlights the importance of treating microarchitec-tural leakage as a first-class security concern in embedded systems, and provides a foundation for side-channel security assessment in this setting. 
+
+## References 
+
+> 1. Acıiçmez, O., Brumley, B.B., Grabher, P.: New results on instruction cache attacks. In: Mangard, S., Standaert, F. (eds.) Cryptographic Hardware and Embedded Systems, CHES 2010, 12th International Workshop, Santa Barbara, CA, USA, August 17-20, 2010. Proceedings, Lecture Notes in Computer Science, vol. 6225, pp. 110–124, Springer (2010), https://doi.org/10.1007/978-3-642-15031-9_8, URL https://doi.org/10.1007/978-3-642-15031-9_8 2. Acıiçmez, O., Koç, Ç.K., Seifert, J.: Predicting secret keys via branch predic-tion. In: Abe, M. (ed.) Topics in Cryptology - CT-RSA 2007, The Cryptogra-phers’ Track at the RSA Conference 2007, San Francisco, CA, USA, February 5-9, 2007, Proceedings, Lecture Notes in Computer Science, vol. 4377, pp. 225–242, Springer (2007), https://doi.org/10.1007/11967668_15, URL https://doi.org/10. 1007/11967668_15
+
+MIPSBLEED: Uncovering Microarchitectural Timing Leaks 19 3. Aciiçmez, O.: Yet another MicroArchitectural attack: exploiting I-Cache. In: Ning, P., Atluri, V. (eds.) Proceedings of the 2007 ACM workshop on Computer Security Architecture, CSAW 2007, Fairfax, VA, USA, November 2, 2007, pp. 11–18, ACM (2007), https://doi.org/10.1145/1314466.1314469, URL https://doi.org/10.1145/ 1314466.1314469 4. Aldaya, A.C., Brumley, B.B.: HyperDegrade: From GHz to MHz effective CPU frequencies. In: Butler, K.R.B., Thomas, K. (eds.) 31st USENIX Security Sympo-sium, USENIX Security 2022, Boston, MA, USA, August 10-12, 2022, pp. 2801– 2818, USENIX Association (2022), URL https://www.usenix.org/conference/ usenixsecurity22/presentation/aldaya 5. Aldaya, A.C., Brumley, B.B., ul Hassan, S., Pereida García, C., Tuveri, N.: Port contention for fun and profit. In: 2019 IEEE Symposium on Security and Pri-vacy, SP 2019, San Francisco, CA, USA, May 19-23, 2019, pp. 870–887, IEEE (2019), https://doi.org/10.1109/SP.2019.00066, URL https://doi.org/10.1109/SP. 2019.00066 6. Barenghi, A., Pelosi, G.: Side-channel security of superscalar CPUs: evaluating the impact of micro-architectural features. In: Proceedings of the 55th Annual Design Automation Conference, DAC 2018, San Francisco, CA, USA, June 24-29, 2018, pp. 120:1–120:6, ACM (2018), https://doi.org/10.1145/3195970.3196112, URL https://doi.org/10.1145/3195970.3196112 7. Bernstein, D.J.: Cache-timing attacks on AES (2005), URL http://cr.yp.to/papers. html#cachetiming 8. Bernstein, D.J., Bhargavan, K., Bhasin, S., Chattopadhyay, A., Chia, T.K., Kan-nwischer, M.J., Kiefer, F., Paiva, T.B., Ravi, P., Tamvada, G.: KyberSlash: Exploiting secret-dependent division timings in Kyber implementations. IACR Trans. Cryptogr. Hardw. Embed. Syst. 2025 (2), 209–234 (2025), https://doi.org/ 10.46586/TCHES.V2025.I2.209-234, URL https://doi.org/10.46586/tches.v2025. i2.209-234 9. Bhasin, S., Danger, J., Guilley, S., Najm, Z.: NICV: Normalized inter-class variance for detection of side-channel leakage. In: International Symposium on Electromag-netic Compatibility, EMC 2014, Tokyo, Japan, May 12-16, 2014, Proceedings, pp. 310–313 (2014), URL https://ieeexplore.ieee.org/document/6997167 10. Bhattacharyya, A., Sandulescu, A., Neugschwandtner, M., Sorniotti, A., Falsafi, B., Payer, M., Kurmus, A.: SMoTherSpectre: Exploiting speculative execution through port contention. In: Cavallaro, L., Kinder, J., Wang, X., Katz, J. (eds.) Proceedings of the 2019 ACM SIGSAC Conference on Computer and Communications Security, CCS 2019, London, UK, November 11-15, 2019, pp. 785–800, ACM (2019), https:// doi.org/10.1145/3319535.3363194, URL https://doi.org/10.1145/3319535.3363194 11. Brumley, B.B., Hakala, R.M.: Cache-timing template attacks. In: Matsui, M. (ed.) Advances in Cryptology - ASIACRYPT 2009, 15th International Conference on the Theory and Application of Cryptology and Information Security, Tokyo, Japan, De-cember 6-10, 2009. Proceedings, Lecture Notes in Computer Science, vol. 5912, pp. 667–684, Springer (2009), https://doi.org/10.1007/978-3-642-10366-7_39, URL https://doi.org/10.1007/978-3-642-10366-7_39 12. Brumley, B.B., Tuveri, N.: Cache-timing attacks and shared contexts. In: Con-structive Side-Channel Analysis and Secure Design - 2nd International Workshop, COSADE 2011, Darmstadt, Germany, February 24-25, 2011. Proceedings, pp. 233– 242 (2011), URL https://researchportal.tuni.fi/files/15671512/cosade2011.pdf 13. Chari, S., Rao, J.R., Rohatgi, P.: Template attacks. In: Jr., B.S.K., Koç, Ç.K., Paar, C. (eds.) Cryptographic Hardware and Embedded Systems - CHES 2002, 20 Ahmed Najeeb and Billy Bob Brumley 4th International Workshop, Redwood Shores, CA, USA, August 13-15, 2002, Re-vised Papers, Lecture Notes in Computer Science, vol. 2523, pp. 13–28, Springer (2002), https://doi.org/10.1007/3-540-36400-5_3, URL https://doi.org/10.1007/ 3-540-36400-5_3 14. Coron, J., Kocher, P.C., Naccache, D.: Statistics and secret leakage. In: Frankel, Y. (ed.) Financial Cryptography, 4th International Conference, FC 2000 Anguilla, British West Indies, February 20-24, 2000, Proceedings, Lecture Notes in Com-puter Science, vol. 1962, pp. 157–173, Springer (2000), https://doi.org/10.1007/ 3-540-45472-1_12, URL https://doi.org/10.1007/3-540-45472-1_12 15. Cronin, P., Gao, X., Wang, H., Cotton, C.: An exploration of ARM system-level cache and GPU side channels. In: ACSAC ’21: Annual Computer Security Appli-cations Conference, Virtual Event, USA, December 6-10, 2021, pp. 784–795, ACM (2021), https://doi.org/10.1145/3485832.3485902, URL https://doi.org/10.1145/ 3485832.3485902 16. Gast, S., Juffinger, J., Schwarzl, M., Saileshwar, G., Kogler, A., Franza, S., Köstl, M., Gruss, D.: SQUIP: Exploiting the scheduler queue contention side channel. In: 44th IEEE Symposium on Security and Privacy, SP 2023, San Francisco, CA, USA, May 21-25, 2023, pp. 2256–2272, IEEE (2023), https://doi.org/10.1109/SP46215. 2023.10179368, URL https://doi.org/10.1109/SP46215.2023.10179368 17. Ge, Q., Yarom, Y., Cock, D., Heiser, G.: A survey of microarchitectural tim-ing attacks and countermeasures on contemporary hardware. J. Cryptographic Engineering 8(1), 1–27 (2018), https://doi.org/10.1007/s13389-016-0141-6, URL https://doi.org/10.1007/s13389-016-0141-6 18. Goodwill, G., Jun, B., Jaffe, J., Rohatgi, P.: A testing methodology for side-channel resistance validation. In: Non-Invasive Attack Testing Workshop, NIAT 2011, Nara, Japan, September 26-27, 2011. Proceedings, NIST (2011), URL https://csrc.nist.gov/csrc/media/events/non-invasive-attack-testing-workshop/ documents/08_goodwill.pdf 19. Gras, B., Razavi, K., Bos, H., Giuffrida, C.: Translation leak-aside buffer: Defeating cache side-channel protections with TLB attacks. In: Enck, W., Felt, A.P. (eds.) 27th USENIX Security Symposium, USENIX Security 2018, Baltimore, MD, USA, August 15-17, 2018, pp. 955–972, USENIX Association (2018), URL https://www. usenix.org/conference/usenixsecurity18/presentation/gras 20. Green, M., Lima, L.R., Zankl, A., Irazoqui, G., Heyszl, J., Eisenbarth, T.: Au-toLock: Why cache attacks on ARM are harder than you think. In: Kirda, E., Ristenpart, T. (eds.) 26th USENIX Security Symposium, USENIX Security 2017, Vancouver, BC, Canada, August 16-18, 2017, pp. 1075–1091, USENIX Association (2017), URL https://www.usenix.org/conference/usenixsecurity17/ technical-sessions/presentation/green 21. Gullasch, D., Bangerter, E., Krenn, S.: Cache games - bringing access-based cache attacks on AES to practice. In: 32nd IEEE Symposium on Security and Privacy, S&P 2011, 22-25 May 2011, Berkeley, California, USA, pp. 490–505, IEEE Computer Society (2011), https://doi.org/10.1109/SP.2011.22, URL https: //doi.org/10.1109/SP.2011.22 22. Hennessy, J.L., Patterson, D.A.: A new golden age for computer architecture. Commun. ACM 62 (2), 48–60 (2019), https://doi.org/10.1145/3282307, URL https: //doi.org/10.1145/3282307 23. Kayaalp, M., Abu-Ghazaleh, N.B., Ponomarev, D.V., Jaleel, A.: A high-resolution side-channel attack on last-level cache. In: Proceedings of the 53rd Annual De-sign Automation Conference, DAC 2016, Austin, TX, USA, June 5-9, 2016, MIPSBLEED: Uncovering Microarchitectural Timing Leaks 21 pp. 72:1–72:6, ACM (2016), https://doi.org/10.1145/2897937.2897962, URL http: //doi.acm.org/10.1145/2897937.2897962 24. Kim, S., Han, M., Baek, W.: DPrime+DAbort: A high-precision and timer-free directory-based side-channel attack in non-inclusive cache hierarchies using In-tel TSX. In: IEEE International Symposium on High-Performance Computer Ar-chitecture, HPCA 2022, Seoul, South Korea, April 2-6, 2022, pp. 67–81, IEEE (2022), https://doi.org/10.1109/HPCA53966.2022.00014, URL https://doi.org/10. 1109/HPCA53966.2022.00014 25. Kocher, P., Horn, J., Fogh, A., Genkin, D., Gruss, D., Haas, W., Hamburg, M., Lipp, M., Mangard, S., Prescher, T., Schwarz, M., Yarom, Y.: Spectre attacks: Ex-ploiting speculative execution. In: 2019 IEEE Symposium on Security and Privacy, SP 2019, San Francisco, CA, USA, May 19-23, 2019, pp. 1–19, IEEE (2019), https: //doi.org/10.1109/SP.2019.00002, URL https://doi.org/10.1109/SP.2019.00002 26. Kocher, P.C.: Timing attacks on implementations of Diffie-Hellman, RSA, DSS, and other systems. In: Koblitz, N. (ed.) Advances in Cryptology - CRYPTO ’96, 16th Annual International Cryptology Conference, Santa Barbara, Califor-nia, USA, August 18-22, 1996, Proceedings, Lecture Notes in Computer Science, vol. 1109, pp. 104–113, Springer (1996), https://doi.org/10.1007/3-540-68697-5_9, URL https://doi.org/10.1007/3-540-68697-5_9 27. Kocher, P.C., Jaffe, J., Jun, B.: Differential power analysis. In: Wiener, M.J. (ed.) Advances in Cryptology - CRYPTO ’99, 19th Annual International Cryp-tology Conference, Santa Barbara, California, USA, August 15-19, 1999, Pro-ceedings, Lecture Notes in Computer Science, vol. 1666, pp. 388–397, Springer (1999), https://doi.org/10.1007/3-540-48405-1_25, URL https://doi.org/10.1007/ 3-540-48405-1_25 28. Lipp, M., Gruss, D., Spreitzer, R., Maurice, C., Mangard, S.: ARMageddon: Cache attacks on mobile devices. In: Holz, T., Savage, S. (eds.) 25th USENIX Security Symposium, USENIX Security 16, Austin, TX, USA, August 10-12, 2016, pp. 549–564, USENIX Association (2016), URL https://www.usenix.org/conference/ usenixsecurity16/technical-sessions/presentation/lipp 29. Lipp, M., Kogler, A., Oswald, D.F., Schwarz, M., Easdon, C., Canella, C., Gruss, D.: PLATYPUS: Software-based power side-channel attacks on x86. In: 42nd IEEE Symposium on Security and Privacy, SP 2021, San Francisco, CA, USA, 24-27 May 2021, pp. 355–371, IEEE (2021), https://doi.org/10.1109/SP40001.2021.00063, URL https://doi.org/10.1109/SP40001.2021.00063 30. Lipp, M., Schwarz, M., Gruss, D., Prescher, T., Haas, W., Fogh, A., Horn, J., Mangard, S., Kocher, P., Genkin, D., Yarom, Y., Hamburg, M.: Meltdown: Reading kernel memory from user space. In: Enck, W., Felt, A.P. (eds.) 27th USENIX Security Symposium, USENIX Security 2018, Baltimore, MD, USA, August 15-17, 2018, pp. 973–990, USENIX Association (2018), URL https://www.usenix. org/conference/usenixsecurity18/presentation/lipp 31. Liu, F., Yarom, Y., Ge, Q., Heiser, G., Lee, R.B.: Last-level cache side-channel attacks are practical. In: 2015 IEEE Symposium on Security and Privacy, SP 2015, San Jose, CA, USA, May 17-21, 2015, pp. 605–622, IEEE Computer Society (2015), https://doi.org/10.1109/SP.2015.43, URL https://doi.org/10.1109/SP.2015.43 32. MIPS: MIPS 1004K coherent processing system datasheet (2011), URL https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/ MD00584-2B-1004K-DTS-01.20.pdf, [Accessed 27-03-2025] 33. MIPS: MIPS software training (2018), URL https://training.mips.com/basic_ mips/PDF/Caches.pdf, [Accessed 27-03-2025] 22 Ahmed Najeeb and Billy Bob Brumley 34. MIPS: Corporate overview (2024), URL https://mips.com/wp-content/uploads/ 2024/01/MIPS-Corporate-Overview-FINALdocx.pdf, [Accessed 04-06-2026] 35. Osvik, D.A., Shamir, A., Tromer, E.: Cache attacks and countermeasures: The case of AES. In: Pointcheval, D. (ed.) Topics in Cryptology - CT-RSA 2006, The Cryptographers’ Track at the RSA Conference 2006, San Jose, CA, USA, February 13-17, 2006, Proceedings, Lecture Notes in Computer Science, vol. 3860, pp. 1– 20, Springer (2006), https://doi.org/10.1007/11605805_1, URL https://doi.org/ 10.1007/11605805_1 36. Paccagnella, R., Luo, L., Fletcher, C.W.: Lord of the ring(s): Side channel attacks on the CPU on-chip ring interconnect are practical. In: Bailey, M.D., Greenstadt, R. (eds.) 30th USENIX Security Symposium, USENIX Security 2021, August 11-13, 2021, pp. 645–662, USENIX Association (2021), URL https://www.usenix.org/ conference/usenixsecurity21/presentation/paccagnella 37. Percival, C.: Cache missing for fun and profit. In: BSDCan 2005, Ottawa, Canada, May 13-14, 2005, Proceedings (2005), URL http://www.daemonology.net/papers/ cachemissing.pdf 38. Tullsen, D.M., Eggers, S.J., Levy, H.M.: Simultaneous multithreading: Maximiz-ing on-chip parallelism. In: Patterson, D.A. (ed.) Proceedings of the 22nd Annual International Symposium on Computer Architecture, ISCA ’95, Santa Margherita Ligure, Italy, June 22-24, 1995, pp. 392–403, ACM (1995), https://doi.org/10.1145/ 223982.224449, URL https://doi.org/10.1145/223982.224449 39. Wang, Y., Paccagnella, R., He, E.T., Shacham, H., Fletcher, C.W., Kohlbren-ner, D.: Hertzbleed: Turning power side-channel attacks into remote timing at-tacks on x86. In: Butler, K.R.B., Thomas, K. (eds.) 31st USENIX Security Sym-posium, USENIX Security 2022, Boston, MA, USA, August 10-12, 2022, pp. 679–697, USENIX Association (2022), URL https://www.usenix.org/conference/ usenixsecurity22/presentation/wang-yingchen 40. Yarom, Y., Falkner, K.: FLUSH+RELOAD: A high resolution, low noise, L3 cache side-channel attack. In: Proceedings of the 23rd USENIX Security Sym-posium, San Diego, CA, USA, August 20-22, 2014, pp. 719–732, USENIX Associ-ation (2014), ISBN 978-1-931971-15-7, URL https://www.usenix.org/conference/ usenixsecurity14/technical-sessions/presentation/yarom 41. Yarom, Y., Genkin, D., Heninger, N.: CacheBleed: A timing attack on OpenSSL constant time RSA. In: Gierlichs, B., Poschmann, A.Y. (eds.) Cryptographic Hard-ware and Embedded Systems - CHES 2016 - 18th International Conference, Santa Barbara, CA, USA, August 17-19, 2016, Proceedings, Lecture Notes in Com-puter Science, vol. 9813, pp. 346–367, Springer (2016), https://doi.org/10.1007/ 978-3-662-53140-2_17, URL https://doi.org/10.1007/978-3-662-53140-2_17 42. Yu, J., Dutta, A., Jaeger, T., Kohlbrenner, D., Fletcher, C.W.: Synchronization storage channels (S2C): Timer-less cache side-channel attacks on the Apple M1 via hardware synchronization instructions. In: Calandrino, J.A., Troncoso, C. (eds.) 32nd USENIX Security Symposium, USENIX Security 2023, Anaheim, CA, USA, August 9-11, 2023, pp. 1973–1990, USENIX Association (2023), URL https:// www.usenix.org/conference/usenixsecurity23/presentation/yu-jiyong 43. Zhang, X., Xiao, Y., Zhang, Y.: Return-oriented flush-reload side channels on ARM and their implications for Android devices. In: Weippl, E.R., Katzenbeisser, S., Kruegel, C., Myers, A.C., Halevi, S. (eds.) Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security, Vienna, Austria, October 24-28, 2016, pp. 858–870, ACM (2016), https://doi.org/10.1145/2976749.2978360, URL https://doi.org/10.1145/2976749.2978360
