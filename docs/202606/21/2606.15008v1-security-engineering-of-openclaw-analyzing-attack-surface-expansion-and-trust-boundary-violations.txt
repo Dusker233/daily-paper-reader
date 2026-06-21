@@ -1,0 +1,885 @@
+Title: Security Engineering of OpenClaw: Analyzing Attack Surface Expansion and Trust-Boundary Violations
+
+URL Source: https://arxiv.org/pdf/2606.15008v1
+
+Published Time: Tue, 16 Jun 2026 00:18:56 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+> 1
+
+# Security Engineering of OpenClaw: Analyzing Attack Surface Expansion and Trust-Boundary Violations 
+
+Saeid Jamshidi, Arghavan Moradi Dakhel, Kawser Wazed Nafi and Foutse Khomh 
+
+Abstract —Agentic large language model (LLM) systems can now execute actions, not just produce text. When model outputs directly trigger privileged operations such as shell commands, browser automation, and external tool invocation, the security problem shifts from alignment concerns to system configuration and structural design. We analyze OpenClaw, a self-hosted multi-agent system in which LLM outputs can execute commands and interact with system tools and services. We measure compromise probability, boundary failures, privilege drift, and how these metrics change as the attacker’s capability increases. With one agent, the probability of compromise is 0.24. When seven agents are active, and the system executes an action if any single agent proposes it, compromise increases to 0.86. The models themselves do not change; the increase stems from how their outputs are aggregated. Prompt injection propagates instability across the system. Attack surface entropy increases from 0.42 to 0.71, reflecting a wider distribution of potential exploit paths. Mean privilege drift rises from 0.03 to 0.21, indicating more substantial unintended authority gain. The escalation curvature is positive (0.08), indicating that privilege grows faster as the attacker’s capability increases. Defensive controls, including policy gating and execution filtering, reduce compromise probability by 0.10, boundary failures by 0.10, and privilege drift by 0.02 (all statistically significant, 𝑝 < 0.0001 ). The system remains sensitive, yet the mitigation impact is measurable. Injection mitigation success differs across models: 0.37 for GPT-5.2, 0.35 for Llama-4-Maverick, and 0.31 for DeepSeek-R1. When execution can be triggered by any single agent, the agent with the highest vulner-ability determines the system’s exposure. Mitigation strategies slightly reduce task utility (from 0.93 to 0.89) and increase median latency (from 420 ms to 468 ms). 
+
+Index Terms —Large language models, Multi-agent systems, Prompt injection, Privilege escalation, Trust boundaries, Attack surface analysis, AI system security. 
+
+I. Introduction 
+
+Large Language Models (LLMs) are rapidly advancing beyond simple text generation, evolving toward autonomous decision-making and task management capabilities through the emergence of agentic AI frameworks [1] [2] [3]. In agentic settings, models interpret context, select tools, and execute actions that directly impact external systems [4] [5] [6]. APIs, file systems, network services, and third-party platforms are now integrated into the impact loop, allowing model outputs to trigger privileged operations [7] [8] [9]. In this setting, the security problem extends beyond alignment failures in 
+
+S. Jamshidi, A. Moradi Dakhel, K. W. Nafi, and F. Khomh are with the SWAT Laboratory, Polytechnique Montr´ eal, Montr´ eal, QC, Canada (e-mail: {saeid.jamshidi, arghavan.moradi-dakhel, kawser.wazed-nafi, foutse.khomh }@polymtl.ca). 
+
+text generation. Reasoning becomes coupled to execution, and model outputs act as operational decisions rather than terminal responses [10] [11] [12]. Prior work has established that prompt injection and indirect manipulation remain persistent weaknesses in tool-enabled agents. InjecAgent demonstrates that untrusted contextual inputs can impact tool selection across heterogeneous environments [13]. Recent studies eval-uate attack success, defensive robustness, and benign task performance in realistic agent workflows [14], confirming that injection attacks can remain impactful even when models appear aligned under static evaluation. Other research explores architectural countermeasures that separate reasoning from actuation to reduce the impact of injection [15], while survey studies on multi-agent LLM systems highlight the complexity of coordination and the risks of shared execution when multi-ple models operate on common substrates [16]. These survey studies show that vulnerabilities in agentic systems are shaped not only by models themselves but also by system structure and execution design. What remains underexamined is how the configuration of multi-agent systems reshapes exposure when reasoning is directly connected to execution, including the impact of proposal aggregation, trust boundaries, and policy enforcement on system-level risk. This paper addresses that gap through a structural security analysis of OpenClaw, a self-hosted multi-agent LLM system in which semantic outputs are mapped directly to executable primitives. Rather than treating prompt injection as an isolated vulnerability, we examine how the combination of multiple agents, boundary controls, and escalating attacker capabilities shapes the prob-ability of compromise and the dynamics of privilege. We introduce quantitative metrics for system-level compromise amplification, cumulative boundary instability (CBI), privilege drift, attack surface entropy, and escalation curvature. Our empirical results demonstrate clear structural shifts. With a single agent, the probability of compromise is 0.24. When seven agents are active and execution proceeds if any one agent proposes an action, compromise probability increases to 0.86, corresponding to a 3.58 × amplification. Injection raises attack-surface entropy from 0.42 to 0.71, indicating a diffusion of risk across internal boundaries. Mean privilege drift increases from 0.03 to 0.21, and escalation curvature is positive (0.08), demonstrating super-linear authority growth as attacker capability increases. Defensive controls reduce the probability of compromise, boundary failures, and privilege drift, while introducing modest reductions in task utility and moderate latency overhead. By quantifying how design decisions impact 
+
+> arXiv:2606.15008v1 [cs.CR] 12 Jun 2026 2
+
+amplification, instability, and escalation behavior, this study offers a structured evaluation of execution-coupled multi-agent AI systems and their security hardening. The main contributions of this work are:  
+
+> •
+
+Amplification Analysis: Quantifying how combining multiple agents under permissive execution rules amplifies the probability of system-level compromise and expands the impact surface.  
+
+> •
+
+Instability and Escalation Modeling: Introducing quan-titative metrics that link prompt injection to boundary insta-bility, privilege drift, and super-linear privilege escalation dynamics.  
+
+> •
+
+Mitigation Evaluation Under Operational Con-straints: Evaluating defensive mechanisms using a coun-terfactual experimental methodology, measuring both se-curity improvements and the resulting utility and latency trade-offs. The remainder of the paper is organized as follows. Section II reviews LLM-agent security and prompt injection. Section III presents the methodology and formal system model. Section IV defines the threat model and adversarial capabilities. Section V reports empirical analysis and experimental results. Section VII discusses implications. Section VIII outlines threats to validity. Section IX describes limitations and future work. Section X concludes the paper. 
+
+II. Related Work 
+
+This section reviews prior research on agent security and multi-agent LLM systems, focusing on prompt injection, ag-gregation risks, escalation dynamics, defense mechanisms, and supply-chain vulnerabilities. 
+
+A. Prompt Injection and Multi-Agent Security 
+
+Prompt injection attacks have gained increasing attention, particularly in tool-integrated and agentic systems. InjecAgent [13] provides a systematic benchmark for assessing indirect prompt injection vulnerabilities in tool-augmented LLM agents. The study demonstrates that untrusted contextual inputs can manipulate tool invocation behavior, a risk amplified in en-vironments with integrated tools and APIs. While InjecAgent focuses on attack success rates, it does not address how policies and boundary mechanisms impact overall system vulnerability. This limitation is particularly relevant for multi-agent systems such as OpenClaw, where agent aggregation can escalate risk, a phenomenon we quantify in this work. AgentDojo [14] operationalizes security evaluation in LLM agents by providing a dynamic testbed that measures attack success, defensive robustness, and benign utility across attack scenarios. While it demonstrates how adversarial content can compromise agent workflows, it lacks a formal examination of how inter-agent dynamics and policies contribute to systemic risk. Our work extends AgentDojo by incorporating multi-agent settings and quantifying associated risk amplification, which is critical for understanding the broader attack surface in multi-agent systems. CaMeL [17] proposes a defense-by-design approach separating reasoning from execution to reduce prompt injection impact. While CaMeL offers architectural insights into mitigating injection, it primarily focuses on reasoning and tool layers rather than the boundary-defining components that we identify as critical sources of risk amplification. Our study extends this perspective by measuring the impact of policies on system-level risk, including parallel agent operation and permissive aggregation. 
+
+B. Multi-Agent Aggregation Risks 
+
+Coordination among diverse agents introduces unique chal-lenges and potential security vulnerabilities [16]. Interactions among agents, especially when sharing execution substrates, can lead to coordination failures and resource contention. Prior studies do not explicitly examine how different aggregation policies directly amplify systemic security risks. In contrast, our work models these policies, particularly the permissive aggregation rule, which increases the likelihood of system compromise when any agent proposes a plausible action. This amplification is a key focus of our analysis. Further research includes Attacker Moves Second [18], which explores adaptive adversarial strategies bypassing static security measures. While it highlights exploitation of external attacks, it does not address internal vulnerabilities arising from agent interactions. Our study fills this gap by measuring how aggregation dynamics and privilege drift create new pathways for exploitation. 
+
+C. Security Analysis and Escalation Dynamics 
+
+Recent works examine escalation dynamics and privilege propagation in LLM-based agent systems. ToolHijacker [19] introduces a vector by hijacking tool selection, highlighting the risk of injected prompts impacting system-level actions. However, it does not analyze the structural consequences of privilege escalation after a tool is invoked. In contrast, we quantify escalation using metrics such as privilege drift and attack surface entropy, providing a comprehensive view of es-calation as adversarial capability increases. The study Privilege Escalation and Instability Analysis [20] emphasizes privilege drift in multi-agent systems and proposes metrics for escalation under adversarial pressure. While insightful, it does not account for systemic impacts of boundary instability, a key driver of risk in self-hosted, execution-coupled systems such as OpenClaw. Our analysis introduces a more granular assessment of privilege instability in aggregation contexts, including positive curvature in escalation with increasing attacker capability. 
+
+D. Defense Mechanisms and Systemic Risk Management Agent-Lock [21] presents a multi-agent defense pipeline that detects and mitigates prompt injection using static analysis and dynamic monitoring. While informative, it does not focus on systemic vulnerabilities introduced by policies. Our work shows that mitigations that are impactful in isolation may still leave agents vulnerable when aggregated. Design patterns for securing LLM agents [22] provide guidance on reducing the likelihood of injection but do not specifically address interactions within shared execution environments. Our analysis fills this gap by assessing how aggregation policies mitigate or amplify systemic risks in the context of prompt injection and privilege escalation. 3
+
+E. Supply-Chain Risk in Multi-Agent Systems 
+
+Supply-chain vulnerabilities are explored in Supply-Chain Risk Evaluation [23], which examines how malicious skills propagate in agent ecosystems. While providing a robust framework for skill-based vulnerabilities, it does not account for how injection-induced vulnerabilities interact with aggregation policies. Our work demonstrates that injection risks can propagate across the entire agent network when low-barrier execution is permitted. The literature synthesis reveals that, while existing studies advance understanding of prompt injection and defensive mech-anisms, there remains a gap in structural and systemic analysis of multi-agent execution coupling. Prior research often focuses on model-level vulnerabilities, static evaluation, and defense heuristics, but overlooks how policies and boundary instability shape overall system security. To address this, we employ formal metrics for amplification, CBI, and privilege escalation, along with a counterfactual evaluation for mitigation, to provide a detailed and actionable understanding of security risks in multi-agent LLM systems. 
+
+III. Methodology 
+
+We formalize the execution-coupled structure of OpenClaw, as its architectural composition directly determines the attack surface and privilege dynamics analyzed in this study. Figure 1 illustrates the layered system model serving as the structural foundation for our analysis. OpenClaw is organized as a pipeline in which contextual inputs enter through external interfaces, including messaging connectors, developer APIs, and system APIs. These inputs pass through a gateway and a control plane, which handle authentication, session management, context construction, and policy filtering, before crossing the first trust boundary separating untrusted external data from internal reasoning components. Within this boundary, multiple LLM-based agents operate in parallel, each instantiated from the same LLM backend but with distinct configurations, depending on the experimental configuration. Each agent performs context processing, semantic reasoning, and action proposal generation. The resulting proposals are evaluated by a selection-and-execution controller , which enforces aggregation logic, resolves conflicts, and applies execution policies. This controller is a structural amplification point: a single compromised agent may be sufficient to trigger system-level actions. Decision rules in the controller are task-specific and consistent across experiments, governing how individual agent outputs are translated into executable authority. A second trust boundary separates reason-ing from execution. Moreover, the execution engine converts semantic outputs into concrete system operations using shell, file, network, and skill invocation adapters. These operations execute within the host OS, where process isolation, resource controls, and credential management define impactive privilege states. A privilege management component tracks authority transitions across execution stages. This decomposition clarifies how reasoning propagates into execution, establishing the foun-dation for formal risk modeling. We define an execution-coupled agentic system as one in which model reasoning outputs are directly mapped to executable primitives, creating operational pathways through which adversarial inputs can propagate into privileged states. Unlike traditional LLM deployments, where outputs remain confined to textual responses, OpenClaw trans-lates semantic outputs into actionable system operations. Three distinct LLM backends are evaluated: GPT-5.2, DeepSeek-R1, and Llama-4-Maverick. In each experimental configuration, agents instantiated from these models generate action proposals that are subsequently considered by the controller. We formalize the agent set as 
+
+M = {𝑚 1, 𝑚 2, 𝑚 3 } = {GPT-5.2 , DeepSeek-R1 , Llama-4-Maverick }.
+
+In single-agent configurations, OpenClaw executes proposals from one model per run. In multi-agent configurations, outputs from multiple models are aggregated through a selection policy :
+
+𝜋 : {𝑂 (𝑚 ) }𝑚 ∈M → 𝑎 ★ ∈ A 𝑠𝑦𝑠𝑡𝑒𝑚 ,
+
+where 𝑂 (𝑚 ) denotes the output of model 𝑚 , and 𝑎 ★ is the action selected for execution. If a proposal contains multiple executable actions, the controller applies the same policy to each action independently, thereby defining aggregation at the action level. This approach ensures clarity in risk attribution: compromising a single model and agent can impact the set of ac-tions executed. The experimental methodology consists of four integrated layers: structural modeling, adversarial stimulation, runtime instrumentation, and statistical validation. These layers collectively feed into a unified risk evaluation methodology defined as 
+
+F𝑟𝑖𝑠𝑘 : (S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ) → R𝑑 ,
+
+where S represents system configuration (agents, model in-stances, and execution substrate), A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 encodes attacker capabilities, and H denotes experimental assumptions, includ-ing task contexts and environmental conditions. The output vector comprises measurable security metrics, including attack surface magnitude, boundary failure probability, and privilege drift. Model-averaged and worst-case risk formulations account for multi-agent settings: 
+
+F 𝑟𝑖𝑠𝑘 (S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ) = 1
+
+|M|∑︁ 𝑚 ∈M
+
+F𝑟𝑖𝑠𝑘 (S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ; 𝑚 ),
+
+F max  
+
+> 𝑟𝑖𝑠𝑘
+
+(S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ) = max  
+
+> 𝑚 ∈M
+
+F𝑟𝑖𝑠𝑘 (S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ; 𝑚 ).
+
+The model-averaged formulation reflects expected risk across heterogeneous backends, while the worst-case formulation captures conservative exposure under the most vulnerable agent. This dual perspective ensures that risk estimates reflect struc-tural and aggregation impacts rather than incidental variations in model behavior. 
+
+A. Explicit Attacker Model 
+
+We represent attacker capability as a four-dimensional vector: 
+
+A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 = (𝑁, 𝑃, 𝑆, 𝐿 ),
+
+where each component reflects a distinct domain of potential impact and is normalized to the interval [0, 1] to maintain 4
+
+Fig. 1: OpenClaw execution-coupled multi-agent system architecture. comparability across dimensions. Normalization allows con-sistent scaling when combining heterogeneous factors such as network reach, message manipulation, skill exploitation, and local privilege.  
+
+> •
+
+𝑁 captures network reachability, from restricted local access to public Internet exposure.  
+
+> •
+
+𝑃 represents the ability to inject and shape messages consumed by agents, e.g., crafted inputs via Slack and Telegram that the system ingests.  
+
+> •
+
+𝑆 denotes impact over skills and extensions, such as publishing a malicious skill and persuading a user to activate it.  
+
+> •
+
+𝐿 reflects local system access, ranging from standard user privileges to elevated host-level authority. Furthermore, these dimensions define a bounded hypercube in 
+
+R4, ensuring that attacker strength remains finite and realistic. A partial order is defined over capability vectors: 
+
+(𝑁 0, 𝑃 0, 𝑆 0, 𝐿 0) ⪯ ( 𝑁 1, 𝑃 1, 𝑆 1, 𝐿 1)
+
+if each component of the first vector represents less capability than the corresponding component of the second. For example, lower 𝐿 indicates fewer privileges, and lower 𝑃 reflects weaker control over message injection. Under this ordering, attacker 
+
+A𝑛 ⪰ A 0 implies at least as much potential impact across all dimensions, supporting monotonic reasoning: if a vulnerability exists under A0, it persists under any attacker A𝑛 . This method-ology enables controlled escalation analysis in experiments by incrementally increasing each dimension and observing which transitions violate trust boundaries and execution constraints. In multi-agent settings, attackers may exploit policy asymmetries across models. Let 𝑆𝑢𝑐𝑐 (𝑚 ) indicate whether agent 𝑚 produces an unauthorized action under a given injection scenario. Under a permissive aggregation policy, where execution proceeds if any plausible action is proposed: 
+
+𝑆𝑢𝑐𝑐 𝜋 = ⊮ (∃ 𝑚 ∈ M : 𝑆𝑢𝑐𝑐 (𝑚 ) = 1) ,
+
+A single compromised agent is sufficient to affect system behavior. Under a conservative policy, such as a consensus requiring a majority of agents to agree: 
+
+𝑆𝑢𝑐𝑐 𝜋 = ⊮ ∑︁ 
+
+> 𝑚 ∈M
+
+𝑆𝑢𝑐𝑐 (𝑚 ) ≥ 
+
+ |M|
+
+2
+
+!
+
+,
+
+Coordinated compromise across multiple agents is required. In our experiments with |M| = 3, this threshold corresponds to either 2 or 3 agents generating unauthorized actions. For comparative analysis, we define a scalar norm over the attacker space: 
+
+∥A 𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ∥ = 𝜔 𝑁 𝑁 + 𝜔 𝑃 𝑃 + 𝜔 𝑆 𝑆 + 𝜔 𝐿 𝐿, 
+
+where weights 𝜔 𝑁 , 𝜔 𝑃 , 𝜔 𝑆 , 𝜔 𝐿 are fixed prior to experimen-tation to reflect realistic enterprise risk priorities. This scalar enables one-dimensional sensitivity curves that characterize how the attack surface magnitude and privilege dynamics evolve as adversarial capability increases. Attacker injection scenarios are pre-defined and fixed within the experimental setup, ensuring repeatable conditions across different models and policy configurations. The attacker model itself is not an LLM; it represents controlled adversarial inputs systematically applied to evaluate system robustness. 5
+
+B. Formal System Model 
+
+We represent OpenClaw as the tuple 
+
+S = (𝐼, 𝐺, 𝑀, 𝐸, 𝐾, 𝑂, Π),
+
+where each component corresponds to a security-relevant module in the execution pipeline:  
+
+> •
+
+𝐼 : input interface layer, including messaging connectors and ingestion channels.  
+
+> •
+
+𝐺 : gateway and controller, responsible for authentication, routing, and session management.  
+
+> •
+
+𝑀 : reasoning module instantiated from LLM backends (GPT-5.2, DeepSeek-R1, Llama-4-Maverick). 𝑀 is proba-bilistic, while all other modules are deterministic.  
+
+> •
+
+𝐸 : execution layer, comprising system-facing tools such as shell, filesystem, and network adapters.  
+
+> •
+
+𝐾 : skill ecosystem, representing installable plugins and their dependencies.  
+
+> •
+
+𝑂 : host operating system layer, capturing processes, files, and stored secrets (e.g., API keys, session tokens, SSH keys).  
+
+> •
+
+Π: privilege state space, formalizing how authority is represented and evolves across transitions. Decoding parameters for 𝑀 (e.g., temperature, top-𝑝 , seed) are fixed during experiments to control stochasticity and ensure re-producibility. In multi-agent configurations, the system extends to 
+
+S𝑀 𝐴 = (S , M, 𝜋 ),
+
+where M is the set of agent instances and 𝜋 is the action aggregation policy. This extension does not alter the underlying modules but makes explicit that 𝑀 may be instantiated multiple times and that 𝜋 governs how proposed actions are combined. We define system state privilege at 𝑆 𝑗 as 
+
+𝑃𝑟𝑖𝑣 (𝑆 𝑗 ) = 𝜎 (𝐶 𝑗 , 𝐴 𝑗 ),
+
+where 𝐶 𝑗 is the set of accessible credentials (e.g., tokens, API keys, session cookies, SSH keys), and 𝐴 𝑗 is the set of executable action primitives (e.g., file operations, shell commands, network calls, skill installation). Here, 𝐸 and 𝑂 define the set of available actions and credential sources, while Π captures the overall authority state. The mapping 𝜎 (·) converts these sets into a scalar value for quantitative comparison: 
+
+𝑃𝑟𝑖𝑣 (𝑆 𝑗 ) = 𝛼 |𝐶 𝑗 | + 𝛽 log (| 𝐴 𝑗 | + 1),
+
+where 𝛼 and 𝛽 are weights reflecting the relative impact of credential access and action breadth. The logarithmic term models diminishing returns: the first high-impact action substan-tially increases privilege, whereas additional low-impact actions contribute marginally. The concavity condition 
+
+𝑑 2 𝑃𝑟𝑖𝑣 𝑑 | 𝐴 |2 < 0ensures sublinear growth, preventing artificial inflation of authority in environments with large tool registries. Constants 
+
+𝛼 and 𝛽 are selected based on the relative risk importance of credentials versus action primitives in the system. Per-transition privilege gain is defined as 
+
+Δ𝑃𝑟𝑖𝑣 𝑗 = 𝑃𝑟𝑖𝑣 (𝑆 𝑗 +1) − 𝑃𝑟𝑖𝑣 (𝑆 𝑗 ),
+
+where each transition 𝑆 𝑗 → 𝑆 𝑗 +1 corresponds to a stage in the OpenClaw pipeline (e.g., message ingestion, LLM reasoning, tool invocation, skill loading). Cumulative Privilege Drift (CPD) over a trace of length 𝑛 is 
+
+𝐶𝑃𝐷 =
+
+> 𝑛
+
+∑︁ 
+
+> 𝑗 =1
+
+Δ𝑃𝑟𝑖𝑣 𝑗 .
+
+A positive CPD without explicit policy authorization constitutes a boundary violation, thereby enabling unintended gains in authority. To enable comparison across environments, we define normalized privilege drift: 
+
+𝑁 𝑃𝐷 = 𝐶𝑃𝐷 𝑃𝑟𝑖𝑣 (𝑆 0) ,
+
+scaling cumulative drift relative to the initial privilege. This ensures that identical absolute privilege gains are interpreted in proportion to the baseline authority, providing a consistent metric for evaluating the impact of escalation and injection across different system configurations. 
+
+C. Attack Surface Quantification 
+
+We quantify the OpenClaw attack surface as 
+
+A =
+
+> 𝑛
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑃 𝑖 · 𝐼 𝑖 · 𝛾 𝑖 · 𝜆 𝑖 ,
+
+where the system is decomposed into 𝑛 exposure vectors 𝑒 𝑖 ,representing security-relevant interfaces such as gateway ports, skill-installation endpoints, and tool-execution interfaces. Each component of the summation is defined as follows:  
+
+> •
+
+𝑃 𝑖 is the empirically measured probability of successful exploitation of 𝑒 𝑖 under a specified attacker capability configuration. It is estimated through repeated adversarial trials in which controlled injections and manipulations are applied, with success observed.  
+
+> •
+
+𝐼 𝑖 denotes the impact of a successful exploit, quantified as the fraction of system resources, credentials, and operational objects reachable through the exposure.  
+
+> •
+
+𝛾 𝑖 captures privilege amplification, measured as the ratio of system privilege immediately after exploitation to the privilege prior to exploitation. This is computed using the per-transition privilege function 𝑃𝑟𝑖𝑣 (𝑆 𝑗 ), as defined in the formal system model, with experimental traces that record pre- and post-exploit states.  
+
+> •
+
+𝜆 𝑖 reflects persistence, representing the expected duration an exposure remains exploitable before remediation and automatic updates neutralize the threat. All components are normalized to [0, 1] to ensure boundedness and comparability across different exposure vectors: 0 ≤ 𝑃 𝑖 , 𝐼 𝑖 , 𝛾 𝑖 , 𝜆 𝑖 ≤ 1.
+
+This guarantees that A ≤ 𝑛 , providing a stable metric across system versions. Increasing 𝑛 introduces additional exposure vectors while maintaining comparability through normalized sub-scores. We define system-level risk as the combination of probability, impact, privilege amplification, and persistence across all exposure vectors. Risk severity is impacted by the 6
+
+magnitude of 𝑃 𝑖 , the criticality of impacted resources ( 𝐼 𝑖 ), the potential for privilege escalation ( 𝛾 𝑖 ), and the duration of exploitability ( 𝜆 𝑖 ). To characterize the distribution of risk across vectors, we define structural entropy: 
+
+𝐻 𝐴 = −
+
+> 𝑛
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑝 𝑖 log 𝑝 𝑖 , 𝑝 𝑖 = 𝑃 𝑖 𝐼 𝑖 𝛾 𝑖 𝜆 𝑖 
+
+Í𝑛 𝑗 =1 𝑃 𝑗 𝐼 𝑗 𝛾 𝑗 𝜆 𝑗 
+
+.
+
+Low entropy indicates concentrated risk in a few dominant exposures, suggesting targeted hardening is impactive. High entropy indicates distributed risk across multiple moderate exposures, motivating layered defensive strategies. We further define attack surface curvature: 
+
+𝜅 𝐴 = 𝑑 2A
+
+𝑑 ∥A 𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ∥2 ,
+
+which measures the acceleration of risk growth as attacker capability increases. Positive curvature ( 𝜅 𝐴 > 0) indicates super-linear escalation, where incremental increases in capability lead to disproportionately larger exposure, e.g., when expanded net-work reach and supply-chain impact unlock multiple dependent attack paths. In multi-agent configurations, the impactive attack surface is policy-dependent. Let A (𝑚 ) denote the attack surface when agent 𝑚 is active. The policy-conditioned attack surface is 
+
+A 𝜋 =
+
+
+
+1 − Î𝑚 ∈M (1 − A (𝑚 ) ) (permissive aggregation) ,
+
+Í𝑚 ∈M 𝑤 𝑚 A (𝑚 ) (weighted routing) .
+
+The first case reflects permissive aggregation, in which ex-ecuting any single agent’s proposal increases system-level exposure. The second case models routing-based configurations in which each agent is invoked according to the weight 𝑤 𝑚 ,reflecting deployment preferences such as the frequency of agent invocation and the criticality of assigned roles. These weights allow risk exposure to be modulated in accordance with system design priorities. 
+
+D. Attack Surface and Risk Distribution 
+
+The OpenClaw attack surface is modeled as the sum of multiple exposure vectors, each representing a potential entry point for adversarial actions: 
+
+A =
+
+> 𝑛
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑃 𝑖 · 𝐼 𝑖 · 𝛾 𝑖 · 𝜆 𝑖 ,
+
+where 𝑃 𝑖 denotes the empirically measured likelihood of exploitation for the 𝑖 -th exposure vector, 𝐼 𝑖 measures the impact of exploitation, 𝛾 𝑖 quantifies privilege amplification, and 𝜆 𝑖 
+
+represents the persistence of the exposure. All factors are normalized to the interval [0,1] to ensure comparability across different vectors. To characterize how risk is distributed across these vectors, we define the attack surface entropy: 
+
+𝐻 𝐴 = −
+
+> 𝑛
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑝 𝑖 log 𝑝 𝑖 , 𝑝 𝑖 = 𝑃 𝑖 𝐼 𝑖 𝛾 𝑖 𝜆 𝑖 
+
+Í𝑛 𝑗 =1 𝑃 𝑗 𝐼 𝑗 𝛾 𝑗 𝜆 𝑗 
+
+.
+
+Low entropy indicates that a small number of vulnerabilities disproportionately contribute to the overall risk, making tar-geted mitigation impactive. High entropy implies that risk is distributed across many vectors, necessitating layered defensive measures. Measuring entropy provides a deeper understand-ing of the system’s risk profile, helping prioritize mitigation strategies and allocate defensive resources impactively. This formulation complements the previously defined metrics by link-ing exposure probability, impact, privilege amplification, and persistence to a quantitative assessment of risk magnitude and distribution across OpenClaw’s execution-coupled architecture. 
+
+E. Prompt Injection Evaluation 
+
+We model prompt injection as the transformation ˜𝑃 = 𝑃 ⊕ 𝛿, 
+
+where 𝑃 denotes a benign task prompt and associated user message thread, and 𝛿 represents an adversarial payload generated by the attacker. In our experimental setup, 𝛿 is derived from predefined attack scenarios that simulate malicious users. The operator ⊕ denotes concatenation using the same formatting and message serialization procedure that OpenClaw employs when constructing LLM inputs, ensuring that injection evaluation reflects realistic system behavior rather than abstract text concatenation. To quantify the impact of prompt injection on privilege escalation, we define the Injection Amplification Factor (IAF): 
+
+𝐼 𝐴𝐹 = Δ𝑃𝑟𝑖𝑣 𝑖𝑛 𝑗𝑒𝑐𝑡𝑒𝑑 
+
+Δ𝑃𝑟𝑖𝑣 𝑏𝑒𝑛𝑖𝑔𝑛 
+
+,
+
+where Δ𝑃𝑟𝑖𝑣 𝑏𝑒𝑛𝑖𝑔𝑛 is the privilege change observed under the benign prompt 𝑃 , and Δ𝑃𝑟𝑖𝑣 𝑖𝑛 𝑗𝑒𝑐𝑡𝑒𝑑 is the privilege change under the adversarial prompt ˜𝑃 . A value of 𝐼 𝐴𝐹 > 1indicates that the injected prompt caused a greater privilege gain than the benign task alone. This interpretation relies on the scalar privilege function 𝑃𝑟𝑖𝑣 (𝑆 𝑗 ) defined in the Formal System Model III-B, which captures both credential access and executable action breadth. Comparing Δ𝑃𝑟𝑖𝑣 𝑖𝑛 𝑗𝑒𝑐𝑡𝑒𝑑 to 
+
+Δ𝑃𝑟𝑖𝑣 𝑏𝑒𝑛𝑖𝑔𝑛 ensures that the measurement reflects only the additional authority gained due to the injection, independent of task-specific baseline privilege requirements. This metric en-ables systematic evaluation of how prompt injections propagate through reasoning-to-execution pathways and quantifies their impact on exploitability under realistic multi-agent deployment conditions. 
+
+a) Semantic Sensitivity: We define semantic sensitivity as 
+
+𝑆𝑆 = 𝜕𝑃𝑟𝑖𝑣 𝜕 ∥𝛿 ∥ ,
+
+measuring the rate at which system privilege changes as the magnitude of an adversarial payload increases. In practice, ∥𝛿 ∥
+
+is parameterized by the payload size, instruction density, and the intensity of structured perturbation. High semantic sensitivity indicates that small textual and structured modifications in the input can induce large shifts in privilege, reflecting a fragile coupling between semantic reasoning and execution authority. In the multi-agent configuration, injection impacts are evaluated at both the individual-agent and policy-aggregation levels. Let 
+
+𝐼 𝐴𝐹 (𝑚 ) denote the IAF observed for agent 𝑚 , instantiated from a specific LLM backend. Let 𝐼 𝐴𝐹 (𝑚 ) denote the Injection Amplification Factor observed for agent 𝑚 , where each agent is 7
+
+Algorithm 1 Deterministic OpenClaw Security Evaluation                                                     
+
+> Input: System state S, agent 𝑚 , attacker A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟
+> Output: ( R ,A, 𝐵𝑅 )
+> 1: SeedRandom(42) 2: 𝑃𝑟𝑖𝑣 0←MeasurePrivilege( S)3: Assert(Consistency( H) == True) 4: for each exposure vector 𝑒 𝑖 defined in Section ?? do
+> 5: SimulateAttack( S, 𝑒 𝑖 ,A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 )6: Δ𝑃𝑟𝑖𝑣 ←MeasurePrivilege( S) -𝑃𝑟𝑖𝑣 0
+> 7: UpdateMetrics( 𝑒 𝑖 ,Δ𝑃𝑟𝑖𝑣 )8: end for
+> 9: for each trust boundary 𝐵 𝑗 introduced in Section III do
+> 10: StressTestBoundary( S, 𝐵 𝑗 )11: ComputeBoundaryMetrics( 𝐵 𝑗 )12: end for
+> 13: for each skill 𝑘 in the skill ecosystem 𝐾 do
+> 14: StaticAnalyze( 𝑘 )15: DynamicExecuteSandbox( 𝑘 )16: ComputeRisk( 𝑘 )17: end for
+> 18: SimulateGatewayCompromise( S)19: AggregateMetrics() 20: return ( R ,A, 𝐵𝑅 )
+
+a distinct instance in the system. In this context, 𝑚 always refers to a single agent, independent of which LLM model it uses. Under permissive selection policies, where execution proceeds if any agent proposes an action, the impactive amplification is determined by the most vulnerable agent: 
+
+𝐼 𝐴𝐹 max  
+
+> 𝜋
+
+= max  
+
+> 𝑚 ∈M
+
+𝐼 𝐴𝐹 (𝑚 ) .
+
+Under consensus-based policies, such as majority agreement for tool invocation, amplification depends on the number of agents simultaneously induced to generate unauthorized actions. In this scenario, we empirically estimate the policy-level injection rate 
+
+𝑃𝐼 𝑟 𝑎𝑡𝑒, 𝜋 and compute: 
+
+𝐼 𝐴𝐹 𝜋 = Δ𝑃𝑟𝑖𝑣 injected , 𝜋 
+
+Δ𝑃𝑟𝑖𝑣 benign , 𝜋 
+
+,
+
+where privilege changes are measured after aggregation accord-ing to policy 𝜋 . This formulation directly links injection robust-ness to aggregation rules and supports systematic evaluation of mitigation strategies, including consensus gating and execution veto mechanisms, within a unified quantitative framework. 
+
+F. Extended Security Evaluation Algorithm 
+
+To operationalize the structural and quantitative metrics defined above, we implement a deterministic security evaluation procedure, summarized in Algorithm 1. This procedure system-atically evaluates exposure vectors, privilege escalation, trust boundary violations, and skill-level risks under a fixed attacker capability configuration. The function ‘SimulateAttack‘ applies adversarial payloads from the Attacker Model to each exposure vector and measures the induced changes in system privilege. ‘StressTestBoundary‘ evaluates whether privilege escalation and injection propagation cross trust boundaries between un-trusted input, reasoning, and execution layers. The combination of static analysis and sandboxed dynamic execution assesses skill-level risks, ensuring that installed plugins do not introduce unauthorized authority. Although LLMs exhibit stochastic be-havior, setting a fixed random seed and standardizing decoding parameters ensures consistent experimental conditions. Under identical system configurations, attacker capabilities, and seed values, the sequence of simulation steps and resulting met-rics remains consistent, with only minor measurement noise introduced by runtime instrumentation. All data, testing results, and scripts are provided in a replication package to support reproducibility, in line with standard practices in software engineering research. The evaluation iterates over finite sets of exposure vectors, trust boundaries, and skills, making the procedure computationally tractable even as the skill ecosystem grows. In multi-agent configurations, the algorithm is executed independently for each agent to obtain per-agent risk vectors, and then aggregated to compute policy-level metrics. This separation enables the identification of vulnerabilities specific to individual models, as well as those arising from aggregation, thereby aligning the measurement process with the structural abstraction of execution-coupled multi-agent architectures. 
+
+G. Mitigation Design Space and Hardening Operators 
+
+The previous subsections characterize architectural risk in OpenClaw. The second objective of this study is to introduce mitigations and evaluate their impactiveness under identical adversarial conditions. We formalize each mitigation as a hardening operator that transforms a baseline system into a defended instance: 
+
+S ( H) = H (S) ,
+
+where H denotes a specific mitigation, and S ( H) represents the resulting hardened deployment. This operator-based formu-lation embeds defensive mechanisms directly within the same quantitative risk framework, enabling measurable comparison rather than purely qualitative assessment. We define the mitiga-tion space as 
+
+H = {H 1, H2, . . . , H𝑞 },
+
+By assigning each element to a reproducible control applicable to OpenClaw, the mitigation space H includes configuration-level patches such as policy definitions, container profiles, gateway flags, and skill registry constraints, thereby ensuring systematic deployability. To align defensive mechanisms with OpenClaw’s trust boundaries, mitigations are organized into five families: 1) Execution Policy Hardening enforces gating and step-up confirmation for high-impact tools. High-impact tools are those that can directly modify system state or access sensitive credentials, such as executing shell commands or installing soft-ware. Step-up confirmation may require explicit approval from multiple agents and user acknowledgment before execution. 2) Prompt-Channel Isolation separates untrusted message contexts from critical reasoning pipelines and applies structured injection filtering, including pattern-based sanitization, context-length limits, and controlled parsing across different input channels (e.g., Slack, Telegram) to prevent propagation of malicious payloads. 3) Skill Ecosystem Governance applies allowlists, signature verification, and dependency constraints to prevent unverified or malicious plugins from being installed and exe-cuted. 4) Runtime Containment uses confinement mechanisms, including seccomp profiles, AppArmor policies, least-privilege containerization, and filesystem isolation, to limit the potential 8
+
+impact of an exploited process and restrict process capabilities. 5) Network Exposure Minimization enforces secure-by-default service bindings, authenticated gateways, and network segmen-tation to reduce the attack surface exposed to external and lateral movement. In multi-agent deployments, the aggregation policy 
+
+𝜋 serves as a hardening mechanism. A conservative, consensus-gated execution rule requires agreement across multiple agents before high-impact actions are permitted. High-impact actions can change system state or elevate privileges (e.g., executing a shell command or installing a skill), whereas low-impact actions are read-only. Formally: 
+
+𝐸𝑥𝑒𝑐𝑢𝑡𝑒 (𝑎 ) = ⊮ ∑︁ 
+
+> 𝑚 ∈M
+
+⊮[𝑎 ∈ 𝑃𝑟𝑜 𝑝𝑜𝑠𝑎𝑙 (𝑚 )] ≥ 𝜏 𝜋 
+
+!
+
+,
+
+where 𝜏 𝜋 is a predefined voting threshold. This mechanism transforms agent diversity into a security control, requiring agreement on proposals before execution. impactiveness is evaluated using the same counterfactual protocol as for other mitigations, to ensure consistent comparisons across defense families. 
+
+H. Mitigation Attribution, Counterfactual Evaluation, and Ac-ceptance Criteria 
+
+Mitigation design in OpenClaw proceeds through three interconnected stages: (1) attribution of individual controls, (2) counterfactual measurement of their causal impact, and (3) enforcement of multidimensional acceptance criteria. Moreover, these stages establish a rigorous, quantitative methodology for evaluating defensive mechanisms rather than relying on qualitative assessment. When multiple mitigations are combined into a composite defense profile, it is necessary to determine each component’s contribution. Let H𝑎 +𝑏 denote a composite mitigation composed of components H𝑎 and H𝑏 . We quantify interaction impacts using a synergy measure: 
+
+𝑆𝑦𝑛𝑒𝑟𝑔𝑦 (𝑎, 𝑏 ) = Δ A𝑎 +𝑏 −  ΔA𝑎 + ΔA𝑏 
+
+,
+
+where ΔA∗ indicates the reduction in attack surface due to the specified mitigation. A positive synergy value indicates complementary protection, meaning the combined mitigation reduces exposure beyond the sum of individual impacts. A negative value indicates overlap, reflecting diminishing returns when multiple controls address the same vulnerabilities. This attribution methodology supports principled construction of hardened deployment profiles. To isolate the causal impact of each mitigation, we adopt a counterfactual experimental design. For every attacker profile A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 and fixed execution seed, we execute the evaluation pipeline on both the baseline system and its hardened counterpart: 
+
+R0 = F𝑟𝑖𝑠𝑘 (S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ) , (1) 
+
+R𝑚 = F𝑟𝑖𝑠𝑘 (S (𝑚 ) , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 , H ) , (2) where R0 and R𝑚 are 𝑑 -dimensional vectors of measured security metrics. The mitigation impact is computed as 
+
+ΔR𝑚 = R𝑚 − R 0.
+
+For risk-related components, including attack surface magnitude 
+
+A, CPD, boundary failure probability 𝑃 (𝐵 𝑓 𝑎𝑖𝑙 𝑗 ), and IAF, negative values in ΔR𝑚 indicate reduced exposure. Because the attacker’s capabilities, environmental configuration, and random seeds are held constant across paired evaluations, observed differences can be directly attributed to the applied hardening operator. This counterfactual approach eliminates confounding factors and ensures consistent comparability across mitigation strategies. Mitigation acceptance is defined by multidimensional improvement rather than optimization of a single metric. Primary acceptance conditions are: 
+
+ΔA𝑚 < 0, Δ𝐶𝑃𝐷 𝑚 < 0, Δ𝐼 𝐴𝐹 𝑚 ≤ 0,
+
+ensuring reductions in attack surface magnitude, CPD, and injection amplification. Additionally, boundary-level strength-ening is required: 
+
+Δ𝑃 (𝐵 𝑓 𝑎𝑖𝑙 𝑗 )𝑚 < 0 ∀ 𝑗 ∈ { 1, . . . , 𝐽 }.
+
+Every modeled trust boundary must show a decrease in failure probability after mitigation. These constraints prevent displacement impacts, where improvement along one dimension is offset by degradation along another. A mitigation is therefore accepted only if it produces coherent, systemic hardening across architectural layers. 
+
+I. Security-Utility Trade-off and Operational Constraints 
+
+Because OpenClaw is designed for productive automation, mitigations must preserve operational viability. Hardening mechanisms are therefore evaluated under explicit overhead constraints: 
+
+Ω = {𝐿 ≤ 𝐿 max , 𝐸 𝑒𝑥𝑒𝑐 ≤ 𝐸 max , 𝑈 𝑡 𝑎𝑠𝑘 ≥ 𝑈 min },
+
+where:  
+
+> •
+
+𝐿 denotes end-to-end tool invocation latency.  
+
+> •
+
+𝐸 𝑒𝑥𝑒𝑐 represents per-execution energy consumption, cap-tured by the runtime monitoring layer.  
+
+> •
+
+𝑈 𝑡 𝑎𝑠𝑘 measures benign-task utility, defined as the fraction of non-adversarial tasks completed successfully without unjustified blocking. Mitigation selection is formalized as the constrained optimiza-tion problem: min  
+
+> H ∈ H
+
+A (S ( H) ) s.t. S ( H) ∈ Ω,
+
+capturing the objective of minimizing measurable attack surface while satisfying operational constraints. This ensures that security improvements remain compatible with deployment re-quirements, preventing degradation of functional performance. 
+
+J. Mitigation Verification Algorithm 
+
+To evaluate mitigations under the constrained security–utility objective, we implement a counterfactual verification procedure summarized in Algorithm 2. The algorithm performs paired baseline and defended evaluations for each attacker profile, computes risk deltas, and enforces operational feasibility con-straints Ω before ranking mitigations. The procedure enforces a controlled before-and-after comparison under fixed attacker capability, deployment configuration, and random seed. Because 9
+
+Fig. 2: Adversarial escalation paths in OpenClaw, illustrating how network exposure, prompt manipulation, skill injection, local access, and credential compromise propagate through the multi-agent core and execution layers, enabling privilege amplification and potential system compromise. 
+
+Algorithm 2 Counterfactual Verification of OpenClaw Mitiga-tions                                                                         
+
+> Input: Baseline system S, mitigation set H, attacker profiles A, experimental assumptions H
+> Output: Mitigation ranking by risk reduction under operational constraints Ω
+> 1: SeedRandom(42) 2: for each attacker profile A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ∈Ado
+> 3: R0← F 𝑟𝑖𝑠𝑘 ( S ,A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ,H)
+> 4: for each mitigation H𝑖 ∈Hdo
+> 5: S(H 𝑖 )← H 𝑖 ( S)
+> 6: R𝑖 ← F 𝑟𝑖𝑠𝑘 ( S (H 𝑖 ),A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ,H)
+> 7: ΔR𝑖 ← R 𝑖 − R 0
+> 8: (𝐿, 𝐸 𝑒𝑥𝑒𝑐 , 𝑈 𝑡 𝑎𝑠𝑘 ) ← MeasureOverhead ( S (H 𝑖 ))
+> 9: if (𝐿, 𝐸 𝑒𝑥𝑒𝑐 , 𝑈 𝑡 𝑎𝑠𝑘 ) ∈ Ωthen
+> 10: StoreResult( A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ,H𝑖 ,ΔR𝑖 )11: end if
+> 12: end for
+> 13: end for
+> 14: RankMitigationsBy( ΔA,Δ𝐶 𝑃𝐷 ,Δ𝑃 (𝐵 𝑓 𝑎𝑖𝑙 ),Δ𝐼 𝐴𝐹 )15: return ranked mitigations and per-attacker deltas
+
+environmental conditions remain invariant across paired eval-uations, the resulting ΔR𝑖 values represent the causal impact of each hardening operator rather than incidental measurement variation. This methodology ensures a consistent, quantitative assessment of mitigation effectiveness while accounting for op-erational constraints and the impacts of multi-agent aggregation. 
+
+IV. Threat Model 
+
+Figure 2 illustrates the adversarial landscape targeting Open-Claw. The attack surface expands as adversarial capability increases, beginning with network reachability and prompt manipulation, extending to skill injection and local host access, and potentially culminating in credential compromise. Because OpenClaw directly connects semantic reasoning to privileged execution, compromise of a single agent can propagate through aggregation and execution subsystems, producing system-level impacts. The purpose of this threat model is to formally describe how adversarial control translates into exposure, privilege amplification, and eventual system compromise. We define a threat-mapping function: 
+
+T : (S , A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ) → R 𝑡 ℎ𝑟 𝑒𝑎𝑡 ,
+
+where S denotes the system configuration, A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 denotes adversarial capability, and R𝑡 ℎ𝑟 𝑒𝑎𝑡 is a structured risk state. Rather than a single scalar, R𝑡 ℎ𝑟 𝑒𝑎𝑡 comprises measurable quantities aligned with the evaluation, including expected privilege drift, boundary-failure probabilities, supply-chain risk, compromise probability, and escalation likelihood. 
+
+A. Adversary Capability Model 
+
+The adversary is modeled as a five-dimensional capability vector: 
+
+A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 = (𝑁, 𝑃, 𝑆, 𝐿, 𝐶 ),
+
+representing network access ( 𝑁 ), prompt manipulation capabil-ity ( 𝑃 ), skill injection ability ( 𝑆 ), local privilege level ( 𝐿 ), and credential acquisition capability ( 𝐶 ). The additional dimension 
+
+𝐶 explicitly captures the potential for credential compromise, complementing the four dimensions of the previously introduced attacker model and enabling more precise evaluation of privilege escalation pathways. Each dimension is normalized to [0, 1] to 10 
+
+ensure bounded adversarial strength. To support sensitivity and escalation analysis, we define a scalar adversary norm: 
+
+∥A 𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ∥ =
+
+> 5
+
+∑︁ 
+
+> 𝑖 =1
+
+𝜔 𝑖 𝑎 𝑖 ,
+
+where weights 𝜔 𝑖 reflect deployment-specific criticality and are fixed prior to experimentation. This scalarization enables a systematic study of how risk evolves as adversarial capability increases. We further define a dominance relation: 
+
+A1 ⪯ A 2 ⇐⇒ 𝑎 1𝑖 ≤ 𝑎 2𝑖 ∀𝑖, 
+
+which induces a capability lattice. This structure enables controlled escalation experiments in which one capability dimension is increased while others remain fixed, supporting monotonic reasoning: if a vulnerability exists under A1, it persists under any stronger adversary A2 ⪰ A 1.
+
+B. Capability-Conditioned Attack Progression 
+
+We model an attack as a sequence of state transitions: 
+
+𝑆 0
+
+> 𝛼 1
+
+−−→ 𝑆 1
+
+> 𝛼 2
+
+−−→ . . . 𝛼 𝑘 
+
+−−→ 𝑆 𝑘 ,
+
+where each adversarial action 𝛼 𝑖 is constrained by the adversary capability vector A𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 . An attack is considered successful if the cumulative privilege gain exceeds a meaningful opera-tional threshold 𝜃 :
+
+𝑃𝑟𝑖𝑣 (𝑆 𝑘 ) − 𝑃𝑟𝑖𝑣 (𝑆 0) > 𝜃. 
+
+The threshold 𝜃 is empirically determined from observed priv-ilege dynamics during benign task execution and the system’s baseline operational risk. Specifically, 𝜃 is set to exceed typical stochastic fluctuations in Δ𝑃𝑟𝑖𝑣 under benign conditions, en-suring that only escalations with operational significance, such as shell access, skill installation, and credential compromise, are counted as successful attacks. The empirical probability of escalation under a given attacker capability configuration is therefore defined as: 
+
+𝑃 𝑒𝑠𝑐 = 𝑃  𝑃𝑟𝑖𝑣 (𝑆 𝑘 ) > 𝑃𝑟𝑖𝑣 (𝑆 0) + 𝜃 | A 𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 
+
+.
+
+This formulation ties attack success to operationally meaningful privilege amplification rather than arbitrary metric variations, ensuring that measured escalation reflects actionable impact within OpenClaw’s multi-agent, execution-coupled environ-ment. 
+
+C. Semantic-to-Execution Exploitation 
+
+The primary security risk in OpenClaw arises from the mapping between LLM outputs and system actions: 
+
+Φ : O𝑠𝑒𝑚𝑎𝑛𝑡𝑖𝑐 → A 𝑠𝑦𝑠𝑡𝑒𝑚 ,
+
+where semantic artifacts( e.g., plans, prompts, and tool call proposals) are transformed into executable system operations. An adversarial perturbation 𝛿 , embedded within a benign prompt 
+
+𝑃 , aims to maximize the resulting privilege state: max  
+
+> 𝛿
+
+𝑃𝑟𝑖𝑣 (Φ(𝑀 (𝑃 + 𝛿 ))) ,
+
+subject to the enforcement of execution policies and trust bound-aries. We quantify the sensitivity of this semantic-to-execution mapping using the Semantic Exploitability Coefficient (SEC): 
+
+𝑆𝐸𝐶 = Δ𝑃𝑟𝑖𝑣 𝑠𝑒𝑚𝑎𝑛𝑡𝑖𝑐 
+
+∥𝛿 ∥ ,
+
+where ∥𝛿 ∥ is the magnitude of the adversarial perturbation, normalized by token count and instruction density. A high SEC indicates that small, carefully crafted textual manipulations produce disproportionately large privilege gains, highlighting fragile coupling between semantic reasoning and execution authority. This metric complements the IAF and policy-conditioned evaluation, providing a fine-grained view of how semantic perturbations propagate into system-level exploitation in a multi-agent, execution-coupled environment. 
+
+D. Trust Boundary Violations 
+
+Each architectural boundary 𝐵 𝑗 in OpenClaw is associated with a validation predicate Θ(·) , which enforces policy and trust constraints. A boundary violation occurs when an input crossing the boundary is accepted ( Θ(𝑥 ) = 1) yet results in an unauthorized privilege increase: 
+
+𝑃𝑟𝑖𝑣 (𝑇 (𝑥 )) > 𝑃𝑟𝑖𝑣 (𝑥 ),
+
+where 𝑇 (𝑥 ) denotes the system state after processing the input 
+
+𝑥 . Boundary failure probability is estimated empirically: 
+
+𝑃 (𝐵 𝑓 𝑎𝑖𝑙 𝑗 ) = number of violating crossings total tested crossings .
+
+To account for varying boundary criticality, we define the CBI metric: 
+
+𝐶𝐵𝐼 =∑︁ 
+
+> 𝑗
+
+𝑃 (𝐵 𝑓 𝑎𝑖𝑙 𝑗 ) · 𝐼𝑚 𝑝𝑎𝑐𝑡 (𝐵 𝑗 ),
+
+which ensures that rare, high-impact boundary failures are prop-erly weighted relative to frequent, low-impact failures. Here, 
+
+𝐼𝑚 𝑝𝑎𝑐𝑡 (𝐵 𝑗 ) can be quantified using the potential privilege amplification, access to high-value credentials, and criticality of actions permitted across the boundary. In multi-agent and execution-coupled contexts, CBI captures how violations at any single boundary can propagate through aggregation and execution pipelines, enabling system-level compromise even if most other boundaries remain intact. This metric integrates directly with attack surface, semantic sensitivity, and CPD to provide a holistic assessment of architectural resilience. 
+
+E. Supply-Chain and Network Threats 
+
+Within the skill ecosystem, a malicious skill 𝑘 ∗ produces a payoff defined as: 
+
+𝑈 (𝑘 ∗) = 𝑃𝑟𝑖𝑣 (𝑆 𝑝𝑜𝑠𝑡 ) − 𝑃𝑟𝑖𝑣 (𝑆 𝑝𝑟 𝑒 ) − 𝐷𝑒𝑡𝑒𝑐𝑡𝑖𝑜𝑛𝐶𝑜𝑠𝑡 (𝑘 ∗),
+
+where 𝑃𝑟𝑖𝑣 (𝑆 𝑝𝑜𝑠𝑡 ) and 𝑃𝑟𝑖𝑣 (𝑆 𝑝𝑟 𝑒 ) denote the privilege states after and before installation, and 𝐷𝑒𝑡𝑒𝑐𝑡𝑖𝑜𝑛𝐶𝑜𝑠𝑡 (𝑘 ∗) captures the defensive detection and containment overhead. Systemic supply-chain risk is then quantified as: 
+
+𝑆𝐶 𝑅 = E[𝑈 (𝑘 ∗)] · 𝑃 (installation ),11 
+
+accounting for both the potential exploit magnitude and the likelihood of adoption by agents within the multi-agent system. For gateway exposure, compromise probability is modeled using a hazard-based formulation: 
+
+𝑃 𝑐𝑜𝑚 𝑝 = 1 − 𝑒 −𝜆 ·𝐸 𝑥 𝑝𝑜𝑠𝑢𝑟 𝑒 ,
+
+where 𝐸𝑥 𝑝𝑜𝑠𝑢𝑟𝑒 reflects the binding posture, authentication strength, and patch level, and 𝜆 represents adversarial attack intensity. 
+
+F. Multi-Stage Threat Composition and Architectural Instabil-ity 
+
+Complex attacks are composed sequentially, with total com-promise probability and cumulative privilege defined as: 
+
+𝑃 𝑡𝑜𝑡 𝑎𝑙 = 1 −
+
+> 𝑘
+
+Ö
+
+> 𝑖 =1
+
+(1 − 𝑃 𝑖 ), 𝑃𝑟𝑖𝑣 𝑡𝑜𝑡 𝑎𝑙 =
+
+> 𝑘
+
+∑︁ 
+
+> 𝑖 =1
+
+Δ𝑃𝑟𝑖𝑣 𝑖 ,
+
+where each 𝑃 𝑖 and Δ𝑃𝑟𝑖𝑣 𝑖 corresponds to the success probability and privilege gain of the 𝑖 -th stage. Architectural instability is quantified through sensitivity to adversarial capability: 
+
+𝑑𝑃𝑟𝑖𝑣 𝑡𝑜𝑡 𝑎𝑙 
+
+𝑑 ∥A 𝑎𝑡𝑡 𝑎𝑐𝑘𝑒𝑟 ∥ > 𝜂, 
+
+where 𝜂 denotes a threshold above which small increases in attacker capability produce disproportionately large privilege gains, indicating structural fragility. Threats are categorized into semantic, execution, supply-chain, and network vectors. The total threat magnitude is computed as a weighted aggregation of category-specific risk contributions: 
+
+𝑇 ℎ𝑟𝑒𝑎𝑡 𝑡𝑜𝑡 𝑎𝑙 =∑︁  
+
+> 𝑐 ∈ { 𝑠𝑒𝑚𝑎𝑛𝑡𝑖𝑐,𝑒𝑥𝑒𝑐𝑢𝑡𝑖𝑜𝑛,𝑠𝑢 𝑝 𝑝𝑙𝑦,𝑛𝑒𝑡 𝑤𝑜𝑟 𝑘 }
+
+𝑤 𝑐 · 𝑅𝑖𝑠𝑘 𝑐 ,
+
+enabling context-sensitive prioritization of mitigation efforts based on deployment-specific operational priorities and multi-agent exposure profiles. 
+
+V. Empirical Security Analysis 
+
+This section quantitatively evaluates OpenClaw, includ-ing baseline exploitability, multi-agent amplification, trust-boundary instability, and privilege escalation. 
+
+A. Baseline Exploitability and Multi-Agent Amplification 
+
+We begin by examining an architectural question: how does OpenClaw’s layer transform individual-model vulnerabilities into system-level exposure when reasoning outputs are directly coupled to executable actions? Because OpenClaw operates as a reasoning-to-action system, security cannot be assessed at the level of a single agent alone. Instead, risk must be evaluated at the boundary, where multiple agents propose tool invocations and the controller decides whether to proceed with execution. In this context, amplification is not an incidental side impact of scale; it is a structural consequence of how proposals are aggregated. Single-agent attack success is 𝑝 = 0.24. Under the permissive “any-agent” rule, system-level risk follows: 
+
+𝑃 𝑠𝑦𝑠𝑡𝑒𝑚 = 1 − ( 1 − 𝑝 )𝑛 ,
+
+Fig. 3: Compromise probability versus number of agents. TABLE I: Observed system-level compromise probability under any-agent selection at representative agent counts.           
+
+> Agents Observed risk Multiplier 10.24 ×1.00 30.57 ×2.38 50.75 ×3.12 70.86 ×3.58
+
+leading to amplification as additional agents are introduced. Table I shows representative observed compromise probabilities under this aggregation policy. Figure 3 shows that compromise probability accelerates as the number of agents increases. In single-agent execution, compromise requires one reasoning instance to absorb adversarial input and generate an unsafe yet executable action. With multi-agent permissive aggregation, execution proceeds if any agent produces such an action, effectively converting the security logic into a disjunctive condition. Each additional agent creates an independent op-portunity for boundary crossing, which explains the sharp increase between one and three agents. With seven agents, the compromise probability reaches 0.86, indicating that in most adversarial trials, at least one agent emits an actionable, unsafe output. The amplification factor rises to 3.58 relative to the single-agent baseline, reflecting a structural transformation: moderate per-agent vulnerability translates into near-certain system-level exposure. Figure 4 highlights tail amplification. As the number of agents grows, the gap between mean and worst-case risk widens, indicating a disproportionate rise in catastrophic outcomes. This impact is critical in OpenClaw, where a single extreme execution event can cause irreversible harm. Across 800 independent trials per configuration, the single-agent compromise rate of 0.24 (95% CI: [0.21, 0.27]) contrasts sharply with the seven-agent rate of 0.86 (95% CI: [0.84, 0.88]). Statistical comparison used a two-proportion 𝑧 -test, confirming significance: 𝑧 = 27 .4, 𝑝 < 0.0001. The absolute increase of 0.62, risk ratio of 3.58, and Cohen’s 
+
+ℎ = 1.42 indicate a very large impact. Table II summarizes these inferential results, explicitly noting the number of runs per configuration ( 𝑛 = 800) and the metrics used for evaluation. 
+
+B. Trust-Boundary Instability 
+
+We analyze how adversarial prompting destabilizes Open-Claw’s internal trust boundaries that separate semantic reason-ing from privileged execution. Instability is measured using CBI, 12 
+
+Fig. 4: Mean versus worst-case system risk under orchestration. TABLE II: Inferential comparison of single-agent and seven-agent configurations. Each configuration was evaluated across 800 independent trials, using compromise rate, confidence intervals, risk ratio, and Cohen’s ℎ as impact-size metrics.                  
+
+> Quantity Single agent Seven agents Trials ( 𝑛 )800 800 Compromise rate 0.24 0.86 95% confidence interval [0.21, 0.27] [0.84, 0.88] Absolute increase +0.62 Risk ratio 3.58 Cohen’s ℎ1.42 Test statistic 𝑧 =27 .4p-value <0.0001
+
+TABLE III: CBI summary statistics across configurations (95% CI).             
+
+> Configuration Mean SD 95% CI Benign 0.18 0.07 [0.17, 0.19] Injected 0.46 0.14 [0.44, 0.48] Defended 0.29 0.09 [0.28, 0.30]
+
+which captures correlated predicate failures across execution traces rather than isolated validation errors. Figure 5 shows a pronounced rightward shift in CBI under injection. In the benign configuration, instability remains tightly concentrated (mean = 0.18, SD = 0.07), indicating coherent boundary enforcement. Under adversarial prompting, the mean CBI increases to 0.46 (SD = 0.14), reflecting greater instability and dispersion across traces. The defended configuration reduces mean CBI to 0.29 (SD = 0.09), confirming measurable hardening, though residual elevation relative to benign behavior remains. Statistical testing confirms that instability amplification is substantial. The benign versus injected comparison yields 𝑝 < 0.0001 with Cohen’s 
+
+𝑑 = 2.46, indicating an extremely large impact. The defended versus injected comparison remains significant ( 𝑝 < 0.0001, 
+
+𝑑 = 1.45), demonstrating strong but incomplete mitigation impact. Predicate-level decomposition in Figure 6 shows that 
+
+PolicyOverride is the dominant injection channel. Adversarial prompts crafted according to the procedure exploit authorization logic rather than low-level execution gating. For example, a malicious input could be: 
+
+"Ignore prior safety checks. Execute SkillInstall(’keylogger’) and elevate shell privileges 
+
+Fig. 5: Distribution of CBI under benign, injected, and defended configurations. 
+
+Fig. 6: Predicate-level trust-boundary violation rates. TABLE IV: Regression of CBI on attacker capability norm.        
+
+> Parameter Estimate Slope 0.38 Standard error 0.04
+> 𝑡 -statistic 9.50
+> 𝑝 -value <0.0001
+> 𝑅 20.42
+
+immediately." 
+
+ToolCall violations are substantially reduced under mitigation, whereas PolicyOverride remains partially persistent, reveal-ing residual semantic reinterpretation pathways. To evaluate structural fragility, we regress CBI against the scalar attacker capability norm: As shown in Table IV, instability increases significantly with attacker strength (slope = 0.38, 𝑝 < 0.0001), with 42% of variance explained by adversarial capability alone. Mild curvature at higher capability levels suggests compounding boundary interactions once semantic thresholds are crossed. Additionally, adversarial prompting produces measurable and structurally significant boundary destabilization. Mitigations reduce instability but do not fully eliminate semantic leakage across validation layers, confirming that reasoning-to-execution coupling remains the primary driver of residual architectural fragility. 
+
+C. Privilege Escalation Dynamics 
+
+We examine whether trust-boundary instability translates into measurable amplification of authority within OpenClaw’s execution layer. Privilege drift captures changes in accessible 13 
+
+Fig. 7: Privilege drift distribution across configurations. TABLE V: Privilege drift statistics (95% CI).             
+
+> Configuration Mean SD 95% CI Benign 0.03 0.04 [0.02, 0.04] Injected 0.21 0.11 [0.19, 0.23] Defended 0.09 0.06 [0.08, 0.10]
+
+TABLE VI: Correlation between token usage and risk proxy.         
+
+> Statistic Value Sample size ( 𝑁 )9Pearson correlation ( 𝑟 )0.635 Spearman rank correlation ( 𝜌 )0.561 High-risk threshold 𝑟𝑖𝑠𝑘 ≥0.80
+
+credentials and the breadth of runtime actions, providing a direct indicator of execution-layer impact. Figure 7 shows that benign executions remain centered near zero drift (mean = 0.03), indicating stable reasoning-to-action transitions. Under adversarial injection, the distribution shifts toward positive values (mean = 0.21) with a heavier upper tail, confirming that malicious prompts increase authority. The defended configu-ration reduces drift (mean = 0.09) but does not fully restore baseline behavior. These statistics are detailed in Table V. The benign-to-injected increase is statistically decisive ( 𝑝 < 0.0001, Cohen’s 𝑑 = 2.04), indicating a very large impact. Mitigation significantly reduces drift relative to injection ( 𝑝 < 0.0001, 
+
+𝑑 = 1.23), though residual amplification persists. Figure 8 and Table VI indicate that higher token usage correlates with in-creased risk. Longer reasoning traces expose more intermediate states where adversarial impact and unsafe tool invocation may occur. Figure 9 and Table VII show that adversarial capability positively correlates with privilege drift, suggesting that stronger adversaries increase the likelihood of authority amplification, although the relationship is not strictly linear. 
+
+D. Mitigation Impactiveness 
+
+We next evaluate whether the proposed hardening mecha-nisms materially reduce the structural risks identified earlier. Because OpenClaw tightly couples reasoning outputs to execu-tion privileges, mitigation must reduce not only attack success but also boundary instability and privilege drift. Figure 10 shows that all core metrics shift below zero under mitigation, indicating consistent risk reduction across identical adversarial conditions. 
+
+Fig. 8: Correlation between token usage and risk proxy. Higher token usage is associated with increased risk, reflecting that longer reasoning traces expose more intermediate states for unsafe execution. 
+
+Fig. 9: Privilege drift as a function of attacker capability norm across configurations. The largest reductions occur in attack success and boundary failures, suggesting that hardening primarily strengthens vali-dation and authorization layers. Privilege drift reductions are smaller but remain consistently negative, indicating constrained yet persistent escalation pathways. Table VIII quantifies absolute improvements, showing that the 0.10 reduction in attack success reflects a meaningful contraction of exposure, particularly in multi-agent configurations. The equal reduction in bound-ary failures confirms strengthened trust predicates, while the smaller decrease in privilege drift indicates partial mitigation of escalation magnitude rather than complete elimination. As shown in Table IX, all reductions are statistically significant with moderate-to-large effect sizes. The strongest impacts are observed in boundary stabilization, while privilege drift remains meaningfully constrained but not fully eliminated. These results confirm that mitigation delivers robust, practically significant improvements in system security, though residual privilege drift indicates that reasoning-to-execution coupling continues to shape system-level exposure even under strengthened policy enforcement. 
+
+E. Mitigation Impactiveness and System-Level Risk 
+
+We evaluate how defensive mechanisms impact attack out-comes across different prompt-injection styles. Because in-jection strategies exploit distinct structural weaknesses in the reasoning–execution pipeline, the effectiveness of mitigation may vary across attack mechanisms. We therefore analyze the 14 
+
+TABLE VII: Correlation between attacker capability norm and privilege drift.      
+
+> Statistic Value Sample size ( 𝑁 )9Pearson correlation ( 𝑟 )0.235 Spearman rank correlation ( 𝜌 )0.311
+
+Fig. 10: Security metric deltas (Defended minus Injected configuration). Negative values indicate a reduction in risk under mitigation. TABLE VIII: Mean reductions relative to injected configuration.      
+
+> Metric Mean reduction Attack Success -0.10 Boundary Failures -0.10 Privilege Drift -0.02 Policy Override Likelihood -0.06
+
+TABLE IX: Inferential results for mitigation impact, including effect sizes and statistical significance.                     
+
+> Metric Mean difference Cohen’s 𝑑 𝑝 -value Attack Success -0.10 0.88 <0.0001 Boundary Failures -0.10 0.94 <0.0001 Privilege Drift -0.02 0.76 <0.0001 Policy Override Likelihood -0.06 0.81 <0.0001
+
+change in system risk after applying defenses. Figure 11 presents the distribution of mitigation impact across four injection categories: role confusion, tool coercion, policy-style jailbreak prompts, and hidden instruction attacks. Each density curve represents the distribution of risk differences, computed as 
+
+Δ𝑅𝑖𝑠𝑘 𝑃𝑟𝑜𝑥𝑦 = 𝑅𝑖𝑠𝑘 𝑑𝑒 𝑓 𝑒𝑛𝑑𝑒𝑑 − 𝑅𝑖𝑠𝑘 𝑖𝑛 𝑗𝑒𝑐𝑡𝑒𝑑 . Most densities are concentrated at negative values, indicating that mitigation generally reduces execution risk. Role confusion attacks exhibit the largest negative shift, suggesting that defensive filtering is particularly effective against explicit role-manipulation prompts. Tool coercion and policy-style jailbreak prompts show moderate reductions, while hidden instruction attacks remain concentrated near zero, indicating that covert prompt manipulations are comparatively resilient. Table X highlights that mitigation impactiveness differs substantially across injection categories. Explicit prompt manipulations are more easily detected and neutralized, while implicit and hidden instructions remain comparatively resilient to defensive filtering. To further evaluate operational exposure, we compare average system risk with worst-case outcomes across experimental runs. Figure 12 shows 
+
+Fig. 11: Mitigation impactiveness across injection styles. Neg-ative Δ𝑅𝑖𝑠𝑘 𝑃𝑟𝑜𝑥𝑦 values indicate reductions in observed risk after applying defenses. TABLE X: Mitigation impact by injection type.            
+
+> Injection Type Mean Δ𝑅𝑖𝑠𝑘 𝑃𝑟 𝑜𝑥 𝑦 Interpretation Role confusion -0.15 Strong mitigation impact Tool coercion -0.06 Moderate mitigation Policy jailbreak style -0.03 Limited mitigation Hidden instruction +0.01 Residual vulnerability
+
+that although mean risk values remain relatively low, worst-case outcomes are substantially higher, indicating that rare, high-impact events dominate system exposure. Table XI demonstrates the divergence between average and worst-case outcomes. The worst-case risk exceeds the average system risk by more than a factor of two, underscoring that execution-coupled LLM systems are dominated by tail events. These results highlight the importance of evaluating systems under adversarial worst-case conditions rather than relying solely on average-case metrics. 
+
+F. Per-Model Vulnerability Differences 
+
+We examine whether individual LLM backends exhibit heterogeneous susceptibility to adversarial prompting. Because OpenClaw aggregates outputs from multiple models, backend variability directly impacts overall exposure. Under permissive selection, system compromise is determined by the weakest backend rather than by average performance. Figure 13 illus-trates attack success rates across the evaluated LLM backends. Under baseline conditions without injection, success rates remain low (7–10%), reflecting normal operational errors rather than adversarial impact. When prompt injection is introduced, compromise rates increase substantially across all models: 37% for GPT-5.2, 31% for DeepSeek-R1, and 35% for Llama-4-Maverick. Applying mitigation reduces attack success rates but does not eliminate them entirely, indicating that prompt injection remains partially effective even under defensive configurations. These values are summarized in Table XII. Figure 14 shows clear heterogeneity across models. Under injection, GPT-5.2 exhibits the highest compromise rate, followed by Llama-4-Maverick, while DeepSeek-R1 shows comparatively lower vulnerability. Mitigation reduces compromise across all models while preserving this ordering, indicating consistent defensive impact without eliminating intrinsic differences in robustness. Confidence intervals in Table XIII confirm statistically sig-15 
+
+Fig. 12: Distribution of mean risk and worst-case risk across experimental runs. TABLE XI: Comparison of mean and worst-case risk across runs.       
+
+> Metric Mean ( 𝜇 )Maximum Mean risk across runs 0.082 0.116 Worst-case risk 0.173 0.330
+
+TABLE XII: Attack success probability by backend.         
+
+> Model Injected Defended GPT-5.2 0.37 0.28 DeepSeek-R1 0.31 0.19 Llama-4-Maverick 0.35 0.22
+
+TABLE XIII: Inferential comparison of backend injection susceptibility.                 
+
+> Model 95% CI Cohen’s ℎvs. lowest 𝑝 -value GPT-5.2 [0.34, 0.40] 0.13 <0.01 DeepSeek-R1 [0.28, 0.34] ––Llama-4-Maverick [0.32, 0.38] 0.09 <0.05
+
+nificant separation between GPT-5.2 and DeepSeek-R1, and between Llama-4-Maverick and DeepSeek-R1, with moderate impact sizes. Critically, backend heterogeneity interacts with orchestration logic. Under permissive selection, compromise occurs if any model emits an unsafe action; therefore, the most vulnerable backend determines system exposure. Diversity alone does not confer resilience. Only aggregation policies that require multi-agent agreement can transform heterogeneity into an effective defensive mechanism. 
+
+G. Operational Trade-offs 
+
+We evaluate how defensive mechanisms affect task perfor-mance and system-level efficiency under adversarial conditions. Utility is defined as the proportion of legitimate tasks completed without unjustified blocking, and latency measures execution responsiveness. Figure 15 shows the distribution of benign task utility under injected and defended configurations. The defended configuration exhibits a slight leftward shift relative to the in-jected baseline, indicating a modest reduction in task completion rate. However, the distribution remains tightly concentrated in the high-utility region, demonstrating that mitigation does 
+
+Fig. 13: Per-LLM attack success rates across experimental sce-narios. Baseline represents normal operation without injection. 
+
+Fig. 14: Per-model attack success under injected and defended settings. TABLE XIV: Utility statistics across configurations (95% CI). Impact size computed using Cohen’s 𝑑 .         
+
+> Configuration Mean utility SD 95% CI Injected 0.93 0.04 [0.92, 0.94] Defended 0.89 0.05 [0.88, 0.90]
+
+TABLE XV: Latency statistics across configurations (millisec-onds).       
+
+> Configuration Median latency IQR Injected 420 ms 110 ms Defended 468 ms 125 ms
+
+not materially impair routine functionality. These statistics are summarized in Table XIV. Figure 16 presents the latency distribution on a logarithmic scale to account for right-skewed response times. The defended configuration exhibits a slight upward shift, reflecting additional policy checks and sandbox validation overhead. The shift is modest relative to the overall variance in response times, and extreme latency outliers are not substantially amplified. Tables XIV and XV show that the mitigation introduces only minor reductions in utility and modest latency overhead. These trade-offs remain well within acceptable deployment thresholds. Importantly, the magnitude of security improvement, particularly in reduced probability of compromise and boundary stabilization, substantially exceeds the operational penalties, confirming that mitigation shifts the system toward a more favorable security–performance frontier rather than merely redistributing risk. 16 
+
+Fig. 15: Utility distribution across configurations. 
+
+Fig. 16: Latency distribution (log scale). TABLE XVI: Attack surface entropy across configurations.     
+
+> Configuration Entropy ( 𝐻 𝐴 )Benign 0.42 Injected 0.71 Defended 0.55
+
+H. Structural Risk Concentration and Instability Analysis 
+
+We examine whether OpenClaw’s attack surface undergoes a structural transformation under adversarial pressure. Entropy-based concentration, escalation curvature, and supply-chain ex-posure are analyzed to determine whether amplification reflects instability in transient behavior. Attack surface entropy measures how risk is distributed across exposure vectors. Lower values indicate concentration in a few dominant weaknesses, whereas higher values reflect diffusion across multiple boundaries. As shown in Table XVI, entropy increases from 0.42 in the benign configuration to 0.71 under injection, indicating that adversarial pressure disperses risk across multiple boundaries rather than exploiting a single weakness. Mitigation partially reconcentrates exposure (0.55) but does not restore benign levels, suggesting persistent multi-boundary fragility. Privilege amplification is next evaluated to determine whether it scales proportionally with attacker capability. Table XVII reports a privilege gradient of 0.19, exceeding the instability threshold 𝜂 = 0.15, and a positive escalation curvature of 0.08. These values indicate super-linear escalation, where incremental increases in adversarial capability yield disproportionately large gains in privilege. The observed behavior is escalation-sensitive, rooted in the coupling between reasoning and execution rather than linear accumulation. Structural exposure introduced through the skill TABLE XVII: Privilege escalation metrics under injection.       
+
+> Metric Value Threshold Privilege gradient 0.19 0.15 Escalation curvature 0.08 0
+
+TABLE XVIII: Supply-chain risk sensitivity to skill installation probability.     
+
+> Installation probability SCR Low 0.035 Medium 0.071 High 0.106
+
+TABLE XIX: System compromise probability under permissive versus consensus-gated aggregation.           
+
+> Number of Agents Permissive Rule Majority (Consensus) Rule 10.24 0.24 30.57 0.33 50.75 0.41 70.86 0.48
+
+ecosystem is also assessed. Table XIII indicates a non-trivial supply-chain risk (SCR = 0.071). Although lower than injection-driven risk, supply-chain exposure persists independently of runtime prompting and remains active even under boundary hardening. Sensitivity analysis varying installation probability shows proportional scaling of SCR, as summarized in Ta-ble XVIII, underscoring the importance of governance controls over marketplace discoverability and adoption. 
+
+I. Consensus-Gated Evaluation 
+
+To evaluate whether aggregation policy can transform back-end diversity into a defensive mechanism, we re-ran the multi-agent experiments under a consensus-gated rule. In this config-uration, execution proceeds only when at least half of the agents independently propose the same action. All other experimental parameters, including attacker configuration, injection types, and LLM backends, were held constant. As shown in Table XIX, compromise probability grows rapidly under permissive aggre-gation, reaching 0.86 with seven agents. Under majority gating, growth is substantially moderated, rising only to 0.48 for the same configuration. This contrast demonstrates that backend diversity amplifies risk under disjunctive selection but attenuates risk when agreement is required. In other words, the aggregation rule determines whether heterogeneity becomes a liability. Although majority gating does not fully eliminate compromise, it significantly reduces amplification relative to permissive execution. These results confirm that aggregation semantics are a primary driver of system-level exposure and that carefully designed multi-agent policies can leverage heterogeneity to improve resilience. 
+
+VI. Comparison with Existing Work 
+
+Recent work has advanced the security evaluation and defense of tool-enabled LLM agents. Benchmark-driven frameworks such as Agent Security Bench provide systematic evaluation 17 
+
+of prompt injection attacks across agent pipelines [24]. Several architectural defenses have been proposed, including CaMeL [17], PromptArmor [25], and RTBAS [26], which aim to mit-igate adversarial instructions and enforce integrity constraints before tool execution. Additional approaches address privilege control mechanisms, such as Prompt Flow Integrity [27] and Progent [28]. In parallel, research has examined ecosystem-level threats impacting agent infrastructures, including tool-selection manipulation via ToolHijacker [19] and broader protocol-level vulnerabilities in LLM agent workflows [29]. Despite these advances, prior work primarily evaluates prompt-injection defenses and privilege controls at the level of individual agents. The structural impact of multi-agent orchestration together with execution coupling on system-level security exposure remains largely unexplored. As summarized in Table XX, existing studies address prompt injection, tool misuse, and privilege management largely in isolation. In contrast, our work analyzes an execution-coupled multi-agent architecture and introduces system-level metrics, including CBI, privilege drift, attack sur-face entropy, and escalation curvature, to quantify orchestration-induced risk amplification and the dynamics of privilege escalation. Our results further demonstrate that permissive aggregation policies amplify the probability of compromise as the number of agents increases, while consensus-based orchestration partially mitigates this amplification, highlighting the security implications of aggregation semantics in multi-agent deployments. 
+
+VII. Discussion 
+
+This study provides a structural security analysis of Open-Claw, an execution-coupled multi-agent system in which se-mantic outputs directly trigger privileged actions. The results demonstrate that compromise probability, boundary instability, and privilege drift are emergent phenomena arising from architectural properties embedded in reasoning-to-execution coupling and aggregation semantics, rather than isolated model vulnerabilities. A central contribution of this work is the identification of a causal pathway linking adversarial impact to privilege escalation through boundary instability. Adversarial prompts and malicious skill inputs first weaken boundary-validation predicates, thereby increasing CBI. As these bound-aries degrade, semantic outputs gain greater leverage over execution-layer authority, leading to measurable privilege drift. Mediation analysis supports this interpretation: the indirect impact of adversarial actions on privilege drift through boundary instability was substantial ( 𝛽 2 = 0.42), whereas the direct impact was smaller ( 𝛽 1 = 0.21). This indicates that boundary instability mediates a significant portion of escalation and that privilege amplification primarily arises from boundary degradation rather than from isolated semantic deviations. Our findings also demonstrate that orchestration semantics strongly determine system-level exposure. Under permissive aggregation, compromise probability increased by a factor of 3.58 when scaling from 1 to 7 agents. In this configuration, backend heterogeneity amplifies risk because execution pro-ceeds whenever any agent emits a viable unsafe action. As shown in the consensus-gated evaluation, requiring majority agreement substantially reduces this amplification, confirming that aggregation rules can transform model diversity from a liability into a protective mechanism. More broadly, these results indicate that security in multi-agent AI systems cannot be reduced to individual model robustness. Architectural controls governing boundary validation, privilege propagation, and ag-gregation logic play a decisive role. Weak trust boundaries allow semantic perturbations to propagate into execution states, while permissive orchestration multiplies opportunities for unsafe execution. Mitigation results further reinforce this architectural perspective: hardening mechanisms significantly reduce the probability of compromise, boundary failures, and privilege drift, yet residual instability persists. Execution-layer gating constrains the magnitude of escalation but does not fully eliminate semantic leverage during authority transitions. As long as reasoning outputs remain directly coupled to executable prim-itives, structural sensitivity remains. Additionally, this study highlights that risk amplification in execution-coupled agentic systems is structural rather than incidental. Boundary instability mediates privilege escalation, orchestration semantics govern amplification, and supply-chain channels introduce orthogonal exposure. impactive security design, therefore, requires coor-dinated architectural controls across boundary enforcement, aggregation policy, and ecosystem governance, rather than relying solely on model-level alignment. 
+
+VIII. Threats to Validity 
+
+This section delineates the reliability boundaries of our find-ings. Consistent with prior simulation-based security research [30], we distinguish between internal and external validity considerations. 
+
+A. Internal Validity 
+
+Internal validity concerns whether the observed impacts re-flect structural properties of OpenClaw rather than experimental artifacts. To minimize confounding, all configurations were evaluated under controlled escalation of attacker capabilities, with fixed random seeds, identical environmental settings, and matched trial counts across baseline, injected, and defended conditions. Several limitations remain. First, the attacker capa-bility model is parameterized and may not capture fully adaptive adversarial strategies. Second, privilege drift and boundary instability were operationalized through measurable state tran-sitions; although grounded in formal definitions, these metrics abstract complex runtime interactions and may not capture all latent privilege pathways. Third, regression and entropy analyses assume independence across runs, whereas subtle architectural correlations may exist across execution traces. Despite these limitations, the consistency of amplification, instability, and escalation-curvature impacts across multiple independent metrics reduces the likelihood that the observed results are due to measurement artifacts. 
+
+B. External Validity 
+
+External validity concerns the generalizability of the evalu-ated OpenClaw configuration beyond the experimental setup. 18 
+
+TABLE XX: Comparison with representative research on LLM-agent security. ✓ indicates explicit support and evaluation.                                                             
+
+> Work (2025) Primary Focus Exec. MA Aggregation Priv. Boundary
+> Zhang et al. (ASB) [24] Agent security benchmark ✓(partial) –––Debenedetti et al. (CaMeL) [17] Defense-by-design architec-ture
+> ✓–––✓
+> Zhong et al. (RTBAS) [26] Tool-call integrity screening ✓–––✓
+> Shi et al. (PromptArmor) [25] Prompt injection detection ✓–––(partial)
+> Kim et al. (PFI) [27] Prompt-flow integrity (privi-lege protection)
+> ✓––✓✓
+> Shi et al. (Progent) [28] Programmable privilege poli-cies
+> ✓––✓–Shi et al. (ToolHijacker) [19] Tool-selection prompt injec-tion
+> ✓––––Ferrag et al. [29] End-to-end agent threat model ✓✓––✓
+> This work (OpenClaw) System-level amplification and trust-boundary viola-tions
+> ✓✓Any-agent vs. ma-jority
+> ✓✓
+
+Experiments used specific LLM backends and defined orches-tration policies. While different model architectures, decoding strategies, and aggregation rules may alter quantitative mag-nitudes, the core mechanisms identified, aggregation-driven amplification, boundary instability, and privilege escalation, are architectural rather than model-specific. The threat model focused on semantic injection, boundary manipulation, and supply-chain exposure in a self-hosted environment. Cloud-based deployments and heavily sandboxed systems may ex-hibit different amplification profiles due to infrastructure-level constraints. Similarly, permissive aggregation maximizes amplification, whereas consensus-based and threshold-gated policies attenuate it. Operational metrics such as latency and task utility were measured under controlled laboratory conditions; real-world variability in workload, network performance, and deployment scale may impact observed trade-offs. Nonetheless, the security dynamics emerge from the coupling of reasoning-to-execution with multi-agent aggregation, a pattern shared across many agentic AI systems. Accordingly, while numerical values may vary across deployments, the structural mechanisms identified in this study are likely to generalize to other execution-coupled multi-agent architectures. Further evaluation across di-verse environments would strengthen empirical generalization. 
+
+IX. Limitations and Future Work 
+
+This study has several limitations that suggest directions for future research. While we quantified super-linear privilege escalation, we did not formally model the causal mediation between boundary instability and privilege drift. Mitigations focused on execution-layer hardening, leaving semantic-layer defenses unexplored. The analysis considered only permissive selection, and systematic evaluation of consensus thresholds, weighted voting, and dynamic trust scoring could clarify how backend diversity can be leveraged defensively. Supply-chain risk was estimated probabilistically rather than empirically, and escalation thresholds were identified empirically rather than analytically. Future work integrating causal modeling, semantic defenses, policies, and empirical ecosystem analysis could more fully characterize and mitigate structural vulnerabilities in multi-agent LLM systems. 
+
+X. Conclusion 
+
+This work presents a structural security analysis of OpenClaw, a self-hosted multi-agent system in which semantic reasoning is directly coupled to executable actions. Our results demonstrate that permissive multi-agent amplifies the probability of com-promise, adversarial prompting diffuses instability across trust boundaries, and privilege escalation exhibits superlinear growth once the attacker’s capability surpasses defined thresholds. Mitigation mechanisms significantly reduce exposure but do not fully eliminate the structural sensitivity inherent in reasoning-to-action integration. These findings indicate that in agentic architectures, security is determined not only by individual model robustness but also by semantics, boundary enforcement, and escalation dynamics. Designing resilient deployments, therefore, requires architectural controls that constrain ag-gregation policies, reinforce boundary isolation, and address both semantic and supply-chain attack vectors. Furthermore, this study underscores that reasoning-to-action coupling, while powerful for automation, introduces amplification mechanisms that must be explicitly engineered and contained to ensure system-level security. 
+
+References      
+
+> [1] S. Brohi, Q.-u.-a. Mastoi, N. Jhanjhi, and T. R. Pillai, “A research landscape of agentic ai and large language models: Applications, challenges and future directions,” Algorithms, vol. 18, no. 8, p. 499, 2025. [2] F. Jiang, C. Pan, K. Wang, P. Michiardi, O. A. Dobre, and M. Debbah, “From large ai models to agentic ai: A tutorial on future intelligent communications,” IEEE Journal on Selected Areas in Communications, 2026. [3] L. R. Alva and B. Pandey, “Agentic ai systems in the age of generative models: architectures, cloud scalability, and real-world applications,” Artificial Intelligence Review, vol. 59, no. 3, p. 88, 2026. [4] X. Miao, G. Oliaro, Z. Zhang, X. Cheng, H. Jin, T. Chen, and Z. Jia, “Towards efficient generative large language model serving: A survey from algorithms to systems,” ACM Computing Surveys, vol. 58, no. 1, pp. 1–37, 2025. [5] Y. Annepaka and P. Pakray, “Large language models: a survey of their development, capabilities, and applications,” Knowledge and Information Systems, vol. 67, no. 3, pp. 2967–3022, 2025. 19
+
+[6] N. L. Rane, A. Tawde, S. P. Choudhary, and J. Rane, “Contribution and performance of chatgpt and other large language models (llm) for scien-tific and research advancements: a double-edged sword,” International Research Journal of Modernization in Engineering Technology and Science, vol. 5, no. 10, pp. 875–899, 2023. [7] J. Luo, W. Zhang, Y. Yuan, Y. Zhao, J. Yang, Y. Gu, B. Wu, B. Chen, Z. Qiao, Q. Long et al., “Large language model agent: A survey on method-ology, applications and challenges,” arXiv preprint arXiv:2503.21460, 2025. [8] A. Plaat, M. van Duijn, N. Van Stein, M. Preuss, P. van der Putten, and K. J. Batenburg, “Agentic large language models, a survey,” Journal of Artificial Intelligence Research, vol. 84, 2025. [9] S. Barua, “Exploring autonomous agents through the lens of large language models: A review,” arXiv preprint arXiv:2404.04442, 2024. [10] Y. Liu, Y. Yao, J.-F. Ton, X. Zhang, R. Guo, H. Cheng, Y. Klochkov, M. F. Taufiq, and H. Li, “Trustworthy llms: a survey and guideline for evaluating large language models’ alignment,” arXiv preprint arXiv:2308.05374, 2023. [11] H. Xu, S. Wang, N. Li, K. Wang, Y. Zhao, K. Chen, T. Yu, Y. Liu, and H. Wang, “Large language models for cyber security: A systematic literature review,” ACM Transactions on Software Engineering and Methodology, 2024. [12] A. Habibzadeh, F. Feyzi, and R. E. Atani, “Large language models for security operations centers: A comprehensive survey,” arXiv preprint arXiv:2509.10858, 2025. [13] Q. Zhan, Z. Liang, Z. Ying, and D. Kang, “Injecagent: Benchmarking indirect prompt injections in tool-integrated large language model agents,” in Findings of the Association for Computational Linguistics (ACL), 2024. [Online]. Available: https://aclanthology.org/2024.findings-acl.624/ [14] E. Debenedetti et al., “Agentdojo: A dynamic environment to evaluate prompt injection attacks and defenses for llm agents,” arXiv preprint, 2024, arXiv:2406.13352. [15] E. Debenedetti, I. Shumailov, T. Fan, J. Hayes, N. Carlini, D. Fabian, C. Kern, C. Shi, A. Terzis, and F. Tram` er, “Defeating prompt injections by design,” arXiv preprint arXiv:2503.18813, 2025. [16] L. Wang et al., “A survey on large language model-based multi-agent systems,” AI and Ethics, 2024. [17] E. Debenedetti et al., “Defeating prompt injections by design,” arXiv preprint arXiv:2503.18813, 2025. [Online]. Available: https: //arxiv.org/abs/2503.18813 [18] M. Nasr, N. Carlini et al., “The attacker moves second: Stronger adaptive attacks bypass defenses against llm jailbreaks and prompt injections,” arXiv preprint, 2025, arXiv:2510.09023. [19] J. Shi, Z. Yuan, G. Tie, P. Zhou, N. Z. Gong, and L. Sun, “Prompt injection attack to tool selection in llm agents,” arXiv preprint, 2025, arXiv:2504.19793. [20] S. Gulyamov, “Prompt injection attacks in large language models and ai systems: A comprehensive review (2023–2025),” Preprints, 2025. [21] S. M. A. Hossain, R. K. Shayoni, M. R. Ameen, and J. Shin, “A multi-agent llm defense pipeline against prompt injection attacks,” in arXiv preprint, 2025, arXiv:2509.14285. [22] Anonymous, “Design patterns for securing llm agents against prompt injection,” arXiv preprint, 2025, arXiv:2506.08837. [23] Y. Tang, “Security of llm-based agents regarding attacks, jailbreaks, and reasoning failures,” Computers & Security, 2025, elsevier. [24] H. Zhang, J. Huang, K. Mei, Y. Yao, Z. Wang, C. Zhan, H. Wang, and Y. Zhang, “Agent security bench (asb): Formalizing and benchmarking attacks and defenses in llm-based agents,” in The Thirteenth International Conference on Learning Representations (ICLR), 2025. [Online]. Available: https://openreview.net/forum?id=V4y0CpX4hK [25] T. Shi et al., “Promptarmor: Simple yet effective prompt injection defenses,” arXiv preprint arXiv:2507.15219, 2025. [Online]. Available: https://arxiv.org/abs/2507.15219 [26] P. Y. Zhong, S. Chen, R. Wang, M. McCall, B. L. Titzer, H. Miller, and P. B. Gibbons, “Rtbas: Defending llm agents against prompt injection and privacy leakage,” arXiv preprint arXiv:2502.08966, 2025. [Online]. Available: https://arxiv.org/abs/2502.08966 [27] J. Kim, W. Choi, and B. Lee, “Prompt flow integrity to prevent privilege escalation in llm agents,” arXiv preprint arXiv:2503.15547, 2025. [Online]. Available: https://arxiv.org/abs/2503.15547 [28] T. Shi, J. He, Z. Wang, L. Wu, H. Li, W. Guo, and D. Song, “Progent: Programmable privilege control for llm agents,” arXiv preprint arXiv:2504.11703, 2025. [Online]. Available: https: //arxiv.org/abs/2504.11703 [29] M. A. Ferrag, N. Tihanyi, D. Hamouda, L. Maglaras, A. Lakas, and M. Debbah, “From prompt injections to protocol exploits: Threats in llm-powered ai agents workflows,” ICT Express, 2025, available online 13 Dec 2025. [30] C. Wohlin, P. Runeson, M. H¨ ost, M. C. Ohlsson, B. Regnell, and A. Wessl´ en, Experimentation in software engineering. Springer Science & Business Media, 2012.

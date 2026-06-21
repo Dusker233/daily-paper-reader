@@ -1,0 +1,1153 @@
+Title: Image Prompt Reconstruction Attacks on Distributed MLLM Inference Frameworks
+
+URL Source: https://arxiv.org/pdf/2606.18710v1
+
+Published Time: Thu, 18 Jun 2026 00:31:16 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+> JOURNAL OF L ATEX CLASS FILES, VOL. 18, NO. 9, SEPTEMBER 2020 1
+
+# Image Prompt Reconstruction Attacks on Distributed MLLM Inference Frameworks 
+
+Xinjian Luo, Hongyan Chang, Jianxin Wei, Yuncheng Wu, Xiaofeng Gao, Meikang Qiu, Ting Yu, and Xue Liu, Fellow, IEEE 
+
+Abstract —Distributed large language model (LLM) inference frameworks connect isolated consumer-grade devices for large-scale model inference, substantially reducing hardware constraints. However, recent studies show that intermediate embeddings transmitted among participants can leak private prompts. As LLMs evolve into multimodal LLMs (MLLMs), this risk extends beyond text: image prompts contain rich visual and seman-tic information, making their intermediate embeddings highly privacy-sensitive. Yet, image-prompt leakage in distributed MLLM inference remains largely unexplored. In this paper, we investigate privacy risks to input images caused by intermediate embeddings in distributed MLLM frameworks. We first analyze the information flow from image pixels to interme-diate representations. Since image and text embeddings are often intertwined across MLLM layers, we design an image embedding extraction algorithm as a prerequisite for reconstruction attacks, achieving 100% extraction accuracy across almost all MLLM layers in our experiments. Building on this, we develop two passive black-box image reconstruction attacks, MPAA and IEDA ,reflecting realistic threats from normal participants with limited knowledge and capability. MPAA performs fine-grained pixel-level reconstruction via patch-wise information extraction and assembly, while IEDA performs coarse-grained semantic reconstruction through embedding-guided diffusion generation. We evaluate our attacks on four representative MLLM families: Gemma 3, Phi 4 Multimodal, Qwen 2.5 VL, and Llama 4 Scout. Results show consistently superior reconstruction performance in various settings. We further analyze the effects of MoE architecture, image preprocessing, model size, and text-image dependency on attack performance. To our knowledge, this is the first study of image reconstruction attacks on MLLMs. 
+
+Index Terms —Prompt Reconstruction, MLLM, Distributed Inference. 
+
+I. I NTRODUCTION 
+
+Distributed large language model (LLM) inference frame-works have attracted considerable attention [ 1 ], [ 2], [ 3], [ 4], [ 5 ], [6 ], [ 7] for their ability to offload large-scale model inference from high-end servers to consumer-grade devices. In parallel, several open-source projects such as Petals [ 1] and Cake [ 3], as well as emerging start-ups including Together.ai [ 8 ], Prime Intellect [ 9], and Modal [ 10 ], have recently built distributed model inference platforms based on this paradigm. These frameworks typically allocate a subset of LLM layers to each            
+
+> Xinjian Luo and Xiaofeng Gao are with Shanghai Jiao Tong University, Shanghai, China. E-mail: {xinjianluo, gaoxiaofeng }@sjtu.edu.cn.
+> Hongyan Chang ,Jianxin Wei ,Ting Yu , and Xue Liu are with Mo-hamed bin Zayed University of Artificial Intelligence, Abu Dhabi, United Arab Emirates. E-mail: changhongyan0530@gmail.com, {jianxin.wei, ting.yu, steve.liu }@mbzuai.ac.ae.
+> Yuncheng Wu is with Renmin University of China, Beijing, China. E-mail: wuyuncheng@ruc.edu.cn.
+> Meikang Qiu is with Augusta University, Augusta, GA, USA. E-mail: qiumeikang@yahoo.com.
+
+client, enabling multiple clients to collaboratively complete full-model inference using only consumer-grade hardware, as illustrated in Figure 1. During the inference process, intermediate representations are transmitted among participants, yet their privacy im-plications remain insufficiently explored. Although recent studies [ 11 ], [ 12 ] examine text prompt leakage risks in distributed inference, they focus exclusively on text-based LLMs and overlook the privacy threats posed by multimodal LLMs (MLLMs) that process image inputs . This gap raises a fundamental question: to what extent can private image inputs be inferred from the intermediate representations transmitted along the distributed inference pipeline? In this work, we address this question by designing image reconstruction attacks targeting distributed MLLM architectures. To accurately reflect privacy vulnerabilities in real-world frameworks [ 1 ], we assume that any participant in the distributed pipeline may act as an adversary. We further restrict our attack setting to be 
+
+black-box and passive . The black-box assumption means that the adversary lacks access to MLLM parameters and architecture details, while the passive assumption indicates that the adversary extracts sensitive information without interfering with the inference process. It is worth noting that the workflow of distributed MLLM inference shares conceptual similarities with split learning (SL) [ 13 ], [ 14 ]. This naturally raises the question of whether existing attacks on SL [ 15 ], [ 16 ], [ 17 ], [ 18 ] can be adapted to our setting, as both aim to reconstruct images from intermediate model representations. The answer is negative for two key reasons. First, the target data differs fundamentally: SL attacks attempt to reconstruct training images during the model training phase, whereas our attacks aim to recover arbitrary unseen input images during model inference. Second, the target models differ significantly: SL attacks operate on lightweight classification networks, where inverse models can be trained efficiently. In contrast, our attacks focus on MLLMs with billions of parameters, for which training inverse models would incur prohibitive resource costs with limited effectiveness. Another possible direction is to adapt existing text prompt reconstruction attacks on distributed LLMs [ 11 ], [ 12 ] to recon-struct images in distributed MLLMs. Although these studies demonstrate strong performance on text data, extending them to the image domain faces two fundamental challenges. First, [ 12 ]assumes a white-box LLM setting in which the adversary needs to host the entire LLM for a successful attack. This assumption violates our black-box and passive threat model and represents 
+
+an unrealistic scenario compared to the typical honest-but-curious participants who have limited resources. Second, [ 11 ]
+
+> arXiv:2606.18710v1 [cs.CR] 17 Jun 2026 Image Encoder
+> Projector
+> Image Prompt
+> Describe this image
+> Text Prompt
+> Tokenizer
+> LLM Decoder
+> LLM Decoder
+> LLM Decoder
+> OK
+> Next Token
+
+⋯  
+
+> 𝐸 𝑓 𝑖
+> Attack
+> Append
+> Client Module Server Module Server Module
+> LLM Decoder
+> LLM Decoder
+> (Attacker)
+> Token Embedding
+> Reconstruction
+
+⋯Fig. 1: The overview of distributed MLLM inference frameworks. 
+
+exploits the discrete nature of text tokens and reconstructs text prompts using classification techniques. However, image pixels are continuous and rich in spatial correlations and fine-grained semantic information, rendering such discrete-space methods 
+
+ineffective for visual reconstruction . Therefore, developing image reconstruction attacks on MLLMs requires new insights into the information flow within MLLM inference pipelines. To design simple yet effective attacks, we begin by analyzing the common information flow patterns from input images to intermediate representations across several state-of-the-art MLLMs, including Gemma 3 [ 19 ], Phi 4 Multimodal [ 20 ], Qwen 2.5 VL [21 ], and Llama 4 Scout [22 ]. Since an MLLM prompt typically contains both text and image data, their corresponding embeddings are intertwined within the intermediate representations produced by different layers. As a prerequisite, we develop an image embedding extraction method that leverages the distinct properties of text, image, and special tokens in the shared embedding space. Our experiments show that this method consistently achieves 100% extraction accuracy across all layers in most MLLM architectures. Based on the extracted image embeddings, we propose two image reconstruction attacks: the Multi-resolution Patch 
+
+Assembly Attack ( MPAA ) for pixel-level reconstruction and the Image Embedding-guided Diffusion Attack ( IEDA ) for semantic-level reconstruction. MPAA is inspired by the obser-vation that MLLMs typically split input images into fixed-size patches and generate image embeddings from them, implying that the information of each patch is primarily contained in a subset of embeddings. Accordingly, MPAA first extracts per-patch pixels from image embeddings and then assembles them into a complete image. It is important to note that the number of image embeddings does not necessarily match the number of patches, since MLLMs may further split or merge patches during processing, which can cause the loss of visual details. To enhance reconstruction fidelity, MPAA employs a multi-resolution reconstruction scheme that first produces two draft images at different resolutions and then fuses them using a fusion-denoising network [ 23 ]. The high-resolution image is assembled with more pixels per patch, emphasizing fine object details, while the low-resolution image uses fewer pixels per patch to emphasize object structure and contours. For MLLMs that heavily transform or merge image patches into tokens, especially in deeper layers, the visual information in the output embeddings may be substantially reduced, resulting in degraded performance for MPAA . To address this limitation, we introduce IEDA , which projects all extracted image embeddings into a predefined semantic space and uses this semantic representation to guide the generation process of a diffusion model. Compared with MPAA , IEDA focuses on semantic-level reconstruction and demonstrates greater robustness to the loss of fine-grained visual information across different layers of MLLMs. We conduct extensive experiments on state-of-the-art MLLMs, including Gemma 3 [ 19 ], Phi 4 Multimodal [ 20 ], Qwen 2.5 VL [ 21 ], and Llama 4 Scout [ 22 ], using seven widely adopted datasets: CIFAR10 [ 24 ], CIFAR100 [ 24 ], STL10 [ 25 ], CelebA [ 26 ], CC3M [ 27 ], COCO Caption [ 28 ], and ImageNette [ 29 ]. Our results show that MPAA achieves high-fidelity pixel-level reconstruction on the front layers of MLLMs, where visual details remain well preserved within the intermediate embeddings. In contrast, IEDA achieves consistent semantic-level reconstruction across all layers and all evaluated models. We further analyze key factors influencing attack performance, including the Mixture-of-Experts (MoE) architecture, image preprocessing strategies, model size, and text-image dependency. Based on the new findings from these analyses, we discuss potential defense mechanisms against the proposed attacks for the future design of a privacy-preserving distributed inference pipeline. In summary, our main contributions are as follows:  
+
+> •
+
+We analyze the distributional differences of embeddings corresponding to image, text, and special tokens in MLLMs, and propose an image embedding extraction algorithm as a necessary foundation for image reconstruc-tion attacks. This algorithm consistently achieves nearly 
+
+100% extraction accuracy across all layers of most MLLM architectures.  
+
+> •
+
+We investigate common patterns in MLLM image process-ing and develop two complementary image reconstruction attacks, MPAA and IEDA , which expose the privacy risks of distributed MLLM inference from both the pixel and semantic levels.  
+
+> •
+
+We perform a comprehensive evaluation on four represen-tative MLLMs, demonstrating the superior reconstruction capabilities of MPAA and IEDA compared to the baselines. Based on the experimental findings, we further explore 2possible defenses for enhancing the privacy protection of distributed MLLM inference frameworks. II. P RELIMINARIES 
+
+Multimodal Large Language Models. Mainstream MLLMs are capable of processing both image and text prompts and producing task-dependent outputs, such as text or images. To jointly handle visual and textual modalities, MLLMs commonly comprise three main components: an image encoder 𝑔 , an 
+
+image embedding projector , and a backbone LLM 𝑓 . The image encoder converts raw images into embeddings, the projector maps these embeddings into image tokens, and the backbone LLM accepts both image tokens and text tokens as input to generate the final outputs. Figure 1 illustrates a general workflow of this inference process. Let 𝒙 ∈ R3×𝐻 ×𝑊 denote an input image with height 𝐻 and width 𝑊 . Before being fed into the image encoder, 𝒙 is first resized to a predefined resolution, denoted as 3×𝑆 ×𝑆 , and then divided into patches of a fixed patch size: 𝑋 = {𝒙 𝑖 }𝑁 patch  
+
+> 𝑖 =1
+
+, where each patch 𝒙 𝑖 ∈ R3×𝑃 ×𝑃 and 𝑁 patch = ⌈𝑆 /𝑃 ⌉2. Note that 𝑆 , and hence 𝑁 patch , may vary depending on the input image size. The patch set 𝑋 is subsequently passed through a series of encoder layers to produce 𝑁 𝒙 patch features. It is important to note that typically 𝑁 𝒙 ≤ 𝑁 patch , as modern MLLMs often employ pooling operations to merge multiple patches, thereby reducing the computational cost of the downstream LLM [ 19 ]. After obtaining patch features, the embedding projector transforms them into a sequence of image tokens 𝑇 𝒙 = {𝒕 𝒙  
+
+> 𝑖
+
+}𝑁 𝒙 
+
+> 𝑖 =1
+
+, where each token 𝒕 𝒙  
+
+> 𝑖
+
+∈ R𝑑 𝑓 and 𝑑 𝑓 denotes the hidden dimension of the LLM 𝑓 .Let 𝒓 denote the text prompt, and let 𝑇 𝒓 = {𝒕 𝒓  
+
+> 𝑖
+
+}𝑁 𝒓  
+
+> 𝑖 =1
+
+represent the text tokens obtained after tokenization and token embedding by the LLM, where 𝑁 𝒓 is the sequence length. 𝑇 𝒓 and 𝑇 𝒙 will then be concatenated and fed into the LLM for next-token prediction. Let 𝐿 denote the number of decoder layers in the LLM 𝑓 , and let 𝑓 𝑖 represent the 𝑖 -th layer ( 𝑖 ∈ 1, · · · , 𝐿 ). After processing through layer 𝑓 𝑖 , the image and text tokens are transformed into intermediate embeddings 𝐸 𝑓 𝑖 = {𝒆 𝑖 }𝑁 𝒙 +𝑁 𝒓  
+
+> 𝑖 =1
+
+.The image information flow in MLLMs can thus be summarized as: 𝒙 split 
+
+−−−→ 𝑋 encoder & projector 
+
+−−−−−−−−−−−−−−→ 𝑇 𝒙 LLM 𝑓 1 ··· 𝑓 𝑖 
+
+−−−−−−−−−→ 𝐸 𝑓 𝑖 .
+
+Distributed MLLM Inference Frameworks. To enable MLLM inference on consumer-grade hardware with limited memory, distributed inference frameworks [ 1], [ 2], [ 3], [ 4], [ 5 ], [6], [ 7 ] partition the model into multiple modules according to participants’ hardware capabilities. Each participant is then assigned one or more modules to collaboratively perform the full inference process. We take the widely used Petals framework [1], [2] as an example. In Petals, two main modules are defined. A client module 
+
+hosts preprocessing, tokenization, and a small portion of the initial layers (less than 3% of total model weights [ 2]) and is responsible for initializing inference queries. A server module 
+
+hosts multiple consecutive LLM layers that execute the main inference computation. Participants may choose to host a client module, a server module, or both [ 2]. During inference, intermediate embeddings produced by each front-end server module are transmitted to the next module as its input, enabling a sequential forward pass across participants. Prior studies [ 11 ], [12 ] have demonstrated that text prompts can be reconstructed from such intermediate text embeddings transmitted between participants. However, the privacy risks associated with image embeddings remain unexplored. III. P ROBLEM STATEMENT 
+
+System Model. Without loss of generality, we consider a curious participant who hosts a contiguous block of LLM layers beginning at layer 𝑖 +1. During inference, this participant receives the intermediate embedding 𝐸 𝑓 𝑖 produced by layer 𝑖 
+
+hosted by the preceding participant. When 𝑖 = 0, we treat 𝐸 𝑓 0
+
+as the original image tokens input to the LLM, i.e., 𝑇 𝒙 . When another participant issues a query using a private image 𝒙 tgt 
+
+(the target image), the curious participant can also receive its corresponding embeddings 𝐸 tgt  
+
+> 𝑓 𝑖
+
+.In addition, this participant can also host a client module. Thus, the participant can collect image-embedding pairs prior to layer 𝑖 +1,  𝒙 , 𝐸 𝑓 𝑖 
+
+, using its local client and server components. Because our attacks are designed to operate at arbitrary layers ,we omit the layer subscript 𝑓 𝑖 where convenient and denote intermediate embeddings simply by 𝐸 .
+
+Threat Model. During distributed inference, any participant may act as an adversary. To reflect realistic deployments, we focus on black-box and passive (semi-honest) attacks. Under the black-box assumption, the attacker has no knowledge of remote modules beyond those it hosts. Concretely, the adversary controls a client module 𝑔 client and a server module 𝑓 𝑖 +1: 𝑗 with 
+
+𝑗 ≥ 𝑖 + 1. Although this restricts the attacker to a subset of model layers, the black-box model implies two important privacy considerations compared with white-box scenarios [ 12 ]in which an adversary hosts the entire MLLM. First, black-box attacks can be executed by ordinary participants using consumer-grade hardware. Second, it applies to settings where proprietary MLLMs are hosted within a distributed framework and therefore cannot be inspected in full. As a result, black-box attacks capture realistic and meaningful privacy risks that white-box analyses may not reveal. The passive requirement further constrains the adversary: it does not modify or interfere with the inference pipeline. Instead, the attacker attempts to infer input images solely from the intermediate image embeddings 
+
+𝐸 tgt delivered to its local server module, which makes the attacks stealthy and practical. Consistent with prior work [ 11 ], [ 15 ], [ 16 ], [ 17 ], we assume the attacker can collect an auxiliary image dataset Daux ,which may share domain knowledge [ 16 ] or distributional similarity [ 11 ], [ 15 ], [ 17 ] with the target image 𝒙 tgt . For example, Daux could be a large collection of face images gathered from public sources, while 𝒙 tgt is an arbitrary face image. We emphasize that Daux is generally easy to obtain but crucial for attack design. Unlike tabular or textual data, images exhibit pronounced spatial structure both locally (e.g., correlated neighboring pixels) and globally (e.g., object edges and textures). Effective reconstruction therefore requires learning these spatial patterns from Daux so that they can generalize to unseen target images. In summary, given the received target embedding 𝐸 tgt , the hosted modules 𝑔 client and 3<bos><start_of_turn>user You are a helpful assistant. <start_of_image><image_soft_token>...< image_soft_token><end_of_image> Describe this image.<end_of_turn> <start_of_turn>model 
+
+Fig. 2: A formatted prompt example for Gemma 3. 𝑡 𝑥 
+
+𝑒 1
+
+𝑡 𝑥  𝑡 𝑠 
+
+𝑡 𝑟  𝑡 𝑟 
+
+𝑒 2 𝑒 3 𝑒 4 𝑒 5
+
+> (a) In Model Design
+
+𝑡 𝑥 
+
+𝑒 1
+
+𝑡 𝑥  𝑡 𝑠 
+
+𝑡 𝑟  𝑡 𝑟 
+
+𝑒 2 𝑒 3 𝑒 4 𝑒 5 (b) In Practice 
+
+Fig. 3: The information flow from tokens to embeddings. 
+
+𝑡 𝑠 indicates a special token. 
+
+𝑓 𝑖 +1: 𝑗 , and the auxiliary dataset Daux , the attacker seeks to reconstruct the private target image 𝒙 tgt :
+
+𝒙 tgt ≈ ˜𝒙 tgt = A  𝐸 tgt ; 𝑔 client , 𝑓 𝑖 +1: 𝑗 , Daux 
+
+ , (1) where ˜𝒙 tgt denotes the reconstructed image and A denotes the attack algorithm. IV. A TTACK METHODS 
+
+In this section, we describe our proposed image reconstruc-tion attacks in detail. As MLLM input prompts comprise both images and text (see Figure 1), a comprehensive prompt-reconstruction attack would ideally recover both modalities. However, a recent study [ 11 ] has already demonstrated high reconstruction accuracy (exceeding 95% ) for text data under the same attack assumptions. Therefore, we focus exclusively on reconstructing image prompts. 
+
+A. Extract Image Embeddings 
+
+The intermediate embeddings 𝐸 output by layer 𝑓 𝑖 contain both image and text embeddings, i.e., 𝐸 = 𝐸 𝒙 ∪ 𝐸 𝒓 . To reconstruct the input images, the first step is to extract the image embeddings 𝐸 𝒙 from 𝐸 . An example prompt for Gemma 3 is illustrated in Figure 2. The primary challenge lies in the fact that both 𝐸 𝒙 and 𝐸 𝒓 vary in length. In particular, the number of <image_soft_token> depends on the size of the target image, which is unknown to the attacker. A straightforward approach would be to analyze the distri-butional differences between image and text embeddings and then train a classifier to distinguish 𝐸 𝒙 from 𝐸 𝒓 . To examine the feasibility of this approach, we conduct the following experiment. We first collect a set of text prompts from Mid-journey Prompts [ 30 ] and use them to generate corresponding images through Midjourney 1. This data collection strategy reflects the realistic setting in which image and text components of a multimodal prompt are semantically related. We then feed these image-text pairs into Gemma 3 to obtain their embeddings, apply principal component analysis (PCA) to reduce their dimensionality to two, and visualize the results 
+
+> 1https://www.midjourney.com/
+
+Algorithm 1: Image Embedding Extraction 
+
+Input: client module 𝑔 client , server module 𝑓 𝑖 +1: 𝑗 , target embeddings 𝐸 tgt = {𝒆 𝑖 }𝑁 𝑖 =1, minimum gap Δ
+
+Output: extracted image embeddings 𝐸 𝒙  
+
+> 1
+
+Notation: 𝑄 (· ; 𝑔 client , 𝑓 𝑖 +1: 𝑗 ) returns server-side embedding sequence;  
+
+> 2
+
+Compose a prompt with a random image–text pair and query: 𝐸 ←𝑄 (prompt ; 𝑔 client , 𝑓 𝑖 +1: 𝑗 ); 
+
+> 3
+
+Extract start/end anchors 𝒆 s, 𝒆 e from 𝐸 ; 
+
+> 4
+
+Compute distances 𝑑 s 
+
+> 𝑖
+
+= 𝑑 (𝒆 s, 𝒆 𝑖 ) and 𝑑 e 
+
+> 𝑖
+
+= 𝑑 (𝒆 e, 𝒆 𝑖 ) for 
+
+𝑖 = 1, . . . , 𝑁 ; 
+
+> 5
+
+Select top-𝑘 candidates Is, Ie with smallest 𝑑 s 
+
+> 𝑖
+
+and 𝑑 e 
+
+> 𝑖
+
+; 
+
+> 6
+
+Find (𝑖 s, 𝑖 e) = arg min 𝑖 ∈ I s , 𝑗 ∈ I e
+
+ 𝑑 s 
+
+> 𝑖
+
++𝑑 e
+
+> 𝑗
+
+ s.t. 𝑗 >𝑖 and 𝑗 −𝑖 ≥ Δ; 
+
+> 7
+
+if (𝑖 s, 𝑖 e) exists then  
+
+> 8
+
+𝐸 𝒙 ← { 𝒆 𝑘 ∈ 𝐸 tgt | 𝑖 s < 𝑘 < 𝑖 e }; 
+
+> 9
+
+else  
+
+> 10
+
+𝐸 𝒙 ← ∅ ; // no valid interval  
+
+> 11
+
+return 𝐸 𝒙 ;
+
+in Figure 12 (Supplement SIII). Our analysis reveals that as the embeddings propagate through deeper LLM layers, the representations of image and text tokens become progressively aligned in the embedding space, rendering classification-based separation increasingly ineffective. Moreover, even in earlier layers, the classifier can hardly achieve perfect accuracy, leading to false-positive image embeddings within 𝐸 𝒙 and consequently degrading the reconstruction quality. 
+
+Motivation. As the first step of image reconstruction, an ideal embedding extraction method should be analytically simple yet achieve perfect accuracy ( 100% ). To design such a method, we systematically analyze the embedding distributions of different token types across multiple MLLM layers and make a key observation: embeddings of special tokens (i.e., tokens that carry no semantic input information, such as 
+
+<start_of_image> ) are minimally affected by other tokens during inference . Note that special tokens are commonly used in modern MLLM designs as structural delimiters. Because LLMs follow an autoregressive design, each token embedding is influenced by its preceding tokens in the sequence, as illustrated in Figure 3a. However, we find that the embeddings of special tokens remain nearly constant in the embedding space, suggesting that other tokens exert negligible influence on them (Figure 3b). To provide an intuitive analogy, consider a text token such as cat , its embedding can vary depending on the preceding context, e.g., referring to a toy cat or a real cat. In contrast, special tokens act purely as delimiters of user inputs, and their embedding role remains fixed regardless of the surrounding content. 
+
+Method. Motivated by the stability of special-token embed-dings, we design a simple and reliable image embedding extraction procedure as follows. 
+
+Phase 1: Prompt-embedding correspondence. The attacker issues a query 𝒙 ∪ 𝒓 consisting of a random image-text pair to its client module 𝑔 client and receives the resulting embeddings 
+
+𝐸 from the server module 𝑓 𝑖 +1: 𝑗 . In a realistic deployment, the attacker may observe multiple (say 𝑏 ) embedding sequences within the same inference time window, among which only one corresponds to the issued query, while the others are 4generated by concurrent users. We can simply establish the correspondence between 𝒙 ∪ 𝒓 and its embedding 𝐸 based on sequence length: the number of tokens in 𝒙 ∪ 𝒓 equals the number of embeddings in 𝐸 . Although length collisions are theoretically possible, we observe that they are extremely rare in practice. In particular, experiments on the Midjourney prompt [ 30 ] with 10 ,000 queries and 𝑏 = 100 concurrent embeddings yield a collision rate of 0.2% . To further mitigate this risk, the attacker can optionally insert a short random sequence of special tokens into the text prompt 𝒓 as an identifier. Across all evaluated settings, this combined strategy achieves 
+
+100% correspondence accuracy in our experiments. 
+
+Phase 2: Image embedding extraction. From the prompt structure illustrated in Figure 2, the attacker can directly locate the embeddings corresponding to the special tokens 
+
+<start_of_image> and <end_of_image> in 𝐸 . We refer to these vectors as the anchor embeddings . During the attack process, given a received target embedding sequence 
+
+𝐸 tgt initialized by other users, the attacker computes pairwise 
+
+ℓ2 or ℓ1 distances between each anchor and the vectors in 𝐸 tgt .The nearest vector to an anchor is likely the same special token in the target sequence; and all embeddings that lie between the matched <start_of_image> and <end_of_image> 
+
+positions are treated as image embeddings. To reduce false positives, we additionally apply top-𝑘 candidate selection and a minimum-gap constraint when matching anchors. Further implementation details are given in Algorithm 1. Let 𝑑 𝑓 denote the embedding dimension. The pairwise distance computation in Algorithm 1 requires 𝑂 (| 𝐸 tgt | · 𝑑 𝑓 )
+
+time, which is substantially more efficient than the classifier-based approach with complexity 𝑂 (| 𝐸 tgt | · 𝑂 fwd ), where 𝑂 fwd 
+
+represents the forward-pass complexity of the classifier. In our experiments, Algorithm 1 consistently achieves 100% 
+
+extraction accuracy across all layers of most MLLMs. 
+
+B. Pixel-Level Reconstruction (MPAA) 
+
+After obtaining the image embeddings 𝐸 𝒙 = {𝒆 𝑖 }𝑁 𝒙 
+
+> 𝑖 =1
+
+, we train an inverse model AMPAA to recover the input image 𝒙 at the pixel level. In practice, the training dataset (E aux , Daux ) for 
+
+AMPAA can be easily constructed by generating prompts from 
+
+Daux and forwarding them through the inference pipeline to obtain the corresponding embeddings. Regarding the design of 
+
+AMPAA , prior studies on image inversion in split learning [ 15 ], [ 16 ], [ 17 ] employ an inverse architecture mirroring the target model 𝑓 . While effective for small-scale classifiers with simple convolutional backbones (e.g., ResNet-20 [ 17 ]), this approach is impractical for MLLMs containing billions of parameters. Training a full inverse model for such architectures would demand prohibitive resources, contradicting our black-box assumption and the attacker’s limited capability. 
+
+Challenge. Due to the autoregressive nature of LLMs (see Figure 3a), each embedding may encode information from multiple image patches. A straightforward approach is to concatenate all embeddings into a single vector and use fully connected layers to reconstruct the image as a whole. However, this approach faces a critical scalability challenge arising from the high embedding dimensionality of modern MLLMs. For example, in Phi 4 Multimodal [ 20 ], an input image of size 128 × 128 generates 𝑁 𝒙 = 545 image embeddings, each with a dimensionality of 𝑑 𝑓 = 3, 072 , resulting in a concatenated vector of 1, 674 , 240 dimensions. Empirically, avoiding overfitting in neural network training requires the dataset size to significantly exceed the input dimension [ 31 ], i.e., |D aux | ≫ 1, 674 , 240 . Collecting a dataset of this scale would demand an impractical number of queries and com-putational resources, making such a solution infeasible for a resource-limited attacker. An effective inverse model should remain lightweight while maintaining generalizability across architectures with diverse embedding sizes. 
+
+Motivation. To design a compact inverse model AMPAA with an input dimension much smaller than 𝑁 𝒙 · 𝑑 𝑓 , we investigate how image information propagates from patches to embeddings. We conduct the following experiment: an image 𝒙 is first fed into Gemma 3 to obtain its layer embeddings 𝐸 𝒙 . We then randomly mask a single patch of 𝒙 to form a modified image 𝒙 ′,and feed it into the same model to obtain 𝐸 𝒙 ′
+
+. We compute the 
+
+ℓ1 distance between each pair of embeddings at corresponding positions in 𝐸 𝒙 and 𝐸 𝒙 ′
+
+and visualize the results in Figure 4, where darker colors indicate stronger impact from the masked patch. Our key observation is that the masked region primarily affects the embedding at the same spatial position, suggesting that the information of a given patch is largely contained in its corresponding embedding . Therefore, instead of reconstructing the entire image from the joint embedding set, we focus on recovering each image patch from its corresponding embedding independently. 
+
+Method. Building on the observation in Figure 4, we design a pixel-level reconstruction method named the Multi-resolution 
+
+Patch Assembly Attack ( MPAA ) as follows. 
+
+Phase 1: Patch extraction. Given the image embeddings 𝐸 𝒙 =
+
+{𝒆 𝑖 }𝑁 𝒙  
+
+> 𝑖 =1
+
+with 𝒆 𝑖 ∈ R𝑑 𝑓 , we first apply two patch extractors to recover patch-level information at different resolutions: Ext 𝐻 :
+
+𝒆 𝑖 → 𝒙 𝐻 𝑖 and Ext 𝐿 : 𝒆 𝑖 → 𝒙 𝐿 𝑖 , with 𝒙 𝐻 𝑖 ∈ R3×𝐻 ×𝐻 and 
+
+𝒙 𝐿 𝑖 ∈ R3×𝐿 ×𝐿 . Here, {𝐻, 𝐿 } denote the patch resolutions (e.g., 
+
+{16 , 8}). We denote the resulting patch sets as ˜𝑋 𝐻 = {𝒙 𝐻 𝑖 }𝑁 𝒙 
+
+> 𝑖 =1
+
+and ˜𝑋 𝐿 = {𝒙 𝐿 𝑖 }𝑁 𝒙 
+
+> 𝑖 =1
+
+. A “patch” refers to a reconstruction unit that may correspond to one or several adjacent input patches in the client module. The extracted patches are concatenated to form two complete images, ˜𝒙 𝐻 and ˜𝒙 𝐿 , which are then passed through a smoothing network to refine global structure based on spatial continuity between neighboring patches. 
+
+Phase 2: Fusion denoising. We adapt a Fusion-Denoising Network (FDN) [ 23 ] to reconstruct the input image 𝒙 from the two refined images. Specifically, we first resize the low-resolution image ˜𝒙 𝐿 to size 𝐻 · √𝑁 𝒙 
+
+ (i.e., the size of ˜𝒙 𝐻 )using nearest-neighbor interpolation. A convolutional network then extracts the features from both ˜𝒙 𝐿 and ˜𝒙 𝐻 , which are further fused using an element-wise averaging rule. The fused features are decoded into an intermediate reconstruction and subsequently refined by a denoising network to obtain the final output ˜𝒙 . It is important to note that the reconstructed image size 𝐻 · √𝑁 𝒙 
+
+ is not required to match the original input resolution, which is typically unknown to the attacker in realistic scenarios. That is, MPAA supports reconstructing 
+
+5(a) 𝒙 ′ (b) Layer 4 (c) Layer 8 (d) Layer 16 
+
+Fig. 4: Embedding differences caused by masked patches in Gemma 3. Assemble -   
+
+> Smoother
+> Fusion -
+> Denoising
+> Extractor(H)
+> Extractor(L) ෤𝑥
+> 𝐸 𝑥 Patches Multi -Res Images
+
+Fig. 5: The overview of Multi-resolution Patch Assembly Attack (MPAA). 
+
+images of arbitrary original sizes to a predefined output resolution . The patch extractors, smoother, and FDN are all trained on the pre-collected auxiliary dataset (E aux , Daux ).
+
+Remarks . The design of MPAA offers three key advantages: 
+
+lightweight , adaptive , and theoretically grounded . First, MPAA employs a shared patch extractor for all embedding vectors, which can reduce the model size from 𝑂 (𝑁 𝒙 𝑑 𝑓 ) in the naive design to 𝑂 (𝑑 𝑓 ), leading to significantly lower training data (query) requirements. Second, a pre-defined MPAA can be di-rectly applied to input images of arbitrary sizes and to different MLLM architectures, without requiring structural modification. Third, our theoretical analysis based on rate-distortion theory and the Shannon lower bound for squared-error distortion [ 32 ]shows that, compared to single-resolution reconstruction, our multi-resolution scheme yields reconstructions that well balance global consistency with local realism. Detailed discussions are provided in Supplement SI. 
+
+C. Semantic-Level Reconstruction (IEDA) 
+
+The effectiveness of MPAA relies on the embedding locality observed in Figure 4, where the information of neighboring patches is primarily concentrated into a corresponding embed-ding. However, Figure 4 also shows that with the processing of deeper layers, the information from each patch gradually diffuses across multiple embeddings. Specifically, embeddings from early LLM layers tend to preserve local visual cues such as edges and textures. As the representations propagate through additional layers, they increasingly capture global semantics such as scene context, becoming more abstract and less spatially detailed. Consequently, MPAA , which primarily exploits local visual information, exhibits degraded performance at deeper layers. To reconstruct plausible images across all MLLM layers, we therefore design a semantic-level reconstruction attack that leverages the global semantic information encoded in image embeddings to generate semantically consistent visual content. 
+
+Challenge. Unlike MPAA , which performs direct pixel-level reconstruction, semantic-level reconstruction is essentially an image generation problem. Among existing generative models, diffusion-based approaches [ 33 ], [ 34 ], particularly Stable Dif-fusion [ 34 ], are widely recognized for their superior generation Adapter     
+
+> 𝐸 𝑥
+> 𝑥
+> Semantic
+> Model
+> ℓ𝑎𝑑𝑣 ℓ2Discriminator
+> Loss
+> Semantic
+> Vector
+> Adapter
+> ෤𝑥 𝑥
+> ℓ2Loss Semantic Vector Diffusion Model
+> Guidance
+> Phase 1
+> Phase 2
+
+Fig. 6: The overview of Image Embedding guided Diffusion Attack (IEDA). 
+
+quality and sample diversity compared to generative adver-sarial networks (GANs) or variational autoencoders (VAEs). Henceforth, a natural strategy is to adapt guided diffusion techniques such as T2I-Adapter [ 35 ] and ControlNet [ 36 ], which control the image generation process using external conditioning signals. These methods typically train an adapter module as a plug-in to a pretrained Stable Diffusion model. However, we find that such methods are ineffective in our problem. In T2I-Adapter and ControlNet, the external signals represent spatially structured visual features that align naturally with the diffusion model’s generative process, such as depth and sketch [ 35 ]. In contrast, our conditional inputs are abstract embeddings produced by MLLMs, which lack explicit spatial organization. As a result, these embeddings are incompatible with the pretrained Stable Diffusion conditioning pathway. 
+
+Motivation. The core rationale behind T2I-Adapter and Con-trolNet is to align external control images with the internal representations of a pretrained Stable Diffusion model [ 35 ]. We can also utilize this rationale in our semantic-level reconstruc-tion attack. Since MLLM embeddings differ fundamentally in modalities from the internal states of diffusion models, we turn to incorporate the embeddings directly as part of the diffusion model’s input to provide generation guidance. The main distinction between our approach and prior methods [ 35 ], [36 ] lies in the training method. While those methods keep the diffusion model fixed and train only the adapter, our method jointly trains both the adapter and the diffusion model to achieve tighter alignment between embeddings and the generative process. 
+
+Method. We design an Image Embedding guided Diffusion 
+
+Attack ( IEDA ) for semantic-level reconstruction. As discussed earlier, fixing the diffusion model and training only an adapter can cause signal attenuation, whereas training both the adapter and diffusion model simultaneously may lead to unstable convergence because the control signal generated by the adapter for the same 𝐸 𝒙 varies continuously during training. To improve convergence stability while reducing training cost, IEDA is designed as a two-phase framework. In the first phase, we train only the adapter to project MLLM embeddings into a predefined semantic space. In the second phase, we freeze the adapter and fine-tune a pretrained diffusion model to align the semantic information with the diffusion generation 6process. Freezing the adapter helps stabilize convergence, while fine-tuning an existing diffusion model significantly lowers computational overhead compared with training one from scratch. The following sections describe the two training phases of IEDA in detail. 
+
+Phase 1: adapter training . The adapter AA is designed to produce a control signal 𝒄 𝒙 , i.e., a compact semantic vector, from the embeddings 𝐸 𝒙 . We do not directly use 𝐸 𝒙 as the control input because both the number of embeddings 𝑁 𝒙 
+
+and the embedding dimension 𝑑 𝑓 vary significantly across different MLLMs. To ensure generalization, the architecture of AA follows the same design as the patch extractor used in MPAA . To make the adapter output semantically meaningful while maintaining generalization, we align its output space with the semantic feature space extracted by a pretrained semantic model, such as Inception V3 [ 37 ] or CLIP [ 38 ]. To achieve this alignment, we design an adversarial training framework that encourages the adapter to generate outputs indistinguishable from those of the semantic model. Specifically, let 𝑓 Sem denote the pre-trained semantic model, and AD denote a discriminator that differentiates between features produced by AA and those produced by 𝑓 Sem . We train AD using the following objective: 
+
+Ladv = −E[A D ( 𝑓 Sem (𝒙 ))] + E[A D (A A (𝐸 𝒙 ))] + 𝜆 gp Lgp ,
+
+where Lgp is the gradient panelty term following the design of Wasserstein GAN [ 39 ]: Lgp = E (||∇ ˆ𝒄 AD ( ˆ𝒄 )|| 2 − 1)2 , with 
+
+ˆ𝒄 = 𝛼 𝑓 Sem (𝒙 ) + ( 1 − 𝛼 )A A (𝐸 𝒙 ) and 𝛼 ∼ 𝑈 (0, 1). The term 
+
+Lgp enforces 1-Lipschitz continuity of the discriminator to stabilize the adversarial training. The adapter is then trained to fool the discriminator while remaining semantically aligned with 𝑓 Sem :
+
+L𝐴 = −E[A D (A A (𝐸 𝒙 ))] + 𝜆 align ||A A (𝐸 𝒙 ) − 𝑓 Sem (𝒙 )|| 22.
+
+The first term promotes global distribution matching, while the second term enforces element-wise alignment between the semantic features. After training, the adapter’s output serves as the semantic guidance signal for fine-tuning the diffusion model in the next phase. 
+
+Phase 2: diffusion fine-tuning . In this phase, we employ the denoising diffusion probabilistic model (DDPM) [ 33 ] as the diffusion backbone. We do not adopt Stable Diffusion [ 34 ], as it is primarily designed for text-to-image tasks and thus unsuitable for our reconstruction attack without text inputs. DDPM training consists of a forward process and a reverse process. The forward process is modeled as a discrete Markov chain [ 33 ], where input images 𝒙 0 ∼ 𝑝 data (𝒙 ) are gradually corrupted by Gaussian noise over 𝐾 timesteps, producing an image sequence 𝒙 0 → · · · → 𝒙 𝐾 . Formally, 𝑝 (𝒙 𝑘 |𝒙 𝑘 −1) =
+
+N ( 𝒙 𝑘 ;√︁ 1 − 𝛽 𝑘 𝒙 𝑘 −1, 𝛽 𝑘 𝑰 ), where 𝛽 𝑘 denotes the noise scale at timestep 𝑘 ∈ { 1, · · · , 𝐾 }. The final image 𝒙 𝐾 follows a Gaussian distribution N ( 0, 𝑰 ), indicating that the input image is completely transformed into noise. In the reverse pass, a neural network 𝒔 𝜽 (𝒙 𝑘 , 𝑘 ) is trained to estimate the score of image density based on 𝒙 𝑘 for 𝑘 ∈ { 𝐾, · · · , 1}. Starting from Gaussian noise 𝒙 𝐾 ∼ N ( 0, 𝑰 ) as the input of the reverse pass, DDPM generates new samples iteratively as 𝒙 𝑘 −1 ←
+
+> 1
+
+√1−𝛽 𝑘 (𝒙 𝑘 + 𝛽 𝑘 𝒔 𝜽 (𝒙 𝑘 , 𝑘 )) + √︁ 𝛽 𝑘 𝒛 𝑘 , where 𝒛 𝑡 ∼ N ( 0, 𝑰 ).
+
+TABLE I: MLLM details. 𝐿 denotes layers, and bold numbers denote the default setting.                           
+
+> MLLM #params 𝐿 𝑔 𝐿 𝑓 Year Developer Gemma 3 4/12/27B 27 34 /48/62 2025 Google Phi 4 Multimodal 6B 27 32 2025 Microsoft Qwen 2.5 VL 3/ 7B32 36/ 28 2025 Alibaba Llama 4 Scout 109B 34 48 2025 Meta
+
+To steer the direction of image generation using the semantic vector 𝒄 𝒙 , we adapt the classifier-free guidance (CFG) strat-egy [ 40 ]: the control signal 𝒄 𝒙 and timestep 𝑘 are together input as the guidance during model training: 
+
+LIEDA (𝜽 ) = E𝒙 𝑘 ,𝑘, 𝒄 𝒙 
+
+|| 𝒔 𝜽 (𝒙 𝑘 , 𝑘, 𝒄 𝒙 ) − 𝝐 || 22
+
+ , (2) where 𝝐 ∼ N ( 0, 𝑰 ) denotes the injected random noise at timestep 𝑘 during the forward pass. Although CFG improves controllability, it can also reduce sampling diversity [ 40 ], which may degrade reconstruction quality in our setting since the semantic signal 𝒄 𝒙 carries far richer information than typical class labels used in [ 40 ]. To address this issue, we propose a weak guidance training strategy comprising two stages. In the first stage, we train a base DDPM on ImageNet [ 41 ] with 𝒄 𝒙 = 0 in Equation (2) .This enables the diffusion model to learn diverse visual priors. In the second stage, we fine-tune the base DDPM on the auxiliary dataset (E aux , Daux ). In this stage, we follow the strategy of CFG [ 40 ] and jointly finetune two score networks, 
+
+𝒔 𝜽 (𝒙 𝑘 , 𝑘 ) and 𝒔 𝜽 (𝒙 𝑘 , 𝑘, 𝒄 𝒙 ), where the former promotes sample diversity and the latter provides semantic guidance. During reconstruction, their outputs are combined: 
+
+𝒔 (𝒙 𝑘 , 𝑘, 𝒄 𝒙 ) = (1 + 𝜔 )𝒔 𝜽 (𝒙 𝑘 , 𝑘, 𝒄 𝒙 ) − 𝜔 𝒔 𝜽 (𝒙 𝑘 , 𝑘 ), (3) where 𝜔 denotes the guidance scale controlling the balance between sampling diversity and fidelity. Note that the base model is trained only once and can be reused across different MLLMs and datasets. Compared with training a diffusion model from scratch, this two-stage strategy substantially reduces computational cost, improves convergence stability, and enhances reconstruction fidelity. V. E XPERIMENTAL RESULTS 
+
+MLLMs. We evaluate our attacks on four series of state-of-the-art MLLMs: Gemma 3 [ 19 ], Phi 4 [20 ], Qwen 2.5 VL [21 ], and Llama 4 Scout [22 ]. Since Llama 4 Scout requires approximately 200 GB of GPU memory, which exceeds our available hardware, we offload part of its layers to CPU memory to complete the inference pipeline. The detailed model configurations are summarized in Table I. We primarily conduct attacks on the LLM backbone 𝑓 , as results on later layers are backward compatible with those from earlier layers, particularly those in the image encoder 𝑔 that precedes 𝑓 .
+
+Datasets. Five datasets are used in the main text: CIFAR10 [24 ](32 ×32), CIFAR100 [ 24 ] (64 ×64), STL10 [25 ] (128 ×128), 
+
+CelebFaces (CELEBA) [ 26 ] (256 ×256), and ImageNet-100 [41 ](160 ×160). Note that we deliberately preprocess these datasets into different resolutions to validate the generalization of MPAA and IEDA across different input sizes. The first four datasets are 7TABLE II: Overlap extraction rates of the embedding extraction algorithm. L denotes the last layer.                                                       
+
+> Dataset Text Source Gemma 3 Phi 4 Multimodal Qwen 2.5 VL Llama 4 Scout 917 25 L (34) 816 24 L (32) 714 21 L (28) 12 24 36 L (48) Midjourney Dependent 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.99 0.95 0.93 CIFAR100 Independent 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.99 0.95 0.92
+
+used to evaluate attack performance, while ImageNet-100 serves primarily for pretraining the base diffusion model in IEDA .The attack performance evaluated on more realistic datasets, 
+
+CC3M [ 27 ], COCO Caption [ 28 ], and ImageNette [29 ], is reported in Supplement SIII. Each dataset is randomly divided into training, validation, and testing subsets in the ratio of (64% , 16% , 20% ). For evaluation consistency, we set the reconstruction resolution of all images to 64 × 64 . We defer the attack evaluation w.r.t. different output resolutions to Supplement SIII. Unless otherwise specified, the default text prompt in each crafted query is Describe this image .
+
+Evaluation Metric. We evaluate reconstruction performance using three metrics: mean absolute error ( ℓ1 loss), Structural Similarity Index Measure (SSIM) [ 42 ], and Cosine Semantic Similarity (CSS) [ 11 ]. The ℓ1 loss captures pixel-level accuracy, SSIM measures perceptual similarity between the original image 𝒙 and the reconstruction ˜𝒙 , and CSS evaluates semantic similarity by computing the CLIP-based cosine similarity between 𝒙 and ˜𝒙 . Lower ℓ1 loss and higher SSIM and CSS indicate better reconstruction quality. 
+
+Baselines. Existing work on image reconstruction within MLLMs remains limited. To evaluate the performance of our proposed attacks, we adapt two representative image reconstruction methods from split learning as baselines. 
+
+PCAT [15 ]. PCAT operates by first training a surrogate model to approximate the behavior of the target model, which is not accessible to the attacker. A corresponding decoder is then trained to reconstruct images from the surrogate model’s outputs. PCAT has only been evaluated on classification models such as ResNet [ 43 ]. In our experiments, we adapt PCAT to our attack setting by feeding the image embeddings into a feature extractor module, as done in MPAA , to reduce the input dimensionality, and then concatenating the reduced features as the decoder’s input. 
+
+SDAR [15 ]. SDAR is an enhanced version of PCAT that introduces an adversarial loss to improve both surrogate model training and decoder reconstruction. The overall workflow of SDAR closely mirrors that of PCAT. We apply the same adaptations to SDAR as those used for PCAT. Note that we defer the experimental platform and algorithm implementation to Supplement SII. 
+
+A. Performance of Embedding Extraction 
+
+We first evaluate the performance of our image embed-ding extraction algorithm (Algorithm 1), which is a critical prerequisite for the subsequent reconstruction stage. If the embeddings extracted by Algorithm 1 contain a number of false positives, the accuracy of the downstream reconstruction attacks will be directly degraded. We utilize the Overlap Extraction Rate (OER) as the evaluation metric. Let 𝐸 𝒙 denote the ground-truth image embeddings and ˜𝐸 𝒙 denote the extracted embeddings. OER is defined as OER = |𝐸 𝒙 ∩ ˜𝐸 𝒙 ||𝐸 𝒙 | , representing the proportion of ground-truth image embeddings successfully recovered. To examine the impact of text-image dependence on extraction accuracy, we evaluate two datasets: Midjourney-generated text-image pairs with strong semantic correspondence (Section IV-A ), and CIFAR-100 images paired with random Midjourney prompts [ 30 ]. Each text-image pair is wrapped into a single prompt and processed through the inference pipeline. Let 𝐿 denote the total number of LLM layers. We report OER values for layers {⌈ 𝐿  
+
+> 4
+
+⌉, ⌈ 2𝐿  
+
+> 4
+
+⌉, ⌈ 3𝐿  
+
+> 4
+
+⌉, 𝐿 } in Table II. From Table II we draw two main observations. First , the semantic dependence between text and image in the prompt does not affect extraction performance. Second , Algorithm 1 achieves a perfect extraction rate ( 100% ) across all evaluated layers for Gemma 3, Phi 4, and Qwen 2.5; however, for Llama 4 Scout, several false positives appear in deeper layers. This discrepancy is primarily due to differences in embedding-space density. In the first three MLLMs, the special tokens <start_of_image> and <end_of_image> are sparsely distributed and well separated from other token types. In contrast, Llama 4 Scout exhibits tightly clustered embeddings across token types: as embeddings become pro-gressively denser in deeper layers, anchor embeddings may be incorrectly matched using ℓ1 distances. For example, 
+
+<|tile_x_separator|> or <|tile_y_separator|> 
+
+tokens may be mistakenly identified as <|image_end|> 
+
+in deeper Llama 4 layers. Such distribution characteristics may stem from the Mixture-of-Experts (MoE) architecture in Llama 4, where different special tokens can activate similar expert combinations and thus be routed to similar representation subspaces. To our knowledge, the embedding-space characteristics of MoE models remain largely unexplored. A deeper investigation, while worthwhile, falls outside the scope of our study, and we defer this to future work. Importantly, Table II indicates that these errors are relatively limited in practice. 
+
+B. Performance of Image Reconstruction 
+
+We evaluate MPAA and IEDA on four datasets across all experimental MLLMs. The cutting layers are set to 
+
+{0, ⌈ 𝐿  
+
+> 4
+
+⌉, ⌈ 2𝐿  
+
+> 4
+
+⌉, ⌈ 3𝐿  
+
+> 4
+
+⌉, 𝐿 }, where 0 corresponds to the image tokens produced by the image projector (see Figure 1), and 
+
+𝐿 is the total number of layers in the backbone LLM. We summarize the ℓ1 loss and CSS of MPAA in Figure 7a–7d and 7e–7h, respectively. The CSS results for IEDA are presented in Figure 7i–7l. Additional reconstruction examples are shown in Figure 8. From Figure 7 and Figure 8, we make three main observations. First , IEDA consistently outperforms both baselines and MPAA across all attack settings in terms of semantic similarity. Figure 8 further illustrates that IEDA can generate plausible images even at cutting layers where 8CIFAR10 CIFAR100 STL10 CelebA PCAT (average) SDAR (average) TOKEN 9 17 25 34 (L) 
+
+> Output Layer
+> 0.03
+> 0.07
+> 0.10
+> 0.13
+> 0.17
+> ℓ1 loss (MPAA)
+
+(a) Gemma 3 TOKEN 8 16 24 32 (L)  
+
+> Output Layer
+> 0.03
+> 0.07
+> 0.10
+> 0.13
+> 0.17
+> ℓ1 loss (MPAA)
+
+(b) Phi 4 Multimodal TOKEN 7 14 21 28 (L)  
+
+> Output Layer
+> 0.03
+> 0.07
+> 0.10
+> 0.13
+> 0.17
+> ℓ1 loss (MPAA)
+
+(c) Qwen 2.5 VL TOKEN 12 24 36 48 (L)  
+
+> Output Layer
+> 0.03
+> 0.07
+> 0.10
+> 0.13
+> 0.17
+> ℓ1 loss (MPAA)
+
+(d) Llama 4 Scout TOKEN 9 17 25 34 (L) 
+
+> Output Layer
+> 0.50
+> 0.61
+> 0.71
+> 0.82
+> 0.92
+> CSS (MPAA)
+
+(e) Gemma 3 TOKEN 8 16 24 32 (L)  
+
+> Output Layer
+> 0.50
+> 0.61
+> 0.71
+> 0.82
+> 0.92
+> CSS (MPAA)
+
+(f) Phi 4 Multimodal TOKEN 7 14 21 28 (L)  
+
+> Output Layer
+> 0.50
+> 0.61
+> 0.71
+> 0.82
+> 0.92
+> CSS (MPAA)
+
+(g) Qwen 2.5 VL TOKEN 12 24 36 48 (L)  
+
+> Output Layer
+> 0.50
+> 0.61
+> 0.71
+> 0.82
+> 0.92
+> CSS (MPAA)
+
+(h) Llama 4 Scout TOKEN 9 17 25 34 (L) 
+
+> Output Layer
+> 0.49
+> 0.58
+> 0.67
+> 0.76
+> 0.85
+> CSS (IEDA)
+
+(i) Gemma 3 TOKEN 8 16 24 32 (L)  
+
+> Output Layer
+> 0.49
+> 0.58
+> 0.67
+> 0.76
+> 0.85
+> CSS (IEDA)
+
+(j) Phi 4 Multimodal TOKEN 7 14 21 28 (L)  
+
+> Output Layer
+> 0.49
+> 0.58
+> 0.67
+> 0.76
+> 0.85
+> CSS (IEDA)
+
+(k) Qwen 2.5 VL TOKEN 12 24 36 48 (L)  
+
+> Output Layer
+> 0.49
+> 0.58
+> 0.67
+> 0.76
+> 0.85
+> CSS (IEDA)
+
+(l) Llama 4 Scout 
+
+Fig. 7: The ℓ1 loss ( ↓) of MPAA ((a)–(b)) and the CSS score ( ↑) of MPAA ((e)–(h)) and IEDA ((i)–(l)) across different MLLMs and datasets. Additional results are provided in Figure 16 in the Supplement. Gemma 3  Phi 4 Multimodal  Qwen 2.5 VL  Llama 4 Scout 
+
+CIFAR10 
+
+STL10 
+
+CelebA 
+
+IEDA 
+
+MPAA 
+
+SDAR 
+
+PCAT 
+
+IEDA 
+
+MPAA 
+
+SDAR 
+
+PCAT 
+
+IEDA 
+
+MPAA 
+
+SDAR 
+
+PCAT 
+
+Fig. 8: Example images reconstructed by different methods. In each block, the five images from left to right indicate results from the cutting layers {0, ⌈ 𝐿 
+
+4 ⌉, ⌈ 2𝐿 
+
+4 ⌉, ⌈ 3𝐿 
+
+4 ⌉, 𝐿 }. See Figure 17 for more examples. 
+
+MPAA performs poorly. This result is expected because IEDA leverages both the prior knowledge encoded in the generative model and the semantic information contained in the embeddings. Since IEDA does not rely on low-level visual details, the loss of fine-grained visual information in deeper layers does not prevent it from producing semantically meaningful images. However, the images reconstructed by IEDA generally preserve only the high-level semantics of the original image while failing to reproduce the precise object structure or spatial arrangement, as shown in Figure 8. 
+
+Second , MPAA can reconstruct visually plausible images from Llama 4, despite its MoE architecture. This indicates that the MoE structure has limited influence on the preservation of visual information in intermediate embeddings. Nonetheless, the performance of MPAA degrades at deeper Llama 4 layers. This degradation is largely due to the false positive cases produced by the image embedding extraction algorithm. Third , MPAA performs better on Gemma 3 and Phi 4 than on Qwen 2.5 and Llama 4. We identify two main factors influencing attack performance: the number of image embeddings 𝑁 𝒙 and the size 9of the LLM. We provide a detailed discussion of these factors in Section V-C . In addition, both PCAT and SDAR perform worse than the proposed attacks (Figure 7), even with the enhancements we apply. This result is expected because these methods were originally designed for image classifiers with relatively simple architectures, which are not comparable to modern MLLMs. Consequently, PCAT and SDAR only produce plausible reconstructions on CelebA (Figure 8), while they generally fail on datasets with more complex visual patterns. In addition, we present the attack transferability , ablation studies , and query costs of our attacks in Supplement SIII. 
+
+C. Privacy Analysis of MLLMs 
+
+As discussed in Section V-B , IEDA exhibits stable perfor-mance across different settings, whereas MPAA relies heavily on the visual information preserved within intermediate embed-dings. As a result, MPAA shows more variable performance across settings. This observation suggests that MPAA can serve as a useful diagnostic tool to assess how well different MLLM components preserve or obscure private visual information . In what follows, we employ MPAA to study how various MLLM design choices influence attack performance, from which we derive insights for designing more privacy-preserving MLLMs. 
+
+Text-Image Dependence. We first examine whether the dependence between text and image in the same prompt affects the attack performance. Prior work [ 44 ] shows that textual prompts can influence the attention allocation of MLLMs. For example, a prompt such as is there a car in the image can cause the model to focus more strongly on a car in the background rather than a person in the foreground. Given these findings, a natural question is whether the choice of textual prompts can affect the performance of MPAA . We begin with an analytical argument: the design of the textual prompt does not affect the attack performance . This follows from two key properties. First, based on the prompt template used in all experimental MLLMs (Figure 2), image tokens always appear before textual tokens. Second, due to the autoregressive nature of LLMs (Figure 3), only earlier tokens can influence the embeddings of later tokens. Text embeddings that appear after the image tokens therefore cannot modify the image embeddings. To validate this reasoning, we conduct experiments on Gemma 3 and Phi 4 using CIFAR10 and CelebA. For each image, we construct two prompts: one with a generic question independent of the image (e.g., Describe this image ), and the other with a detailed, image-specific description (e.g., a man outdoors, facing right, with his eyes closed or squinting ). We feed these different image-text pairs into the MLLMs, obtain the corresponding embeddings, and evaluate the attack models used in Figure 7. The ℓ1 results are reported in Table III. We observe that attack performance on Phi 4 remains identical across different textual prompts, confirming that its LLM backbone follows the autoregressive property strictly. A slight fluctuation is observed in Gemma 3. This variation is due to the normalization layers used in Gemma 3, whose internal statistics incorporate all input tokens, causing minor shifts in image embedding distributions. However, as shown in Table III, this effect is 
+
+TABLE III: The ℓ1 losses caused by different types of text-image dependence.                           
+
+> Dataset Text Source Gemma 3 Phi 4 Multimodal 17 25 L (34) 16 24 L (32) CIFAR10 Dependent 0.055 0.061 0.063 0.056 0.063 0.068 Independent 0.055 0.060 0.064 0.056 0.063 0.068 CelebA Dependent 0.059 0.065 0.080 0.059 0.063 0.067 Independent 0.061 0.064 0.087 0.059 0.063 0.067
+
+TABLE IV: ℓ1 losses caused by different Gemma sizes.                                     
+
+> Dataset Model Size Layers 917 25 L (34) STL10 4B 0.0724 0.0799 0.0815 0.1118 12B 0.0584 0.0729 0.0874 0.0910 27B 0.0494 0.0588 0.0797 0.0854
+> CelebA 4B 0.0504 0.0614 0.0641 0.0876 12B 0.0424 0.0585 0.0671 0.0774 27B 0.0368 0.0447 0.0580 0.0721 GT 4B 12B 27B
+> (a) STL10 GT 4B 12B 27B (b) CelebA
+
+Fig. 9: Reconstructed examples from layer 17 of Gemma 3 under different model sizes. 
+
+small and has negligible impact on attack performance. In conclusion, text-image dependence has minimal influence on the attack performance of MPAA. 
+
+Model Sizes. The size of the LLM backbone is closely related to both the number of layers and the hidden dimension. As shown earlier in Figure 7, processing through deeper layers can degrade the performance of MPAA to some extent. Here, we focus specifically on the impact of the LLM hidden dimension on attack performance. For this experiment, we use the Gemma 3 series, which includes three model variants, 4B, 12B, and 27B, with hidden dimensions of 2560, 3840, and 5376, respectively. All three models share the same image encoder [ 19 ], which ensures that differences in attack performance are not attributable to variation in the visual encoder. The ℓ1 losses on STL10 and CelebA are reported in Table IV, and qualitative examples are shown in Figure 9. Our main observation is that MPAA performs better on MLLMs with larger hidden dimensions . The reason is that a larger hidden dimension enables the MLLM to retain more fine-grained visual information in the intermediate embeddings. This richer representation allows the attention mechanism to capture more detailed spatial and semantic cues from the image tokens. Consequently, the embeddings supplied to MPAA contain more informative visual features, which in turn leads to higher reconstruction quality. 
+
+Number of Embeddings. We now examine the key factor that explains why MPAA performs worse on Qwen 2.5 and 10 TABLE V: The ℓ1 losses caused by different numbers of embeddings on Qwen 2.5 VL 3B.                              
+
+> Dataset Layer Image Size (Embedding Num.) 64 (4) 128 (25) 256 (81) 512 (324) CIFAR10 TOKEN 0.1207 0.1082 0.0855 0.0658
+> 14 0.1398 0.1149 0.1013 0.0775
+> 28 0.1424 0.1268 0.1146 0.0826
+> CelebA TOKEN 0.1154 0.1039 0.0903 0.0625
+> 14 0.1200 0.1057 0.0985 0.0696
+> 28 0.1282 0.1156 0.1061 0.0773
+
+TABLE VI: The ℓ1 losses of MPAA and adversarial prediction accuracies under different settings.                        
+
+> Metric Model Size (Gemma) Embed. Num. (Qwen 3B) 4B 12B 27B 425 81 324
+> ℓ1loss ( ↓)0.072 0.058 0.049 0.120 0.108 0.085 0.065
+> APA ( ↑)44 %67 %69 %94 %87 %81 %76 %
+
+Llama 4 compared with Gemma 3 and Phi 4, namely, the number of image embeddings. As discussed in Section II, an MLLM first splits the input image into 𝑁 patch patches in the preprocessor and extracts 𝑁 𝒙 image embeddings from these patches. For the experimental images used in Figure 7, the four MLLMs, Gemma 3, Phi 4, Qwen 2.5, and Llama 4, produce 
+
+{256 , 256 , 4, 144 } effective image embeddings, respectively. This naturally raises the question: Does the extremely small number of embeddings in Qwen 2.5 explain why MPAA performs the worst on this model? To answer this question, we conduct the following experiment. We take a dataset with image size 64 and resize each image to different sizes, generating four versions of the same dataset with sizes {64 , 128 , 256 , 512 }.This ensures that any differences in attack performance reflect the effect of the number of embeddings, rather than differences in image information. We then train separate attack models on Qwen 2.5 VL 3B using each version. For image sizes 
+
+{64 , 128 , 256 , 512 }, Qwen 2.5 extracts {4, 25 , 81 , 324 } image embeddings, respectively. During reconstruction, all images are generated at size 64, since the attacker does not know the original input resolution. The ℓ1 losses for different numbers of embeddings are reported in Table V, and qualitative examples are shown in Figure 10. The observation is straightforward: a larger number of image embeddings leads to greater leakage of private information from the input images. Compared with the results in Table IV and Figure 9, the effect of the number of embeddings is substantially stronger than that of the LLM hidden dimension. As illustrated in Figure 4, each embedding corresponds to one or several specific image patches. Thus, when an MLLM produces more image embeddings, it effectively captures low-level visual features at a finer granularity, which in turn provides MPAA with richer visual cues and significantly improves reconstruction performance. In summary, the number of embeddings, and therefore the granularity of patch splitting, is the dominant factor underlying the performance differences of MPAA across MLLMs .
+
+Robustness. The benefits of increasing the hidden dimension and adopting a finer patch-splitting granularity are intuitive: both designs enhance the LLM’s ability to capture subtle visual details, such as a faint traffic sign in the background [ 44 ]. However, our earlier results show that these improvements GT  4 25  81  324      
+
+> (a) CIFAR10 GT 425 81 324 (b) CelebA
+
+Fig. 10: Reconstructed examples from layer 14 of Qwen 2.5 VL 3B under varying embedding counts. 
+
+introduce privacy risks in distributed inference. We now take a further step to examine other potential side effects of improving the model’s capacity for fine-grained visual perception. In particular, we study how these design choices affect the robustness of MLLMs under adversarial perturbations. To this end, we evaluate different MLLM configurations using the AdvDiffVLM adversarial attack [ 45 ]. AdvDiffVLM perturbs a source image belonging to class 𝐴 such that, when fed into an MLLM, the model outputs a targeted incorrect label (class 𝐵 ). In our experiments, we use plane as the source class and car 
+
+as the target class (see Figure 14 for an example). If a perturbed image is still classified as the original class, we consider the prediction robust. Accordingly, we measure robustness via adversarial prediction accuracy (APA), defined as the fraction of perturbed images that remain correctly classified. A higher APA indicates a more robust model. Table VI summarizes the APA of various MLLM configurations, together with the corresponding ℓ1 losses of MPAA for reference. From Table VI, we draw two key findings. First, model robustness improves as the capability of the LLM backbone increases, as demonstrated by the Gemma 3 series. The 27B model, trained on substantially larger datasets, is better at suppressing irrelevant perturbations and focusing on the true visual features. At the same time, the 27B model is more vulnerable to MPAA ,illustrating a privacy-robustness trade-off when scaling up the LLM backbone. Second, when the LLM capability is fixed, using fewer embeddings (i.e., adopting a coarser patch-splitting granularity) improves both privacy preservation and robustness. This improvement is likely because coarse patch splitting reduces both the number of embeddings and the amount of low-level visual detail they contain, thereby diminishing the influence of adversarial perturbations. These observations lead to a practical insight for MLLM architecture design: when training data and computational resources are limited, using a coarser patch-splitting granularity can simultaneously enhance robustness and privacy; when scaling MLLM size with abundant resources, a fundamental privacy-robustness trade-off emerges .We leave a more comprehensive investigation for future work. VI. P OTENTIAL DEFENSES 
+
+End-to-End Encryption. Since MPAA and IEDA rely on plain-text embeddings for image reconstruction, an intuitive defense strategy is to adopt end-to-end encryption. Existing approaches fall into two categories: math-trusted protocols, such as secure multi-party computation [ 46 ], and hardware-trusted sandboxes, 11 such as trusted execution environments (TEEs) [ 47 ]. Math-trusted protocols require decomposing non-linear operations (e.g., ReLU) into basic arithmetic operations compatible with encryption schemes. As a result, each non-linear operation requires multiple communication rounds, making inference extremely slow. For example, the encrypted inference system in [ 48 ] requires roughly 14 minutes to generate one token on Llama-7B. Hardware-trusted approaches achieve nearly plain-text efficiency, but require specialized hardware at client side, significantly limiting their practicality for large-scale, real-world distributed MLLM deployments. In summary, current encryption-based solutions are unlikely to serve as practical defenses for MLLM inference. 
+
+Sophisticated MLLM Design. As discussed in Section V-C ,reducing the number of patches in the preprocessing stage or decreasing the hidden dimension of image embeddings can lower the amount of low-level visual information preserved in the embeddings, thereby weakening MPAA . However, this approach does not meaningfully degrade IEDA , which relies primarily on semantic information rather than detailed pixel-level cues. Moreover, reducing the number of patches diminishes the model’s ability to recognize fine-grained visual details and may harm overall MLLM performance. Thus, this defense introduces a privacy-utility trade-off that must be carefully managed in practical deployments. We defer the discussion on embedding shuffle , remove special tokens , and differential privacy to Supplement SIV. VII. R ELATED WORK 
+
+Attacks on Language Models. A broad range of attacks has been developed to analyze vulnerabilities in large language models, including membership inference [ 49 ], [ 50 ], model extraction [ 51 ], [ 52 ], and inference prompt reconstruction [ 53 ], [ 12 ], [ 11 ], [ 54 ], [ 55 ], [ 49 ], [ 56 ]. Membership inference [49 ]attempts to determine whether a particular data point was used for model training. Model extraction [51 ], [ 52 ] aims to replicate proprietary fine-tuned models using public LLMs. Prompt re-construction is most related to ours and includes system prompt reconstruction [ 53 ] and user prompt reconstruction [ 12 ], [ 11 ], [54 ], [ 55 ], [ 49 ], [ 56 ]. System prompt reconstruction focuses on recovering hidden system instructions embedded in proprietary APIs, while user prompt reconstruction attempts to infer user-provided inputs either from intermediate embeddings [ 54 ], [55 ], [ 49 ], [ 12 ], [ 11 ] or final LLM outputs [ 56 ]. However, all existing prompt reconstruction studies are limited to text-based inputs. Text data consists of discrete tokens, whereas image data involves continuous-valued pixels, making prior methods [ 54 ], [55], [49], [12], [11] unsuitable for our setting. 
+
+Attacks on Vision Models. We next review attacks on vision models, mainly under the split learning (SL) paradigm [ 14 ], [ 13 ]. For image classifiers, reconstruction attacks [ 15 ], [ 16 ], [ 17 ], [ 18 ] aim to recover inputs from intermediate represen-tations. FSHA [ 16 ] performs active attacks by modifying the training process, while PCAT [ 15 ], Unsplit [ 18 ], and SDAR [ 17 ] perform passive attacks by learning surrogate models and decoders. These approaches, however, target small-scale classifiers during training, whereas our work focuses on inference-time privacy in large MLLMs. For image embedding encoders, attacks include adversarial methods [ 45 ], [ 57 ] and re-construction methods [ 58 ], [ 59 ]. Adversarial attacks [ 45 ] often use transfer-based optimization, generating perturbation masks from surrogate models and transferring them to larger vision architectures such as Llama and Qwen. Reconstruction attacks like LeakyCLIP [ 58 ] or DRAG [ 59 ] invert CLIP embeddings. DRAG requires white-box access, limiting its applicability beyond small models. To the best of our knowledge, our work is the first to study image reconstruction attacks on large MLLMs under black-box, distributed inference settings. VIII. D ISCUSSION 
+
+Dataset Transferability. As discussed in Supplement SIII, the performance of MPAA and IEDA may degrade under dataset transfer. We emphasize that this degradation is primarily attributable to limited coverage of the training data rather than deficiencies in the attack design itself. Figure 11 supports this conclusion by showing that the degradation occurs mainly when the training and testing datasets exhibit significantly different object patterns. In principle, a more universal attack could be obtained by training MPAA and IEDA on large-scale, diverse image corpora such as LAION-5B [ 60 ], which was used to train Stable Diffusion and contains billions of images. However, such an approach would incur substantial computational cost, introducing a clear trade-off between attack generality and resource requirements. In this work, our goal is to characterize privacy leakage risks in distributed MLLM inference, rather than to engineer a single attack that generalizes optimally across all possible image distributions. 
+
+Reconstruction Resolution. In our experiments, we set the reconstruction resolution to 64 due to resource constraints. Increasing the output resolution does not necessarily yield additional visual details (see Figure 15), as low-level informa-tion is progressively lost during MLLM processing. Notably, whether reconstructions at a resolution of 64 , potentially with missing fine-grained details, constitute meaningful privacy leakage depends on the privacy definitions of specific scenarios. While higher-resolution reconstructions with finer details may further benefit an adversary, exploring such settings does not materially alter the conclusions of this work. IX. C ONCLUSION 
+
+In this paper, we study privacy vulnerabilities of MLLMs under distributed inference. We analyze information flow from images to intermediate embeddings and propose two complementary attacks: a pixel-level attack ( MPAA ) and a semantic-level attack ( IEDA ). Experiments show that MPAA recovers fine-grained details at early layers, while IEDA consistently reconstructs semantic content across all layers. Our analysis of factors affecting attack performance offers insights for the design of more privacy-preserving distributed MLLM inference systems. REFERENCES [1] A. Borzunov, D. Baranchuk, T. Dettmers, M. Riabinin, Y. Belkada, A. Chumachenko, P. Samygin, and C. Raffel, “Petals: Collaborative inference and fine-tuning of large models,” in Proc. ACL , 2023, pp. 558–568. 
+
+12 [2] A. Borzunov, M. Ryabinin, A. Chumachenko, D. Baranchuk, T. Dettmers, Y. Belkada, P. Samygin, and C. A. Raffel, “Distributed inference and fine-tuning of large language models over the internet,” NeurIPS , 2024. [3] Evilsocket, “Cake: a rust framework for distributed inference of large models based on candle,” https://github.com/evilsocket/cake, 2025. [4] M. Zhang, J. Cao, X. Shen, and Z. Cui, “Edgeshard: Efficient llm inference via collaborative edge computing,” arXiv:2405.14371 , 2024. [5] Y. Jiang, R. Yan, X. Yao, Y. Zhou, B. Chen, and B. Yuan, “Hexgen: Generative inference of large language model over heterogeneous environment,” in ICML 2024 , 2024. [6] J. Zhao, Y. Song, S. Liu, I. G. Harris, and S. A. Jyothi, “Lingualinked: A distributed large language model inference system for mobile devices,” 
+
+CoRR , vol. abs/2312.00388, 2023. [7] R. Ma, J. Wang, Q. Qi, X. Yang, H. Sun, Z. Zhuang, and J. Liao, “Poster: Pipellm: Pipeline LLM inference on heterogeneous devices with sequence slicing,” in Proc. ACM SIGCOMM 2023 . ACM, 2023, pp. 1126–1128. [8] T. AI, “The ai acceleration cloud,” https://www.together.ai/, 2025. [9] P. Intellect, “Find compute. train models. co-own intelligence,” https: //www.primeintellect.ai/, 2025, online; accessed 22-August-2025. [10] Modal, “Ai infrastructure that developers love,” https://modal.com/, 2025. [11] X. Luo, T. Yu, and X. Xiao, “Prompt inference attack on distributed large language model inference frameworks,” arXiv:2503.09291 , 2025. [12] W. Qu, Y. Zhou, Y. Wu, T. Xiao, B. Yuan, Y. Li, and J. Zhang, “ Prompt Inversion Attack against Collaborative Inference of Large Language Models ,” in SP 2025 , 2025, pp. 1602–1619. [13] O. Gupta and R. Raskar, “Distributed learning of deep neural network over multiple agents,” J. Netw. Comput. Appl. , vol. 116, pp. 1–8, 2018. [14] P. Vepakomma, O. Gupta, T. Swedish, and R. Raskar, “Split learning for health: Distributed deep learning without sharing raw patient data,” 
+
+arXiv preprint arXiv:1812.00564 , 2018. [15] X. Gao and L. Zhang, “ {PCAT }: Functionality and data stealing from split learning by {Pseudo-Client } attack,” in Proc. USENIX Security ,2023, pp. 5271–5288. [16] D. Pasquini, G. Ateniese, and M. Bernaschi, “Unleashing the tiger: Inference attacks on split learning,” in ACM CCS , 2021, pp. 2113–2129. [17] X. Zhu, X. Luo, Y. Wu, Y. Jiang, X. Xiao, and B. C. Ooi, “Passive inference attacks on split learning via adversarial regularization,” arXiv preprint arXiv:2310.10483 , 2023. [18] E. Erdo ˘gan, A. K ¨up c¸ ¨ u, and A. E. C¸ ic¸ ek, “Unsplit: Data-oblivious model inversion, model stealing, and label inference attacks against split learning,” in Proc. WPES , 2022, pp. 115–124. [19] G. Team, A. Kamath, J. Ferret et al. , “Gemma 3 technical report,” arXiv preprint arXiv:2503.19786 , 2025. [20] A. Abouelenin, A. Ashfaq, A. Atkinson, H. Awadalla, N. Bach, J. Bao, A. Benhaim, M. Cai, V. Chaudhary, C. Chen et al. , “Phi-4-mini technical report: Compact yet powerful multimodal language models via mixture-of-loras,” arXiv preprint arXiv:2503.01743 , 2025. [21] S. Bai, K. Chen, X. Liu, J. Wang, W. Ge, S. Song, K. Dang, P. Wang, S. Wang, J. Tang, H. Zhong, Y. Zhu, M. Yang, Z. Li, J. Wan, P. Wang, W. Ding, Z. Fu, Y. Xu, J. Ye, X. Zhang, T. Xie, Z. Cheng, H. Zhang, Z. Yang, H. Xu, and J. Lin, “Qwen2.5-vl technical report,” arXiv preprint arXiv:2502.13923 , 2025. [22] Meta, “The llama 4 herd: The beginning of a new era of natively multimodal ai innovation,” https://ai.meta.com/blog/ llama-4-multimodal-intelligence/, 2025. [23] X. Luo, X. Xiao, Y. Wu, J. Liu, and B. C. Ooi, “A fusion-denoising attack on instahide with data augmentation,” in Proceedings of the AAAI Conference on Artificial Intelligence , vol. 36, no. 2, 2022, pp. 1899–1907. [24] A. Krizhevsky, G. Hinton et al. , “Learning multiple layers of features from tiny images,” 2009. [25] A. Coates, A. Ng, and H. Lee, “An analysis of single-layer networks in unsupervised feature learning,” in AISTATS , 2011, pp. 215–223. [26] Z. Liu, P. Luo, X. Wang, and X. Tang, “Deep learning face attributes in the wild,” in ICCV , 2015, pp. 3730–3738. [27] P. Sharma, N. Ding, S. Goodman, and R. Soricut, “Conceptual captions: A cleaned, hypernymed, image alt-text dataset for automatic image captioning,” in Proc. ACL , 2018, pp. 2556–2565. [28] T.-Y. Lin, M. Maire, S. Belongie, L. Bourdev, R. Girshick, J. Hays, P. Perona, D. Ramanan, C. L. Zitnick, and P. Doll ´ar, “Microsoft coco: Common objects in context,” 2015. [29] J. Howard, “Imagenette: A smaller subset of 10 easily classified classes from imagenet.” [Online]. Available: https://github.com/fastai/imagenette [30] S. AI, “midjourney-prompts,” https://huggingface.co/datasets/succinctly/ midjourney-prompts, 2025, online; accessed 21-October-2025. [31] C. Zhang, S. Bengio, M. Hardt, B. Recht, and O. Vinyals, “Understanding deep learning requires rethinking generalization,” in ICLR , 2017. [32] C. E. Shannon et al. , “Coding theorems for a discrete source with a fidelity criterion,” IRE Nat. Conv. Rec , vol. 4, no. 142-163, p. 1, 1959. [33] J. Ho, A. Jain, and P. Abbeel, “Denoising diffusion probabilistic models,” 
+
+NeurIPS , vol. 33, pp. 6840–6851, 2020. [34] R. Rombach, A. Blattmann, D. Lorenz, P. Esser, and B. Ommer, “High-resolution image synthesis with latent diffusion models,” in Proc. IEEE/CVF CVPR , 2022, pp. 10 684–10 695. [35] C. Mou, X. Wang, L. Xie, Y. Wu, J. Zhang, Z. Qi, and Y. Shan, “T2i-adapter: Learning adapters to dig out more controllable ability for text-to-image diffusion models,” in Proc. AAAI , vol. 38, no. 5, 2024. [36] L. Zhang, A. Rao, and M. Agrawala, “Adding conditional control to text-to-image diffusion models,” in Proc. ICCV , 2023, pp. 3836–3847. [37] C. Szegedy, V. Vanhoucke, S. Ioffe, J. Shlens, and Z. Wojna, “Rethinking the inception architecture for computer vision,” in IEEE CVPR , 2016, pp. 2818–2826. [38] A. Radford, J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal, G. Sastry, A. Askell, P. Mishkin, J. Clark et al. , “Learning transferable visual models from natural language supervision,” in International conference on machine learning . PmLR, 2021, pp. 8748–8763. [39] I. Gulrajani, F. Ahmed, M. Arjovsky, V. Dumoulin, and A. C. Courville, “Improved training of wasserstein gans,” Proc. NeurIPS , vol. 30, 2017. [40] J. Ho and T. Salimans, “Classifier-free diffusion guidance,” arXiv preprint arXiv:2207.12598 , 2022. [41] J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-Fei, “Imagenet: A large-scale hierarchical image database,” in Proc. IEEE CVPR . Ieee, 2009, pp. 248–255. [42] Z. Wang, A. C. Bovik, H. R. Sheikh, and E. P. Simoncelli, “Image quality assessment: from error visibility to structural similarity,” IEEE transactions on image processing , vol. 13, no. 4, pp. 600–612, 2004. [43] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image recognition,” in Proc. IEEE CVPR , 2016, pp. 770–778. [44] J. Zhang, M. Khayatkhoei, P. Chhikara, and F. Ilievski, “Mllms know where to look: Training-free perception of small visual details with multimodal llms,” arXiv preprint arXiv:2502.17422 , 2025. [45] Q. Guo, S. Pang, X. Jia, Y. Liu, and Q. Guo, “Efficient generation of targeted and transferable adversarial examples for vision-language models via diffusion models,” IEEE TIFS , 2024. [46] M. Keller, “MP-SPDZ: A versatile framework for multi-party computa-tion,” in ACM CCS 2020 . ACM, 2020, pp. 1575–1590. [47] P. Jauernig, A.-R. Sadeghi, and E. Stapf, “Trusted execution environments: properties, applications, and challenges,” IEEE S&P , 2020. [48] W.-j. Lu, Z. Huang, Z. Gu, J. Li, J. Liu, C. Hong, K. Ren, T. Wei, and W. Chen, “Bumblebee: Secure two-party inference framework for large transformers,” Cryptology ePrint Archive , 2023. [49] C. Song and A. Raghunathan, “Information leakage in embedding models,” in ACM CCS 2020 . ACM, 2020, pp. 377–390. [50] H. Chang, A. Shahin Shamsabadi, K. Katevas, H. Haddadi, and R. Shokri, “Context-aware membership inference attacks against pre-trained large language models,” in EMNLP 2025 . Association for Computational Linguistics, Nov. 2025, pp. 7299–7321. [51] K. Krishna, G. S. Tomar, A. P. Parikh, N. Papernot, and M. Iyyer, “Thieves on sesame street! model extraction of bert-based apis,” in ICLR 2020 , 2020. [52] S. Zanella-Beguelin, S. Tople, A. Paverd, and B. K ¨opf, “Grey-box extraction of natural language models,” in ICML . PMLR, 2021, pp. 12 278–12 286. [53] Y. Zhang, N. Carlini, and D. Ippolito, “Effective prompt extraction from language models,” in First Conference on Language Modeling , 2024. [54] H. Li, M. Xu, and Y. Song, “Sentence embedding leaks more information than you expect: Generative embedding inversion attack to recover the whole sentence,” in ACL 2023 , 2023, pp. 14 022–14 040. [55] J. X. Morris, V. Kuleshov, V. Shmatikov, and A. M. Rush, “Text embeddings reveal (almost) as much as text,” in Proc. EMNLP 2023 ,2023, pp. 12 448–12 460. [56] C. Zhang, J. X. Morris, and V. Shmatikov, “Extracting prompts by inverting LLM outputs,” in Proc. EMNLP 2024 , 2024, pp. 14 753–14 777. [57] K. Hu, W. Yu, L. Zhang, A. Robey, A. Zou, C. Xu, H. Hu, and M. Fredrikson, “Transferable adversarial attacks on black-box vision-language models,” arXiv preprint arXiv:2505.01050 , 2025. [58] Y. Chen, S. Wang, X. Wang, and X. Ma, “Leakyclip: Extracting training data from clip,” arXiv preprint arXiv:2508.00756 , 2025. [59] W.-K. Lei, J.-C. Chen, and S.-T. Chen, “Drag: Data reconstruction attack using guided diffusion,” arXiv preprint arXiv:2509.11724 , 2025. [60] C. Schuhmann, R. Beaumont, R. Vencu, C. Gordon, R. Wightman, M. Cherti, T. Coombes, A. Katta, C. Mullis, M. Wortsman et al. , “Laion-5b: An open large-scale dataset for training next generation image-text models,” Proc. NeurIPS , vol. 35, pp. 25 278–25 294, 2022. 
+
+13 [61] N. Blachman, “The convolution inequality for entropy powers,” IEEE Transactions on Information theory , vol. 11, no. 2, pp. 267–271, 2003. [62] A. Gersho and R. M. Gray, Vector quantization and signal compression .Springer Science & Business Media, 2012, vol. 159. [63] H. Liu, C. Li, Q. Wu, and Y. J. Lee, “Visual instruction tuning,” 2023. [64] OpenAI, “Gpt aip pricing,” https://openai.com/api/pricing/, 2025, online; accessed 14-November-2025. [65] Google, “Gemini api pricing,” https://ai.google.dev/gemini-api/docs/ pricing, 2025, online; accessed 14-November-2025. [66] Y. Jiang, X. Luo, Y. Yang, and X. Xiao, “Calibrating noise for group privacy in subsampled mechanisms,” arXiv preprint arXiv:2408.09943 ,2024. [67] X. Luo, Y. Wu, X. Xiao, and B. C. Ooi, “Feature inference attack on model predictions in vertical federated learning,” in 2021 IEEE 37th international conference on data engineering (ICDE) . IEEE, 2021, pp. 181–192. 
+
+14 SUPPLEMENTARY MATERIAL 
+
+SI. D ESIGN REMARKS ON MPAA Below, we provide several remarks on MPAA. 
+
+Lightweight . In MPAA , we employ a shared patch extractor for all embedding vectors based on the observation that the relationship between image patches and their corresponding embeddings is generally consistent across positions [ 11 ]. Compared with the naive approach that reconstructs the entire image jointly, MPAA reduces the model size from 𝑂 (𝑁 𝒙 𝑑 𝑓 )
+
+to 𝑂 (𝑑 𝑓 ). The smaller model significantly lowers training data requirements, reducing both the number of queries needed and the likelihood of attack detection. 
+
+Adaptive . MPAA focuses on modeling the information flow between embeddings and image patches rather than the internal structure of a specific MLLM. After the network architecture is defined, the same design can be applied to different MLLMs with only minor modifications to the input dimension. Moreover, although the input image size of 𝒙 affects the number of image embeddings 𝑁 𝒙 , it does not alter the overall attack workflow since the same patch extractor is applied uniformly to all embeddings. 
+
+Multi-resolution reconstruction . Each input patch 𝒙 𝑖 is reconstructed at two resolutions, 𝒙 𝐻 𝑖 and 𝒙 𝐿 𝑖 . As shown theoretically below using rate-distortion theory and the Shannon lower bound for squared-error distortion [ 32 ], for patches 𝒙 𝐻 𝑖 
+
+and 𝒙 𝐿 𝑖 of size 𝐿 < 𝐻 , the expected per-pixel reconstruction distortion satisfies 𝐷 𝐿 < 𝐷 𝐻 . Hence, low-resolution patches 
+
+𝒙 𝐿 𝑖 preserve better structural fidelity, while high-resolution patches 𝒙 𝐻 𝑖 capture finer visual details. Fusing 𝒙 𝐿 𝑖 and 𝒙 𝐻 𝑖 thus yields reconstructions that balance global consistency with local realism. 
+
+Theoretical Analysis . Let the original image patch be 𝒙 𝑖 ∈
+
+R3×𝑃 ×𝑃 , where 𝑃 is the patch size, and 𝒆 𝑖 ∈ R𝑑 𝑓 be the embedding output by an MLLM intermediate layer: 
+
+𝒆 𝑖 = 𝑓 (𝒙 𝑖 ).
+
+We define the downsampled patches of 𝒙 𝑖 as 𝒙 𝑠 𝑖 with 𝑠 ∈ { 𝐿, 𝐻 }
+
+and 𝐿 < 𝐻 ≤ 𝑃 . The corresponding reconstructions from 𝒆 𝑖 
+
+are given by 
+
+ˆ𝒙 𝑠 𝑖 = Extractor (𝒆 𝑖 ),
+
+and the average per-pixel mean squared error (MSE) is 
+
+𝐷 𝑠 = 1
+
+𝑀 𝑠 
+
+E || 𝒙 𝑠 𝑖 − ˆ𝒙 𝑠 𝑖 || 22
+
+ ,
+
+where 𝑀 𝑠 = 3𝑠 2 denotes the number of pixel values in a patch. According to the Shannon lower bound (SLB) for continuous sources [ 32 ], we have the minimum achievable distortion (or MSE) for reconstructing 𝒙 𝑠 𝑖 from 𝒆 𝑖 as: 
+
+𝐷 𝑠 ≥ 𝑁 (𝒙 𝑠 𝑖 )2 −2𝐼 ( 𝒙 𝑠 𝑖 ;𝒆 𝑖 ) 
+
+> 𝑀𝑠
+
+, (4) where 𝑁 (𝒙 𝑠 𝑖 ) = 12 𝜋𝑒 2 2ℎ( 𝒙 𝑠 𝑖 ) 
+
+> 𝑀𝑠
+
+is the entropy power [ 61 ] that quantifies the effective variance of image patches, and 𝐼 (𝒙 𝑠 𝑖 ; 𝒆 𝑖 )
+
+is the mutual information between the image patch and its embedding. Note that the traditional SLB theory [ 32 ] is derived for i.i.d. sources; we extend it to image patches by modeling each patch 𝒙 𝑠 𝑖 as a finite-dimensional correlated Gaussian vector. Under this extension, the distortion lower bound still follows the same exponential dependence on the information rate. We now compare the reconstruction distortions between 𝐷 𝐿 
+
+and 𝐷 𝐻 . There are two components in Equation (4) , i.e., 𝑁 (𝒙 𝑠 𝑖 )
+
+and 2 −2𝐼 ( 𝒙 𝑠 𝑖 ;𝒆 𝑖 ) 
+
+> 𝑀𝑠
+
+.For the first component, when an image patch is downsam-pled, its high-frequency components will be removed, reducing the entropy power: 
+
+𝑁 (𝒙 𝐿 𝑖 ) < 𝑁 (𝒙 𝐻 𝑖 ), (5) as established in signal compression theory [62]. For the second component, we note that the total information contained in the small patch cannot exceed that of the larger patch, leading to 
+
+𝐼 (𝒙 𝐿 𝑖 ; 𝒆 𝑖 ) ≤ 𝐼 (𝒙 𝐻 𝑖 ; 𝒆 𝑖 ). (6) Although 𝐼 (𝒙 𝐿 𝑖 ; 𝒆 𝑖 ) ≤ 𝐼 (𝒙 𝐻 𝑖 ; 𝒆 𝑖 ), the denominator 𝑀 𝑠 (the number of patch pixels) shrinks much faster, specifically 
+
+𝑀 𝐻 /𝑀 𝐿 = (𝐻 /𝐿 )2. Generally, the information rate per pixel increases as the patch size decreases, that is 
+
+𝐼 (𝒙 𝐿 𝑖 ; 𝒆 𝑖 )
+
+𝑀 𝐿 
+
+> 𝐼 (𝒙 𝐻 𝑖 ; 𝒆 𝑖 )
+
+𝑀 𝐻 
+
+. (7) Combining Equation (4)–(7) yields: 
+
+𝐷 𝐿 < 𝐷 𝐻 . (8) Equation (8) indicates that smaller patches will have lower per-pixel reconstruction error, hence better reconstruction quality. Specifically, the reconstructed low-resolution patch 
+
+ˆ𝒙 𝐿 𝑖 will preserve structural fidelity such as edges, while the high-resolution patch ˆ𝒙 𝐻 𝑖 provides more high-frequency details like textures. Fusing the multi-resolution patches will provide a balanced reconstruction quality. SII. A DDITIONAL EXPERIMENTAL SETTING 
+
+Platform. We implement MPAA and IEDA in PyTorch . We build a distributed inference environment following Petals [ 1], [2] and host it on a server with an AMD EPYC 9654 processor (192 cores), two NVIDIA A100-SXM4 40GB GPUs, and 750 GB of RAM, under Ubuntu 22.04. In our setup, three participants are distributed across the two local GPUs, with the second participant designated as the attacker. Note that the number of participants does not affect the attack mechanism; the primary factor influencing attack performance is the index of the first layer hosted by the attacker. 
+
+Algorithm Implementation. For MPAA , the patch extractor is implemented as a four-layer multi-layer perceptron (MLP) with batch normalization and LeakyReLU activations after each layer. The input dimension corresponds to the MLLM embedding dimension 𝑑 𝑓 , and the output dimension matches the number of pixels in an extracted patch. We use the implementation of FDN [ 23 ] as the fusion-denoising network, and we adopt a simple averaging rule during patch fusion. For IEDA , the adapter follows the same architecture as the patch extractor in MPAA , except for its output dimension. We use the feature extraction part (before the linear layer) of Inception V3 [ 37 ]15 TABLE VII: The performance of MPAA evaluated on additional datasets. 
+
+Dataset Metric Gemma 3 Phi 4 Multimodal Qwen 2.5 VL Llama 4 Scout TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉ TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉ TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉ TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉
+
+CC3M 
+
+ℓ1 loss ( ↓) 0.049 0.055 0.063 0.064 0.062 0.066 0.070 0.072 0.069 0.068 0.076 0.079 0.062 0.067 0.070 0.071 SSIM ( ↑) 0.806 0.767 0.705 0.680 0.655 0.613 0.593 0.577 0.579 0.582 0.545 0.530 0.504 0.524 0.564 0.553 CSS ( ↑) 0.748 0.683 0.641 0.608 0.562 0.555 0.549 0.541 0.578 0.577 0.550 0.554 0.603 0.584 0.589 0.584 COCO 
+
+ℓ1 loss ( ↓) 0.052 0.057 0.061 0.066 0.052 0.057 0.061 0.066 0.058 0.058 0.062 0.069 0.057 0.050 0.066 0.068 SSIM ( ↑) 0.739 0.632 0.555 0.529 0.678 0.655 0.521 0.503 0.543 0.543 0.509 0.478 0.596 0.527 0.548 0.522 CSS ( ↑) 0.736 0.685 0.648 0.631 0.614 0.614 0.594 0.581 0.668 0.667 0.646 0.629 0.507 0.520 0.512 0.496 ImageNette 
+
+ℓ1 loss ( ↓) 0.047 0.057 0.068 0.067 0.063 0.066 0.066 0.067 0.069 0.068 0.069 0.075 0.068 0.069 0.072 0.070 SSIM ( ↑) 0.807 0.672 0.612 0.603 0.578 0.555 0.557 0.540 0.534 0.545 0.527 0.521 0.679 0.614 0.595 0.612 CSS ( ↑) 0.774 0.718 0.668 0.641 0.564 0.551 0.547 0.553 0.608 0.610 0.597 0.589 0.652 0.621 0.551 0.541 
+
+TABLE VIII: The CSS ( ↑) performance of IEDA evaluated on additional datasets. Note that we omit ℓ1 loss and SSIM results for IEDA, as these pixel-level metrics cannot accurately evaluate semantic reconstruction quality. 
+
+Dataset Gemma 3 Phi 4 Multimodal Qwen 2.5 VL Llama 4 Scout TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉ TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉ TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉ TOKEN ⌈ 𝐿  
+
+> 4
+
+⌉ ⌈ 2𝐿  
+
+> 4
+
+⌉ ⌈ 3𝐿  
+
+> 4
+
+⌉
+
+CC3M 0.835 0.791 0.842 0.826 0.724 0.739 0.734 0.734 0.738 0.738 0.728 0.749 0.732 0.745 0.747 0.735 COCO 0.799 0.776 0.777 0.700 0.781 0.797 0.807 0.767 0.815 0.798 0.717 0.709 0.799 0.758 0.750 0.746 ImageNette 0.737 0.744 0.753 0.747 0.761 0.772 0.738 0.762 0.730 0.753 0.776 0.757 0.748 0.753 0.740 0.752 CIFAR10                          
+
+> CIFAR100
+> STL10
+> CelebA
+> CIFAR10
+> CIFAR100
+> STL10
+> CelebA
+> 0.034 0.041 0.065 0.092
+> 0.042 0.036 0.066 0.086
+> 0.105 0.108 0.051 0.128
+> 0.089 0.074 0.085 0.030
+> (a) TOKEN CIFAR10
+> CIFAR100
+> STL10
+> CelebA
+> CIFAR10
+> CIFAR100
+> STL10
+> CelebA
+> 0.047 0.064 0.085 0.108
+> 0.053 0.045 0.083 0.092
+> 0.129 0.135 0.072 0.156
+> 0.113 0.103 0.113 0.050 (b) Layer 9
+
+Fig. 11: ℓ1 losses for attack transferability by training (𝑥 -axis) and test ( 𝑦 -axis) datasets. 
+
+as the semantic model, since the linear layer may compress semantic features and thus degrade reconstruction quality. The diffusion model implementation follows DDPM [ 33 ], augmented with an additional semantic embedding layer before the input stage. SIII. A DDITIONAL EXPERIMENTS 
+
+Real-World Image Datasets. Apart from the classification-based image datasets used in Section V, we further evaluate the proposed attacks on three real-world datasets designed for diverse tasks: CC3M [ 27 ], COCO Caption [ 28 ], and ImageNette [ 29 ]. The CC3M dataset contains 3,318,333 image-caption pairs for image captioning tasks and has been used to train multimodal models such as LLaVA [ 63 ]. The COCO Caption dataset consists of 328k images with 2.5 million labeled instances and was originally designed to evaluate scene understanding capabilities of MLLMs. The ImageNette dataset contains 13.4k real-world images and is commonly used as a compact benchmark for transfer learning. Tables VII and VIII present the attack evaluation of MPAA and IEDA , respectively. The reconstructed example images are shown in Figures 18 and 19. Overall, the observed trends and insights are consistent with those discussed in Section V-B. 
+
+Attack Transferability. We evaluate the transferability of the proposed attacks, with the goal of answering the following question: Can attack models trained on one dataset be used to reconstruct images from another dataset? Since IEDA is a diffusion-based image generation method, its reconstruction quality largely depends on the diversity of its training data. In particular, IEDA is unlikely to generate objects that do not appear in its training set [ 40 ]. For this reason, our transferability analysis primarily focuses on MPAA . In this experiment, we train attack models on four datasets, CIFAR10, CIFAR100, STL10, and CelebA, using cutting layers {0, 9} of Gemma 3. We then evaluate each trained model on the three remaining datasets that differ from its training data. The ℓ1 losses of this transferability study are shown in Figure 11, from which we draw two main observations. First , transferability is influenced by the distribution similarity between the training and test datasets. For instance, Figure 11 shows that models trained on CIFAR10 and CIFAR100 transfer well to each other, as these datasets share similar visual and semantic distributions. In contrast, models trained on CelebA transfer poorly to the other datasets because human faces differ substantially from the natural objects present in CIFAR10, CIFAR100, and STL10. 
+
+Second , deeper cutting layers reduce attack transferability. The LLM backbone primarily serves to align text and image embeddings, and as more layers process the image embeddings, their distribution gradually shifts into a different representation space. This shift increases the distribution mismatch between datasets and thus degrades the attack transferability. 
+
+Ablation Study of MPAA . The three main components of MPAA are the multi-resolution local feature extractor, the global patch smoother, and the FDN denoising module. We now evaluate the contribution of each component. Specifically, we train three ablated variants of MPAA on layer 17 of Gemma 3: the first variant replaces the multi-resolution extractor with a single extractor that recovers single-resolution patches; the second variant removes the global patch smoother before the 16 TABLE X: Ablation study of IEDA on CIFAR10 and the cutting layer 14 of Qwen 2.5 VL. 
+
+Metric Branch Default Joint Train Strong Guidance No Pretrain CSS ( ↑) 0.7842 0.7158 0.7369 0.7612 
+
+ℓ1 (↓) 0.173 0.1671 0.2433 0.2055 
+
+TABLE XI: Query costs for collecting one training dataset used in MPAA and IEDA. 
+
+Pricing Strategy MLLM Implementation Gemma 3 Phi 4 Qwen 2.5 Llama 4 #Input Tokens 13,000,000 13,000,000 400,000 7,400,000 GPT-5.1 $16.25 $16.25 $0.50 $9.25 Gemini 2.5 Flash $3.90 $3.90 $0.12 $2.22 Together.AI $0.26 $0.26 $0.12 $1.33 Image Embedding Text Embedding  
+
+> (a) Layer 8 (b) Layer 33
+
+Fig. 12: Text and image distributions in Gemma 3. TABLE IX: Ablation study of MPAA on the cutting layer 17 of Gemma 3. 
+
+Dataset Metric Branch Default 1× Res. No Smoother No FDN CIFAR10 ℓ1 (↓) 0.0525 0.0687 0.0656 0.0894 SSIM ( ↑) 0.7639 0.7289 0.7581 0.5655 CelebA ℓ1 (↓) 0.0614 0.0726 0.0695 0.0865 SSIM ( ↑) 0.7395 0.6990 0.7166 0.6026 STL10 ℓ1 (↓) 0.0799 0.1018 0.0837 0.1355 SSIM ( ↑) 0.6639 0.6187 0.6219 0.3812 Ground Truth  Default  1 × Reso.  No Smoother  No FDN      
+
+> (a) MPAA Ground Truth Default Joint Train Strong Guid .No Pretrain
+> (b) IEDA
+
+Fig. 13: Example images of the ablation study. + Perturbation 
+
+> Source Image
+> (Plane )
+> Target Image
+> (Car)
+> Perturbed Image
+> (Target: Car)
+
+Fig. 14: An adversarial example generated by AdvDif-fVLM [45]. 
+
+FDN; and the third variant removes the FDN denoising module entirely. The corresponding results are shown in Figure IX, with qualitative examples provided in Figure 13a. From the examples in Figure 13a, we observe the following. Compared with the original MPAA , the single-resolution variant fails to accurately reproduce image colors and often loses fine-grained details. When the global patch smoother is removed, noticeable artifacts appear across patch boundaries, degrading overall visual quality. The denoising module proves to be the most critical component: the variant without FDN yields the poorest reconstruction quality, demonstrating that effective denoising is essential for producing coherent and realistic images. 
+
+Ablation Study of IEDA . For IEDA , we incorporate three main design choices to improve attack performance: the two-phase adapter and diffusion training strategy, the weak guidance strategy during diffusion training, and the diffusion pretraining stage on ImageNet. Together, these three strategies balance reconstruction fidelity and diversity. We now evaluate the effect of each strategy separately. For the first ablated variant, we merge the two-phase diffusion training into a single phase, meaning that the adapter and diffusion model are trained jointly. For the second variant, we replace the weak guidance strategy with a strong guidance strategy. In this case, only a single guided diffusion model is trained, and reconstructions are generated via 𝒔 (𝒙 𝑘 , 𝑘, 𝒄 𝒙 ) = 𝒔 𝜽 (𝒙 𝑘 , 𝑘, 𝒄 𝒙 ), which resembles a simplified form of Eq. (3) . For the third variant, we remove the ImageNet pretraining stage and train the diffusion model directly from scratch. Table X reports the results on layer 14 of Qwen 2.5 VL, with qualitative examples shown in Figure 13b. Overall, the default design of IEDA achieves the highest semantic similarity. While jointly training the adapter and the diffusion model yields the lowest ℓ1 loss, the diffusion model struggles to extract meaningful information from the adapter, resulting in semantically meaningless reconstructions. The remaining two ablations reduce the diversity of reconstructed images: the strong guidance variant produces implausible object textures due to over-constrained generation, and the no-pretraining variant exhibits degraded background fidelity. Both effects lead to inferior semantic reconstruction compared with the full IEDA design. 
+
+Query Costs. The primary cost associated with MPAA and IEDA arises from the queries needed to construct the aux-iliary training dataset (E aux , Daux ). Since each experimental dataset uses 50 , 000 image-text pairs, we estimate the cor-responding query expenses under three mainstream MLLM service providers: GPT-5.1 [ 64 ], Gemini 2.5 Flash [ 65 ], and Together.AI [ 8]. The estimated costs are summarized in Ta-ble XI. Across all pricing models and MLLM implementations, assembling the required training dataset typically costs less than 20 USD , highlighting the low financial barrier of the proposed attacks. 
+
+Different Reconstruction Resolutions. Recall that the designs of MPAA and IEDA allow flexible adjustment of recon-struction resolution. We evaluate attack performance under output resolutions of {32 × 32 , 64 × 64 , 96 × 96 , 128 × 128 }.Reconstructions are performed at layer 9 of Gemma 3 and layer 17 TABLE XII: Performance of MPAA under different reconstruction resolutions on CelebA, evaluated at layer 9 of Gemma 3 and layer 8 of Phi 4.                                        
+
+> MLLM Metric Output Resolutions 32 64 96 128 Gemma 3
+> ℓ1loss ( ↓)0.0412 0.0504 0.0511 0.0522 SSIM ( ↑)0.8823 0.7923 0.7717 0.7625 CSS ( ↑)0.8760 0.8152 0.7631 0.7442 Phi 4
+> ℓ1loss ( ↓)0.0468 0.0502 0.0512 0.0530 SSIM ( ↑)0.8739 0.8112 0.7737 0.7380 CSS ( ↑)0.8813 0.8230 0.7719 0.7438 GT
+> Train 670 1590 2444 3619 3909 4142 6479 9906 9934
+> Train 670 1590 2444 9906
+> 32 64 96 128 32 64 96 128
+> Gemma 4 Phi 4 Multimodal
+> 64
+
+Fig. 15: Reconstructed examples under different output resolutions. The configurations correspond to those in Table XII. 
+
+8 of Phi 4 Multimodal, using CelebA as the evaluation dataset. Table XII reports the quantitative performance of MPAA , while Figure 15 presents reconstructed examples. We observe that the performance of IEDA remains largely consistent across different output resolutions in terms of the CSS metric and does not exhibit notable variation. Therefore, we focus our discussion on MPAA . Table XII and Figure 15 reveal two seemingly contradictory observations. As the reconstruction resolution increases from 32 to 128 , quantitative metrics slightly degrade (Table XII), whereas the reconstructed images exhibit improved perceptual quality to human observers (Figure 15). This discrepancy arises because higher output resolutions enable MPAA to generate finer-grained visual details, leading to visually sharper reconstructions. However, these additional details do not necessarily correspond to the true low-level details in the original images. This behavior is rooted in the low-level information loss introduced by MLLM processing. Specifically, the embeddings produced at a given MLLM layer may discard fine-grained visual information and instead emphasize higher-level, abstract representations. Since such information loss is irreversible, increasing the reconstruction resolution cannot recover the missing low-level details and may instead amplify mismatches between the reconstructed images and the ground truth, resulting in degraded quantitative metrics. SIV. A DDITIONAL COUNTERMEASURES 
+
+Embedding Shuffle. Since both MPAA and IEDA rely on correctly matched image-embedding pairs for training, anatural defense is to disrupt this correspondence. A centralized server could aggregate user queries into a batch, pad them to a uniform length, randomly shuffle the batch, and then feed the shuffled sequence through the inference pipeline. Under this design, an attacker would be unable to infer the correspondence between input images and embeddings based on sequence length (see Section IV-A ). Nevertheless, the attacker can still identify the embedding it initiated by inserting a fragment of identifiers into the text prompt, such as a random sequence composed of special tokens (e.g., 
+
+<end_of_image><start_of_turn><start_of_turn> ). While such insertion may affect generation quality, it does not interfere with the primary objective of collecting matched image-prompt pairs. In addition, this batch-based inference defense is only practical for offline settings, where users can tolerate additional latency in LLM responses. For online inference, batching queries inevitably introduces extra delay for some users, thereby degrading service usability and response time. 
+
+Remove Special Tokens. As shown in Section IV-A ,both MPAA and IEDA rely on correctly extracting im-age tokens, which in turn depends on the stability of special-token embeddings, such as <start_of_image> and 
+
+<end_of_image> . Accordingly, a natural defense strategy is to remove the special tokens used in the prompt format (see Figure 2). However, modern MLLMs universally employ special tokens as delimiters for multi-modal inputs, enabling the model to distinguish modalities and align them in a shared embedding space during training. Removing these delimiters would prevent the model from reliably separating image inputs from text inputs, thereby degrading embedding alignment and downstream performance. Implementing such a defense would require fundamentally different training strategies and potentially new MLLM architectures, which are out of the scope of this paper. 
+
+Differential Privacy. Differential privacy (DP) is a widely adopted privacy-preserving framework with strong theoretical guarantees [ 66 ]. However, DP is fundamentally incompatible with the distributed MLLM inference pipeline. DP requires that for any two neighboring datasets differing in a single sample (an image in our case), the algorithm’s outputs must be nearly indistinguishable. Applied to MLLMs, this requirement implies that the intermediate embeddings of two distinct input images 
+
+𝒙 1 and 𝒙 2 must be nearly identical. Such constraints would destroy the utility of the embeddings and render the MLLM incapable of producing meaningful outputs [ 17 ], [ 11 ], [ 67 ]. Therefore, DP does not apply to this setting. ETHICAL CONSIDERATIONS 
+
+This work examines privacy vulnerabilities in distributed inference frameworks for multimodal large language models (MLLMs). Given the dual-use nature of security research, we conduct a stakeholder-based ethics analysis to assess potential impacts, harms, and benefits associated with both the research process and the publication of our findings. 
+
+Stakeholders. The primary stakeholders include (1) end users whose private images may be processed by distributed MLLM inference systems, (2) developers and operators of distributed 18 CIFAR10 CIFAR100 STL10 CelebA PCAT (average) SDAR (average) TOKEN 9 17 25 34 (L) 
+
+> Output Layer
+> 0.43
+> 0.56
+> 0.69
+> 0.82
+> 0.95
+> SSIM (MPAA)
+
+(a) Gemma 3 TOKEN 8 16 24 32 (L)  
+
+> Output Layer
+> 0.43
+> 0.56
+> 0.69
+> 0.82
+> 0.95
+> SSIM (MPAA)
+
+(b) Phi 4 Multimodal TOKEN 7 14 21 28 (L)  
+
+> Output Layer
+> 0.43
+> 0.56
+> 0.69
+> 0.82
+> 0.95
+> SSIM (MPAA)
+
+(c) Qwen 2.5 VL TOKEN 12 24 36 48 (L)  
+
+> Output Layer
+> 0.43
+> 0.56
+> 0.69
+> 0.82
+> 0.95
+> SSIM (MPAA)
+
+(d) Llama 4 Scout 
+
+Fig. 16: The SSIM score ( ↑) of MPAA ((a)–(b)) across different MLLMs and datasets. It is important to note that we omit ℓ1 loss and SSIM results for the semantic attack ( IEDA ), as these pixel-level metrics cannot accurately evaluate semantic reconstruction quality. Gemma 3  Phi 4 Multimodal  Qwen 2.5 VL  Llama 4 Scout 
+
+CIFAR10 
+
+CIFAR100 
+
+IEDA 
+
+MPAA 
+
+SDAR 
+
+PCAT 
+
+IEDA 
+
+MPAA 
+
+SDAR 
+
+PCAT 
+
+Fig. 17: Example images reconstructed by different methods. In each block, the five images from left to right indicate results from the cutting layers {0, ⌈ 𝐿  
+
+> 4
+
+⌉, ⌈ 2𝐿  
+
+> 4
+
+⌉, ⌈ 3𝐿  
+
+> 4
+
+⌉, 𝐿 }.CC3M  COCO  ImageNette 
+
+Fig. 18: Example images reconstructed via MPAA from different datasets. In each block, the six images from left to right indicate the ground truth image and results from the cutting layers {0, ⌈ 𝐿  
+
+> 4
+
+⌉, ⌈ 2𝐿  
+
+> 4
+
+⌉, ⌈ 3𝐿  
+
+> 4
+
+⌉, 𝐿 }.
+
+inference frameworks, (3) model providers whose architectures may be affected by privacy leakage, (4) the research community, and (5) society at large, including both defenders and potential adversaries. 19 CC3M  COCO  ImageNette Fig. 19: Example images reconstructed via IEDA from different datasets. In each block, the six images from left to right indicate the ground truth image and results from the cutting layers {0, ⌈ 𝐿  
+
+> 4
+
+⌉, ⌈ 2𝐿  
+
+> 4
+
+⌉, ⌈ 3𝐿  
+
+> 4
+
+⌉, 𝐿 }.Ethical Principles. Our analysis is guided by the ethical prin-ciples articulated in the Menlo Report, including Beneficence ,
+
+Respect for Persons , Justice , and Respect for Law and Public Interest . In particular, we consider whether the research reduces or exacerbates privacy risks, whether it respects the rights and expectations of affected users, and whether the benefits of disclosure outweigh potential harms. 
+
+Potential Harms. The primary potential harm of this work is that insights into image reconstruction from intermediate embeddings could be misused by adversaries to infer sensitive visual information. Such misuse could result in violations of user privacy if deployed irresponsibly. However, we do not conduct experiments on real user data. All experiments are performed using publicly available models and datasets, and no personal or sensitive user information is collected or processed. 
+
+Mitigations. We take several steps to mitigate potential harms. First, we adopt a passive and black-box threat model that reflects realistic adversarial capabilities, avoiding invasive or disruptive actions. Second, we refrain from releasing turnkey attack tools that could directly enable misuse; the released code is intended for research reproducibility and requires substantial expertise and controlled conditions to apply. Third, we focus on analyzing systemic privacy risks rather than optimizing attacks for maximal exploitation. Finally, we responsibly disclosed high-level findings to the Petals developers prior to submission to support mitigation efforts. 
+
+Decision to Publish. We conclude that publishing this work is ethically justified. From a beneficence perspective, our findings expose previously unexplored privacy risks in distributed MLLM inference and provide insights that can guide the design of more privacy-resilient systems. From a respect-for-persons perspective, identifying and communicating these risks supports users’ rights to understand and protect their privacy. While acknowledging the potential for misuse, we determine that the defensive and societal benefits of transparency and early disclosure outweigh the risks, especially given the mitigations described above. 
+
+Human Subjects and Legal Considerations. This study does not involve human subjects, interaction with users, or collection of personal data, and therefore does not require IRB approval. All experiments are conducted in compliance with applicable laws and using resources permitted by their respective licenses and terms of use. 20

@@ -1,0 +1,1372 @@
+Title: Your "Pro" LLM Subscription May Actually Be "Free": Exposing Fingerprint Spoofing Risks in LLM Inference Services
+
+URL Source: https://arxiv.org/pdf/2606.16100v1
+
+Published Time: Tue, 16 Jun 2026 01:32:30 GMT
+
+Number of Pages: 21
+
+Markdown Content:
+Pro 
+
+> Free
+
+# Your “Pro” LLM Subscription May Actually Be “Free”: Exposing Fingerprint Spoofing Risks in LLM Inference Services 
+
+Jiahao Zhang *, Xiuyu Li *, Suhang Wang 
+
+The Pennsylvania State University, USA 
+
+jiahao.zhang@psu.edu, disangan233@gmail.com, szw494@psu.edu 
+
+Abstract 
+
+As Large Language Model (LLM) APIs become ubiquitous, users increasingly rely on black-box fingerprinting to verify that providers are serving the advertised premium models. However, these methods may over-look adversarial providers who manipulate model weights to cheat the fingerprint pro-cess. We introduce a novel threat termed fin-gerprint spoofing , where a malicious provider stealthily serves a weaker model that has been parameter-efficiently fine-tuned to mimic a stronger model, thereby evading user-side fin-gerprinting. We first formally prove that user-side resource constraints (i.e., finite query bud-gets and weak fingerprinting classifiers) make current fingerprinting vulnerable to fingerprint spoofing. Guided by this theoretical analy-sis, we propose GhostPrint , a cost-effective attack framework leveraging surrogate model-ing, reward-ranked fine-tuning, and knowledge distillation. Extensive evaluations in both static and continual fingerprinting settings demon-strate that GhostPrint allows weak models to consistently bypass representative fingerprint methods while maintaining utility at a low fine-tuning cost, exposing a critical vulnerability in current LLM fingerprinting pipelines. 
+
+1 Introduction 
+
+LLMs have shown great ability on various tasks. A growing number of third-party providers of-fer API-based inference services for LLMs, such as OpenRouter 1 and other Model-as-a-Service providers (Liang et al., 2023; Gao et al., 2025b; Chen et al., 2024). These platforms serve a dual role: providing foundational architecture for downstream applications (e.g., coding agents (Yao et al., 2023; Shinn et al., 2023; Ning et al., 2026), retrieval-augmented generation (Fan et al., 2025; Liu et al., 2026; Yang et al., 2026; Nguyen et al., 
+
+> *Equal contribution.
+> 1https://openrouter.ai/
+
+2026), personalized chat-bots (Jiang et al., 2025a,b; Huang et al., 2026), multi-modal reasoning (Zhang et al., 2025d; Wu et al., 2026b; Fang et al., 2026)) and acting as essential infrastructure for academic evaluation (Chiang et al., 2024; Qin et al., 2024). Given the foundational role of these API ser-vices, ensuring the integrity of the served models has become a pressing necessity (Cai et al., 2025b; Velasco et al., 2025; Zhang et al., 2026b,c). From a user’s perspective, a practical approach to au-dit whether LLM APIs are serving the advertised model relies on LLM fingerprinting (i.e., model auditing) methods (Gao et al., 2025b; Gubri et al., 2024; Sun et al., 2025c; Pasquini et al., 2025). The key aim of these methods is to probe a black-box API with a small number of queries and efficiently analyze the responses to verify the model’s identity. This relies on the common assumption that distinct response styles to specific prompts are sufficient to classify models (Pasquini et al., 2025; Sun et al., 2025c), making fingerprinting a trustworthy tool. However, fingerprinting inherently assumes that the models remain static and are not adversarially manipulated by API providers, which might not hold in practice. For instance, an inference provider serving open-source models might adversarially fine-tune a weak model to closely mimic the fin-gerprint of a stronger one, bypassing user audits, for profit gain (see Figure 1). Similarly, companies hosting proprietary models (e.g., OpenAI, Google) could stealthily serve fine-tuned, weaker variants to reduce operational costs while evading detection. If these fine-tuning processes are computationally efficient and financially profitable, they pose a crit-ical risk to API users. Therefore, we challenge the adversarial reliability of existing LLM fingerprint-ing methods and study a novel and fundamental research question :
+
+Can a malicious model provider parameter-efficiently fine-tune a weak model so that the weak 
+
+1 
+
+> arXiv:2606.16100v1 [cs.CR] 15 Jun 2026 User API Provider
+> With an Adam optimizer, we ...
+> Query
+> Overpay
+> Tuned Weak LLM
+> Secretly Uses
+> Who is Adam??
+> Actual Response (Low-Quality)
+> Good choice. The step size ...
+> Strong LLM High-Quality Response
+> Advertised But Never Used
+> Claims
+
+Figure 1: The economic motivation of LLM API spoofing . To maximize profit, a malicious provider secretly serves a tuned weak LLM instead of the adver-tised strong model. If the provider successfully spoofs the user’s fingerprint audit, the user is deceived into overpaying for lower-quality responses. 
+
+model behaves like a stronger model to bypass user-side fingerprinting tests? 
+
+To answer this question, we formalize a threat model named fingerprint spoofing , where API service providers actively seek to bypass user-side model auditing (Figure 2(a)). In this setting, the provider advertises a strong LLM to charge a premium rate, but actually serves a parameter-efficient (Hu et al., 2022; Dettmers et al., 2023; Liu et al., 2024) fine-tuned weak LLM to evade finger-print checks. Successfully executing such an attack is highly non-trivial and presents severe technical challenges. Fundamentally, based on LLM scaling laws (Kaplan et al., 2020; Hoffmann et al., 2022; Sardana et al., 2024) and our lower-bound analysis (Proposition 5.1), a small model inherently lacks the representational capacity to perfectly mimic the behavior of a much larger model. Consequently, the attacker faces a severe optimization trade-off: aggressively fine-tuning a weak model to mimic a strong model’s fingerprint behavior may lead to catastrophic forgetting (Li et al., 2024; Luo et al., 2025), destroying its ability to answer normal user queries. Furthermore, mimicking a large model with a small model must be achieved under re-source constraints, since full-parameter retraining is often expensive and would make the adversary’s attack financially infeasible. Formalizing these technical challenges, our goal is to study whether a malicious provider can suc-cessfully resolve this trade-off to simultaneously achieve three conflicting objectives: (i) fingerprint spoofing , where the adapted model becomes behav-iorally indistinguishable from the claimed strong model under auditing; (ii) utility preservation ,where the adapted weak model maintains accept-able performance on normal downstream tasks; and (iii) economic gain , where the attack only relies on inexpensive parameter-efficient fine-tuning (PEFT) mechanisms. To understand why spoofing remains feasible under the three goals, we theoretically analyze the vulnerabilities of current fingerprint pipelines. Constrained by user-side resources, users often rely on limited query sets (Gubri et al., 2024; Pasquini et al., 2025) and weak verification mech-anisms (Sun et al., 2025c; Gao et al., 2025b). Consequently, an attacker will not need to emu-late the strong model universally, and a localized, parameter-efficient adaptation suffices to fool the user-side audit. We formalize these limitations in Theorem 5.2 (finite query budgets) and Theo-rem 5.3 (weak local classifiers). Guided by these theoretical weaknesses, we propose a novel at-tack framework, namely GhostPrint , to overcome the utility-spoofing trade-off. Specifically, the at-tacker trains a surrogate fingerprint model and em-ploys reward-ranked fine-tuning to identify queries where the weak model can naturally mimic the larger model. We then leverage LoRA-based su-pervised fine-tuning (SFT) alongside knowledge distillation (KD) to align the weak model with the strong model, specifically on the targeted finger-print queries, effectively bypassing the audit while preserving general utility. Furthermore, recogniz-ing that user-side fingerprints evolve over time, we extend our framework to a continual spoofing set-ting, exploring whether an attacker can dynamically adapt to new fingerprint queries and auditing meth-ods. We empirically validate this attack framework in both static and continual settings, exposing the practical risks posed by fingerprint spoofing. Our core contributions are: (i) Theoretical Vul-nerability Analysis : We formally demonstrate when and why fingerprint spoofing is possible, proving that user-side resource constraints (i.e., weak query sets and weak surrogate models) make existing au-diting methods fundamentally breakable (Theorem 5.2 and 5.3); (ii) Fingerprint Spoofing Framework :We propose a novel, practical attack that can suc-cessfully bypass static fingerprinting while main-taining task utility; and (iii) Continual Spoofing Evaluation : We extend our attack to dynamic envi-ronments, demonstrating that malicious providers can continually adapt to evolving user-side finger-printing methods, highlighting a persistent threat to LLM API integrity. 22 Related Works 
+
+LLM Fingerprinting . Pay-per-use APIs create in-centives for providers to silently substitute weaker models (Cai et al., 2025b; Zhang et al., 2026b). Fingerprinting addresses this by verifying model identity. Existing methods fall into three cate-gories: white-box non-intrusive approaches that inspect internal signals (Zheng et al., 2022; Wu et al., 2025; Zhang et al., 2025b, 2026a), black-box non-intrusive approaches that analyze API out-puts (Gao et al., 2025b; Sun et al., 2025c; Pasquini et al., 2025; Gubri et al., 2024), and intrusive meth-ods that embed verifiable signatures during train-ing (Gu et al., 2022; Li et al., 2023; Xu et al., 2024; Yamabe et al., 2025). Further discussion is pro-vided in Appendix C. 
+
+Attacks Against LLM Fingerprinting . Adver-sarial robustness of fingerprinting is an emerging concern. Prior attacks use rewriting or statistical evasion but assume no fine-tuning of the weak model and rely on distinguishing query distribu-tions (Kurian et al., 2025; Nasery et al., 2025a). In contrast, we consider a provider that actively fine-tunes a weak model to spoof fingerprints, a realistic threat that undermines distribution-agnostic audi-tors like LLM-idio (Sun et al., 2025c) and Model Equality Testing (MET) (Gao et al., 2025b). 
+
+3 Preliminaries 
+
+Notations . We use ∥W∥F and ∥W∥2 to denote the matrix Frobenius and ℓ2 norms, and use ∥x∥2
+
+to denote the vector ℓ2 norm. We treat an LLM as a conditional probability distribution over token sequences. Given an LLM f parameterized by θ
+
+and a prompt q, a response r is sampled as r ∼
+
+f (· | q; θ). When the parameters are fixed, we write r ∼ f (· | q) for notation simplicity. 
+
+Black-Box LLM Fingerprinting . The goal of black-box fingerprinting is to audit an LLM API, denoted as fapi , to determine whether it actually serves a specific claimed target model, ftarget . The auditing procedure is formalized below. 
+
+Definition 3.1 (Black-Box LLM Fingerprinting) .
+
+Let the user/auditor have a query distribution 
+
+Dq, a query budget n, and a local classification mechanism g. The fingerprinting procedure is: 
+
+1. Query Sampling : The auditor samples a query set Qn := {qi}ni=1 , where qi ∼ D q.
+
+2. Response Collection : The auditor queries the API and collects the responses Rn := {ri}ni=1 ,
+
+where ri ∼ fapi (· | qi) and qi ∈ Q n.
+
+3. Verification : The mechanism g maps the collected responses to a binary decision 
+
+g(Rn, f target ) ∈ { 0, 1}, returning 1 if the API is verified as ftarget , and 0 otherwise. 
+
+The above definition naturally encapsulates ex-isting representative black-box fingerprinting meth-ods, which differ mainly in their formulation of the query distribution Dq and the verification mech-anism g. For instance, LLMmap (Pasquini et al., 2025) restricts Dq to a small set of carefully crafted, identity-revealing probes and trains g as a multi-class embedding classifier. MET (Gao et al., 2025b) uses a general Dq but formulates g as a statistical two-sample kernel test (Maximum Mean Discrep-ancy) that computes the distance between Rn and reference generations, thresholding the p-value to yield a binary decision. 
+
+Practical Constraints of Fingerprinting . In prac-tice, the query budget n in Definition 3.1 enforces a trade-off between auditing accuracy and financial cost, as users must pay for every API call. A larger 
+
+n is more accurate but result in higher cost. Fur-thermore, user-side resource constraints typically restrict the verification mechanism g to lightweight statistical tests (Gao et al., 2025b; Zhu et al., 2026) or weak surrogate models (Pasquini et al., 2025; Sun et al., 2025c) rather than state-of-the-art LLMs. 
+
+Why Black-box Fingerprinting? We focus on black-box fingerprinting, where the auditor only has query access, because this mirrors the real-ity of commercial LLM APIs. End users cannot inspect internal model states or intervene in the provider’s training pipeline. For proprietary mod-els like GPT -4o, the query - response interface is the sole accessible surface, making black - box methods the only practical tool for user-side verification. 
+
+4 Problem Formulation 
+
+4.1 Threat Model 
+
+We study a malicious third-party API provider (i.e., the adversary) that claims to serve a strong tar-get model ftarget , but in reality deploys a weaker and cheaper model architecture fweak , initially parameterized by θweak . The adversary aims to adapt these parameters into deceptive parameters 
+
+θadv such that the auditor’s local mechanism g in-correctly verifies the adapted model’s distribution 
+
+fweak (· | · ; θadv ) as ftarget .
+
+Attacker’s Capabilities. We assume the attacker has the following capabilities: 3• Knowledge of the fingerprinting mechanism :The attacker has full knowledge of the auditor’s local classification mechanism g (e.g., feature extractor, distance metric, etc.) and can build a surrogate g that mimics the auditor’s g.• Knowledge of the query distribution : The at-tacker knows the distribution Dq from which the auditor draws queries. This allows the attacker to sample a surrogate query set Qm := {qi}mi=1 ,where qi ∼ D q. Importantly, the attacker does not know the exact finite query set Qn instanti-ated by the auditor during the verification .• White-box manipulation of the weak model :The attacker has full access to the deployed ar-chitecture fweak and can tune its parameters via parameter-efficient fine-tuning (PEFT). 
+
+Attacker’s Goal. The attacker aims to simulta-neously achieve: (i) Fingerprint spoofing : Under the fingerprinting mechanism (Definition 3.1), the auditor’s local mechanism g incorrectly verifies 
+
+fweak (· | · ; θadv ) as ftarget ; (ii) Utility preserva-tion : After adaptation, the served model fweak (· | ·; θadv ) still maintains acceptable normal-task per-formance; and (iii) Economic gain : The process to obtain θadv is cost-effective. 
+
+Practicality of Threat Model. Assuming the ad-versary knows both the query distribution Dq and the classifier g aligns with adaptive-attacker evalu-ations rooted in Kerckhoffs’s principle. For an au-dit to be credible and independently verifiable, its methodology, classification algorithm g, and query set Dq must be transparent and publicly disclosed. Relying on secrecy of the auditing pipeline con-stitutes security by obscurity, so a fully informed attacker model is necessary. 
+
+4.2 Fingerprint Spoofing 
+
+Based on the threat model described in Section 4.1, we now formalize our attacker goals into a general problem definition. 
+
+Definition 4.1 (Fingerprint Spoofing Problem) .
+
+Given a white-box weak model architecture fweak 
+
+initially parameterized by θweak , access to a tar-get model ftarget , and knowledge of the auditor’s query distribution Dq and verification mechanism 
+
+g, the fingerprint spoofing problem seeks to effi-ciently find adapted parameters θadv for the weak model to achieve three primary objectives: 
+
+1. Fingerprint Spoofing: The adapted model 
+
+fweak (· | · ; θadv ) must generate responses that fool the auditor’s mechanism g into identifying 
+
+it as the target model over the distribution Dq.
+
+2. Utility Preservation: The adapted model 
+
+fweak (· | · ; θadv ) must maintain general model utility comparable to the initial weak model 
+
+fweak (· | · ; θweak ), ensuring the API remains functional for benign user requests. 
+
+3. Economic Gain: The adversary’s fine-tuning process to obtain θadv must be economically viable. Specifically, the adapted parameters are obtained via Parameter-Efficient Fine-Tuning (PEFT), i.e., θadv = θweak + ∆ θ,where ∆θ is a small low-rank update. 
+
+5 Proposed Method 
+
+In this section, we first present a theoretical study on fundamental limits of LLM fingerprinting, and then present our proposed attack framework. An illustration of our framework is in Figure 2. 
+
+5.1 When and Why Could Fingerprint Spoofing Happen? 
+
+As shown in Section 4.1, fingerprint spoofing re-quires balancing three conflicting goals: fingerprint spoofing, utility preservation, and computational efficiency. To design a successful attack, it is criti-cal to first establish a theoretical understanding of when and why fingerprint spoofing is feasible. 
+
+Impossibility of Universal Spoofing . Fundamen-tally, small models lack the representational ca-pacity of large models due to established scaling laws (Kaplan et al., 2020; Hoffmann et al., 2022; Sardana et al., 2024). To formally capture this, we analyze a single high-rank weight transforma-tion W (e.g., an FFN or attention projection ma-trix) (Vaswani et al., 2017) in a target large model 
+
+ftarget , and its corresponding lower-rank counter-part W′ in the weak model fweak 2. The following proposition demonstrates that if an auditor has suf-ficient resources, spoofing via parameter-efficient fine-tuning (PEFT) is mathematically impossible. 
+
+Proposition 5.1 (Lower Bound of Universal Spoofing) . Let W, W′ ∈ Rd1×d2 be two weight matrices, where W has rank k1 and W′ has rank 
+
+k2, with k1 > k 2. Let the low-rank adaptation (LoRA) matrices be A ∈ Rd1×r and B ∈ Rr×d2 ,where r < k 1 − k2. Define the adapted weight                      
+
+> 2In practice, weak models may use smaller hidden dimen-sions ( d′
+> 1< d 1) with weights V∈Rd′
+> 1×d2.Our setting, where Wand W′share identical dimensions but differ in rank, naturally captures this reality. By letting W′=PV ,where P∈Rd1×d′
+> 1is an up-projection, the rank of W′is bottlenecked by d′
+> 1, ensuring it has a lower rank than W.
+
+4User   
+
+> (a) Threat Model
+> Mechanism
+> API Provider Strong LLM
+> Queries
+> Fingerprinting
+> Fingerprint Spoofing
+> Responses
+> Veri fi cation result
+> Weak LLM
+> Mimic
+> (b) Proposed Framework
+> Distribution ... ...
+> Surr. Mechanism
+> ... ...
+> Query
+> Query
+> Query
+> Query
+> Sample Select
+> Weak LLM
+> Compute SFT Loss
+> KD Loss
+
++ LoRA  
+
+> Phase 1 Data
+> Phase 2 Data
+> 1. Training Data 2. PEFT 3. Continual Learning
+> Fingerprint 1
+> Fingerprint
+> ... ... ...
+> Routing
+
+Figure 2: Overview of GhostPrint. (a) Threat model. An adversary leverages a weak LLM to mimic a strong target model and evade fingerprint-based verification when interacting with an API provider. (b) Proposed framework. GhostPrint constructs training data from both target-model and surrogate queries, then fine-tunes a weak LLM via SFT and KD, and enables continual learning to progressively adapt the adversarial fingerprint over time. 
+
+matrix as cW := W′ + AB and the residual ma-trix as R := W − W′. For any input vector 
+
+x ∈ Rd2 , the following lower bounds hold: 1. Spectral Norm: 
+
+inf  
+
+> A,B
+
+sup 
+
+> ∥x∥2=1
+
+∥Wx − cWx ∥2 ≥ σ+min (R),
+
+2. Frobenius Norm: 
+
+inf  
+
+> A,B
+
+∥W − cW∥2 
+
+> F
+
+≥ (k1 − k2 − r) · σ+min (R)2,
+
+where σ+min (R) denotes the smallest non-zero sin-gular value of R.
+
+The rank condition k2 < k 1 reflects the scale gap between weak and strong models, and the bound on r captures practical PEFT constraints. Proposi-tion 5.1 shows universal spoofing error is strictly positive, motivating us to exploit specific weak-nesses of real auditors. In practice, users have finite query budgets and weak classifiers, introduc-ing vulnerabilities that make successful spoofing achievable despite the theoretical lower bound. 
+
+Vulnerabilities of LLM Fingerprinting . Despite the theoretical impossibility of universal spoofing, users cannot expend infinite resources to audit an LLM API in practice. They cannot utilize infinite queries, nor can they always deploy the strongest classifiers to verify responses. These practical con-straints create critical vulnerabilities and establish theoretical upper bounds for successful spoofing. 
+
+First , existing auditing methods often rely on a small, simple set of queries. For example, LLMmap (Pasquini et al., 2025) uses queries like “Which model is this?” with specific prefixes for auditing. When the input space is sufficiently sim-ple and structured, we can establish the following upper bound based on query distribution simplicity. 
+
+Theorem 5.2 (Upper Bound under Low-Effec-tive-Rank Distributions) . Let x ∈ Rd2 be the representation of a query drawn from a zero-mean continuous distribution Dq, and let Σ := 
+
+Ex∼D q [xx ⊤] be the covariance matrix. Let λ1 ≥
+
+λ2 ≥ · · · ≥ λd2 ≥ 0 denote the eigenvalues of 
+
+Σ. Let the LoRA matrices be A ∈ Rd1×r and 
+
+B ∈ Rr×d2 , and the adapted weight matrix be 
+
+cW := W′ + AB . The optimal expected spoofing error is bounded by the following equation:     
+
+> inf
+> A,BEx∼D q
+> ∥Wx −cWx ∥22
+> ≤ ∥ R∥22
+> d2X
+> i=r+1
+> λi,
+
+where R := W − W′ is the residual matrix. 
+
+The theorem shows that when the query distri-bution Dq is simple (small effective rank), the ex-pected spoofing error can be substantially mini-mized. This matches LLMmap, where queries con-centrate in specific semantic directions, revealing the first vulnerability of current auditing methods. 
+
+Second , due to training costs, auditors of-ten rely on weak classifiers. For exam-ple, LLMmap (Pasquini et al., 2025) and LLM - idio (Sun et al., 2025c) use small LLM - based classifiers. To analyze this, we consider a projec-tion weight matrix C from g’s transformer and test whether outputs Wx and (W′ + AB )x become indistinguishable under C.
+
+Theorem 5.3 (Tight Bound under Weak Clas-sifiers) . Let C ∈ Rd1×d1 be a weight matrix from the auditor’s verification model, and let 
+
+W, W′ ∈ Rd1×d2 be the weight matrices of the strong target model and the weak surrogate model, respectively. Let the LoRA matrices be 
+
+A ∈ Rd1×r and B ∈ Rr×d2 , and the adapted weight matrix be cW := W′ + AB . Under the 
+
+5audit, the worst-case spoofing error is exactly:      
+
+> inf
+> A,Bsup
+> ∥x∥2=1
+> ∥C⊤(Wx −cWx )∥2=σr+1 (C⊤R),
+
+where R = W − W′ is the residual matrix, and 
+
+σr+1 (·) is the (r + 1) -th largest singular value. 
+
+If the auditor utilizes a simple classifier with rank c ≤ r, then σr+1 (C⊤R) = 0 . This shows that when the user-side fingerprint model g is suffi-ciently weak, the adversary can ideally use PEFT to perfectly fool the fingerprint with zero error. 
+
+Takeaway. Our analysis reveals a critical mis-alignment: perfect spoofing is globally impossible (Proposition 5.1), yet it is locally trivial under real-istic auditing constraints (Theorems 5.2 and 5.3). 
+
+5.2 The Proposed GhostPrint Attack 
+
+As shown in Section 5.1, practical LLM fingerprint-ing pipelines suffer from two fundamental vulnera-bilities: (i) low-complexity query distributions Dq,and (ii) the reliance on computationally weak ver-ification models g. A potent fingerprint spoofing attack must actively exploit both vulnerabilities si-multaneously. To this end, we propose GhostPrint ,a principled attack framework that leverages Super-vised Fine-Tuning (SFT) and Knowledge Distilla-tion (KD) to efficiently memorize the behavioral characteristics of the target model over Dq while preserving normal utility. Furthermore, we incor-porate a Ranked Fine-Tuning (RAFT) (Dong et al., 2023) mechanism, utilizing a surrogate fingerprint model g to filter and select weak model outputs that match the strong model’s fingerprint. To satisfy the attacker’s economic constraints, all optimizations are conducted parameter-efficiently. 
+
+Exploiting the Query Distribution Dq. We em-ploy Supervised Fine - Tuning (SFT) to force the weak model to mimic the target model’s fingerprint-ing behavior. For a fingerprint query q ∼ D q and the target response r generated by ftarget , the SFT objective minimizes the negative log-likelihood:       
+
+> LSFT (θadv ) := −Eq,r
+> X|r|
+> t=1 log fweak (rt|q, r <t ;θadv )
+> 
+> .
+
+To preserve general capability without external data, we apply Knowledge Distillation (KD) on the same queries, using the target model as teacher: 
+
+LKD (θadv ) := Eq,r 
+
+X|r|
+
+> t=1
+
+DKL 
+
+ ptarget  
+
+> t
+
+pweak 
+
+> t
+
+
+
+,
+
+where ptarget  
+
+> t
+
+and pweak  
+
+> t
+
+are the next -token distri-butions of the target and weak model, respectively. The total objective is 
+
+min 
+
+> θadv
+
+Ltotal := LSFT (θadv ) + αLKD (θadv ), (1) where α > 0 is a hyperparameter balancing finger-print deception and utility. 
+
+Exploiting the Fingerprint Mechanism g. After optimizing (1) , the weak model mimics the target on the query distribution Dq. However, when Dq
+
+comprises diverse, general-purpose queries (e.g., UltraChat (Ding et al., 2023)), standard SFT alone may fail to capture the subtle model - specific finger-prints required by auditors such as LLM - idio (Sun et al., 2025c) and MET (Gao et al., 2025b). To ad-dress this, we directly exploit the structural weak-ness of the verification model g by incorporating its supervisory signal into the fine-tuning process. Directly using g is precluded under the black - box threat model (Section 4.1). Even if ac-cessible, employing it as a reward model for re-inforcement learning (RL) (Guo et al., 2025; Li et al., 2026a,b; Luo et al., 2026) would be pro-hibitively expensive and unstable, violating the attacker’s economic constraints. We instead con-struct a local surrogate g from the known query distribution Dq, which can be a lightweight clas-sifier (for LLMmap, LLM -idio) or a reproduced statistical metric (for MET). To leverage g with-out RL, we adopt RAFT (Dong et al., 2023) as an additional post-training phase. Specifically, for each query q ∼ D q, we sam-ple K candidate responses from the current weak model, rank them with g, and select the most decep-tive one as radv := arg max rj g(rj , f target ). The resulting (q, r adv ) pairs are then used to fine -tune the adapter parameters θadv with the same SFT and KD objectives defined in (1) . This approach filters the weak model’s natural generation space to isolate responses that already cross the surro-gate’s decision boundaries. By fine-tuning on these selected examples, the model leverages the signal from the target weak classifier g, while avoiding the unstable and costly use of RL. 
+
+Parameter-Efficient Fine-Tuning . To address the economic gain goal shown in Section 4.1, we re-strict the attacker to apply Low-Rank Adaptation (LoRA) to the weak model rather than computa-tionally prohibitive full-parameter fine-tuning. Let the initial parameters of the weak architec-ture fweak be denoted as the set of N targeted base weight matrices θweak := {W′
+
+> i
+
+}Ni=1 . We formalize the deceptive parameter set θadv by assigning each 6adapted weight matrix cWi as the sum of the frozen base weight and a low-rank update: 
+
+θadv := { cWi | cWi = W′ 
+
+> i
+
++ AiBi}Ni=1 , (2) where r < min( d1,i , d 2,i ) is the adapter rank, and 
+
+Ai ∈ Rd1,i ×r and Bi ∈ Rr×d2,i are the trainable LoRA matrices for the i-th target weight. By freezing θweak and optimizing the set ∆θ := 
+
+{(Ai, Bi)}Ni=1 , the adversary transitions the gener-ation distribution to fweak (· | · ; θadv ) while reduc-ing the computational cost of the attack. 
+
+Continual Learning of Multiple Fingerprints .Our two-phase training bypasses a single finger-print. However, auditors might continually deploy new methods. Thus, an adversary must spoof a sequence of verifiers g(τ ) with query distributions 
+
+D(τ ) 
+
+> q
+
+for τ = 1 , . . . , T , updating fweak without catastrophic forgetting. For each task at contin-ual learning step τ , we train a task - specific LoRA adapter ∆θ(τ ) := {(A(τ ) 
+
+> i
+
+, B(τ ) 
+
+> i
+
+)}Ni=1 via our afore-mentioned process, then integrate adapters with a Mixture -of - LoRA - Experts (MoLA) (Gao et al., 2025a) architecture. It routes queries to relevant adapters, exploiting shared structure across finger-printing mechanisms. Specifically, for the i-th target weight matrix at continual learning step τ , we introduce a trainable router matrix V(τ ) 
+
+> i
+
+∈ Rt×d2,i , where d2,i is the dimension of the intermediate hidden state x. The router computes a t-dimensional logit vector to assign a routing score si,m (x) for the m-th expert: 
+
+si,m (x) := exp( V(τ ) 
+
+> i
+
+x)m
+
+Ptj=1 exp( V(τ ) 
+
+> i
+
+x)j
+
+.
+
+The adapted output h(τ ) 
+
+> i
+
+for the i-th base weight matrix W′ 
+
+> i
+
+and input x is then computed as a dy-namically weighted combination of the historical LoRA experts as: 
+
+h(τ ) 
+
+> i
+
+:= W′
+
+> i
+
+x +
+
+> τ
+
+X
+
+> m=1
+
+si,m (x)A(m) 
+
+> i
+
+B(m) 
+
+> i
+
+x.
+
+By freezing previous adapters ∆θ(<τ ) := 
+
+{∆θ(1) , ∆θ(2) , . . . , ∆θ(τ −1) } and only training the new adapter ∆θ(τ ) alongside the router V(t) 
+
+> i
+
+,GhostPrint continually expands its spoofing capa-bilities across multiple detection methods while strictly maintaining parameter efficiency. To train the router matrices, we reuse the same SFT and KD objectives defined in Eq. (1) . The training data for this routing phase is a mixture of queries from all tasks seen so far, i.e., D(1)  
+
+> q
+
+∪D(2)  
+
+> q
+
+· · · ∪ D (τ ) 
+
+> q
+
+. Because we only train the new adapter and a very small set of router weights 
+
+V(τ ) := {V(τ ) 
+
+> i
+
+}Ni=1 , this continual learning pro-cess remains highly efficient. 
+
+6 Experiments 
+
+6.1 Experimental Settings Models and Datasets. We instantiate our at-tack across three representative LLM families se-lected from the model list of LLMmap (Pasquini et al., 2025). Specifically, we utilize Gemma-1.1 (2B as the weak model and 7B as the strong tar-get) (Team et al., 2024), Qwen2 (1.5B as weak and 7B as strong) (Yang et al., 2024), and Phi-3 (Mini 3.8B as weak and Medium 14B as strong) (Ab-din et al., 2024). To quantify the preservation of general capabilities, model utility is evaluated on three standard benchmarks under a 5-shot setting using the open-source LM Evaluation Harness 3:MMLU (Hendrycks et al., 2020), GSM8K (Cobbe et al., 2021), and ARC-Challenge (ARC-C) (Clark et al., 2018). 
+
+LLM Fingerprints. We evaluate against three rep-resentative black-box LLM fingerprints to audit LLM APIs: (i) LLMmap (Pasquini et al., 2025), a 52-class classifier driven by adversarial identity probes; (ii) LLM-idiosyncrasies (LLM-idio) (Sun et al., 2025c), a binary classifier trained on Ultra-Chat (Ding et al., 2023) responses; and (iii) Model Equality Testing (MET) (Gao et al., 2025b), a two-sample hypothesis test comparing completion dis-tributions via MMD and Hamming distance. 
+
+Spoofing Baselines. We compare against four base-lines: (i) Query Detection , where we train a simple MLP to memorize historical fingerprint queries, routing flagged queries to the strong model and all others to the weak model; (ii) Rewriting (Kurian et al., 2025), which uses their proposed prompt to rewrite the generated response; (iii) 5-shot ICL ,which extends the rewriting baseline by providing five strong-model responses as in-context exam-ples; and (iv) Token Suppression (Nasery et al., 2025a), which applies their Suppress Top-K attack to randomize generation and mask the model’s stan-dard behavioral patterns. For reference, we also report the unmodified baseline performance of both the base weak model and the target strong model. 
+
+> 3https://github.com/EleutherAI/ lm-evaluation-harness
+
+7Method Utility ASR (%) MMLU GSM8K ARC-C LLMmap LLM-idio MET                                                                                                                                     
+
+> Gemma-1.1-2B →Gemma-1.1-7B
+> Original (weak) 37.90 10.69 44.97 12.0 7.2 6.7 Query Detection –––35.0 7.2 13.3 Rewriting –––20.0 0.7 0.0 5-shot ICL –––15.0 22.9 3.3 Token Suppression –––28.0 4.5 0.0 GhostPrint (ours) 38.11 8.72 44.54 95.0 58.5 23.3
+> Original (target) 58.70 49.58 56.83 92.0 98.8 100.0
+> Qwen2-1.5B →Qwen2-7B
+> Original (weak) 55.55 55.42 43.52 4.0 7.4 33.3 Query Detection –––70.0 7.4 40.0
+> Rewriting –––40.0 34.2 33.3 5-shot ICL –––0.0 64.4 30.0 Token Suppression –––6.0 4.9 6.7 GhostPrint (ours) 55.36 55.80 44.97 76.0 71.3 40.0
+> Original (target) 70.67 72.93 62.12 81.0 98.6 96.7
+> Phi-3-mini →Phi-3-medium
+> Original (weak) 70.37 80.36 62.97 6.0 28.8 43.3 Query Detection –––70.0 28.8 50.0 Rewriting –––0.0 38.6 33.3 5-shot ICL –––0.0 70.5 36.7 Token Suppression –––5.0 51.2 6.7 GhostPrint (ours) 69.70 78.01 62.80 80.0 64.0 60.0
+> Original (target) 78.12 85.52 66.38 91.0 77.2 96.7
+
+Table 1: Evaluation of single-fingerprint spoofing across three LLM families . The table reports the Attack Success Rate (ASR) alongside general model utility. A successful attack maximizes ASR (best re-sults bolded) while preserving utility scores comparable to the base weak model. Entries marked with “–” de-note inference-time baselines that do not tune the weak model, where the model utility remains identical to the original weak model. 
+
+Evaluation Setting. All fingerprint spoofing at-tacks are evaluated using an 8:2 train-test split for all fingerprint queries. For LLMmap (Pasquini et al., 2025), we use their official query set. For LLM-idio (Sun et al., 2025c) and MET (Gao et al., 2025b), we use the UltraChat (Ding et al., 2023) dataset as the fingerprint queries, consistent with the original papers. Due to space limitations, full implementation details are deferred to Appendix A. 
+
+6.2 Single-Fingerprint Spoofing Performance 
+
+Table 1 reports the single-fingerprint spoofing per-formance of GhostPrint, with full implementation details of GhostPrint deferred to Appendix B.1. The results demonstrate that our framework suc-cessfully achieves the attacker’s primary goals shown in Section 4.1. (i) Regarding fingerprint spoofing , GhostPrint attains the highest Attack Suc-cess Rate (ASR) across all evaluated fingerprints for nearly all weak model families, with the only exception of the 5-shot ICL baseline on LLM-idio. Notably, when evaluating the Gemma fam-ily against LLMmap, GhostPrint achieves a 95%                                                 
+
+> Setting Method ASR (%) LLMmap LLM-idio MET Gemma-2B
+> →Qwen2-7B Original (weak) 0.0 0.7 0.0 Query Detection 0.0 2.4 6.7 Rewriting 0.0 0.1 0.0 5-shot ICL 0.0 3.6 0.0 Token Suppression 0.0 2.0 6.7 GhostPrint (ours) 0.0 95.2 33.3
+> Original (target) 80.0 99.9 96.7 Qwen2-1.5B
+> →Gemma-7B Original (weak) 0.0 1.1 0.0 Query Detection 0.0 2.5 6.7
+> Rewriting 0.0 1.8 0.0 5-shot ICL 0.0 17.3 0.0 Token Suppression 15.0 1.7 0.0 GhostPrint (ours) 6.0 96.7 6.7
+> Original (target) 97.0 99.2 86.7
+
+Table 2: Evaluation of cross-family weak-to-strong spoofing . The table reports the Attack Success Rate (ASR) when adapting a weak model from one architec-tural family to spoof a strong model from a completely different family. The highest ASR among attack meth-ods is bolded. 
+
+ASR, even surpassing the original target model’s natural classification rate of 92%. (ii) In terms of 
+
+utility preservation , GhostPrint maintains down-stream performance that is almost identical to the base weak models. While inference-time baselines inherently preserve utility by avoiding weight up-dates, our parameter-efficient fine-tuning incurs only marginal performance drops or even slight im-provements, confirming that the attack successfully preserves the weak model’s general capabilities on normal tasks. 
+
+6.3 Cross-Model Spoofing Performance 
+
+In this section, we extend the within model family setting in Section 6.2 to the more challenging cross-family setting. Specifically, we study two trans-fer scenarios: Gemma-1.1-2B to Qwen2-7B, and Qwen2-1.5B to Gemma-1.1-7B. From the results in Table 2, we observe: (i) Cross-family spoofing is in-herently more difficult because different model ar-chitectures exhibit distinct baseline linguistic styles and vocabulary distributions; and (ii) Despite this architectural gap, GhostPrint still achieves notable success, successfully bypassing LLM-Idio in both settings and MET in the Gemma-to-Qwen transfer. For completeness, we also evaluate cross-family spoofing between models of the same scale in Ap-pendix B.2. However, as this does not fit the finan-cial gain goals for the adversary, it falls outside of our threat model and is put in the appendix. 80.25 0.5 0.75 1         
+
+> α(KD weight)
+> 40
+> 50
+> 60
+> LLM-idio ASR (%)  Gemma
+> 0.25 0.5 0.75 1
+> α(KD weight)
+> Qwen2
+> 0.25 0.5 0.75 1
+> α(KD weight)
+> Phi-3
+> Weak anchor
+> Strong anchor
+
+Figure 3: Ablation study on the knowledge-distillation anchor model type and weight coefficient 
+
+α. We report LLM-idio ASR (%) for each family under the weak- and strong-model anchors. 
+
+Family LLM-idio ASR (%) MET ASR (%) 
+
+λraft = 0 0.5 0 0.5
+
+Gemma-1.1-2B →7B 54.7 58.8 6.7 10.0 
+
+Qwen2-1.5B →7B 56.3 63.4 36.7 40.0 
+
+Phi-3-mini →medium 49.1 54.8 40.0 43.3 
+
+Table 3: Ablation study on RAFT-guided query se-lection . The parameter λraft represents the proportion of RAFT-selected queries mixed into the fine-tuning dataset, with the highest ASR bolded. 
+
+6.4 Ablation Study Knowledge-Distillation Loss. In this study, we evaluate the stability of knowledge distillation un-der different coefficients α in Eq. (1) . We also investigate whether the small model or the large model should serve as the reference anchor. Based on the results in Figure 3, we find that: (i) us-ing the large model as the anchor gives a slightly higher fingerprint spoofing ASR, but utilizing the small model remains highly effective. This demon-strates that our attack is effective in both scenar-ios. Whether the target model is accessed via re-sponses only or through softmax probabilities that enable KD, the attack succeeds. (ii) The impact of the KD loss is generally stable across different weights, achieving the optimal ASR at approxi-mately α = 0 .25 .
+
+Impact of RAFT . To ensure that fingerprint spoof-ing fine-tuning effectively exploits the vulnerabil-ities of weak classifiers, we utilize RAFT to se-lect queries that are more adversarial to fingerprint classifiers. The results are summarized in Table 3. As shown in the table, incorporating a 50% ratio of RAFT queries ( λraft = 0 .5) during fine-tuning alongside standard queries significantly improves the ASR. This demonstrates that strategically lever-aging weak classifier vulnerabilities directly en-hances spoofing capabilities, validating our theoret-ical analysis in Section 5.1.                                         
+
+> Family Router Config Attack ASR (%) LLMmap LLM-idio MET
+> Gemma-1.1-2B →7B
+> LLMmap + LLM-idio 86.0 54.2 10.0 LLMmap + MET 89.0 13.2 10.0 LLM-idio + MET 20.0 58.6 30.0
+> 3-way (all) 86.0 54.8 16.7
+> Qwen2-1.5B →7B
+> LLMmap + LLM-idio 75.0 58.4 23.3 LLMmap + MET 74.0 55.5 16.7 LLM-idio + MET 20.0 57.1 26.7 3-way (all) 81.0 57.6 26.7
+> Phi-3-mini →medium
+> LLMmap + LLM-idio 71.0 53.0 43.3 LLMmap + MET 70.0 27.5 43.3 LLM-idio + MET 0.0 49.3 60.0
+> 3-way (all) 77.0 50.6 53.3
+
+Table 4: Continual fingerprint spoofing performance using MoLA across different task settings . Bold values indicate the highest ASR achieved within each model family and column. 
+
+6.5 Continual Fingerprint Spoofing 
+
+Here, we evaluate our mixture-of-LoRA-experts (MoLA) framework for the continual learning of multiple fingerprints. Specifically, we sequen-tially train three separate sets of LoRA parameters tailored to three distinct fingerprinting methods: 
+
+LLMmap , LLM-idio , and MET . We then evaluate different combinations of these fingerprinted ex-perts routed through a Mixture-of-Experts (MoE) architecture to see how effectively the combined parameters preserve and integrate capabilities. Our main results are summarized in Table 4, from which we draw the following key observa-tions: (i) After continual learning via integrating different parameters into the MoLA framework, performance experiences only minor degradation and remains at a high level. Notably, in the 3-way configurations for Qwen and Phi-3, some finger-print spoofing results even outperform their stan-dalone counterparts. This demonstrates that our framework can continually adapt to new finger-prints while retaining prior knowledge without catastrophic forgetting. (ii) Even when an expert is not explicitly trained on a specific fingerprint, the integrated MoLA framework demonstrates an inherent ability to generalize. For instance, in the LLMmap + LLM-idio routing configuration on Qwen2 and Phi-3, despite the complete omis-sion of the MET expert during sequential training, the evaluation scores on MET closely approach those of configurations where it was explicitly in-cluded. This suggests that the compositionality of the learned experts facilitates cross-fingerprint knowledge transfer. 97 Conclusion 
+
+We introduce fingerprint spoofing and propose GhostPrint, a parameter-efficient attack combining surrogate modeling, reward-ranked fine-tuning, and knowledge distillation, extended with a Mixture-of-LoRA router to unify multiple auditors. GhostPrint consistently bypasses four auditors across three model families while preserving utility, exposing a critical vulnerability in current black-box LLM fingerprint methods. 
+
+Limitations 
+
+Due to academic compute limits, GhostPrint is not evaluated on frontier-scale models (e.g., Qwen-3 32B), which is an important next step. Future work may incorporate reinforcement learning with the surrogate classifier as a reward model to improve alignment. While our attack exposes a vulnerability that could be misused, this is a research prototype intended to motivate robust fingerprinting and we do not foresee a potential negative societal impact. LLMs were used only for grammar checking and language quality, and the authors are fully respon-sible for all technical content. 
+
+References 
+
+Marah Abdin, Jyoti Aneja, Hany Awadalla, Ahmed Awadallah, Ammar Ahmad Awan, Nguyen Bach, Amit Bahree, Arash Bakhtiari, Jianmin Bao, Harkirat Behl, Alon Benhaim, Misha Bilenko, Johan Bjorck, Sébastien Bubeck, Martin Cai, Qin Cai, Vishrav Chaudhary, Dong Chen, Dongdong Chen, and 110 others. 2024. Phi-3 technical report: A highly ca-pable language model locally on your phone. arXiv preprint arXiv:2404.14219 .Xiaofan Bai, Pingyi Hu, Xiaojing Ma, Linchen Yu, Dongmei Zhang, Qi Zhang, and Bin Benjamin Zhu. 2025. Esf: Efficient sensitive fingerprinting for black-box tamper detection of large language models. In 
+
+Findings of the Association for Computational Lin-guistics: ACL 2025 , pages 10477–10494. Jiacheng Cai, Jiahao Yu, Yangguang Shao, Yuhang Wu, and Xinyu Xing. 2025a. Utf: Under-trained tokens as fingerprints——a novel approach to llm identifi-cation. In Proceedings of the The First Workshop on LLM Security (LLMSEC) , pages 1–6. Will Cai, Tianneng Shi, Xuandong Zhao, and Dawn Song. 2025b. Are you getting what you pay for? au-diting model substitution in llm apis. arXiv preprint arXiv:2504.04715 .Yuhan Cao, Yu Wang, Sitong Liu, Miao Li, Yixin Tao, and Tianxing He. 2026. Pay for the second-best ser-vice: A game-theoretic approach against dishonest llm providers. In Proceedings of the ACM Web Con-ference 2026 , pages 249–260. Lingjiao Chen, Matei Zaharia, and James Zou. 2024. FrugalGPT: How to use large language models while reducing cost and improving performance. Trans-actions on Machine Learning Research . Featured Certification. Sixu Chen, Xiang Chen, Hongyao Yu, Jiaxin Hong, Hao Fang, Shuoyang Sun, Bin Chen, and Shu-Tao Xia. 2026. Prompt2fingerprint: Plug-and-play llm fingerprinting via text-to-weight generation. arXiv preprint arXiv:2605.18474 .Wei-Lin Chiang, Lianmin Zheng, Ying Sheng, Anasta-sios Nikolas Angelopoulos, Tianle Li, Dacheng Li, Banghua Zhu, Hao Zhang, Michael Jordan, Joseph E Gonzalez, and 1 others. 2024. Chatbot arena: An open platform for evaluating llms by human pref-erence. In International Conference on Machine Learning , pages 8359–8388. PMLR. Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind Tafjord. 2018. Think you have solved question an-swering? try arc, the ai2 reasoning challenge. arXiv preprint arXiv:1803.05457 .Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, and 1 others. 2021. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 .Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. 2023. Qlora: Efficient finetuning of quantized llms. Advances in neural information processing systems , 36:10088–10115. Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Shengding Hu, Zhiyuan Liu, Maosong Sun, and Bowen Zhou. 2023. Enhancing chat language models by scaling high-quality instructional conversations. In Proceedings of the 2023 Conference on Empiri-cal Methods in Natural Language Processing , pages 3029–3051. Hanze Dong, Wei Xiong, Deepanshu Goyal, Rui Pan, Shizhe Diao, Jipeng Zhang, Kashun Shum, and Tong Zhang. 2023. RAFT: Reward rAnked Fine-Tuning for generative foundation model alignment. 
+
+Transactions on Machine Learning Research (TMLR) .ArXiv:2304.06767. Wenqi Fan, Pangjing Wu, Yujuan Ding, Liangbo Ning, Shijie Wang, and Qing Li. 2025. Towards retrieval-augmented large language models: Data manage-ment and system design. In 2025 IEEE 41st Inter-national Conference on Data Engineering (ICDE) ,pages 4509–4512. IEEE. Zhengru Fang, Yu Guo, Fei Liu, Yuang Zhang, Yi-hang Tao, Senkang Hu, Wenbo Ding, and Yuguang Fang. 2026. Agent-centric visual reinforcement 
+
+10 learning under dynamic perturbations. arXiv preprint arXiv:2604.24661 .Chongyang Gao, Kezhen Chen, Jinmeng Rao, Berrak Sisman, Frank Bayer, Daniel Macko, and Yixin Lao. 2025a. MoLA: MoE LoRA with layer-wise expert allocation. In Findings of NAACL 2025 .Irena Gao, Percy Liang, and Carlos Guestrin. 2025b. Model equality testing: Which model is this API serving? In The Thirteenth International Conference on Learning Representations .Thibaud Gloaguen, Robin Staab, Nikola Jovanovi´ c, and Martin Vechev. 2026. LLM fingerprinting via seman-tically conditioned watermarks. In The Fourteenth International Conference on Learning Representa-tions .Gene H Golub and Charles F Van Loan. 2013. Matrix computations . JHU press. Chenxi Gu, Chengsong Huang, Xiaoqing Zheng, Kai-Wei Chang, and Cho-Jui Hsieh. 2022. Watermark-ing pre-trained language models with backdooring. 
+
+arXiv preprint arXiv:2210.07543 .Martin Gubri, Dennis Ulmer, Hwaran Lee, Sangdoo Yun, and Seong Joon Oh. 2024. Trap: Targeted ran-dom adversarial prompt honeypot for black-box iden-tification. In Findings of the Association for Compu-tational Linguistics: ACL 2024 , pages 11496–11517. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, and 1 others. 2025. Deepseek-r1 incentivizes reasoning in llms through reinforce-ment learning. Nature , 645(8081):633–638. Xin He, Junxi Shen, Zhenheng Tang, Xiaowen Chu, Bo Li, Ivor W Tsang, and Yew-Soon Ong. 2025. Routemark: A fingerprint for intellectual property attribution in routing-based model merging. arXiv preprint arXiv:2508.01784 .Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt. 2020. Measuring massive multitask language under-standing. arXiv preprint arXiv:2009.03300 .Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch, Elena Buchatskaya, Trevor Cai, Eliza Rutherford, Diego de Las Casas, Lisa Anne Hendricks, Johannes Welbl, Aidan Clark, and 1 others. 2022. An empirical analysis of compute-optimal large language model training. Advances in neural information processing systems , 35:30016–30030. Edward J Hu, yelong shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. 2022. LoRA: Low-rank adaptation of large language models. In International Conference on Learning Representations .Pingyi Hu, Xiaofan Bai, Xiaojing Ma, Chaoxiang He, Dongmei Zhang, and Bin Benjamin Zhu. 2025. Resf: Regularized-entropy-sensitive fingerprinting for black-box tamper detection of large language models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing ,pages 4889–4903. Jiani Huang, Shijie Wang, Liang-bo Ning, Wenqi Fan, Shuaiqiang Wang, Dawei Yin, and Qing Li. 2026. Towards next-generation recommender systems: A benchmark for personalized recommendation assis-tant with llms. In The ACM International Conference on Web Search and Data Mining (WSDM) .Bowen Jiang, Zhuoqun Hao, Young Min Cho, Bryan Li, Yuan Yuan, Sihao Chen, Lyle Ungar, Camillo Jose Taylor, and Dan Roth. 2025a. Know me, respond to me: Benchmarking LLMs for dynamic user profil-ing and personalized responses at scale. In Second Conference on Language Modeling .Bowen Jiang, Yuan Yuan, Maohao Shen, Zhuoqun Hao, Zhangchen Xu, Zichen Chen, Ziyi Liu, Anvesh Rao Vijjini, Jiashu He, Hanchao Yu, and 1 others. 2025b. Personamem-v2: Towards personalized intelligence via learning implicit user personas and agentic mem-ory. arXiv preprint arXiv:2512.06688 .Heng Jin, Chaoyu Zhang, Shanghao Shi, Wenjing Lou, and Y Thomas Hou. 2024. Proflingo: Afingerprinting-based intellectual property protection scheme for large language models. In 2024 IEEE Conference on Communications and Network Secu-rity (CNS) , pages 1–9. IEEE. Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Benjamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei. 2020. Scaling laws for neural language models. arXiv preprint arXiv:2001.08361 .Rohith Kuditipudi, Jing Huang, Sally Zhu, Diyi Yang, Christopher Potts, and Percy Liang. 2025. Blackbox model provenance via palimpsestic membership in-ference. In The Thirty-ninth Annual Conference on Neural Information Processing Systems .Kevin Kurian, Ethan Holland, and Sean Oesch. 2025. Attacks and defenses against llm fingerprinting. 
+
+arXiv preprint arXiv:2508.09021 .Hongyu Li, Liang Ding, Meng Fang, and Dacheng Tao. 2024. Revisiting catastrophic forgetting in large lan-guage model tuning. In Findings of the association for computational linguistics: EMNLP 2024 , pages 4297–4308. Peixuan Li, Pengzhou Cheng, Fangqi Li, Wei Du, Haodong Zhao, and Gongshen Liu. 2023. Plmmark: a secure and robust black-box watermarking frame-work for pre-trained language models. In Proceed-ings of the AAAI Conference on Artificial Intelligence ,volume 37:12, pages 14991–14999. 
+
+11 Xiuyu Li, Jinkai Zhang, Mingyang Yi, Yu Li, Longqiang Wang, Yue Wang, and Ju Fan. 2026a. Ets: Energy-guided test-time scaling for training-free rl alignment. In Forty-third International Conference on Machine Learning .Yu Li, Mingyang Yi, Xiuyu Li, Ju Fan, Fuxin Jiang, Binbin Chen, Peng Li, Jie Song, and Tieying Zhang. 2026b. Reasoning and tool-use compete in agentic rl: From quantifying interference to disentangled tuning. 
+
+arXiv preprint arXiv:2602.00994 .Percy Liang, Rishi Bommasani, Tony Lee, Dimitris Tsipras, Dilara Soylu, Michihiro Yasunaga, Yian Zhang, Deepak Narayanan, Yuhuai Wu, Ananya Ku-mar, Benjamin Newman, Binhang Yuan, Bobby Yan, Ce Zhang, Christian Cosgrove, Christopher D Man-ning, Christopher Re, Diana Acosta-Navas, Drew A. Hudson, and 31 others. 2023. Holistic evaluation of language models. Transactions on Machine Learning Research .Jiale Liu, Jiahao Zhang, and Suhang Wang. 2026. Ex-posing privacy risks in graph retrieval-augmented generation. In ACL Findings .Shih-Yang Liu, Chien-Yi Wang, Hongxu Yin, Pavlo Molchanov, Yu-Chiang Frank Wang, Kwang-Ting Cheng, and Min-Hung Chen. 2024. Dora: Weight-decomposed low-rank adaptation. In Forty-first In-ternational Conference on Machine Learning .Sijia Luo, Xiaokang Zhang, Yuxuan Hu, Bohan Zhang, Ke Wang, Jinbo Su, Mengshu Sun, Lei Liang, and Jing Zhang. 2026. Sparse-rl: Breaking the memory wall in llm reinforcement learning via stable sparse rollouts. arXiv preprint arXiv:2601.10079 .Yun Luo, Zhen Yang, Fandong Meng, Yafu Li, Jie Zhou, and Yue Zhang. 2025. An empirical study of catas-trophic forgetting in large language models during continual fine-tuning. IEEE Transactions on Audio, Speech and Language Processing .Hope Elizabeth McGovern, Rickard Stureborg, Yoshi Suhara, and Dimitris Alikaniotis. 2025. Your large language models are leaving fingerprints. In Proceed-ings of the 1stWorkshop on GenAI Content Detection (GenAIDetect) , pages 85–95. Anshul Nasery, Edoardo Contente, Alkin Kaz, Pramod Viswanath, and Sewoong Oh. 2025a. Are robust llm fingerprints adversarially robust? arXiv preprint arXiv:2509.26598 .Anshul Nasery, Jonathan Hayase, Creston Brooks, Peiyao Sheng, Himanshu Tyagi, Pramod Viswanath, and Sewoong Oh. 2025b. Scalable fingerprinting of large language models. In The Thirty-ninth An-nual Conference on Neural Information Processing Systems .Vinh Nguyen, Cuong Dang, Jiahao Zhang, Hoa Tran, Minh Tran, Trinh Chau, Thai Le, Lu Cheng, and Suhang Wang. 2026. Urag: A benchmark for un-certainty quantification in retrieval-augmented large language models. arXiv preprint arXiv:2603.19281 .Ivica Nikolic, Teodora Baluta, and Prateek Saxena. 2025. Model provenance testing for large language models. In The Thirty-ninth Annual Conference on Neural Information Processing Systems .Xuying Ning, Katherine Tieu, Dongqi Fu, Tianxin Wei, Zihao Li, Yuanchen Bei, Jiaru Zou, Mengting Ai, Zhining Liu, Ting-Wei Li, and 1 others. 2026. Code as agent harness. arXiv preprint arXiv:2605.18747 .Dario Pasquini, Evgenios M. Kornaropoulos, and Giuseppe Ateniese. 2025. LLMmap: Fingerprint-ing for large language models. In USENIX Security Symposium .Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, Sihan Zhao, Lauren Hong, Runchu Tian, Ruobing Xie, Jie Zhou, Mark Gerstein, dahai li, Zhiyuan Liu, and Maosong Sun. 2024. ToolLLM: Facilitating large language models to master 16000+ real-world APIs. In The Twelfth International Con-ference on Learning Representations .Zhenzhen Ren, GuoBiao Li, Sheng Li, Zhenxing Qian, and Xinpeng Zhang. 2025. Cotsrf: Utilize chain of thought as stealthy and robust fingerprint of large language models. arXiv preprint arXiv:2505.16785 .Nikhil Sardana, Jacob Portes, Sasha Doubov, and Jonathan Frankle. 2024. Beyond chinchilla-optimal: Accounting for inference in language model scaling laws. In International Conference on Machine Learn-ing , pages 43445–43460. PMLR. Shuo Shao, Yiming Li, Yu He, Hongwei Yao, Wenyuan Yang, Dacheng Tao, and Zhan Qin. 2025. Sok: Large language model copyright auditing via fingerprinting. 
+
+arXiv preprint arXiv:2508.19843 .Shuo Shao, Yiming Li, Hongwei Yao, Yifei Chen, Yuchen Yang, and Zhan Qin. 2026. Reading be-tween the lines: Towards reliable black-box llm fin-gerprinting via zeroth-order gradient estimation. In 
+
+Proceedings of the ACM Web Conference 2026 , pages 2637–2648. Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik Narasimhan, and Shunyu Yao. 2023. Re-flexion: Language agents with verbal reinforcement learning. Advances in neural information processing systems , 36:8634–8652. Guoheng Sun, Ziyao Wang, Bowei Tian, Meng Liu, Zheyu Shen, Shwai He, Yexiao He, Wanghao Ye, Yiting Wang, and Ang Li. 2025a. Coin: Counting the invisible reasoning tokens in commercial opaque llm apis. arXiv preprint arXiv:2505.13778 .Guoheng Sun, Ziyao Wang, Xuandong Zhao, Bowei Tian, Zheyu Shen, Yexiao He, Jinming Xing, and Ang Li. 2025b. Invisible tokens, visible bills: The urgent need to audit hidden operations in opaque llm services. arXiv preprint arXiv:2505.18471 .
+
+12 Mingjie Sun, Yida Yin, Zhiqiu Xu, J Zico Kolter, and Zhuang Liu. 2025c. Idiosyncrasies in large language models. In International Conference on Machine Learning , pages 57854–57885. PMLR. Ling Tang, YueFeng Chen, Hui Xue, and Quanshi Zhang. 2025. Towards the resistance of neural net-work fingerprinting to fine-tuning. In The Thirty-ninth Annual Conference on Neural Information Pro-cessing Systems .Gemma Team, Thomas Mesnard, Cassidy Hardin, Robert Dadashi, Surya Bhupatiraju, Shreya Pathak, Laurent Sifre, Morgane Rivière, Mihir Sanjay Kale, Juliette Love, and 1 others. 2024. Gemma: Open models based on gemini research and technology. 
+
+arXiv preprint arXiv:2403.08295 .Yao Tong, Haonan Wang, Siquan Li, Kenji Kawaguchi, and Tianyang Hu. 2026. Seedprints: Fingerprints can even tell which seed your large language model was trained from. In The Fourteenth International Conference on Learning Representations .Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. Advances in neural information processing systems , 30. Ander Artola Velasco, Stratis Tsirtsis, and Manuel Gomez-Rodriguez. 2026. Auditing pay-per-token in large language models. In AISTATS .Ander Artola Velasco, Stratis Tsirtsis, Nastaran Okati, and Manuel Gomez-Rodriguez. 2025. Is your llm overcharging you? tokenization, transparency, and incentives. arXiv preprint arXiv:2505.21627 .Ziyao Wang, Guoheng Sun, Yexiao He, Zheyu Shen, Bowei Tian, and Ang Li. 2025. Predictive auditing of hidden tokens in llm apis via reasoning length estimation. arXiv preprint arXiv:2508.00912 .Zehao Wu, Yanjie Zhao, and Haoyu Wang. 2025. Ten-sorguard: Gradient-based model fingerprinting for llm similarity detection and family classification. In 
+
+2025 40th IEEE/ACM International Conference on Automated Software Engineering (ASE) , pages 445– 456. IEEE. Zhaomin Wu, Haodong Zhao, Ziyang Wang, Jizhou Guo, Qian Wang, and Bingsheng He. 2026a. LLM DNA: Tracing model evolution via functional repre-sentations. In The Fourteenth International Confer-ence on Learning Representations .Zongyu Wu, Minhua Lin, Zhiwei Zhang, Fali Wang, Xianren Zhang, Xiang Zhang, and Suhang Wang. 2026b. Image corruption-inspired membership infer-ence attacks against large vision-language models. In 
+
+Proceedings of the 19th Conference of the European Chapter of the Association for Computational Lin-guistics (Volume 1: Long Papers) , pages 7945–7957. Zixun Xiong, Gaoyi Wu, Qingyang Yu, Mingyu Derek Ma, Lingfeng Yao, Miao Pan, Xiaojiang Du, and Hao Wang. 2026. iseal: Encrypted fingerprinting for reliable llm ownership verification. In Proceedings of the AAAI Conference on Artificial Intelligence ,volume 40:42, pages 35940–35948. Jiashu Xu, Fei Wang, Mingyu Ma, Pang Wei Koh, Chaowei Xiao, and Muhao Chen. 2024. Instructional fingerprinting of large language models. In Proceed-ings of the 2024 Conference of the North American Chapter of the Association for Computational Lin-guistics: Human Language Technologies (Volume 1: Long Papers) , pages 3277–3306. Yijie Xu, Aiwei Liu, Xuming Hu, Lijie Wen, and Hui Xiong. 2025a. Mark your llm: Detecting the misuse of open-source large language models via watermark-ing. arXiv preprint arXiv:2503.04636 .Zhenhua Xu, Zhaokun Yan, Binhan Xu, Xin Tong, Haitao Xu, Yourong Chen, and Meng Han. 2025b. Unlocking the effectiveness of lora-fp for seamless transfer implantation of fingerprints in downstream models. In Findings of the Association for Computa-tional Linguistics: EMNLP 2025 , pages 4302–4312. Zhenhua Xu, Xixiang Zhao, Xubin Yue, Shengwei Tian, Changting Lin, and Meng Han. 2025c. Ctcc: A robust and stealthy fingerprinting framework for large language models via cross-turn contextual correlation backdoor. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing ,pages 6978–7000. Shojiro Yamabe, Futa Kai Waseda, Tsubasa Taka-hashi, and Koki Wataoka. 2025. Mergeprint: Merge-resistant fingerprints for robust black-box ownership verification of large language models. In Proceed-ings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-pers) , pages 6894–6916. Yuliang Yan, Haochun Tang, Shuo Yan, and Enyan Dai. 2026. Duffin: A dual-level fingerprinting framework for llms ip protection. In Findings of the Association for Computational Linguistics: EACL 2026 , pages 5168–5184. An Yang, Baosong Yang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Zhou, Chengpeng Li, Chengyuan Li, Dayiheng Liu, Fei Huang, Guanting Dong, Hao-ran Wei, Huan Lin, Jialong Tang, Jialin Wang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Ma, and 43 others. 2024. Qwen2 technical report. arXiv preprint arXiv:2407.10671 .Shuhua Yang, Jiahao Zhang, Yilong Wang, Dongwon Lee, and Suhang Wang. 2026. Query-efficient agen-tic graph extraction attacks on GraphRAG systems. In ACL .Ziqing Yang, Yixin Wu, Yun Shen, Wei Dai, Michael Backes, and Yang Zhang. 2025. The challenge of identifying the origin of black-box large language models. arXiv preprint arXiv:2503.04332 .
+
+13 Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and Yuan Cao. 2023. React: Synergizing reasoning and acting in language models. In The Eleventh International Conference on Learning Representations .Chuanchao Zang, Xiangtao Meng, Wenyu Chen, Tian-shuo Cong, Zha Yaxing, Dong Qi, Zheng Li, and Shanqing Guo. 2025. Errortrace: A black-box trace-ability mechanism based on model family error space. In The Thirty-ninth Annual Conference on Neural In-formation Processing Systems .Boyi Zeng, Lizheng Wang, Yuncong Hu, Yi Xu, Chenghu Zhou, Xinbing Wang, Yu Yu, and Zhouhan Lin. 2024. Huref: Human-readable fingerprint for large language models. Advances in Neural Informa-tion Processing Systems , 37:126332–126362. Boyu Zhang, Ping He, Tianyu Du, Xuhong Zhang, Lei Yun, Kingsum Chow, and Jianwei Yin. 2025a. Clm-tracing: Black-box user-level watermarking for code language model tracing. In Proceedings of the 2025 Conference on Empirical Methods in Natural Lan-guage Processing , pages 28962–28978. Haobo Zhang, Zhenhua Xu, Junxian Li, Shangfeng Sheng, Dezhang Kong, and Meng Han. 2026a. At-tndiff: Attention-based differential fingerprinting for large language models. In ACL .Jie Zhang, Jiayuan Li, Haiqiang Fei, Lun Li, and Hong-song Zhu. 2024. Easydetector: Using linear probe to detect the provenance of large language models. In 
+
+2024 IEEE 23rd International Conference on Trust, Security and Privacy in Computing and Communica-tions (TrustCom) , pages 2410–2417. IEEE. Jie Zhang, Dongrui Liu, Chen Qian, Linfeng Zhang, Yong Liu, Yu Qiao, and Jing Shao. 2025b. REEF: Representation encoding fingerprints for large lan-guage models. In The Thirteenth International Con-ference on Learning Representations .Qingjie Zhang, Di Wang, Haoting Qian, Liu Yan, Tian-wei Zhang, Ke Xu, Qi Li, Minlie Huang, Hewu Li, and Han Qiu. 2025c. Speculating llms’ chinese train-ing data pollution from their tokens. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 26124–26144. Xianren Zhang, Hui Liu, Delvin Ce Zhang, Xianfeng Tang, Qi He, Dongwon Lee, and Suhang Wang. 2025d. Sua: Stealthy multimodal large language model unlearning attack. In Proceedings of the 2025 Conference on Empirical Methods in Natural Lan-guage Processing , pages 11241–11254. Yage Zhang, Yukun Jiang, Zeyuan Chen, Michael Backes, Xinyue Shen, and Yang Zhang. 2026b. Real money, fake models: Deceptive model claims in shadow APIs. arXiv preprint arXiv:2603.01919 .Yuanhe Zhang, Xinyue Wang, Zhican Chen, Weiliu Wang, Zilu Zhang, Zhengshuo Gong, Zhenhong Zhou, Kun Wang, Li Sun, Yang Liu, and 1 others. 2026c. Resource consumption threats in large lan-guage models. arXiv preprint arXiv:2603.16068 .Yue Zheng, Si Wang, and Chip-Hong Chang. 2022. A dnn fingerprint for non-repudiable model ownership identification and piracy detection. IEEE Transac-tions on Information Forensics and Security , 17:2977– 2989. Xiaoyuan Zhu, Yaowen Ye, Tianyi Alex Qiu, Hanlin Zhu, Sijun Tan, Ajraf Mannan, Jonathan Michala, Raluca Ada Popa, and Willie Neiswanger. 2026. Au-diting black-box LLM APIs with a rank-based uni-formity test. In The Fourteenth International Confer-ence on Learning Representations .
+
+14 Appendix 
+
+List of Contents 
+
+In this appendix, we provide the following addi-tional information: • Section A : Implementation Details of Experi-ments. • Section B : Additional Experimental Results. • Section C : Additional Related Works. • Section D : Detailed Proofs. 
+
+A Implementation Details of Experiments 
+
+A.1 Fingerprinting Auditors 
+
+For LLMmap, we use the released set of 800 ad-versarial identity probes, each concatenated with a system prompt and CoT/RAG -style prompts as in the original work. The 800 probes are split 8:2 (640 training, 160 test), and we use 100 probes to evaluate ASR. For LLM-idio, we follow the original setting: a per -family binary classifier is trained on 10,000 UltraChat (Ding et al., 2023) responses from each of the small and large models. The same prompts are used for training the attack adapters and for evaluation; a held -out 20% subset (2,000 prompts) serves as the test set. For MET, the two -sample test is applied to com-pletions from the UltraChat prompt set. For the main - table fair - budget setting we use N = 1
+
+prompt and K = 10 completions per prompt, sub-sampled from the full N = 50 , K = 20 collection. The test statistic is MMD hamming with a permuta-tion p- value (100 permutations, α = 0 .05 ). ASR is the fraction of 30 independent random seeds for which MET fails to reject H0. The full (N, K )
+
+sweep is described in Appendix A.4. 
+
+A.2 Baseline Settings 
+
+For Query Detection, we train a defender-side classifier that decides at audit time whether to serve the small or the large model. The clas-sifier is a two-layer MLP on top of frozen 
+
+all-MiniLM-L6-v2 sentence embeddings, trained to distinguish LLMmap identity probes from Ul-traChat prompts. At evaluation, each query is routed to the large model’s pre-collected response if flagged as a probe and to the small model’s re-sponse otherwise. This is an oracle baseline be-cause the defender knows the probe distribution; utility is unchanged on prompts the detector rejects. For Rewriting (Kurian et al., 2025), the small model first answers the query, then is re-prompted with a fixed style-laundering template that asks it to rewrite the response “to be more comprehen-sive, detailed, and well-reasoned, as if written by a highly knowledgeable assistant with deep exper-tise.” Both passes use the same small model; only the second pass output is audited. Sample sizes per auditor match the Original (small) row. For 5-shot ICL, we sample five question-answer pairs from the large model’s UltraChat responses and prepend them as an in-context demonstration block before every query that the small model answers. For LLMmap, the same five pairs are prepended to every identity probe before evalua-tion; for LLM-idio and MET, they are prepended to every UltraChat prompt. For Token Suppression (Nasery et al., 2025a), we follow the SuppressTop-k attack. At decoding time, for the first n = 16 generation positions we mask the k = 4 highest-probability tokens (set-ting their logits to −∞ ) before sampling; subse-quent positions decode normally. The mask is im-plemented as a HuggingFace LogitsProcessor 
+
+and applied uniformly across all three auditors, us-ing the same temperature, prompt set, and sample count as Original (small). 
+
+A.3 Training Settings 
+
+We adopt the LoRA-based deception attack from Section 5, with r = 16 , α = 32 , dropout 0.05 ,
+
+2 epochs, learning rate 5 × 10 −5, batch size 4,AdamW with weight decay 0.01 , and a knowledge-distillation term ( λkd = 0 .5, τ = 2 .0) against a frozen large teacher. We set λkd = 0 .5 as the mid-point of the sweep in Figure 3, which shows that ASR is insensitive to λkd across [0 .25 , 1.0] . The RAFT-style ablation of Section 6.4 uses N = 8 
+
+candidates per prompt, 3 rounds, and λraft = 0 .5.
+
+A.4 MET Sample Complexity 
+
+LLMmap and LLM-idio use one query per audit; MET defaults to (N = 20 , K = 5) , costing 100 ×
+
+more generations. The main paper therefore reports MET at the fair budget (1 , 10) . Here we character-ize detection power by subsampling from a (50 , 20) 
+
+pool, computing ASR over 30 seeds. At the strong budget on Phi - 3, our MoLA adapter achieves a mean permutation p = 0 .086 > α ,the first time MET fails to reject H0. Its ASR stays above 50% until N > 30 , while the best single - fingerprint adapter drops below 50% at N =
+
+15 1 2 5 10 20 50               
+
+> N(prompts)
+> 0
+> 50
+> 100
+> MET ASR (%)  Gemma
+> Best Single (UC)
+> MoLA (3-way)
+> RAFT ( λ= 0.5)
+> 12510 20 50
+> N(prompts)
+> Qwen2
+> 12510 20 50
+> N(prompts)
+> Phi-3
+
+Figure 4: MET sample complexity at K = 10 for three spoofing attacks across model families . ASR is averaged over 30 resampling seeds. 
+
+20 . On other families, curves overlap, consistent with family-dependent trade-offs. Even though all adapters are rejected at the full 
+
+(50 , 20) budget, that setting costs 1,000 generations per audit and is impractical for frequent use. Audi-tors operating at lower budgets, including the fair 
+
+(1 , 10) and the intermediate (20 , 5) default, leave many attacks undetected, especially on Phi -3 where the scale gap is smallest. 
+
+B Additional Experimental Results 
+
+B.1 Per-adapter Single-Fingerprint Breakdown 
+
+Table 5 reports each of the 18 single-fingerprint LoRA variants we train per family, organised by training data (LLMmap probes vs. UltraChat) and KD teacher (no KD, student-size self-distillation, target-size teacher). The “GhostPrint (ours)” rows in Table 1 pick the column-wise maximum per family across these 18 cells.                                                                              
+
+> Family Training Data KD Teacher LLMmap LLM-idio MET Gemma LLMmap –95.0 31.2 13.3 LLMmap 2B 84.0 14.7 3.3 LLMmap 7B 87.0 16.8 0.0 UltraChat –19.0 58.5 23.3
+> UltraChat 2B 21.0 52.0 13.3 UltraChat 7B 28.0 55.9 13.3 Qwen2 LLMmap –74.0 70.0 26.7 LLMmap 1.5B 76.0 41.5 30.0 LLMmap 7B 76.0 71.3 36.7 UltraChat –21.0 50.2 40.0
+> UltraChat 1.5B 28.0 51.0 36.7 UltraChat 7B 35.0 51.7 40.0
+> Phi-3 LLMmap –80.0 64.0 26.7 LLMmap mini 77.0 35.9 43.3 LLMmap medium 74.0 35.2 33.3 UltraChat –10.0 58.0 33.3 UltraChat mini 5.0 53.0 36.7 UltraChat medium 0.0 56.0 60.0
+
+Table 5: Detailed evaluation across all 18 LoRA vari-ants . The results are categorized by model family and training configurations (dataset × KD teacher selection). The best performance within each family and column is bolded.                                                 
+
+> Setting Method ASR (%) LLMmap LLM-idio MET Gemma-2B
+> →Qwen2-1.5B Original (weak) 0.0 1.6 0.0 Query Detection 0.0 3.2 6.7 Rewriting 0.0 0.0 3.3 5-shot ICL 0.0 0.8 0.0 Token Suppression 1.0 2.2 16.7 GhostPrint (ours) 4.0 97.5 46.7
+> Original (target) 78.0 99.5 100.0 Qwen2-1.5B
+> →Gemma-2B Original (weak) 0.0 0.8 0.0 Query Detection 0.0 2.5 6.7 Rewriting 0.0 8.9 0.0 5-shot ICL 0.0 19.4 0.0 Token Suppression 16.0 1.0 3.3 GhostPrint (ours) 38.0 97.9 20.0
+> Original (target) 84.0 99.1 93.3
+
+Table 6: Evaluation of cross-family weak-to-weak spoofing . The table reports the Attack Success Rate (ASR) when adapting a weak model from one architec-tural family to spoof a strong model from a completely different family. The highest ASR among attack meth-ods is bolded. 
+
+B.2 More Cross-Model Spoofing Results 
+
+For completeness, we provide additional results to investigate whether models of similar scale can serve as fingerprints for other model families. As shown in Table 6, our proposed GhostPrint frame-work consistently outperforms all baselines. No-tably, our results on LLM-idio across both settings are particularly notablez, showing almost no perfor-mance difference compared to the target model’s original fingerprint. 
+
+C Additional Related Works 
+
+C.1 LLM API Overcharging Risks 
+
+The proliferation of commercial LLM APIs un-der pay-per-use pricing has raised concerns about provider dishonesty at multiple levels. At the model level, providers may silently substitute promised strong models with weaker alterna-tives (Cai et al., 2025b; Zhang et al., 2026b), di-rectly misrepresenting service quality. At the to-ken level, hidden reasoning tokens in opaque APIs introduce invisible billing overhead (Sun et al., 2025a,b), with tokenization transparency and in-centive misalignment further analyzed in (Velasco et al., 2025). Broader resource-side threats, such as compute, memory, and API abuse, are surveyed in (Zhang et al., 2026c). Early defenses address both directions: a game-theoretic auditing mecha-nism targets dishonest model-level providers (Cao et al., 2026), while statistical and predictive audit-ing schemes tackle pay-per-token billing fraud (Ve-16 lasco et al., 2026; Wang et al., 2025). Our work identifies a new threat distinct from previous model substitution and token overcharging, where a ma-licious provider can use parameter-efficient fine-tuning to adapt a weak model to evade fingerprint-based auditing, making dishonest model deploy-ments harder to detect. 
+
+C.2 LLM Fingerprinting White-box Non-Intrusive Fingerprinting . White-box fingerprinting assumes direct weight access and verifies ownership through internal model anal-ysis without modifying model behavior. Parame-ter and gradient signatures form one primary axis: Zheng et al. (2022) establish non-repudiable own-ership certificates from weight statistics, and Ten-sorGuard (Wu et al., 2025) classifies model fam-ilies via gradient-based features. Representation-based approaches extract fingerprints from internal activations: REEF (Zhang et al., 2025b) encodes layer-wise hidden states as compact fingerprints, AttnDiff (Zhang et al., 2026a) exploits differential attention maps for identification, and EasyDetec-tor (Zhang et al., 2024) detects provenance via lin-ear probes on intermediate features. HuRef (Zeng et al., 2024) constructs human-interpretable finger-prints from weight-invariant vectors, and Shao et al. (2025) provides a systematic survey of LLM copy-right auditing spanning the full white-box land-scape. 
+
+Non-Intrusive Black-Box Fingerprinting . Black-box fingerprinting operates through API queries alone, without parameter access. General-query methods derive model identity from naturally elicited responses. For API integrity auditing, statistical hypothesis tests detect model substitu-tion by comparing output distributions (Gao et al., 2025b; Zhu et al., 2026) and behavioral consis-tency (Cai et al., 2025b; Nikolic et al., 2025). Idiosyncrasy-based approaches exploit persistent behavioral quirks (Sun et al., 2025c; McGov-ern et al., 2025), characteristic error-space signa-tures (Zang et al., 2025), and side-channel query statistics (Pasquini et al., 2025) as inherent finger-prints. Specific-query methods craft targeted inputs to elicit discriminative signals. Adversarial honey-pot strategies embed verifiable traps for IP attribu-tion (Gubri et al., 2024; Jin et al., 2024). Token-level probing exploits under-trained tokens (Cai et al., 2025a) and training corpus artifacts (Zhang et al., 2025c) as covert signals. Further direc-tions include membership-inference-based prove-nance (Kuditipudi et al., 2025), chain-of-thought fingerprinting (Ren et al., 2025), zeroth-order gra-dient estimation (Shao et al., 2026), sensitivity-guided query selection (Hu et al., 2025), code model tracing (Zhang et al., 2025a), and dual-level IP protection frameworks (Yan et al., 2026). 
+
+Intrusive Fingerprinting . Intrusive methods em-bed verifiable fingerprints during model training via backdoor mechanisms. Early work establishes backdoor watermarking baselines for pre-trained language models (Gu et al., 2022; Li et al., 2023). Instruction-triggered backdoors bind ownership responses to specific prompt patterns (Xu et al., 2024, 2025c), and LoRA-based transfer propagates fingerprints into fine-tuned derivatives (Xu et al., 2025b). Robustness under post-hoc model modi-fication is a central challenge: merge-resistant de-signs (Yamabe et al., 2025; He et al., 2025) and fine-tuning-resistant schemes (Tang et al., 2025; Nasery et al., 2025b) address editing and adapta-tion threats. Semantically richer fingerprints are pursued via conditioned watermarks (Gloaguen et al., 2026), random-seed fingerprinting (Tong et al., 2026), and functional evolution tracing (Wu et al., 2026a). Additional contributions include en-crypted ownership verification (Xiong et al., 2026), plug-and-play fingerprint generation (Chen et al., 2026), open-source misuse detection (Xu et al., 2025a), tamper attribution (Bai et al., 2025), and analysis of the fundamental difficulty of black-box origin identification (Yang et al., 2025). 
+
+D Detailed Proofs 
+
+Notations. For a set of vectors {x1, . . . , xk},
+
+span {x1, . . . , xk} denotes the set of all their linear combinations. For a matrix A ∈ Rd1×d2 , we use 
+
+col( A) := {Ax | x ∈ Rd2 } to denote its column space, and null( A) := {x ∈ Rd2 | Ax = 0} to denote its null space. Finally, tr( A) denotes the trace of a square matrix A, defined as the sum of its diagonal elements. 
+
+D.1 Basic Tools Lemma D.1 (The Eckhart-Young Theorem, adapted from page 79 of (Golub and Van Loan, 2013)) . Let A ∈ Rd1×d2 be a matrix with rank 
+
+r, and let its singular value decomposition be given by A = Pri=1 σiuiv⊤ 
+
+> i
+
+, where σ1 ≥ σ2 ≥· · · ≥ σr > 0 are the non-zero singular values, and ui, vi are the corresponding left and right singular vectors. 
+
+17 For any integer k < r , let Ak := Pki=1 σiuiv⊤
+
+> i
+
+denote the rank-k truncated singular value de-composition of A.Then, the optimal rank-k approximation of A un-der the Frobenius norm and spectral norm is Ak,i.e.,          
+
+> arg min
+> rank( B)= k
+> ∥A−B∥2=arg min
+> rank( B)= k
+> ∥A−B∥F=Ak.
+
+By substituting matrix B with the optimal so-lution Ak, we obtain the following corollary with basic algebra. 
+
+Corollary D.2 (Error of Optimal Low-Rank Approximation) . Under the same setting as Lemma D.1, the minimum approximation errors achieved by a rank-k matrix are: 1. Spectral Norm: 
+
+min  
+
+> rank( B)= k
+
+∥A − B∥2 = σk+1 ,
+
+2. Frobenius Norm: 
+
+min  
+
+> rank( B)= k
+
+∥A − B∥F =
+
+> r
+
+X
+
+> i=k+1
+
+σ2
+
+> i
+
+!1/2
+
+.
+
+D.2 Proof of Proposition 5.1 Proposition D.3 (Lower Bound of Universal Spoofing, Restatement of Proposition 5.1) . Let 
+
+W, W′ ∈ Rd1×d2 be two weight matrices, where 
+
+W has rank k1 and W′ has rank k2, with k1 >k2. Let the low-rank adaptation (LoRA) ma-trices be A ∈ Rd1×r and B ∈ Rr×d2 , where 
+
+r < k 1 − k2. Define the adapted weight matrix as cW := W′ + AB and the residual matrix as 
+
+R := W − W′. For any input vector x ∈ Rd2 ,the following lower bounds hold: 1. Spectral Norm: 
+
+inf  
+
+> A,B
+
+sup 
+
+> ∥x∥2=1
+
+∥Wx − cWx ∥2 ≥ σ+min (R),
+
+2. Frobenius Norm: 
+
+inf  
+
+> A,B
+
+∥W − cW∥2 
+
+> F
+
+≥ (k1 − k2 − r) · σ+min (R)2,
+
+where σ+min (R) denotes the smallest non-zero sin-gular value of R.
+
+Proof. Part 1. Spectral Norm . We first consider the LHS of the spectral norm bound without taking the infimum: 
+
+sup 
+
+> ∥x∥2=1
+
+∥Wx − cWx ∥2 = ∥W − cW∥2
+
+= ∥R − AB ∥2,
+
+where the first equality follows from the definition of spectral norm, and the second equality follows from the definition of R.Taking the infimum over the LoRA matrices A
+
+and B on both sides, we obtain: 
+
+inf  
+
+> A,B
+
+sup 
+
+> ∥x∥2=1
+
+∥Wx − cWx ∥2 = inf  
+
+> A,B
+
+∥R − AB ∥2.
+
+(3) Since the LoRA matrices A ∈ Rd1×r and 
+
+B ∈ Rr×d2 are bottlenecked by their inner dimen-sion r, their product AB has a rank of at most r.Therefore, minimizing ∥R − AB ∥2 is equivalent to finding the optimal rank-r approximation of the residual matrix R under the spectral norm. We can directly apply part 1 of Corollary D.2 to evaluate this optimal error, which yields: 
+
+inf  
+
+> A,B
+
+∥R − AB ∥2 = σr+1 (R). (4) We now lower bound σr+1 (R). Because W =
+
+W′ + R, where rank( W) = k1 and rank( W′) = 
+
+k2, the subadditivity property of matrix rank dic-tates that rank( R) ≥ k1 − k2. The proposition assumes the adaptation rank satisfies r < k 1 − k2,which directly implies r + 1 ≤ rank( R). Con-sequently, the (r + 1) -th singular value must be at least as large as the smallest non-zero singular value of R:
+
+σr+1 (R) ≥ σ+min (R). (5) Combining the Eq. (3) , Eq. (4) and Eq. (5) above, we obtain the desired result: 
+
+inf  
+
+> A,B
+
+sup 
+
+> ∥x∥2=1
+
+∥Wx − cWx ∥2 ≥ σ+min (R),
+
+which finishes the proof for the spectral norm case. 
+
+Part 2. Frobenius Norm . We consider the LHS of the Frobenius norm bound and have the following: 
+
+inf  
+
+> A,B
+
+∥W − cW∥2 
+
+> F
+
+= inf  
+
+> A,B
+
+∥R − AB ∥2
+
+> F
+
+= min  
+
+> rank( X)≤r
+
+∥R − X∥2
+
+> F
+
+=
+
+> rank( R)
+
+X
+
+> i=r+1
+
+σ2 
+
+> i
+
+(R)
+
+18 ≥ (rank( R) − r)σ+min (R)2
+
+≥ (k1 − k2 − r)σ+min (R)2,
+
+where the first step is from the definition of R, the second step is from the fact that AB is of rank r,the third step is from part 2 of Corollary D.2, the fourth step is from the fact that all terms in the summation are at least σ+min (R)2, and the last step is from the fact on rank( R) ≥ k1 − k2.Thus, we complete the proof. 
+
+D.3 Proof of Theorem 5.2 
+
+To prove this upper bound, we first present a useful fact. 
+
+Fact D.4 (Folklore) . For a zero-mean stochastic vector x with covariance matrix M := E[xx ⊤]
+
+and any constant matrix A, we have: 
+
+E[( Ax )( Ax )⊤] = AMA ⊤.
+
+Now, we show the upper bound under the simple query distribution setting. 
+
+Theorem D.5 (Upper Bound under Low-Effec-tive-Rank Distributions, Restatement of Theo-rem 5.2) . Let x ∈ Rd2 be the representation of a query drawn from a zero-mean continuous distri-bution Dq, and let Σ := Ex∼D q [xx ⊤] be the co-variance matrix. Let λ1 ≥ λ2 ≥ · · · ≥ λd2 ≥ 0
+
+denote the eigenvalues of Σ.Let the LoRA matrices be A ∈ Rd1×r and B ∈
+
+Rr×d2 , and the adapted weight matrix be cW := 
+
+W′ + AB . The optimal expected spoofing error is bounded by the following: 
+
+inf  
+
+> A,B
+
+Ex∼D q
+
+∥Wx − cWx ∥22
+
+ ≤ ∥ R∥22
+
+> d2
+
+X
+
+> i=r+1
+
+λi,
+
+where R := W − W′ is the residual matrix. 
+
+Proof. Let Σ = Ex∼D q [xx ⊤] have eigendecompo-sition Σ = ULU ⊤ with L = diag( λ1, . . . , λ d2 )
+
+and λ1 ≥ λ2 ≥ · · · ≥ 0. Choose Ur ∈ Rd2×r as the first r eigenvectors. Construct 
+
+AB = RU rU⊤ 
+
+> r
+
+,
+
+which has rank at most r and thus can be factored as AB .For this choice, we have the following: 
+
+Ex∼D q
+
+∥Wx − cWx ∥22
+
+
+
+= Ex∼D q
+
+∥(R − AB )x∥22
+
+
+
+= Ex∼D q
+
+∥R(I − UrU⊤ 
+
+> r
+
+)x∥22
+
+
+
+= Ex∼D q
+
+∥R(UU ⊤ − UrU⊤ 
+
+> r
+
+)x∥22
+
+
+
+= Ex∼D q
+
+ R
+
+
+
+> d2
+
+X
+
+> j=r+1
+
+uj u⊤
+
+> j
+
+ x
+
+> 22
+
+ ,
+
+where the first step is from the definition of cW and 
+
+R, the second step is from choosing a specific AB ,the third step is from the orthogonality of eigenvec-tors, and the last step is from expanding the matrix into eigenvector outer products and eliminating the first r terms. For simplicity, let Q := Pd2 
+
+> j=r+1
+
+uj u⊤ 
+
+> j
+
+. Apply-ing the trace identity for expected quadratic forms in Fact D.4, we have: 
+
+Ex∼D q
+
+∥Wx − cWx ∥22
+
+ = Ex∼D q
+
+∥RQx ∥22
+
+
+
+= tr( RQΣQ ⊤R⊤).
+
+Since eigenvectors form an orthonormal basis, we expand and collapse the inner product QΣQ ⊤
+
+as follows:      
+
+> QΣQ ⊤
+> =
+> d2X
+> j=r+1
+> uju⊤
+> j
+> !d2X
+> i=1
+> λiuiu⊤
+> i
+> !d2X
+> k=r+1
+> uku⊤
+> k
+> !
+> =
+> d2X
+> i=r+1
+> λiuiu⊤
+> i,
+
+where the second step follows from the orthogonal-ity condition u⊤ 
+
+> j
+
+ui = 1 if i = j and 0 otherwise. Finally, we substitute this collapsed term back into the trace to bound the expected error: 
+
+Ex∼D q
+
+∥Wx − cWx ∥22
+
+
+
+= tr( RQΣQ ⊤R⊤)= tr R
+
+> d2
+
+X
+
+> i=r+1
+
+λiuiu⊤
+
+> i
+
+!
+
+R⊤
+
+!
+
+=
+
+> d2
+
+X
+
+> i=r+1
+
+λitr( Ru iu⊤ 
+
+> i
+
+R⊤)=
+
+> d2
+
+X
+
+> i=r+1
+
+λitr( u⊤ 
+
+> i
+
+R⊤Ru i)=
+
+> d2
+
+X
+
+> i=r+1
+
+λi∥Ru i∥22
+
+≤
+
+> d2
+
+X
+
+> i=r+1
+
+λi∥R∥22∥ui∥22
+
+= ∥R∥22
+
+> d2
+
+X
+
+> i=r+1
+
+λi,
+
+19 where the third step follows from the linearity of the trace operator, the fourth step follows from the cyclic property of the trace, the fifth step follows from the definition of the ℓ2 norm, the fifth step follows from the fact that ∥Ru i∥2 ≤ ∥ R∥2∥ui∥2,and the final step follows from the fact that eigen-vectors are unit vectors (i.e., ∥ui∥2 = 1 ). Taking the infimum over all parameterizations of 
+
+A and B can only yield an expected error less than or equal to this specific construction. Therefore, the upper bound holds, completing the proof. 
+
+D.4 Proof of Theorem 5.3 
+
+To show the tight bound under the weak classi-fier setting, we first prove a variant of the Eckhart-Young Theorem. 
+
+Lemma D.6 (A Variant of the Eckhart-Young Theorem) . Let A ∈ Rd1×d2 and C ∈ Rd1×d1 .Let the singular value decomposition of the prod-uct matrix CA be given by CA = Ppi=1 σiuiv⊤ 
+
+> i
+
+,where p = min( d1, d 2) and σ1 ≥ σ2 ≥ · · · ≥ 0.For any integer k < p, let (CA )k := Pki=1 σiuiv⊤ 
+
+> i
+
+denote the rank-k truncated sin-gular value decomposition of CA .Then, the minimum achievable approximation er-ror under the spectral norm is: 
+
+min  
+
+> rank( B)≤k
+
+∥CA − CB ∥2 = σk+1 (CA ).
+
+Proof. Part 1. Existence . We show that there exists a rank-k matrix B such that ∥CA −CB ∥2 =
+
+σk+1 (CA ).Because the product matrix CA is formed by lin-ear combinations of the columns of C, its column space is restricted: col( CA ) ⊆ col( C). Further-more, its truncated SVD is built from its principal directions, meaning col(( CA )k) ⊆ col( CA ).Since col(( CA )k) ⊆ col( C), the linear equa-tion CX = ( CA )k is consistent. We can construct a specific solution using the Moore-Penrose pseu-doinverse: let B∗ = C+(CA )k. This satisfies 
+
+CB ∗ = ( CA )k. Furthermore, because the rank of a product cannot exceed the rank of its factors, 
+
+rank( B∗) ≤ rank(( CA )k) ≤ k.We now consider this specific valid rank-k ma-trix B∗ and compute the approximation error: 
+
+∥CA − CB ∗∥2 = ∥CA − (CA )k∥2
+
+=
+
+> p
+
+X
+
+> i=1
+
+σiuiv⊤ 
+
+> i
+
+−
+
+> k
+
+X
+
+> i=1
+
+σiuiv⊤
+
+> i
+> 2
+
+=
+
+> p
+
+X
+
+> i=k+1
+
+σiuiv⊤
+
+> i
+> 2
+
+,
+
+which follows from basic algebra. Because the remaining singular values are or-dered σk+1 ≥ σk+2 ≥ . . . , the spectral norm of this residual matrix is exactly the largest re-maining singular value. Thus, ∥CA − CB ∗∥2 =
+
+σk+1 (CA ).
+
+Part 2. Optimality . We show that no matrix B
+
+with rank at most k can achieve a lower error value than σk+1 (CA ).Suppose rank( B) ≤ k for some arbitrary matrix 
+
+B ∈ Rd1×d2 . Let Y = CB . By the properties of matrix multiplication, rank( Y) ≤ rank( B) ≤ k.Because Y has d2 columns and rank at most 
+
+k, its null space has a dimension of at least 
+
+d2 − k, which follows from the rank-nullity the-orem. It follows that we can find orthonor-mal vectors x1, . . . , xd2−k such that null( Y) = span {x1, . . . , xd2−k} via the Gram-Schmidt pro-cess. Let Vk+1 := span {v1, . . . , vk+1 } be the (k +1) -dimensional subspace spanned by the top right singular vectors of CA . A dimension argument shows that: 
+
+(d2 − k) + ( k + 1) = d2 + 1 > d 2,
+
+meaning the sum of their dimensions exceeds the ambient space Rd2 . Therefore, their intersection must be non-trivial: 
+
+span {x1, . . . , xd2−k} ∩ span {v1, . . . , vk+1 }̸ = {0}.
+
+Let z be a unit 2-norm vector (i.e., ∥z∥2 = 1 )in this intersection. Since z ∈ null( Y), we have 
+
+Yz = CBz = 0. Furthermore, since z ∈ V k+1 ,applying CA to z yields: 
+
+(CA )z =
+
+> k+1
+
+X
+
+> i=1
+
+σi(v⊤ 
+
+> i
+
+z)ui. (6) We can now lower-bound the spectral norm for any choice of B:
+
+∥CA − CB ∥22 ≥ ∥ (CA − CB )z∥22
+
+= ∥(CA )z − 0∥22
+
+=
+
+> k+1
+
+X
+
+> i=1
+
+σi(v⊤ 
+
+> i
+
+z)ui
+
+> 22
+
+=
+
+> k+1
+
+X
+
+> i=1
+
+σ2 
+
+> i
+
+(v⊤ 
+
+> i
+
+z)2
+
+20 ≥ σ2
+
+> k+1
+> k+1
+
+X
+
+> i=1
+
+(v⊤ 
+
+> i
+
+z)2
+
+= σ2
+
+> k+1
+
+∥z∥22
+
+= σ2
+
+> k+1
+
+,
+
+where the sixth step follows from the fact that z ∈
+
+span {v1, . . . , vk+1 }, and other steps follows from definitions and basic algebra. Taking the square root of both sides yields 
+
+∥CA − CB ∥2 ≥ σk+1 (CA ), completing the proof. Based on the lemma above, we show the tight bound as follows. 
+
+Theorem D.7 (Tight Bound under Weak Clas-sifiers, Restatement of Theorem 5.3) . Let C ∈
+
+Rd1×d1 be a weight matrix from the auditor’s ver-ification model, and let W, W′ ∈ Rd1×d2 be the weight matrices of the strong target model and the weak surrogate model, respectively. Let the LoRA matrices be A ∈ Rd1×r and 
+
+B ∈ Rr×d2 , and the adapted weight matrix be 
+
+cW := W′ + AB . Under the audit, the worst-case spoofing error is exactly: 
+
+inf  
+
+> A,B
+
+sup 
+
+> ∥x∥2=1
+
+∥C⊤(Wx − cWx )∥2 = σr+1 (C⊤R),
+
+where R = W − W′ is the residual matrix, and 
+
+σr+1 (·) is the (r + 1) -th largest singular value. 
+
+Proof. By the definition of cW and R, and the defi-nition of the matrix spectral norm, we first rewrite the worst-case spoofing error: 
+
+inf  
+
+> A,B
+
+sup 
+
+> ∥x∥2=1
+
+∥C⊤(Wx − cWx )∥2
+
+= inf  
+
+> A,B
+
+∥C⊤R − C⊤AB ∥2. (7) Because the LoRA matrices A ∈ Rd1×r and 
+
+B ∈ Rr×d2 are bottlenecked by their inner dimen-sion r, their product AB forms a matrix of rank at most r. Conversely, any d1 × d2 matrix with a rank of at most r can be exactly factored into the product of two such matrices A and B. Therefore, taking the infimum over the parameter space of A
+
+and B is mathematically equivalent to minimizing over all possible matrices X of rank at most r:
+
+inf  
+
+> A,B
+
+∥C⊤R − C⊤AB ∥2
+
+= min  
+
+> rank( X)≤r
+
+∥C⊤R − C⊤X∥2. (8) We now apply Lemma D.6, substituting C with 
+
+C⊤, A with R, and the rank constraint k with r.This yields exactly: 
+
+min  
+
+> rank( X)≤r
+
+∥C⊤R − C⊤X∥2 = σr+1 (C⊤R).
+
+(9) Combining Eq. (7) , Eq. (8) , and Eq. (9) com-pletes the proof. 21
