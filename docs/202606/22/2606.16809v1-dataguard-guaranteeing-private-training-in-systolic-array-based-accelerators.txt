@@ -1,0 +1,669 @@
+Title: DataGuard: Guaranteeing Private Training in Systolic-array Based Accelerators
+
+URL Source: https://arxiv.org/pdf/2606.16809v1
+
+Published Time: Tue, 16 Jun 2026 02:22:04 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# DataGuard: Guaranteeing Private Training in Systolic-array Based Accelerators 
+
+Pawan Kumar Sanjaya ∗, Christina Giannoula †, Nikhil Shreekumar, Ian Colbert ‡, Alec Dewulf ∗, Mehdi Saeedi ‡,Ihab Amer, Gabor Sines ‡, Nandita Vijaykumar ∗∗University of Toronto 
+
+†Max Planck Institute for Software Systems 
+
+‡Advanced Micro Devices (AMD) 
+
+Abstract —Differential privacy (DP) and federated learning (FL) have emerged as important privacy-preserving approaches when using sensitive data to train machine learning (ML) models. FL ensures that raw sensitive data does not leave the users’ devices by training the model locally on the device. DP ensures that the model does not leak any information about an individual by clipping and adding noise to the gradients before updating the model. It provides formalism to constrain privacy loss during training to a privacy budget determined a priori by the owner of sensitive data. However, real-life deployments of FL algorithms typically assume that a third-party FL application can be trusted to correctly implement DP algorithms. Thus, the third-party application is given full access to sensitive data. In this work, we propose DataGuard, a hardware-based mechanism that guarantees that the only data that can leave the device is the result of computation that meets DP requirements. DataGuard can thus be used to ensure that the privacy budget defined by the data owner is not exceeded during FL training without the need to trust a third-party application. We evaluate DataGuard in simulations of four accelerators for various ML models and demonstrate only small area overheads of less than 0.01% and performance slowdowns of less than 0.3%. 
+
+I. I NTRODUCTION 
+
+Protecting the privacy of sensitive user data in machine learning (ML) training is of critical importance in many domains such as healthcare and finance. For example, training medical diagnosis models requires sensitive patient records from multiple hospitals [50], [57], [80], [92]. In the financial sector, sensitive user data from multiple institutions is used to train models for fraud detection [4] and credit scoring [56]. Models for text prediction [36], facial recognition [12], and others [9], [15], [73], [75], [95] use sensitive user data col-lected on mobile phones. Federated learning (FL) [62] and differential privacy (DP) [27] protect user privacy when training ML models on sensitive data. In a typical FL system (Fig. 1), a shared model is trained without the sensitive training data ( a ) ever leaving the data owners’ ( i.e., clients’) devices ( b ), e.g., 
+
+This work was partially conducted while Christina Giannoula and Nikhil Shreekumar were with the University of Toronto, and while Ihab Amer was with AMD. © 2026 Advanced Micro Devices, Inc. All rights reserved. AMD, the AMD Arrow logo, Radeon, and combinations thereof are trademarks of Advanced Micro Devices, Inc. Other product names used in this publication are for identification purposes only and may be trademarks of their respective companies. Local Server/Device   
+
+> Training Application
+> Sensitive Training Data
+> DP Mechanism
+> Central Server
+> Global Model
+> Client 1 Client 2 Client N ...
+
+b
+
+a
+
+d
+
+c
+
+> Noised Gradients Local Gradients Global Model
+
+e
+
+Fig. 1: Overview of DP-enabled Federated Learning. local servers or mobile devices. Instead, in each round, the training application ( c ) trains a copy of the shared model on the client device and shares only the weight gradients with a central server ( d ) for aggregation. By keeping data where it is owned, FL not only protects data privacy but also facilitates compliance with regulations such as GDPR [2] that strictly restrict data transfers and storage locations. FL alone does not guarantee privacy as information about sensitive training data can be extracted from trained mod-els [65], [82]. DP [27] can be used with FL to provide formal guarantees [5], [25], [63]. DP is a mathematical framework to protect the privacy of an individual when their data is used in an analysis of a larger dataset. It has proven effective for statistical analyses [3], [6], [11], [29] and more recently, for privacy-preserving ML on sensitive data [4], [5], [10], [23], [25], [35], [50], [58], [63], [74], [80], [90], [91]. The common approach integrates DP into SGD [5] by clipping gradients to a threshold and adding Gaussian noise before updating model weights. In DP-enabled FL, only noised gradients ( e ) are sent to the central server ( d ) for aggregation. Every time a user’s data is used in a training iteration, the model learns some information about that individual, quantified as the privacy cost . Data owners set a privacy budget , and each iteration consumes some of it. Ensuring that the budget is not exceeded provides formal privacy guarantees. 
+
+Untrusted third-party training applications. In real-world deployments, the FL training application is typically owned by a third-party entity distinct from the clients who own sensitive data, as it requires aggregating gradients across independent clients (data owners). For example, in medical ML training, 1
+
+> arXiv:2606.16809v1 [cs.AR] 15 Jun 2026
+
+hospitals own local servers containing patient records; in facial recognition, users control mobile devices holding personal images. In both cases, the aggregator may be an ML or mobile application service provider. Consequently, this third-party application must be granted access to sensitive data on client devices, yet clients cannot easily verify that only correctly noised gradients leave the device rather than raw user data or a non-DP transformation of it. Therein lies the challenge: existing ML frameworks that incorporate FL and DP require trusting third-party applica-tions with access to sensitive data. Verifying that a training application correctly implements the DP algorithm is non-trivial, as the application operates directly on raw sensitive data and may violate DP through subtle deviations from the algorithm. Such deviations can stem from malicious design or programmer error and are difficult to detect. Software-based approaches have significant disadvantages and shortcomings as we discuss in §IV. Program analysis [7], [13], [69], [77], [99], [100] can verify that an application satisfies DP, but requires assuming an honest programmer (i.e., trusting the third party) and is thus unsuitable in our setting. Dynamic taint tracking [28], [85] and software DP frameworks [64], [67] can enforce privacy at runtime without trusting the programmer, but incur prohibitive performance overheads on ML accelerators due to tracking data in memory or enforcing isolation. Code attestation [87] avoids runtime overheads by having a trusted authority verify and sign the application before deployment; however, such an approach incurs several practical challenges in FL, such as requiring verification and signing for every code modification (see §IV). To obviate the need to trust a third-party application, prior works [17], [26], [49], [51], [61], [74], [93] propose noising sensor data before granting the training application access to it. Since DP is robust to post-processing, any subsequent compu-tation on the noised data does not affect privacy. However, this significantly degrades model accuracy compared to noising gradients during training [74], and has not been applied to text, images, or videos. Thus, providing DP guarantees against an untrusted third-party training application remains an open problem. 
+
+Goal. In this work, we explore the feasibility of leveraging lightweight hardware to provide DP guarantees and serve as a substrate within the accelerator for privacy-preserving ML training. To this end, we propose DataGuard, the first frame-work for ML accelerators, to our knowledge, that enforces DP guarantees using hardware mechanisms. This obviates the need to trust third-party software in DP-based ML training. To enable this, the framework must provide the following guarantees: 1) there is no leakage of sensitive training data, 
+
+i.e., only noised gradients can be shared out of the device; 2) gradients that are shared out of the device are noised according to the DP algorithm; and 3) privacy cost of training should not exceed the defined budget. 
+
+Challenges in designing a hardware-based DP framework: 
+
+Challenge 1: Preserving the programmability of the ML accelerator. A na¨ ıve design would hard-code the full DP-SGD algorithm directly into accelerator hardware. However, this would require specialized datapaths and on-chip memories for all computation in order to track and isolate the computation of gradients and their noising. This would require extensive redesign of modern accelerators, which rely on shared compute and memory structures. Such specialization would severely restrict programmability, complicate support for different DP mechanisms (e.g., layer-wise vs. global clipping [39]), and make enforcing privacy budgets challenging. 
+
+Challenge 2: Efficiently tracking gradients in memory. Given that the DP mechanisms cannot be baked into the datapath, the system must dynamically and automatically identify the locations of calculated raw and noised gradients in memory to ensure that only correctly noised gradients are shared out of the device. It is challenging to track the gradients in memory during program execution without compromising performance or incurring substantial area overheads. 
+
+DataGuard . Our proposed framework consists of two hard-ware components. First, a lightweight tagging mechanism identifies and tracks correctly noised and clipped gradients in hardware. Only data tagged as such by DataGuard is allowed to leave the device by a privileged software manager. Second, a noising module ensures that gradients are correctly noised and clipped to satisfy DP guarantees. An untrusted application is forced to use this module, because only gradients noised by the module are tagged as “safe” by DataGuard. The module is accessed using new instructions that mirror existing accelerator instructions, thereby preserving programmability. With DataGuard, the application can flexibly perform any computation on the ML accelerator using any data; however, only data that meets the required (and specified) differential privacy guarantees and budget will be marked “safe”. We also propose an extension, DataGuard ex , that supports additional guarantees with slightly higher area and perfor-mance overheads: the training samples are randomly sampled every iteration, and intermediate data cannot be accessed between iterations. DataGuard ex enables using DP accounting methods with tighter bounds, where more training iterations can be performed for the same privacy budget. DataGuard and DataGuard ex together support all modern DP-based FL algorithms that clip and add Gaussian noise [10], [16], [54], [58], [63], [70], [94], [96] directly on the user device. We model DataGuard in SCALE-sim [78] simulator for TPU [47], DIVA [72], and an accelerator based on Shidian-nao [22]. Our evaluations on popular ML models demonstrate only small slowdowns ( <0.3%). We also implement Data-Guard in RTL and demonstrate negligible area (0.01%) and power overheads (0.07%). We make the following contribu-tions:  
+
+> •
+
+We motivate the need for additional privacy protection mechanisms in real-life deployments of DP-enabled FL. We explore the potential of leveraging hardware mechanisms to provide stronger DP guarantees.  
+
+> •
+
+We identify key guarantees that must be met in hardware to ensure that user-defined privacy budgets cannot be violated by any application. We propose the first framework that 2provides DP guarantees in hardware for ML accelerators and obviates the need to verify third-party applications for ML training (formal proof in §VIII).  
+
+> •
+
+We propose two variants of DataGuard to support all DP-based FL algorithms for local DP settings i.e., the most secure setting where only data that satisfies DP guarantees can be shared out of the device.  
+
+> •
+
+We evaluate DataGuard in simulation for various ML train-ing workloads on four ML accelerators and show only small performance overheads. We implement DataGuard in RTL and show negligible area and power overheads. II. B ACKGROUND 
+
+A. Differential Privacy (DP) 
+
+Differential privacy (DP) [27] is a theoretical framework that bounds the influence any one individual data point can have on the outputs of a statistical function. A function over a dataset with user information satisfies DP if and only if the output of the function does not change significantly when a single data point (user or record) is added or removed from the input dataset. Here, DP assumes that the attacker can only observe the outputs of the statistical function. Therefore, if the function’s output does not change meaningfully depending on whether a particular data point is included in the dataset, the attacker cannot reliably determine whether that record was part of the input dataset. This is enough to ensure meaningful protection against adversaries, even if they may have arbitrary auxiliary information about the user [27]. Formally, for any two adjacent datasets, DP restricts the difference in proba-bility distributions of the function’s outputs, as stated in the following definition. 
+
+Definition II.1. Differential Privacy: Any function M : X −→
+
+Y , is (ϵ, δ ) differentially private if for two adjacent datasets 
+
+D and D′ i.e., |D| − | D′| = 1 and ∀K ∈ Y , satisfies 
+
+P (M(D) = K) ≤ eϵP (M(D′) = K) + δ (1) Here, ( ϵ, δ ) denotes the privacy cost . When ϵ is sufficiently small, an adversary is unable to distinguish between adjacent datasets based on M’s output. δ can be interpreted as the probability that the entire dataset is leaked . Typically for a dataset with n records, δ ≪ 1 
+
+> n
+
+is recommended [68]. To ensure that the final output of any function ( F ) satisfies 
+
+(ϵ, δ )-DP, it can be post-processed by adding noise sampled from a Gaussian distribution ( N ) (2) [24]. 
+
+M (x) = F (x) + N  0, σ 2 , σ =
+
+r
+
+2S2 log 1.25 
+
+δ /ϵ (2) Here, S is the ℓ2-sensitivity of the function. The ℓ2-sensitivity is the maximum value by which the output of the function changes when a single entry in the dataset is removed. DP is robust to post-processing, i.e., any subsequent analysis on the output of a DP function also satisfies (ϵ, δ )-DP. DP also supports composition: if two functions that satisfy (ϵ1, δ 1)-DP and (ϵ2, δ 2)-DP are chained together to construct a third function, i.e., f3(x) = f2(f1(x)) , the resulting function ( f3)satisfies (ϵ1 + ϵ2, δ 1 + δ2)-DP. Thus, using composition, the privacy cost of an iterative algorithm such as ML training can be calculated using the privacy cost of a single iteration [27]. In FL-training, a single training round can consist of multiple training iterations where the clients update the local model weights. If each iteration satisfies (ϵ, δ )-DP, the privacy cost of a round can be calculated using composition. 
+
+B. Differential Privacy in Federated Learning 
+
+The DP formalism can be applied to stochastic gradient descent (SGD)-based training to provide DP guarantees when using FL to train models on sensitive data. It can be modified in two ways: per-batch and per-example clipping [54]. In both, noise is sampled from a Gaussian distribution with standard deviation σ = C2
+
+> th
+
+z2, where z is a user-defined scaling factor derived using (ϵ, δ ) and Cth is a user-defined threshold for the ℓ2-norm of all the gradients ( ∥g∥2). The ℓ2-norm of the gradients ( ∥g∥2) is the square root of sum of squares of all the gradients calculated per iteration. Before noising, it is ensured that the ℓ2-norm of the gradients is less than Cth by clipping 
+
+which involves scaling each gradient by min 
+
+
+
+1, Cth 
+
+> ∥g∥2
+
+
+
+.
+
+Per-batch clipping: For every training iteration, the gradients for the batch ( g) are calculated (where gradients across ex-amples in a batch are first added) and clipped such that the 
+
+ℓ2-norm is less than Cth (i.e., ∥g∥2 ≤ Cth ). Noise is added to these clipped gradients to obtain the gradients for the batch (ˆgn) which are then used to update the model weights. 
+
+ˆgn = gc + N  0, 4C2
+
+> th
+
+z2I ,
+
+where gc = min 
+
+
+
+1, Cth 
+
+∥g∥2
+
+
+
+· g (3) 
+
+Per-example clipping: In every training iteration, instead of calculating the gradients for the entire batch (of batch size 
+
+b), per-example gradients ( gi) are calculated and the gradients are clipped such that the ℓ2-norm of the gradients for each example is less than Cth . Noise is then added to the summed gradients for the batch ( gc) and model weights are updated using the noised gradients ( ˆgn), as follows: 
+
+ˆgn = gc + N  0, C 2
+
+> th
+
+z2I ,
+
+where gc =
+
+> b
+
+X
+
+> i=1
+
+min 
+
+
+
+1, Cth 
+
+∥gi∥2
+
+
+
+· gi
+
+(4) To enable DP-based ML training, the gradient computation for the entire batch ( gc) in every iteration should satisfy DP. In the per-example clipping , the per-example gradients ( gi)are clipped such that ∥gi∥2 ≤ Cth . In doing so, ℓ2-sensitivity of the computation is fixed to Cth . With per-batch clipping ,the batch gradient is clipped to ∥g∥2 ≤ Cth , and thus the sensitivity of the computation is 2Cth . Based on (2), the gradient computation during training satisfies (ϵ, δ )-DP, if (5) is true and by post-processing property the model also satisfies 
+
+(ϵ, δ )-DP [27]. 
+
+z =
+
+s
+
+2 log 1.25 
+
+δ
+
+
+
+/ϵ , (5) Per-batch clipping ensures that an attacker cannot infer if a particular client contributed to the training dataset, e.g., used in LDP-FED [91] and NbAFL [94]. Per-example clipping ensures that an attacker cannot infer if a particular record was present in the training dataset, e.g., used in federated variants of the 3DP-based SGD algorithm [5], [62]. A model can be trained to a similar accuracy using both clipping mechanisms. However, per-batch clipping requires more communication rounds, while per-example clipping requires larger clipping thresholds [54]. 
+
+Privacy Budget: Information leaked during gradient com-putation is bounded by (ϵ, δ ), i.e., the privacy cost. Each computation on the dataset increases this cost [25]. For ex-ample, consider one training round has a cost of (ϵ1, δ 1).Since training is iterative i.e., multiple training rounds are performed over the same dataset; T rounds cost (T ϵ 1, T δ 1)
+
+by DP composition [27]. Real-world deployments of such applications, an upper limit ( ϵmax , δ max ) called privacy budget 
+
+is defined to ensure that the privacy cost does not exceed a threshold, i.e., T ϵ 1 ≤ ϵmax and T δ 1 ≤ δmax . Thus, each (ϵ, δ )-DP training round can be seen as consuming a part of this 
+
+budget , and training is stopped once the budget is exhausted. To reduce the cost of multiple rounds of training, modern DP-ML algorithms which perform per-example clipping use 
+
+privacy amplification by subsampling [5]: records used for each training iteration are randomly sampled with replacement from the dataset. Using a randomly sampled batch reveals less information about each record, and reduces the cost of T
+
+rounds to (q√T ϵ, δ ), where q < 1 is the sampling probability. III. T HREAT MODEL AND ASSUMPTIONS 
+
+This work targets the common FL scenario in which a third-party entity trains a model on data from independent clients, such as a medical diagnosis model trained across multiple hospitals [80] or a fraud detection model built on transaction data from financial institutions [4]. We model the FL system with two types of entities: 1) Data owners are the independent entities that own the sensitive data and the devices or servers used for local model training; each data owner also controls its own privacy budget allocation during training. 2) Aggregator 
+
+is the entity that trains a global model using sensitive data from multiple independent clients, using its own server for aggregating noised gradients. Our threat model assumes the aggregator is an untrusted and potentially malicious entity from the data owners’ perspective. The aggregator controls both the training application executed on client devices and the central server where gradients are aggregated. While conventional OS-based privacy mechanisms protect sensitive data through access control, they offer no protection once an application is granted data access. The training application owned by the aggregator can therefore share sensitive data, non-DP gradients, or any other non-DP transformations of sensitive data outside the client device. The aggregator can thus perform a range of privacy-violating adversarial attacks on the aggregated model, including infer-ence attacks to learn private information about the clients’ datasets [65], [82]. Since the data owners control the client devices, we assume the local training infrastructure (including hardware and system software) is trusted, with security vulner-abilities falling outside the scope. We reasonably assume the aggregator has no physical access to these systems, i.e., phys-ical side-channel attacks cannot be used to extract sensitive information. DP-based FL mechanisms fall into two categories depending on where the DP algorithm is implemented: Centralized DP (CDP) and Local DP (LDP). In CDP, the DP mechanism is implemented at the central server owned by the aggregator; in LDP, it runs on the client devices owned by the data owners. CDP requires transmitting raw, unnoised gradients outside the local trust boundary and, therefore, inherently requires trusting the aggregator. Thus, CDP cannot be used under our threat model, where the third-party aggregator is untrusted, and we focus exclusively on LDP. IV. A C ASE FOR HARDWARE -BASED GUARANTEES 
+
+To motivate the benefits of providing primitives in hardware for DP guarantees, we first discuss a purely software-based solution that could potentially address the challenge of trusting third-party applications. We note that many approaches below are hypothetical as they have not been proposed or constructed to our knowledge to address the above challenge. 
+
+(i) Static or dynamic program analysis [7], [8], [13], [30], [45], [69], [77], [98]–[100]. These works require program-mers to annotate variables that store sensitive data and specify privacy rules governing data usage, effectively assuming an “honest but fallible” programmer. They cannot be used in settings where the programmer, i.e., the third party owning the training application, is untrusted. 
+
+(ii) Dynamic taint tracking-based approaches [28], [85] in software can enforce privacy properties at runtime. However, they rely on a trusted privileged software layer to instrument and propagate taint. Thus, they are not directly applicable to ML accelerators such as TPUs [48], which lack support for privilege-based isolation mechanisms. They also incur substantial performance overheads (upto 15% [85]). 
+
+(iii) Code attestation-based approaches [87] , where atrusted authority verifies that the FL training code meets DP requirements, compiles it, and generates a cryptographic signature. Clients validate this signature during training to confirm that the application was compiled by the trusted party. This approach has several limitations: (a) it requires a separate trusted party distinct from the clients and aggregator; (b) verifying that code satisfies DP requirements is non-trivial, as it requires manual analysis by experts when the programmer is untrusted; (c) the application must be compiled and signed per platform, which is challenging as clients commonly use heterogeneous devices and operating systems in FL; and (d) any update to the application code requires re-verification, recompilation, and re-signing. 
+
+(iv) Software frameworks [31], [64], [67] that restrict access to sensitive data. These frameworks expose a controlled API through which the application executes custom functions on sensitive data. The outputs are automatically transformed to satisfy DP guarantees before being returned to the applica-tion. These approaches suffer from two significant limitations. First, they impose substantial performance overhead on ML accelerators. To enforce DP guarantees, such frameworks must isolate each execution of the third-party training function to 4prevent reuse of intermediate results across training examples and iterations. OS-level memory isolation can enforce this on the host CPU, but ML accelerators lack hardware support for such mechanisms. Device memory is managed entirely by the application in software. To prevent unintentional or malicious data reuse, the framework must zero out accelerator memory between invocations, an operation that takes 0.3 s on a TPUv3 [47] (32 GB memory, 900 GB/s bandwidth) per training iteration at batch size 8. Our evaluations show that the same iteration for VGG16 completes in ∼0.03 s, a 10 ×
+
+slowdown. Second, several DP-based FL applications use local personalization [55], [97] to improve training accuracy. They store a local non-DP state that is used to modify the gradi-ents before any DP transformation. Such frameworks do not support local personalization algorithms, as they prohibit the application from retaining any non-DP state between training rounds. 
+
+(v) Software ML frameworks with restricted APIs. In this approach, the client device installs a validated (trusted) ML framework that implements all training code. The third-party training application uses an API or messaging interface to provide the model description, weights, and training param-eters ( e.g., learning rate, batch size). The framework trains the model and returns noised gradients to the application, which are shared with the server. This approach has two major limitations. First, ML frameworks are large codebases with complex interactions among components such as layer definitions, gradient computations, and noising. Validating that such a codebase correctly enforces DP requires manual expert analysis across all possible code paths and/or reliance on programmer annotations. Even validated codebases can subtly violate DP [14], [89], because DP violations need not manifest as correctness bugs. A bug in compilation tools or imported libraries that alters, for instance, the rounding mode used during clipping does not significantly affect training accuracy but can break the DP guarantee [14]. Validating such aframework, therefore, requires ensuring that the high-level al-gorithm, each operator’s implementation, and their interactions during training all preserve DP, a task whose difficulty scales with framework complexity. Second, any modification to the training algorithm, such as adopting adaptive clipping [10] or a new personalisation strategy [97], requires: (a) updating the independent training framework; (b) revalidating the updated codebase; and (c) redeploying across all participating clients. In a cross-device FL setting with heterogeneous clients, this requires coordination among multiple independent parties be-fore the training application can adopt the training algorithm during deployment. Thus, providing DP guarantees for FL in software requires combining several techniques: program analysis/verification and code attestation across the software stack, including var-ious libraries and drivers. This approach is potentially error-prone [14], [89], requires coordinating across multiple parties, and limits programmability and ease of updates. In this work, we aim to investigate the design of hardware-based checks for core DP invariants ( e.g., clipping and noising) Application Data Systolic Array   
+
+> Memory Interface
+> Tag Buffers
+> NPU with DataGuard
+> Tags
+> PCIE Interface
+> On-Chip Buffers
+> 4
+> 7
+> MTU
+> 5
+> 6
+> Device Memory
+> Noise
+> DRAM
+> PMA Software
+> Training App Host CPU
+> (𝜖 𝑚𝑎𝑥 ,
+> 𝛿 𝑚𝑎𝑥 )
+> (𝜖 i,𝛿 i, C th )
+> 8
+> Tagging Module Noising Module
+> 23
+> Vector processor 1
+> (𝜎 , C th )
+
+Fig. 2: Overview of a system with DataGuard. that can serve as a substrate for building privacy-preserving ML systems. These checks are exposed as concise interfaces for DP operations that the training application uses to compute gradients. This design supports modifications to the training algorithm without requiring re-verification of the application, effectively decoupling programmability from privacy enforce-ment. Once verified, these hardware checks ensure that any software stack running on the accelerator meets privacy guar-antees. V. D ATA GUARD : D ESIGN OVERVIEW 
+
+We introduce DataGuard, a framework that provides DP guarantees in hardware for ML accelerators such as TPUs [46]–[48], DIVA [72] and Genesys [34]. We assume the ML accelerator is a separate device with dedicated device memory and all operations can be performed on the accelera-tor. The host CPU schedules the necessary computations on the accelerator and coordinates data movement. Fig. 2 presents an overview of a system with DataGuard, having an example ac-celerator with a systolic array ( 4 ), a dedicated memory ( 7 ), and a vector processor ( 1 ). Modules shaded in green indicate the trusted modules; we trust the host CPU and the privileged software running on the host. We also trust the accelerator and hardware modules of DataGuard. DataGuard interfaces with any third-party training application via a privileged software layer: the privacy management application (PMA) ( 8 ). The data owner sets the privacy budget (ϵmax , δ max ). Using Eq. 3, the PMA computes the standard deviation for noising ( σ)and the maximum training rounds ( N ) allowed within this budget. The PMA cannot itself guarantee that a third-party application adheres to (Cth , ϵ i, δ i, ϵ max , δ max ); it configures the hardware with these parameters, and DataGuard enforces them in hardware. To provide guarantees that each training round is ( ϵi,δi)-DP and the ( ϵmax ,δmax ) budget specified by the user is never exceeded, DataGuard guarantees that the following conditions are satisfied: 1) Noising condition: Ensuring that the data is noised by sampling from the correct distribution, i.e., with the σ, decided by the PMA. 2) Clipping condition: Ensuring that the ℓ2-norm of the noised data is less than or equal to Cth , as configured by the PMA. The application can perform the gradient clipping using either per-example or per-batch clipping. 3) Budget condition: The training algorithm does not exceed the ( ϵmax , δ max ) as provided by the user. The clipping and noising conditions together ensure that the (ϵi, δ i)-DP guarantees are satisfied for each round. However, the application may perform multiple training rounds and the total privacy cost is calculated using composition theorems (§II). Thus, to ensure that the total budget is not exceeded (ϵmax , δ max ), the number of training rounds must not exceed 5N , as calculated by the PMA. 4) Privacy condition: Only the noised gradients are allowed to leave the device. 
+
+A. DataGuard: Key Ideas 
+
+Fig. 3 shows the two operations implemented by DataGuard to provide the necessary guarantees: 1) noise l 2 ( a ) and 2) privacy budgeting ( b ). Regardless of the computation performed by the application ( c ), any data that leaves the device must first be transformed using the noising operation. The noise l 2 operation ensures that the data is noised with Gaussian noise with a specified σ. The ℓ2-norm of all the data that is noised is also computed during the noise l 2 operation. The privacy budgeting operation then performs the necessary checks to ensure that the overall privacy budget ( ϵmax , δ max )is not exceeded. We now explain how these operations are used to satisfy the necessary conditions enumerated previously. We explain how these are implemented in §VI and perform a security analysis in §VIII. Data w/ Bounded Guarantees Results Raw Data Verified Noised & Clipped Results   
+
+> User Data App Noising & ℓ2-norm
+> Privacy Budgeting
+
+c
+
+a
+
+b
+
+> Device
+
+Fig. 3: Key operations of DataGuard. 
+
+1) Verifying the privacy condition: All the data in device memory ( 7 ) is associated with tags. These tags are used to identify data that is “safe”, i.e., data that has been transformed using the operations a and b in Fig. 3. To do so, we implement a lightweight information flow tracking (IFT) and tagging mechanism in the tagging module ( 2 ). 
+
+2) Verifying the noising condition: We implement a con-figurable noising module ( 3 ) in hardware that implements the noise l 2 operation ( a ). This module is configured by the PMA to sample noise from a Gaussian distribution with a standard deviation of σ. The training application uses a custom instruction ( add-noise ) to perform noising using this module. Only the results generated by this module are tagged as “noised” by DataGuard. Thus, for any data to be shared out of the device it must be noised using the 
+
+add-noise instruction. If the “noised” data satisfies all the necessary conditions (outlined in §V-A3, §V-A4), it is “safe” and is allowed to be shared out of the device. This ensures that, for the noised gradients to be tagged correctly and communicated out of the device, it should be processed by the noising module of DataGuard. However, an application can use the add-noise instruction arbitrarily in the code and thus put any initial, intermediate, or computed data through the noising module. This data would still be marked as “noised” and may be shared out of the device. DataGuard is designed such that the DP guarantees are met regardless of this (explained in §V-A3, §V-A4). 
+
+3) Verifying the clipping condition: The noising module, in addition to adding noise, calculates and stores in hardware a cumulative sum of squares ( S) for all data being noised. When a training round is completed and the application calls the audit instruction, DataGuard checks that the clipping condition is satisfied using the cumulative sum i.e., √S ≤ Cth 
+
+and resets it to 0. Note that the audit instruction can be called arbitrarily by the application. This does not violate ( ϵi,
+
+δi)-DP. However, the application must call both add-noise 
+
+and audit instructions at the end of every training round to implement DP-enabled ML training correctly (to ensure accuracy of the trained model). These two instructions together implement the noise l 2 operation ( a ). 
+
+4) Verifying the budget condition: DataGuard tracks the number of invocations of the audit instruction with ahardware counter. This counter stores the current epoch , i.e., 
+
+audit calls made till the current execution point. Thus, when the audit instruction is called at the end of each training round, this counter is incremented. The epoch count is used by the PMA to calculate the total privacy cost of training (as explained in §II-B) and verify that it does not exceed the privacy budget. For example, when the audit instruction is called n times, the cost is calculated as ( nϵ, nδ ). The application is allowed to share data out of the device only if the calculated privacy cost is less than the budget i.e., 
+
+nϵ < ϵ max and nδ < δ max . The application can use the 
+
+add-noise and audit instructions for any data such as raw training samples, gradients, or any intermediate results. The privacy cost calculation in DataGuard ensures that the budget is never exceeded, thereby protecting privacy. When used as intended for DP-enabled ML training, we assume that the application shares the noised gradients every time the 
+
+audit instruction is called. If the application does not share data every time, DataGuard overestimates the privacy cost. However, user privacy is preserved because the budget cannot be exceeded. Together, add-noise and audit , provide the necessary guarantees: add-noise ensures that only properly noised values can ever be marked “noised” and computes the sum of squares ( S) of the data required to verify clipping, while 
+
+audit verifies clipping (by using S to compute ℓ2-norm) and budget conditions before the data is marked ”safe” to leave the device. The application is thus forced to use these instructions to transmit noised gradients to the server. Any data marked ”safe” satisfy DP guarantees (§VIII). VI. D ETAILED DESIGN 
+
+As shown in Fig. 2 the ML accelerator consists of a systolic array ( 4 ) with 64k processing elements for multiply-and-accumulate operations and a 128-lane wide vector proces-sor (VPU) ( 1 ) for other operations. Fig. 4 illustrates the modifications in the VPU. The accelerator performs training using single-precision floating-point numbers [43] i.e., each element is 4 bytes. The noising ( 2 ) and the tagging ( 2 ) mod-ules are implemented in the VPU. The on-chip buffers ( 5 ) are modified to store the tags and a memory tagging unit (MTU) ( 6 ) is implemented to perform the memory operations for the tags. The device memory ( 7 ) is partitioned to store the application data, tags, and sampled noise values. 6Noising Module ALU          
+
+> Scratchpad Buffers Tag Buffer
+> Decoder Tagging Module OpCode
+> p1
+> CStatus
+> p2p3p128 ...
+> ++++...
+> fma fma fma fma ... Noise Addition Unit
+> epoch
+> c
+> d
+> abℓ2-norm computation unit
+> Cth
+> e
+
+Fig. 4: Block diagram of the vector processor in the acceler-ator. Modules added by DataGuard are shaded. 
+
+A. Noising Module 
+
+Fig. 4 illustrates the components of noising module: noise addition unit ( a ), budgeting unit ( b ), and ℓ2-norm calcu-lation unit ( c ). The noising module implements two instruc-tions: add-noise and audit . The add-noise instruction adds a floating-point (FP) operand and a noise term, then updates the ℓ2 norm using the operand. It requires twice as many FMA operations as a plain FP addition. Repurposing existing FMA units would degrade performance, so we imple-ment dedicated units in the execute stage for both operations and use a pipelined implementation based on HardFloat [38] to avoid impacting the critical path. 
+
+Noise addition unit: The noise addition unit ( a ), is responsible for performing the noise addition during add-noise opera-tion. The sampled values from the noise distribution are stored in a protected memory region on the device memory and are populated by the PMA (using a software implementation [37] of noise sampling) on the host CPU. This protected region is configured by the PMA using a configuration register ( noise-br ) on the accelerator. The application is not allowed to access this memory region. The on-chip buffers are partitioned such that one-fourth of the buffers are used to store the sampled noise values during the noising operation. When the instruction is executed for the first time, a batched data transfer of 6 MB (size of on-chip buffers is 24 MB) is initiated from the device memory to on-chip buffers. These values are then added to the gradients to complete the noising operation. This is similar to how noising is implemented in other accelerators [72]. The privacy guarantees when using DP depend on the correctness and freshness of the injected noise. The trusted PMA generates the noise values and writes them directly into the protected accelerator memory. We assume that the PMA samples from the correct distribution and produces fresh randomness for each training round. Importantly, DataGuard remains completely agnostic to the concrete noise-generation method. Noise-generation mechanisms based on software sampling, hardware random number generators, or verifiable hardware-based approaches ( e.g., DINAR [32]) can be trivially integrated with DataGuard as black-box components. 
+
+Budgeting unit: Consists of an 8-bit counter ( epoch b ) which is incremented every time an audit instruction is executed. It is reset to 1 by the PMA before execution of the application. 
+
+ℓ2-norm calculation unit: The ℓ2-norm calculation unit ( c ) maintains the cumulative sum of squares of the operands to 
+
+add-noise instruction. The unit has 128 registers ( d ) ( Pi)that store partial sums of the ℓ2-norm and 128 fused multiply-add units, one for each vector lane in the VPU. The partial registers for each lane are updated with the sum of the squared operand for the corresponding lane and the initial value. The ℓ2-norm calculation unit also includes two registers: a status register ( CStatus ) and a configuration register ( Cth ). The PMA configures the Cth register with the clipping threshold before executing the application. When an audit instruction is executed, the partial sums in the registers ( d ) are added together to obtain the ℓ2-norm ( Pagg ) of all elements noised in the current iteration. The noising module then checks if the calculated ℓ2-norm is less than the threshold in Cth i.e., pPagg ≤ Cth . The CStatus register is written with the value of the epoch if the register was cleared before ( i.e., the current value is 0) and the check fails. After the check, the partial sum registers ( d ) are cleared. The CStatus register can only be cleared by the PMA and we explain how it is used in §VI-B. 
+
+B. Tagging Module 
+
+DataGuard implements tagging using a lightweight mecha-nism. The data in the device memory is divided into blocks of 512 bytes (128 elements x 4 bytes), and each block has 1 byte of metadata, called tags, associated with it (stored in the protected tag region). This metadata is maintained automatically by the tagging module as the application is executed. The ratio of tag size to data was chosen because the VPU generates 512 bytes of data for every operation, such as add-noise . Thus, updating a single tag for 512 bytes minimizes the additional memory traffic required for tags while ensuring correctness. We now describe the mechanisms that update the tags. 
+
+Tagging module components: To ensure DP guarantees for each training iteration, DataGuard only needs to ensure that the tags indicate whether the data has been properly transformed using the noising operation ( a in Fig. 3). However, both instructions ( add-noise and audit ) should be executed to correctly implement the noise l 2 operation ( a in Fig. 3) 
+
+i.e., ℓ2-norms computed in each epoch should be less than 
+
+Cth . To ensure that this check can be performed by the PMA, we tag the noised data with the value of epoch register. When the application attempts to send any noised data out of the device, the PMA ensures that the corresponding tag value is less than the CStatus register (if it is not 0). The CStatus 
+
+register indicates the first epoch in which the checks for 
+
+audit instruction failed. Thus, only noised data that satisfies the required guarantees can be shared out of the device. We add additional SRAM buffers (tag buffers) to store tags alongside data . We design the tag buffers of DataGuard such that the accesses for tags do not introduce any contention for the ports of the SRAM buffers which store application data. The on-chip SRAM buffers in ML accelerators are orga-nized as multiple independent banks, and multiple hardware modules, each equipped with dedicated ports [33], [34]. We implement the tag buffers as an additional bank with its own independent port in each module. For example, in a TPU [47] like design, we add two ports. This ensures that there is no port contention for accessing the application data and the 7corresponding tag in the same cycle. These tag buffers are only added to buffers ( 5 ) where the results of the operations are written. A tagging module ( 2 ) is implemented in the VPU, which appropriately sets the tags of results generated by the instructions. DataGuard implements a memory tagging unit (MTU) ( 6 ) that moves the tags between on-chip buffers and device memory along with data. The MTU also contains a configuration register ( tag-br ), which stores the base address of tag region and is used to calculate addresses for storage and retrieval of tags. 
+
+Tagging Operation: In ML workloads, only the noising 
+
+operation can generate data that is safe. Thus, we leverage this to enable highly efficient tagging. The results from the systolic array are always marked as sensitive. The results generated in the VPU are handled by the tagging module ( e in Fig. 4). If the op-code of the instruction corresponds to the add-noise 
+
+instruction, the results are tagged with the value of epoch ,thus being marked as “noised”. Any instruction other than the add-noise sets the tags of the corresponding results to 
+
+0. Thus, DataGuard avoids fetching the tags from the device memory for every operation i.e., any data fetched from the device memory is tagged with 0 in the on-chip buffers. When the data is written back to the device memory, the tags from on-chip buffers are used to update the corresponding tags in the device memory. The tagging module also checks the tags of the operands of control flow instructions. If the tag is 0,the CStatus register is updated to indicate a failure i.e., control flows dependent on sensitive data are not allowed. However, in a DP-based FL application, the application may execute multiple training iterations in a single round, while noising gradients in each iteration. For such applica-tions, the noised gradients from each training iteration are aggregated at the end of a training round to calculate the round update. DataGuard allows aggregating noised data using the vector addition instruction ( vadd ) while tagging the result as “noised”. To facilitate this, a custom instruction ( load-tagged ) is added, which fetches the tags along with the data from the off-chip memory into the on-chip buffers. When the application executes a vadd instruction on noised data, the tagging unit checks the tags of the source operands. If all the source operands are “noised”, i.e., have a non-zero tag value, then the result is tagged with the tag value which is the higher of the two, or zero otherwise. This satisfies the required guarantees because the result is only tagged as “noised”. The PMA performs the check to ensure that the clipping condition is satisfied for the corresponding epoch before the application is allowed to share aggregated data out of the device. 
+
+C. Integration with ML frameworks 
+
+DataGuard can be seamlessly integrated with ML frame-works via APIs implementing core operations (noising, audit). Aggregators insert these APIs into training code, which com-pilers translate to DataGuard instructions. Since DataGuard instructions mirror existing ML accelerator instructions (e.g., 
+
+add-noise parallels vector-add ), compiler extensions are straightforward. This approach reduces programming bur-Privacy Budgeting Accumulate & ℓ 2-norm compute App Subsampling    
+
+> Verified Noised & Clipped Results
+> Noising & Check ℓ 2-norm
+> Samples for batch Results Accumulated Results
+> abc
+> de
+> User Data
+> Device Raw Data
+> Data w/ Bounded Guarantees
+
+Fig. 5: Key operations of DataGuard ex .den compared to prior works requiring custom languages or frameworks [7], [30], [69], [77], [99], [100], while offering greater flexibility than libraries with fixed DP mechanisms [8], [41], [98] by enabling custom DP implementations. VII. D ATA GUARD E X : E XTENSION OF DATA GUARD 
+
+While DataGuard enables FL applications that use per-batch clipping, it does not support per-example clipping. We propose DataGuard ex , an extension for per-example clipping and subsampling (§II-B) to enable higher accuracy under the same budget. For subsampling, we must ensure records for each training batch are randomly sampled from the overall dataset (§II-B). In this discussion, we assume that one training round consists of one iteration (there is however no restriction). Per-example clipping requires a modified clipping condition described in §V: Clipping condition: The ℓ2-norm of the gradients computed for each training sample must not exceed 
+
+Cth , as configured by the PMA. 
+
+A. DataGuard ex : Key Idea 
+
+Fig. 5 shows the four operations implemented by DataGuard ex to provide the necessary guarantees: 1) sub -
+
+sampling ( a ), 2) acc l 2 ( c ), 3) noise chk ( d ), and 4) 
+
+privacy budgeting ( e ). Subsampling ( a ) ensures that each batch is randomly sampled from the training dataset. 
+
+Acc l 2 ( c ) computes the ℓ2-norm for each of the per-example gradients. This operation then accumulates the gradients to compute the gradients for the entire batch. N oise chk ( d ) noises the gradients and checks that the ℓ2-norms of the per-example gradients are less than Cth . P rivacy budgeting 
+
+( e ) is performed as in DataGuard (§V-A4). We now explain how these operations check that the necessary conditions are satisfied. We use gradients in our explanations below, but as in DataGuard, these operations can be performed on any data without violating DP guarantees. All data in the device memory is associated with tags. Fig. 6 shows the tag fields in DataGuard ex : an identifier of the training record used in the computation ( rid ), whether the data is “noised” ( s), and the round in which the data was generated ( depoch ). Only data tagged as “noised” ( s = 1 ) and also satisfies the conditions in §VII-A2-§VII-A4 can be shared out of the device. 
+
+1) Enabling subsampling: To ensure that the privacy cost of training is calculated correctly, DataGuard ex must ensure that the application can only access a batch size ( b) number of samples every iteration that are randomly sampled from the training dataset. Thus, the training data is stored in a designated region of device memory (record region) initial-ized by the PMA. DataGuard ex introduces a new instruction (load-record ) to allow the application to fetch data from the record region. If the application uses any other instruction 8to load data from the record region, it is disallowed from sending data out of the device. The load-record instruc-tion takes as input a record index (which is between 1 to 
+
+b). This index maps to a randomly selected training record as determined by the PMA at the beginning of each training iteration. DataGuard ex tracks the index of the record used to calculate any gradient using IFT. Any record and the results of computation using the record are tagged with its index in the rid field. The rid field is set to 0 if multiple records are used to compute the gradients. depoch rid  
+
+> 14 07
+> s
+> 15
+
+Fig. 6: Tag fields for DataGuard ex .
+
+2) Verifying the clipping condition: We introduce a custom instruction ( acc-grad ) to perform the acc l 2 operation. This instruction is used by the application to accumulate per-example gradients and obtain the gradients for the batch. The results of this instruction are tagged with the value −1 in the 
+
+rid field. When the instruction is executed, gradient ℓ2-norms are calculated for each record (based on the tagged rid ). The application must call the audit instruction at the end of every training iteration. When the audit instruction is called, each calculated ℓ2-norm is checked to be less than Cth .
+
+3) Verifying the noising condition: The application must use the add-noise instruction to noise the accumulated gradients calculated using acc-grad . DataGuard ex uses the 
+
+rid field in the tags to ensure that the application is performing the noising operation on the accumulated gradients. Only the results of the add-noise instruction are tagged as “noised”. 
+
+4) Verifying the budget condition: DataGuard ex tracks the number of iterations executed by the application using a hard-ware counter ( epoch ) which is incremented when the audit 
+
+instruction is executed. When the application tries to share data out of the device after n iterations, the PMA computes the privacy cost as (q√nϵ, δ ), where q is the sampling probability. The application is allowed to share data out of the device only if the computed privacy cost is less than the budget. To ensure that the calculated privacy cost is accurate, DataGuard ex must ensure that the application does not use any data that was computed using records accessed in a previous iteration. To this end, DataGuard ex tags the results of all computations on the accelerator with the value of the epoch 
+
+register in the depoch field. When an application fetches any gradients from memory, the depoch field is checked to ensure that the gradients were generated in the current epoch (and thus only using training data from the current iteration). 
+
+B. DataGuard ex : Detailed Design 
+
+The device memory in DataGuard ex is divided into 5segments: the model, records, scratchpad, secure scratch, and tags. The PMA configures the starting addresses of each of these regions using the record-br , scratch-br , noise-br , and 
+
+tag-br registers. The PMA also stores the size of each record in the rec-sz register. The model weights and the noised gradients are stored in the model region, while the scratchpad region is used to store any intermediate results, including the gradients. The records region is used to store the sensitive training data. The secure scratch region is used to store the noise samples generated by the PMA and the index to record mappings for each batch. This mapping is generated by the PMA on the host CPU. The secure scratch and tags regions are protected and cannot be accessed by the application directly. DataGuard ex uses a 2-byte tag for every 512 bytes of data. The data in the model region is considered to be the “noised” data ( s is initialized to 1) by the PMA. A 1-byte rid field (as in Fig. 6) can support a maximum batch size of 254. The size of the rid field can be increased, thereby increasing the size of the tags, to support larger batch sizes. 
+
+1) Modifications to the tagging unit: The tagging unit ( e in Fig. 4) is modified to update the tags of the results based on the tags of the source operands: 1) s: For any instruction except add-noise , it is set to 0 if any operands have s =0, otherwise it is set to 1. It is set to 1 for the results of 
+
+add-noise always. 2) rid : It is set to −1 for the acc-grad 
+
+instruction. For any other instruction, if all the operands with 
+
+s = 0 have the same rid value x, it is set x; otherwise, it is set to 0. 3) depoch : it is set to the current value of epoch .The tagging module also checks that all the operands of the add-noise instruction have rid = −1 and that all the operands of the acc-grad instruction have rid ̸ = 0 . If either check fails and CStatus = 0 , then CStatus is set to the value of epoch . The value of the CStatus register is used by the PMA to ensure that the condition was satisfied in the corresponding epoch for the data, i.e., depoch < CStatus .
+
+2) Modifications to the memory tagging unit: The MTU ( 6 in Fig. 2) is modified to read/write tags for all data fetched/written to memory. The MTU checks the depoch field of any data fetched from scratchpad region and ensures that it is equal to epoch (current iteration count). If the check fails and CStatus = 0 , CStatus is updated to the value of epoch .We implement load-record in the VPU ( 1 in Fig. 2). The load-record instruction takes index idx , offset ( off ), target tgt , and size bsize as operands. The mapping of idx to an index of a record tid in the training dataset is fetched from memory and used to calculate the base address for loading 
+
+bsize bytes from main memory, onto on-chip buffers at the location indicated by tgt . The base address is calculated by adding off to the product of tid and rec-sz register. 
+
+3) Modifications to the noising unit: The noising module calculates the ℓ2-norm for the gradients computed using each record when the acc-grad instruction is executed. Similar to DataGuard, the partial sum registers ( pi, d in Fig. 4) are updated with the sum of squares of all gradients that have the same rid . The partial sums for each record are stored in the secure scratch region of device memory. When the 
+
+audit instruction is executed, the partial sums for each record are fetched from the device memory to compute the gradient 
+
+ℓ2-norms for each record. Similar to DataGuard, a check is performed to ensure that the ℓ2-norm for each record is less than Cth and the CStatus register is updated if the check fails. The add-noise instruction adds noise to the data as in DataGuard. 9VIII. D ISCUSSION 
+
+Security Analysis DataGuard and DataGuard ex provide for-mal guarantees that: (1) any computational results derived from sensitive training data on the accelerator and transmitted from the device satisfy (ϵ, δ )-DP, and (2) the cumulative pri-vacy expenditure remains within the allocated budget. Under the threat model we describe in §III, we examine four different attack scenarios wherein malicious applications attempt to circumvent privacy protections. 
+
+Attack 1: Sharing Unnoised Data. A malicious application attempts to transmit any transformation of the training data (including the gradients) without noising them. DataGuard’s tagging module automatically marks the results of all compu-tations performed using the accelerator as sensitive (tag = 0) and this data is not allowed to be shared out of the device. 
+
+Attack 2: Bypassing Gradient Clipping. The application attempts to share the noised gradients generated using 
+
+add-noise instruction and executes audit but skips gradi-ent clipping. DataGuard’s noising module automatically cal-culates the ℓ2-norm during the add-noise operation and tags the results with the current epoch . The ℓ2-norm of the gradients being noised exceeds the Cth threshold as they are unclipped, the audit instruction updates the CStatus 
+
+register (tracks the first training iteration where the checks for the audit instruction failed) with the current epoch value. When the application tries to share this noised data, the PMA detects that the tag values are equal to the value of the CStatus 
+
+register. This violates the requirement that tags be strictly less than the value of the CStatus register, and thus the PMA will terminate the application. The application may also attempt to bypass gradient clipping by not executing the audit instruc-tion. The noised gradients generated using the add-noise 
+
+instruction are tagged with the current epoch . However, the 
+
+epoch is not incremented at the end of training round ( audit 
+
+instruction was not executed). When the application attempts to share these noised gradients out of the device, the tag values will not be less than the current epoch and thus the PMA will terminate the application. 
+
+Attack 3: Exceeding Privacy Budget. The application correctly clips and noises gradients but executes more training itera-tions than allowed by the privacy budget. Each add-noise 
+
+operation tags results with the current epoch value, which increments with each audit execution. When the application attempts to share final gradients, the PMA calculates total privacy cost from tag values, and the PMA terminates the application as the computed cost will exceed the budget. 
+
+DataGuard ex -Specific Attack: Bypassing sampling. In DataGuard ex , applications may attempt to reuse intermediate results, such as feature vectors, from previous iterations to bypass sampling mechanisms. The intermediate results computed in previous iterations have been tagged with the value of the epoch register (which was incremented at the end of the iteration) in the depoch field. When this data is loaded in the subsequent iteration, the Memory Tagging Unit (MTU) compares the depoch field of the tags with the current value of epoch register, and the MTU would detect the mismatch in the fields. The CStatus register will be updated with the epoch value, which causes the PMA to terminate the application when the application attempts to share this data out of the device. 
+
+Noising and sharing data that is not the gradients. Our frame-work provides DP guarantees to arbitrary results derived from sensitive training data. When applications apply DataGuard instructions to transform the training data, the resulting noised data still satisfies DP i.e., the sensitivity of the mathematical function representing the transformation is bounded by Cth ,and noise was sampled according to Eq. 3. Thus, sharing this data does not result in any privacy violations. 
+
+Formal Proof: We include a formal proof for DataGuard. Proofs for DataGuard ex , and for privacy budgeting can be constructed analogously. Let f : D → Rn, n ∈ Z+ be a vector-valued function computed by an application running on an accelerator with DataGuard, where D is the space of datasets, R is the set of real numbers and Z+ is the set of positive integers. We show that regardless of the computation 
+
+implemented by the application ( c in Fig. 3), DataGuard theo-retically guarantees (ϵ, δ )-DP. For any data identified as safe-to-share, the application has successfully executed noise l 2
+
+( a in Fig. 3) for DataGuard i.e., it is always the result of 
+
+M(x) as defined below. 
+
+Theorem VIII.1. Given that data shared out of the device for DataGuard is a result of M : D → Rn, then it satisfies 
+
+(ϵ, δ )-DP when M is a standard Gaussian mechanism [24] such that 
+
+M(x) = f (x) + N (0 , 4C2
+
+> th
+
+z2In),where z = p2 log(1 .25 /δ )/ϵ. (6) 
+
+Proof. By [24], M is differentially private if max ∥f (D) −
+
+f (D′)∥2 = 2 Cth for two adjacent datasets (D, D ′) ∈ D .Recall the noise l 2 operation ( a in Fig. 3) in DataGuard ensures ∥f (D)∥2 ≤ Cth . Thus, using the triangle inequality, we can calculate the following bound: 
+
+∥f (D) − f (D′)∥2 ≤ ∥ f (D)∥2 + ∥f (D′)∥2
+
+≤ Cth + Cth ≤ 2Cth 
+
+(7) Thus, M satisfies (ϵ, δ )-DP, which concludes the proof. 
+
+Budget allocation: Determining appropriate budget alloca-tions is needed for long-term deployments to ensure that the cumulative privacy cost over time provides sufficient protection. DataGuard ’s PMA can be integrated with privacy management systems [53], [60] to budget across multiple ap-plications/mechanisms (including potential collusion). When combining different DP techniques for the same data ( e.g., raw data noising plus DP-FL), and when collusion among multiple aggregators using the same dataset is assumed, the PMA can calculate the privacy cost using composition [27], [66]. 
+
+Generalizability of DataGuard : DataGuard and DataGuard ex 
+
+together support all LDP FL+DP algorithms that clip gradients by ℓ2 norm and add Gaussian noise [10], [16], [54], [58], [63], [70], [94], [96]. DataGuard can be trivially extended for LDP schemes which use other noise distributions [81], [84], [91], 10 since they follow the same two steps: clip gradients, then add noise. For example, supporting LDP-Fed [91], which clips and noises individual gradient elements, only requires modifying the host CPU’s noise-sampling software and the noising unit. 
+
+Limitations: DataGuard only tracks computation on the ML accelerator, and thus no guarantee is provided regarding any computation performed outside DataGuard ( e.g., in the CPU). DataGuard is applicable to ML accelerators that are built according to the framework depicted in Fig. 2. This includes most systolic array-based accelerators [34], [44], [46]–[48] but does not include GPUs where the dataflow and caches cannot be tracked using the DataGuard framework. IX. M ETHODOLOGY 
+
+Evaluation Methodology: We use a custom cycle-accurate simulator for ML workloads, which is based on the open-source SCALE-sim simulator [78] integrated with Ramulator v2.0 [59]. We model on-chip buffers, double buffering for efficient data transfers, systolic array, and all DataGuard modules. The simulator was validated against Google Cloud TPUv3 [46] for a wide range of shapes/sizes for GEMM, vector addition, and noising operators (Pearson correlation coefficient >0.92). We evaluate DataGuard and DataGuard ex 
+
+with a tag size of 1 and 4 bytes, respectively. DataGuard ex 
+
+can also be implemented with a tag size of 2 bytes (for batch sizes up to 254 ). We evaluate DataGuard and DataGuard ex on four base-lines that implement DP-enabled ML training but do not provide DP guarantees in hardware: (i) TPU [47]: models the Google TPUv3 [47] with weight-stationary dataflow. (ii) 
+
+DIVA : that proposes an outer-product based dataflow [72] (iii) 
+
+DIVA-PPU : that also uses a post-processing unit (PPU) with hardware adder trees to accelerate ℓ2-norm computation for the per-example gradients [72]. The PPU eliminates the need to fetch computed gradients from memory after they have been computed to compute the ℓ2-norm. (iv) OS : an accelerator with output-stationary dataflow with same SRAM parameters as TPU for a fair comparison. The systolic array on OS is based on Shidiannao [22]. We evaluate all accelerators using a 128×128 systolic array running at 1 GHz, 24 MB of on-chip SRAM and assume two accelerators on-chip connected to HBMv2 memory, as in TPUv3 [47] i.e., the memory subsystem provides 450 GB/s bandwidth for each accelerator. 
+
+Benchmarks: State-of-the-art DP-based FL algorithms [35], [54], [91], [94] are evaluated on image recognition tasks. Thus, we evaluate a range of CNN models: VGG16 ( vgg ) [83], ResNet50 (r50 ) [40], ResNet152 (r152 ) [40], AlexNet (alx ) [52], Yolov3 (ylo ) [76], GoogleNet (goo ) [86], SqueezeNet ( sqz ) [42], and MobileNetV2 ( mob ) [79]. We also evaluate two transformer models [20], BERT-base ( brtb )and BERT-large ( brtl ), for next-sentence prediction tasks. We use ImageNet [19] dataset for CNN models and BooksCor-pus [101] dataset for transformer models. We evaluate Data-Guard and DataGuard ex for one local training round consisting of 10 and 1 iteration(s), respectively with a batch size of 8. alx goo mob r152 r50 sqz vgg ylo brtb brtl geo    
+
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> Slowdown(%)
+> 0.31
+> TPU DIVA DIVA-PPU OS
+
+(a) DataGuard alx goo mob r152 r50 sqz vgg ylo brtb brtl geo      
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> Slowdown(%)
+> 2.08 0.79 2.31 0.81
+> TPU DIVA DIVA-PPU OS
+
+(b) DataGuard ex 
+
+Fig. 7: Slowdowns for DataGuard and DataGuard ex across various workloads over TPU, DIVA, DIVA-PPU, and OS. 
+
+RTL implementation: We implement the DataGuard and DataGuard ex modules in Bluespec System Verilog and use openroad for area and power overheads. With CACTI [88] we model the area and power overheads of the SRAM buffers used to store the tags in the accelerators. X. E VALUATION 
+
+A. Performance Overheads 
+
+Fig. 7a and Fig. 7b show the slowdown of DataGuard and DataGuard ex , for various workloads during local training, over the respective baseline accelerators. We observe that DataGuard incurs only 0.09%, 0.20%, 0.18%, and 0.13% performance slowdown on average for TPU, DIVA, DIVA-PPU, and OS as a result of the additional memory requests required. DataGuard ex incurs on average 0.31%, 0.5%, 0.55%, and 0.37% performance slowdown for TPU, DIVA, DIVA-PPU, and OS, respectively. The small performance impact is because DataGuard and DataGuard ex generate little additional memory traffic: ∼0.08% and ∼0.61% for OS and ∼0.12% and 
+
+∼0.8% for the others. Fig. 8a left presents the performance breakdown of Data-Guard for the two types of kernels: 1) ComB : matrix multi-plication kernels in the forward and backward passes, and 2) 
+
+MemB : kernels for model update and noising. Fig. 8a right shows the breakdown of additional memory requests issued in the two types of kernels. Fig. 8b shows the breakdown for the two types of kernels ( ComB , MemB ) in terms of execution time (left) and additional memory traffic of DataGuard ex (right) for various baseline accelerators. The per-example gradient computation, clipping, and noising kernels are included in 
+
+MemB for DataGuard ex . We make five observations. First, the slowdown on TPU is less than the slowdown on DIVA and DIVA-PPU for both DataGuard and DataGuard ex .For example, DataGuard has an average slowdown of 0.09% and 0.2%, while DataGuard ex has a slowdown of 0.31% and 0.55% on TPU and DIVA. This is because the additional memory requests for DataGuard and DataGuard ex are over-lapped with the execution of the ComB kernels. The fraction of time spent executing ComB kernels is higher on TPU than in DIVA or DIVA-PPU, while the fraction of the additional memory traffic for the ComB kernels remains similar. For example, for mob in DataGuard the ComB kernels take up 95% and 80% of the execution time on TPU and DIVA, while 11 alx goo mob r152 r50 sqz vgg ylo brtb brtl                                                                                   
+
+> 0
+> 25
+> 50
+> 75
+> 100
+> Execution Time(%)
+> TTTTTTTTTTVVVVVVVVVVPPPPPPPPPPOOOOOOOOOO
+> Compute Ratio
+> alx goo mob r152 r50 sqz vgg ylo brtb brtl
+> 0
+> 25
+> 50
+> 75
+> 100
+> Additional Memory
+> Request(%)
+> TTTTTTTTTTVVVVVVVVVVPPPPPPPPPPOOOOOOOOOO
+> Memory Request Ratio
+> ComB MemB
+
+(a) DataGuard alx goo mob r152 r50 sqz vgg ylo brtb brtl                                                                                   
+
+> 0
+> 25
+> 50
+> 75
+> 100
+> Execution Time(%)
+> TTTTTTTTTTVVVVVVVVVVPPPPPPPPPPOOOOOOOOOO
+> Compute Ratio
+> alx goo mob r152 r50 sqz vgg ylo brtb brtl
+> 0
+> 25
+> 50
+> 75
+> 100
+> Additional Memory
+> Request(%)
+> TTTTTTTTTTVVVVVVVVVVPPPPPPPPPPOOOOOOOOOO
+> Memory Request Ratio
+> ComB MemB
+
+(b) DataGuard ex 
+
+Fig. 8: Breakdown of performance and additional memory traffic on TPU( T), DIVA ( V), DIVA-PPU( P), & OS( O). 97% of the additional memory requests are issued for ComB 
+
+kernels. Thus, the latency costs of the additional memory operations of DataGuard are hidden better on TPUs, resulting in lower overall slowdowns. The slowdown of DataGuard and DataGuard ex in OS is less than that in DIVA and DIVA-PPU for the same reason. Second, the slowdown in OS is more than TPU for both DataGuard and DataGuard ex : DataGuard averages 0.09% (TPU) vs. 0.13% (OS), and DataGuard ex 0.31% vs. 0.37%. This is due to fewer ComB kernel stalls in the OS baseline than in TPU [72], i.e., the execution time of ComB is lower in OS vs TPU (e.g., r50 on DataGuard: 36% vs. 41%). Thus, despite lower additional memory traffic in OS (0.08% vs. TPU’s 0.12%), the memory latency for DataGuard/DataGuard ex re-quests adds additional systolic-array stalls in OS. Third, DataGuard causes 0.20% slowdown on DIVA, which is higher than on DIVA-PPU (0.18%). The difference between DIVA and DIVA-PPU is the presence of the PPU in the latter, which accelerates ℓ2-norm computation. However, the acceleration of ℓ2-norm computation reduces the portion of execution time spent on MemB kernels, but the ratio of memory requests issued for each type of kernel is similar. Additional memory traffic of DataGuard for DIVA and DIVA-PPU is also similar (0.12%). Thus, on DIVA-PPU, a larger fraction of the memory requests of DataGuard are overlapped with systolic array execution, resulting in a lower overall performance impact. Fourth, DataGuard ex causes a slowdown of 0.5% on DIVA, while it causes 0.55% slowdown on DIVA-PPU. This is be-cause the additional memory traffic of DataGuard ex is higher for DIVA-PPU (0.89%) in comparison to DIVA (0.77%). Fifth, DataGuard and DataGuard ex cause high slowdowns for mob and sqz on DIVA, even though the ratio of execution time for ComB is high. For example, DataGuard ex causes a slowdown of 2.08% for mob , which is larger than the slowdowns of other models, even though the ComB kernels take 60% of the execution time. This is because these models have very small sizes for the matrix multiplication kernels, which are efficiently executed on the systolic array. Thus, the additional memory requests of DataGuard ex introduce addi-tional stalls (5.4% and 1.1%), resulting in higher slowdowns. alx goo mob r152 r50 sqz vgg ylo brtb brtl geo      
+
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> Slowdown(%)
+> 30.56 63.23
+> 4816 32 64 128
+
+Fig. 9: DataGuard ex slowdown across tag sizes on DIVA-PPU. alx goo mob r152 r50 sqz vgg ylo brtb brtl geo            
+
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> Slowdown(%)
+> DataGuard
+> 816 32
+> alx goo mob r152 r50 sqz vgg ylo brtb brtl geo
+> 2.31
+> 2.06
+> 2.05
+> DataGuard ex
+
+Fig. 10: Slowdown for various batch sizes on DIVA-PPU. Overall, we conclude that DataGuard and DataGuard ex are efficient approaches to provide DP guarantees for per-batch clipping and per-example clipping algorithms, respectively. 
+
+B. Sensitivity Studies 
+
+Tag size: We present the slowdown of DataGuard ex over the DIVA-PPU baseline for one training iteration when the varying tag sizes in Fig. 9. The tag size denotes the number of tag bytes per 512 bytes of data, achieved by increasing number of tags, size of each tag, or both. We observe that the slowdown increases as tag size increases, because the additional memory accesses required to fetch tags increase, causing larger stalls in the accelerator. However, a tag size of four would be the maximum needed for DataGuard and DataGuard ex .
+
+Batch size: Fig. 10 shows DataGuard and DataGuard ex per-formance slowdown over the baseline for 1 training round varying the batch size on DIVA-PPU. The slowdown due to DataGuard reduces, as batch size increases, but remains same DataGuard ex . For example, DataGuard incurs a slowdown of 0.18%, 0.15%, and 0.13% for batch sizes 8, 16, and 32, while DataGuard ex incurs 0.55% for all batch sizes. This is because the ratio of the execution time for ComB kernels increases for DataGuard, while it remains the same for DataGuard ex ,as batch sizes increase. The latency needed to perform the memory operations of DataGuard is overlapped with the ComB 
+
+kernels execution, resulting in a lower overall impact on slowdown. 
+
+C. Hardware Overheads 
+
+The main overheads are the additional SRAM buffers that store tags and the logic to implement the noising unit. For a TPUv3, whose chip-wide area is ∼650 mm 2 (on 12 nm) and each chip contains two accelerators [47], we add a total of 32KB and 128KB SRAM buffers per accelerator for Data-Guard and DataGuard ex , respectively. We incur an additional chip-wide area overhead of 0.01% and 0.05% (22 nm in CACTI) for tag storage in for DataGuard and DataGuard ex ,respectively. The noising unit has an area of 0.003 mm 2 (using 7 nm technology [18] targeting a frequency of 1 GHz) per accelerator and costs only an extra 0.0008% area overhead chip-wide. DataGuard and DataGuard ex introduce a set of new accel-erator instructions (listed in Table I). Although they require changes to the vector processor, these changes remain inten-tionally localized and lightweight. The new opcodes extend the 12 TABLE I: ISA additions/semantic extensions introduced by DataGuard/DataGuard ex .                    
+
+> Instruction Applies to Operation
+> add-noise DataGuard, DataGuard ex Add Gaussian noise to operands.
+> audit DataGuard, DataGuard ex Verify clipping condition.
+> load-tagged DataGuard Load data from memory along with tags.
+> vadd DataGuard Vector add (with tag propaga-tion).
+> load-record DataGuard ex Load asubsampled training record.
+> acc-grad DataGuard ex Add two per-example gradients.
+
+vector-processor ISA ( e.g., add-noise mirrors a standard vector add) and require only modest datapath modifications, namely, dedicated noising and tagging modules. All other changes are confined to metadata handling: small SRAMs for tags, and an MTU that moves tag bytes along with normal data transfers. Consequently, the chip-wide area overhead is merely 
+
+∼ 0.01% and ∼0.05% for DataGuard and DataGuard ex , re-spectively. DataGuard and DataGuard ex also incur a memory overhead of 64 MB and 256 MB to store the tags for TPUv3, which has a total memory capacity of 32GB [47]. The energy overhead of performing tag fetches/writes is 0.08 % for DataGuard and 0.61 % for DataGuard ex on the OS accelerator, and 
+
+0.12 % for DataGuard and 0.80 % for DataGuard ex on the other accelerators. These values were estimated using memory traffic from simulation, assuming energy access for HBMv2 is 3.6 pJ /bit [71]. The noising module adds 0.12 Watts per accelerator causing a chip-wide increase in power consumption of 0.05% when running at 1 GHz, i.e., TDP of TPUv3 is 450 Watt [47]. We estimate the static and dynamic power of the additional SRAM modules. The static power, obtained from CACTI, is 0.02 Watts and 0.04 Watts per accelerator for DataGuard and DataGuard ex , respectively. The dynamic power was estimated to be 0.0105 Watts and 0.1024 Watts per accelerator for DataGuard and DataGuard ex , respectively. Thus, the total power overhead for DataGuard and DataGuard ex is 0.07% and 0.1%. XI. P RIOR WORK 
+
+To our knowledge, DataGuard is the first hardware-based framework to provide DP guarantees during ML training on accelerators. We briefly discuss prior work. 
+
+Privacy Guarantees in Hardware: Prior works [17], [51], [61] propose approaches to noise raw data before the applica-tion is granted access to it by modifying the noising mecha-nisms [51] or designing dedicated hardware modules [17], [61] for noising. These approaches are limited to certain kinds of sensor data ( e.g., accelerometers) and were not designed for text, images, or videos. Directly noising training data can also lead to significant accuracy loss in ML training [74]. 
+
+Accelerators for DP-enabled Training: Prior works propose accelerators for DP-based ML: DIVA [72] is a novel dataflow architecture with a reduction module that accelerates the per-example gradient computations. DINAR [32] proposes a novel noise generation algorithm that relies on pre-generated seeds to generate noise. DPAcc [21] offloads DP operations to an FPGA placed in the memory path, accelerating DP training by performing these operations in-line during data transfers. These works are orthogonal; they improve performance but require trusting a third-party application for DP guarantees. 
+
+Software Mechanisms for Protecting User Privacy: Prior works [28], [85] proposed software IFT techniques to detect leakage of sensitive information. These works rely on aprivileged software layer running between the application and hardware to instrument tracking and detection. However, these works are not designed for ML applications where gradients computed from sensitive data are sent out of the device. These techniques also rely on a trusted software layer, which increases the attack surface of the system; a software bug can allow malicious applications to leak data. Such techniques also incur significant performance overheads ( e.g., up to 15% [85]) due to instruction execution overhead for IFT, and additional memory traffic for tag metadata. DataGuard is designed to minimize these overheads for DP. Several prior works [7], [8], [13], [30], [41], [45], [64], [67], [69], [98]–[100] propose mechanisms that automatically analyze a program and ensure that it is DP. These works are implemented as libraries [8], [41], [98] or define custom programming languages [7], [13], [99]. However, these works only provide guarantees if the program uses specific libraries. It is challenging to ensure that an application is correctly using them without manual analysis by an expert. 
+
+Ensuring privacy with an untrusted aggregator: Prior work [87] proposes using trusted execution environments (TEEs) on the aggregation server to enforce a differentially private aggregation protocol and enable secure aggregation. In this design, aggregation functions execute inside enclaves, and clients verify the integrity of the server’s code via remote attestation. However, this approach assumes an adversary other than the aggregator or the client. It does not consider the case where the aggregator itself is malicious and controls both the aggregation server and the training applications running on client devices, as in real-world FL deployments [1]. In such settings, a server-side TEE solution fails to protect client privacy: a malicious aggregator can simply modify the training application to bypass remote attestation checks, violating DP guarantees. In contrast, our threat model assumes no trust in the application running on the client devices. XII. C ONCLUSION 
+
+We propose DataGuard and DataGuard ex , the first work that enables DP guarantees in hardware for FL applications on ML accelerators. With DataGuard, any data that is shared out of the device satisfies DP guarantees (defined by data owner) regardless of the operations performed by the application. DataGuard requires minimal changes to the accelerator and incurs small performance and area overheads. 13 AI U SE DISCLAIMER 
+
+ChatGPT and Claude were used in the preparation of this manuscript for editing and grammar checking. No passages were copied without full author review, and all substantive ideas, analyses, and conclusions are the product and respon-sibility of the authors. REFERENCES [1] “Advances in private training for production on-device language models.” [Online]. Available: https://research.google/blog/advances-in-private-training-for-production-on-device-language-models/ [2] “General data protection regulation (Gdpr) – legal text.” [Online]. Available: https://gdpr-info.eu/ [3] “Differential Privacy for the 2020 Census: How Can We Make Data Both Private and Useful? | Har-vard University Privacy Tools Project,” Jul. 2022. [On-line]. Available: https://privacytools.seas.harvard.edu/blog/differential-privacy-2020-census-how-can-we-make-data-both-private-and-useful [4] “Fraud detection empowered by federated learning with the Flower framework on Amazon SageMaker AI | Artificial Intelligence,” Jul. 2025. [Online]. Available: https://aws.amazon.com/blogs/machine-learning/fraud-detection-empowered-by-federated-learning-with-the-flower-framework-on-amazon-sagemaker-ai/ [5] M. Abadi, A. Chu, I. Goodfellow, H. B. McMahan, I. Mironov, K. Talwar, and L. Zhang, “Deep learning with differential privacy,” in Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security , ser. CCS ’16. New York, NY, USA: Association for Computing Machinery, 2016, p. 308–318. [Online]. Available: https://doi.org/10.1145/2976749.2978318 [6] J. M. Abowd, “The us census bureau adopts differential privacy,” 
+
+Proceedings of the 24th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining , pp. 2867–2867, 2018. [7] C. Abuah, D. Darais, and J. P. Near, “Solo: a lightweight static analysis for differential privacy,” New York, NY, USA, Oct. 2022. [Online]. Available: https://doi.org/10.1145/3563313 [8] C. Abuah, A. Silence, D. Darais, and J. P. Near, “Dduo: General-purpose dynamic analysis for differential privacy,” in 2021 IEEE 34th Computer Security Foundations Symposium (CSF) , 2021, pp. 1–15. [9] M. Ammad-Ud-Din, E. Ivannikova, S. A. Khan, W. Oyomno, Q. Fu, K. E. Tan, and A. Flanagan, “Federated collaborative filtering for privacy-preserving personalized recommendation system,” in Proceed-ings of the 29th International Conference on Artificial Neural Net-works . Springer, 2019, pp. 241–252. [10] G. Andrew, O. Thakkar, H. B. McMahan, and S. Ramaswamy, “Differentially private learning with adaptive clipping,” in Advances in Neural Information Processing Systems , A. Beygelzimer, Y. Dauphin, P. Liang, and J. W. Vaughan, Eds., 2021. [Online]. Available: https://openreview.net/forum?id=RUQ1zwZR8 [11] Apple Inc., “Differential privacy overview,” Apple Inc., Tech. Rep., 2017. [Online]. Available: https://www.apple.com/privacy/docs/ Differential Privacy Overview.pdf [12] F. Bai, J. Wu, P. Shen, S. Li, and S. Zhou, “Federated face recognition,” 2021. [Online]. Available: https://arxiv.org/abs/2105.02501 [13] G. Barthe, B. K¨ opf, F. Olmedo, and S. Zanella-B´ eguelin, “Probabilistic relational reasoning for differential privacy,” ACM Trans. Program. Lang. Syst. , vol. 35, no. 3, Nov. 2013. [Online]. Available: https://doi.org/10.1145/2492061 [14] S. Casacuberta, M. Shoemate, S. Vadhan, and C. Wagaman, “Widespread underestimation of sensitivity in differentially private libraries and how to fix it,” in Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security ,ser. CCS ’22. New York, NY, USA: Association for Computing Machinery, 2022, p. 471–484. [Online]. Available: https://doi.org/10. 1145/3548606.3560708 [15] F. Chen, M. Luo, Z. Dong, Z. Li, and X. He, “Federated meta-learning with fast convergence and efficient communication,” 2019. [Online]. Available: https://arxiv.org/abs/1802.07876 [16] A. Cheng, P. Wang, X. S. Zhang, and J. Cheng, “Differentially private federated learning with local regularization and sparsification,” in 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , June 2022, pp. 10 122–10 131. [17] W.-S. Choi, M. Tomei, J. R. S. Vicarte, P. K. Hanumolu, and R. Kumar, “Guaranteeing local differential privacy on ultra-low-power systems,” in ISCA , 2018. [18] L. T. Clark, V. Vashishtha, L. Shifren, A. Gujja, S. Sinha, B. Cline, C. Ramamurthy, and G. Yeric, “Asap7: A 7-nm finfet predictive process design kit,” Microelectronics Journal , vol. 53, pp. 105–115, 2016. [19] J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-Fei, “Imagenet: A large-scale hierarchical image database,” in 2009 IEEE Conference on Computer Vision and Pattern Recognition , 2009, pp. 248–255. [20] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “Bert: Pre-training of deep bidirectional transformers for language understanding,” arXiv preprint arXiv:1810.04805 , 2018. [21] A. Dong, Y. Wang, P. Li, Y. Tian, X. Chen, and J. Yin, “Dpacc: An fpga-based differential privacy acceleration framework,” in 2025 IEEE International Symposium on Circuits and Systems (ISCAS) , 2025, pp. 1–5. [22] Z. Du, R. Fasthuber, T. Chen, P. Ienne, L. Li, T. Luo, X. Feng, Y. Chen, and O. Temam, “Shidiannao: Shifting vision processing closer to the sensor,” in 2015 ACM/IEEE 42nd Annual International Symposium on Computer Architecture (ISCA) , 2015, pp. 92–104. [23] J. C. Duchi, M. I. Jordan, and M. J. Wainwright, “Local privacy and statistical minimax rates,” in 2013 IEEE 54th Annual Symposium on Foundations of Computer Science . IEEE, 2013, pp. 429–438. [24] C. Dwork, K. Kenthapadi, F. McSherry, I. Mironov, and M. Naor, “Our data, ourselves: privacy via distributed noise generation,” in 
+
+EUROCRYPT , 2006. [25] C. Dwork, F. McSherry, K. Nissim, and A. Smith, “Calibrating noise to sensitivity in private data analysis,” in Theory of cryptography conference . Springer, 2006, pp. 265–284. [26] C. Dwork, F. McSherry, K. Nissim, and A. Smith, “Calibrating Noise to Sensitivity in Private Data Analysis,” in Theory of Cryptography ,S. Halevi and T. Rabin, Eds. Berlin, Heidelberg: Springer, 2006, pp. 265–284. [27] C. Dwork and A. Roth, “The algorithmic foundations of differential privacy,” Found. Trends Theor. Comput. Sci. , 2014. [28] W. Enck, P. Gilbert, S. Han, V. Tendulkar, B.-G. Chun, L. P. Cox, J. Jung, P. McDaniel, and A. N. Sheth, “Taintdroid: An information-flow tracking system for realtime privacy monitoring on smartphones,” ACM Trans. Comput. Syst. , vol. 32, no. 2, Jun. 2014. [Online]. Available: https://doi.org/10.1145/2619091 [29] ´U. Erlingsson, V. Pihur, and A. Korolova, “Rappor: Randomized aggregatable privacy-preserving ordinal response,” in Proceedings of the 2014 ACM SIGSAC Conference on Computer and Communications Security . ACM, 2014, pp. 1054–1067. [30] M. Gaboardi, A. Haeberlen, J. Hsu, A. Narayan, and B. C. Pierce, “Linear dependent types for differential privacy,” in Proceedings of the 40th Annual ACM SIGPLAN-SIGACT Symposium on Principles of Programming Languages , ser. POPL ’13. New York, NY, USA: Association for Computing Machinery, 2013, p. 357–370. [Online]. Available: https://doi.org/10.1145/2429069.2429113 [31] M. Gaboardi, J. Honaker, G. King, J. Murtagh, K. Nissim, J. Ullman, and S. Vadhan, “Psi ( Ψ): a private data sharing interface,” 2018. [Online]. Available: https://arxiv.org/abs/1609.04340 [32] K. Ganesan, V. Karyofyllis, J. Attai, A. Hamoda, and N. Enright Jerger, “Dinar: Enabling distribution agnostic noise injection in machine learning hardware,” in HASP , 2023. [33] H. Genc, S. Kim, A. Amid, A. Haj-Ali, V. Iyer, P. Prakash, J. Zhao, D. Grubb, H. Liew, H. Mao, A. Ou, C. Schmidt, S. Steffl, J. Wright, I. Stoica, J. Ragan-Kelley, K. Asanovic, B. Nikolic, and Y. S. Shao, “Gemmini: Enabling systematic deep-learning architecture evaluation via full-stack integration,” in Proceedings of the 58th Annual ACM/IEEE Design Automation Conference , ser. DAC ’21. IEEE Press, 2022, p. 769–774. [Online]. Available: https://doi.org/10.1109/DAC18074.2021.9586216 [34] S. Ghodrati, S. Kinzer, H. Xu, R. Mahapatra, Y. Kim, B. H. Ahn, D. K. Wang, L. Karthikeyan, A. Yazdanbakhsh, J. Park, N. S. Kim, and H. Esmaeilzadeh, “Tandem processor: Grappling with emerging operators in neural networks,” in Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2, ser. ASPLOS ’24. New York, NY, USA: Association for Computing Machinery, 2024, p. 1165–1182. [Online]. Available: https://doi.org/10.1145/3620665.3640365 
+
+14 [35] A. Girgis, D. Data, S. Diggavi, P. Kairouz, and A. Theertha Suresh, “Shuffled model of differential privacy in federated learning,” in 
+
+Proceedings of The 24th International Conference on Artificial Intelligence and Statistics , ser. Proceedings of Machine Learning Research, A. Banerjee and K. Fukumizu, Eds., vol. 130. PMLR, 13–15 Apr 2021, pp. 2521–2529. [Online]. Available: https: //proceedings.mlr.press/v130/girgis21a.html [36] A. Hard, K. Rao, R. Mathews, F. Beaufays, S. Augenstein, H. Eichner, C. Kiddon, and D. Ramage, “Federated learning for mobile keyboard prediction,” arXiv preprint arXiv:1811.03604 , 2018. [37] C. R. Harris, K. J. Millman, S. J. Van Der Walt, R. Gommers, P. Virtanen, D. Cournapeau, E. Wieser, J. Taylor, S. Berg, N. J. Smith, R. Kern, M. Picus, S. Hoyer, M. H. Van Kerkwijk, M. Brett, A. Haldane, J. F. Del R´ ıo, M. Wiebe, P. Peterson, P. G´ erard-Marchant, K. Sheppard, T. Reddy, W. Weckesser, H. Abbasi, C. Gohlke, and T. E. Oliphant, “Array programming with NumPy,” Nature ,vol. 585, no. 7825, pp. 357–362, Sep. 2020. [Online]. Available: https://www.nature.com/articles/s41586-020-2649-2 [38] J. R. Hauser, “Berkeley hardfloat floating-point arithmetic,” http: //www.jhauser.us/arithmetic/HardFloat.html, university of California, Berkeley, CA, USA. [39] J. He, X. Li, D. Yu, H. Zhang, J. Kulkarni, Y. T. Lee, A. Backurs, N. Yu, and J. Bian, “Exploring the limits of differentially private deep learning with group-wise clipping,” 2022. [Online]. Available: https://arxiv.org/abs/2212.01539 [40] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image recognition,” in Proceedings of the IEEE conference on computer vision and pattern recognition , 2016, pp. 770–778. [41] N. Holohan, S. Braghin, P. Mac Aonghusa, and K. Levacher, “Diff-privlib: the IBM differential privacy library,” ArXiv e-prints , vol. 1907.02444 [cs.CR], Jul. 2019. [42] F. N. Iandola, S. Han, M. W. Moskewicz, K. Ashraf, W. J. Dally, and K. Keutzer, “Squeezenet: Alexnet-level accuracy with 50x fewer parameters and ¡0.5mb model size,” 2016. [Online]. Available: https://arxiv.org/abs/1602.07360 [43] IEEE, “754-2019 - IEEE Standard for Floating-Point Arithmetic,” pp. 1–84, Jul. 2019. [44] Intel Corporation, “Intel® gaudi® 3 ai accelerator,” Intel Corporation, White Paper, 2023, accessed: October 2, 2024. [Online]. Available: https://www.intel.com/content/www/us/en/content-details/ 817486/intel-gaudi-3-ai-accelerator-white-paper.html [45] N. Johnson, J. P. Near, J. M. Hellerstein, and D. Song, “Chorus: a programming framework for building scalable differential privacy mechanisms,” in 2020 IEEE European Symposium on Security and Privacy (EuroS&P) . IEEE, 2020, pp. 535–551. [46] N. Jouppi, G. Kurian, S. Li, P. Ma, R. Nagarajan, L. Nai, N. Patil, S. Subramanian, A. Swing, B. Towles, C. Young, X. Zhou, Z. Zhou, and D. A. Patterson, “Tpu v4: An optically reconfigurable supercomputer for machine learning with hardware support for embeddings,” in Proceedings of the 50th Annual International Symposium on Computer Architecture , ser. ISCA ’23. New York, NY, USA: Association for Computing Machinery, 2023. [Online]. Available: https://doi.org/10.1145/3579371.3589350 [47] N. P. Jouppi, D. H. Yoon, G. Kurian, S. Li, N. Patil, J. Laudon, C. Young, and D. Patterson, “A domain-specific supercomputer for training deep neural networks,” Commun. ACM , vol. 63, no. 7, p. 67–78, Jun. 2020. [Online]. Available: https://doi.org/10.1145/3360307 [48] N. P. Jouppi, C. Young, N. Patil, D. Patterson, G. Agrawal, R. Bajwa, S. Bates, S. Bhatia, N. Boden, A. Borchers, R. Boyle, P.-l. Cantin, C. Chao, C. Clark, J. Coriell, M. Daley, M. Dau, J. Dean, B. Gelb, T. V. Ghaemmaghami, R. Gottipati, W. Gulland, R. Hagmann, C. R. Ho, D. Hogberg, J. Hu, R. Hundt, D. Hurt, J. Ibarz, A. Jaffey, A. Jaworski, A. Kaplan, H. Khaitan, D. Killebrew, A. Koch, N. Kumar, S. Lacy, J. Laudon, J. Law, D. Le, C. Leary, Z. Liu, K. Lucke, A. Lundin, G. MacKean, A. Maggiore, M. Mahony, K. Miller, R. Na-garajan, R. Narayanaswami, R. Ni, K. Nix, T. Norrie, M. Omernick, N. Penukonda, A. Phelps, J. Ross, M. Ross, A. Salek, E. Samadiani, C. Severn, G. Sizikov, M. Snelham, J. Souter, D. Steinberg, A. Swing, M. Tan, G. Thorson, B. Tian, H. Toma, E. Tuttle, V. Vasudevan, R. Walter, W. Wang, E. Wilcox, and D. H. Yoon, “In-datacenter performance analysis of a tensor processing unit,” ISCA , 2017. [49] P. Kairouz, S. Oh, and P. Viswanath, “Extremal mechanisms for local differential privacy,” in Advances in Neural Information Processing Systems , Z. Ghahramani, M. Welling, C. Cortes, N. Lawrence, and K. Weinberger, Eds., vol. 27. Curran Associates, Inc., 2014. [Online]. Available: https://proceedings.neurips.cc/paper files/paper/ 2014/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf [50] G. A. Kaissis, M. R. Makowski, D. R¨ uckert, and R. F. Braren, “Secure, privacy-preserving and federated machine learning in medical imaging,” Nature Machine Intelligence , vol. 2, no. 6, pp. 305–311, 2020. [51] A. I. K. Kalupahana, A. N. Balaji, X. Xiao, and L.-S. Peh, “Serandip: Leveraging inherent sensor random noise for differential privacy preser-vation in wearable community sensing applications,” IMWUT , 2023. [52] A. Krizhevsky, I. Sutskever, and G. E. Hinton, “Imagenet classification with deep convolutional neural networks,” Advances in neural infor-mation processing systems , vol. 25, 2012. [53] N. K¨ uchler, E. Opel, H. Lycklama, A. Viand, and A. Hithnawi, “Cohere: Managing differential privacy in large scale systems,” 2023. [Online]. Available: https://arxiv.org/abs/2301.08517 [54] B. Li, X. Jiang, M. N. Schmidt, T. S. Alstrøm, and S. U. Stich, “An improved analysis of per-sample and per-update clipping in federated learning,” in The Twelfth International Conference on Learning Representations , 2024. [Online]. Available: https: //openreview.net/forum?id=BdPvGRvoBC [55] H. Li, X. Li, X. Liu, B. Wang, J. Wang, and Y. Tian, “Fedsam: Enhancing federated learning accuracy with differential privacy and data heterogeneity mitigation,” Comput. Stand. Interfaces , vol. 95, no. C, Jan. 2026. [Online]. Available: https://doi.org/10.1016/j.csi. 2025.104019 [56] R. Li, Y. Cao, Y. Shu, J. Guo, B. Shi, J. Yu, Y. Di, Q. Zuo, and H. Tian, “A dynamic receptive field and improved feature fusion approach for federated learning in financial credit risk assessment,” 
+
+Scientific Reports , vol. 14, no. 1, p. 26515, Nov. 2024. [Online]. Available: https://www.nature.com/articles/s41598-024-77310-z [57] X. Li, Y. Gu, N. Dvornek, L. H. Staib, P. Ventola, and J. S. Duncan, “Multi-site fmri analysis using privacy-preserving federated learn-ing and domain adaptation: Abide results,” Medical Image Analysis ,vol. 65, p. 101765, 2020. [58] X. Li, F. Tramer, P. Liang, and T. Hashimoto, “Large language models can be strong differentially private learners,” in International Conference on Learning Representations , 2022. [Online]. Available: https://openreview.net/forum?id=bVuP3ltATMz [59] H. Luo, Y. C. Tu˘ grul, F. N. Bostancı, A. Olgun, A. G. Ya˘ glıkc ¸ı, and O. Mutlu, “Ramulator 2.0: A modern, modular, and extensible dram simulator,” 2023. [Online]. Available: https://arxiv.org/abs/2308.11030 [60] T. Luo, M. Pan, P. Tholoniat, A. Cidon, R. Geambasu, and M. L´ ecuyer, “Privacy budget scheduling,” in 15th USENIX Symposium on Operating Systems Design and Implementation (OSDI 21) .USENIX Association, Jul. 2021, pp. 55–74. [Online]. Available: https://www.usenix.org/conference/osdi21/presentation/luo [61] M. Maycock and S. Sethumadhavan, “Hardware enforced statistical privacy,” IEEE Computer Architecture Letters , vol. 15, no. 1, pp. 21– 24, 2016. [62] B. McMahan, E. Moore, D. Ramage, S. Hampson, and B. A. y Arcas, “Communication-efficient learning of deep networks from decentral-ized data.” PMLR, 2017. [63] H. B. McMahan, D. Ramage, K. Talwar, and L. Zhang, “Learning differentially private recurrent language models,” in International Con-ference on Learning Representations , 2018. [64] F. D. McSherry, “Privacy integrated queries: an extensible platform for privacy-preserving data analysis,” p. 19–30, 2009. [Online]. Available: https://doi.org/10.1145/1559845.1559850 [65] L. Melis, C. Song, E. De Cristofaro, and V. Shmatikov, “Exploiting unintended feature leakage in collaborative learning,” in IEEE S&P ,2019. [66] I. Mironov, “ R´ enyi Differential Privacy ,” in 2017 IEEE 30th Computer Security Foundations Symposium (CSF) . Los Alamitos, CA, USA: IEEE Computer Society, Aug. 2017, pp. 263–275. [Online]. Available: https://doi.ieeecomputersociety.org/10.1109/CSF.2017.11 [67] P. Mohan, A. Thakurta, E. Shi, D. Song, and D. Culler, “Gupt: privacy preserving data analysis made easy,” in Proceedings of the 2012 ACM SIGMOD International Conference on Management of Data , ser. SIGMOD ’12. New York, NY, USA: Association for Computing Machinery, 2012, p. 349–360. [Online]. Available: https://doi.org/10.1145/2213836.2213876 [68] J. P. Near and C. Abuah, Programming Differential Privacy , 2021, vol. 1. [Online]. Available: https://programming-dp.com/ 
+
+15 [69] J. P. Near, D. Darais, C. Abuah, T. Stevens, P. Gaddamadugu, L. Wang, N. Somani, M. Zhang, N. Sharma, A. Shan, and D. Song, “Duet: an expressive higher-order language and linear type system for statically enforcing differential privacy,” Proc. ACM Program. Lang. , vol. 3, no. OOPSLA, Oct. 2019. [Online]. Available: https://doi.org/10.1145/3360598 [70] M. Noble, A. Bellet, and A. Dieuleveut, “Differentially private federated learning on heterogeneous data,” CoRR , vol. abs/2111.09278, 2021. [Online]. Available: https://arxiv.org/abs/2111.09278 [71] M. O’Connor, N. Chatterjee, D. Lee, J. Wilson, A. Agrawal, S. W. Keckler, and W. J. Dally, “Fine-grained dram: energy-efficient dram for extreme bandwidth systems,” in Proceedings of the 50th Annual IEEE/ACM International Symposium on Microarchitecture ,ser. MICRO-50 ’17. New York, NY, USA: Association for Computing Machinery, 2017, p. 41–54. [Online]. Available: https: //doi.org/10.1145/3123939.3124545 [72] B. Park, R. Hwang, D. Yoon, Y. Choi, and M. Rhu, “Diva: An accelerator for differentially private machine learning,” in MICRO ,2022. [73] M. Pelikan, S. S. Azam, V. Feldman, J. H. Silovsky, K. Talwar, C. G. Brinton, and T. Likhomanenko, “Enabling differentially private federated learning for speech recognition: Benchmarks, adaptive optimizers and gradient clipping,” 2025. [Online]. Available: https://arxiv.org/abs/2310.00098 [74] N. Ponomareva, S. Vassilvitskii, Z. Xu, B. McMahan, A. Kurakin, and C. Zhang, “How to dp-fy ml: A practical tutorial to machine learning with differential privacy,” in Proceedings of the 29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining , ser. KDD ’23. New York, NY, USA: Association for Computing Machinery, 2023, p. 5823–5824. [Online]. Available: https://doi.org/10.1145/3580305.3599561 [75] M. Rao, G. Chennupati, G. Tiwari, A. Kumar Sahu, A. Raju, A. Ras-trow, and J. Droppo, “Federated self-learning with weak supervision for speech recognition,” ICASSP 2023 - 2023 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) ,2023. [76] J. Redmon and A. Farhadi, “Yolov3: An incremental improvement,” 
+
+arXiv preprint arXiv:1804.02767 , 2018. [77] J. Reed and B. C. Pierce, “Distance makes the types grow stronger: a calculus for differential privacy,” in Proceedings of the 15th ACM SIGPLAN International Conference on Functional Programming , ser. ICFP ’10. New York, NY, USA: Association for Computing Machinery, 2010, p. 157–168. [Online]. Available: https://doi.org/10.1145/1863543.1863568 [78] A. Samajdar, J. M. Joseph, Y. Zhu, P. Whatmough, M. Mattina, and T. Krishna, “A systematic methodology for characterizing scalability of dnn accelerators using scale-sim,” in 2020 IEEE International Sym-posium on Performance Analysis of Systems and Software (ISPASS) ,2020, pp. 58–68. [79] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen, “Mo-bilenetv2: Inverted residuals and linear bottlenecks,” in Proceedings of the IEEE conference on computer vision and pattern recognition , 2018, pp. 4510–4520. [80] M. J. Sheller, G. A. Reina, B. Edwards, J. Martin, and S. Bakas, “Feder-ated learning in medicine: facilitating multi-institutional collaborations without sharing patient data,” Scientific reports , vol. 10, no. 1, p. 12598, 2020. [81] X. Shen, H. Jiang, Y. Chen, B. Wang, and L. Gao, “Pldp-fl: Federated learning with personalized local differential privacy,” Entropy , vol. 25, no. 3, p. 485, March 2023. [82] R. Shokri, M. Stronati, C. Song, and V. Shmatikov, “Membership inference attacks against machine learning models,” in 2017 IEEE S&P ,2017, pp. 3–18. [83] K. Simonyan and A. Zisserman, “Very deep convolutional networks for large-scale image recognition,” arXiv preprint arXiv:1409.1556 , 2014. [84] L. Sun, J. Qian, and X. Chen, “Ldp-fl: Practical private aggregation in federated learning with local differential privacy,” in Proceedings of the Thirtieth International Joint Conference on Artificial Intelligence ,2021, pp. 1571–1578. [85] M. Sun, T. Wei, and J. C. Lui, “Taintart: A practical multi-level information-flow tracking system for android runtime,” in CCS , 2016. [86] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed, D. Anguelov, D. Erhan, V. Vanhoucke, and A. Rabinovich, “Going deeper with convolutions,” in Proceedings of the IEEE conference on computer vision and pattern recognition , 2015, pp. 1–9. [87] S. Takagi and S. Hasegawa, “Securing private federated learning in a malicious setting: A scalable tee-based approach with client auditing,” 2025. [Online]. Available: https://arxiv.org/abs/2509.08709 [88] S. Thoziyoor, J. H. Ahn, M. Monchiero, J. B. Brockman, and N. P. Jouppi, “A comprehensive memory modeling tool and its application to the design and analysis of future memory hierarchies,” in 2008 International Symposium on Computer Architecture , 2008, pp. 51–62. [89] F. Tramer, A. Terzis, T. Steinke, S. Song, M. Jagielski, and N. Carlini, “Debugging differential privacy: A case study for privacy auditing,” 2022. [Online]. Available: https://arxiv.org/abs/2202.12219 [90] A. Triastcyn and B. Faltings, “Federated learning with bayesian differ-ential privacy,” in 2019 IEEE International Conference on Big Data (Big Data) , 2019, pp. 2587–2596. [91] S. Truex, L. Liu, K.-H. Chow, M. E. Gursoy, and W. Wei, “Ldp-fed: federated learning with local differential privacy,” in Proceedings of the Third ACM International Workshop on Edge Systems, Analytics and Networking . New York, NY, USA: Association for Computing Machinery, 2020, p. 61–66. [Online]. Available: https://doi.org/10.1145/3378679.3394533 [92] A. Vaid, S. K. Jaladanki, J. Xu, S. Teng, A. Kumar, S. Lee, S. Somani, I. Paranjpe, J. K. De Freitas, T. Wanyan et al. , “Federated learning of electronic health records to improve mortality prediction in hospitalized patients with covid-19: Machine learning approach,” JMIR Medical Informatics , vol. 9, no. 1, p. e24207, 2021. [93] S. L. Warner, “Randomized Response: A Survey Technique for Eliminating Evasive Answer Bias,” Journal ofMethodology the American Statistical Association , vol. 60, no. 309, pp. 63–69, Mar. 1965. [Online]. Available: http://www.tandfonline.com/doi/abs/ 10.1080/01621459.1965.10480775 [94] K. Wei, J. Li, M. Ding, C. Ma, H. H. Yang, F. Farokhi, S. Jin, T. Q. S. Quek, and H. V. Poor, “Federated learning with differential privacy: Algorithms and performance analysis,” IEEE Transactions on Information Forensics and Security , vol. 15, pp. 3454–3469, 2020. [95] J. Xu, B. S. Glicksberg, C. Su, P. Walker, J. Bian, and F. Wang, “Federated learning for healthcare informatics,” Journal of Healthcare Informatics Research , 2020. [96] X. Yang, W. Huang, and M. Ye, “Dynamic personalized federated learning with adaptive differential privacy,” in Advances in Neural Information Processing Systems , vol. 36, 2023, pp. 72 181–72 192. [97] X. Yang, W. Huang, and M. Ye, “Dynamic personalized federated learning with adaptive differential privacy,” in Thirty-seventh Conference on Neural Information Processing Systems , 2023. [Online]. Available: https://openreview.net/forum?id=RteNLuc8D9 [98] D. Zhang, R. McKenna, I. Kotsogiannis, M. Hay, A. Machanavajjhala, and G. Miklau, “Ektelo: A framework for defining differentially-private computations,” in Proceedings of the 2018 International Conference on Management of Data , ser. SIGMOD ’18. New York, NY, USA: Association for Computing Machinery, 2018, p. 115–130. [Online]. Available: https://doi.org/10.1145/3183713.3196921 [99] D. Zhang and D. Kifer, “Lightdp: towards automating differential privacy proofs,” in Proceedings of the 44th ACM SIGPLAN Symposium on Principles of Programming Languages , ser. POPL ’17. New York, NY, USA: Association for Computing Machinery, 2017, p. 888–901. [Online]. Available: https://doi.org/10.1145/3009837.3009884 [100] H. Zhang, E. Roth, A. Haeberlen, B. C. Pierce, and A. Roth, “Fuzzi: a three-level logic for differential privacy,” Proc. ACM Program. Lang. , vol. 3, no. ICFP, Jul. 2019. [Online]. Available: https://doi.org/10.1145/3341697 [101] Y. Zhu, R. Kiros, R. Zemel, R. Salakhutdinov, R. Urtasun, A. Torralba, and S. Fidler, “Aligning books and movies: Towards story-like visual explanations by watching movies and reading books,” in Proceedings of the IEEE international conference on computer vision , 2015, pp. 19–27. 
+
+16
