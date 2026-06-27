@@ -1,0 +1,1353 @@
+Title: Cache-Resident LLM Inference in GB-Scale Last-Level Caches
+
+URL Source: https://arxiv.org/pdf/2606.25353v1
+
+Published Time: Thu, 25 Jun 2026 00:31:47 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Cache-Resident LLM Inference in GB-Scale Last-Level Caches 
+
+Wanning Zhang 
+
+King Abdullah University of Science and Technology Saudi Arabia 
+
+wanning.zhang@kaust.edu.sa 
+
+Tongzhou Gu 
+
+King Abdullah University of Science and Technology Saudi Arabia 
+
+tongzhou.gu@kaust.edu.sa 
+
+Marco Canini 
+
+King Abdullah University of Science and Technology Saudi Arabia 
+
+marco@kaust.edu.sa 
+
+Ceyu Xu 
+
+The Hong Kong University of Science and Technology Hong Kong SAR, China 
+
+eeentropy@ust.hk 
+
+Jian Weng 
+
+King Abdullah University of Science and Technology Saudi Arabia 
+
+jian.weng@kaust.edu.sa 
+
+Abstract 
+
+Large language model (LLM) inference is increasingly dom-inated by data movement across the memory hierarchy. Recent advances in 3D-stacked cache technologies have enabled GB-scale last-level caches in modern server CPUs. These caches make it possible to keep reusable model weights on chip and exploit cache bandwidth and latency. Achieving this regime, however, is not straightforward. Un-der conventional pipelining, the deeper partitioning needed for weight residency also increases in-flight requests and therefore the KV-cache footprint. Meanwhile, once oper-ators become cache-resident, operator-centric execution pays disproportionate synchronization overhead at every operator boundary. We present a cache-resident execution model for infer-ence on hierarchical-memory clustered systems. The model separates weight-centric operators from attention and KV-cache management into dedicated resource domains. This keeps reusable weights cache-resident while scaling KV ca-pacity independently of pipeline depth. It also relaxes syn-chronization from operator boundaries to true sub-operator dependencies, reducing coordination overhead in the cache-resident regime. We instantiate this model on a multi-socket CPU cluster with a weight–attention decoupled architecture, locality-aware placement, and a specialized static runtime. Our evaluation shows that the prototype substantially outper-forms equally provisioned llama.cpp . Measured end to end on the deployed Llama-3.2-3B and Llama-2-7B config-urations, it achieves 2.04× –11.51× speedup on time-per-output-token (TPOT). Under a validated analytical model, it further reaches up to 13.9× TPOT speedup across a broad range of model sizes, context lengths, and batch sizes. These results show that commodity CPUs with GB-scale last-level caches can support efficient LLM inference when execution is organized around cache residency, decoupled state management, and dependency-aware coordination. 
+
+Keywords: large language model inference, last-level cache, CPU inference 
+
+1 Introduction 
+
+Large language model (LLM [29]) inference is prominently dominated by data movement. Each token is decoded by propagating embeddings through operators layer by layer, involving activated model weights and attention state (e.g., KV cache). As model sizes and context lengths grow, the re-peated decoding incurs substantial data movement across the memory hierarchy and frequent synchronization at op-erator boundaries, leading to compute unit underutilization. A natural, if ideal, response is to keep model weights res-ident in on-chip caches. To do so, weights must be parti-tioned across multiple cache instances. Layer-wise partition-ing, a.k.a. pipeline parallelism (PP), shards the model by lay-ers, so the pipeline depth is determined by the model size rel-ative to cache capacity. Although a deeper pipeline reduces per-stage weight footprint, it also increases the number of concurrently in-flight tokens. Attention state (KV cache) must be maintained for every in-flight token at each stage. As pipeline depth increases, the total KV cache footprint grows proportionally, competing for the same limited cache capac-ity required for weight residency. Since both attention state and model weights contend for the same cache resources, a fundamental scalability limitation emerges for cache-resident deployment under PP. Our insight is that weights and attention have fundamen-tally different access and reuse patterns. Weights are static and can be reused for different tokens, while the KV cache is a runtime state dedicated to a single query. This cache-resource contention can be eliminated by re-organizing weights and attention state into separate dedicated resources. In contrast, intra-layer partitioning, a.k.a. tensor paral-lelism (TP), splits individual operators within a layer across different computing domains to reduce memory pressure and improve utilization. In practice, TP is implemented un-der an operator-centric execution model: the data-parallel 
+
+> 1
+> arXiv:2606.25353v1 [cs.AR] 24 Jun 2026 Zhang et al.
+
+loops of each operator are distributed across domains, fol-lowed by a synchronization barrier to materialize results before subsequent operators proceed. Although convenient for modular system design, such global synchronization be-comes increasingly costly when data already reside in on-chip cache and computation is fine-grained [30]. Our insight is that this synchronization overhead can be substantially reduced by adopting a finer-grain scheduling strategy. Many sub-computations within a layer (e.g. atten-tion heads) are semantically independent and do not require immediate global synchronization. Scheduling computation at sub-operator granularity avoids unnecessary barriers and amortizes synchronization overhead. These ideas are realized in a cache-resident execution model for cache-resident inference on hierarchical-memory clus-tered systems. The model is prototyped on a multi-socket CPU architecture with large shared last-level caches. High-end server-class multi-socket CPUs already provide suffi-cient arithmetic throughput for memory-dominated LLM in-ference. Once data resides in on-chip cache, general-purpose hardware can achieve substantial efficiency gains. The technical contributions of this work are as follows: 
+
+• Performance bottleneck characterization under cache-residency. Inference is typically bounded by data movement across the memory hierarchy that serves the working set, and co-located weights and KV state amplify this cache pressure. Even when cache resi-dency is achieved, the synchronization overhead at operator boundaries becomes a bottleneck. 
+
+• An execution model for scalable cache-resident inference. The model decouples weight-centric and attention-centric operators to optimize each individ-ual access and reuse pattern, and relaxes synchroniza-tion from operator boundaries to true data dependen-cies. 
+
+• A practical implementation and evaluation. An instantiation on a multi-socket CPU cluster validates this execution model, demonstrates substantial per-formance gains over llama.cpp , and exposes the fixed-resource tradeoff of WA separation. The execution bottlenecks and resource-organization prin-ciples developed in this work are expressed at the level of memory hierarchy and execution dependencies, and are there-fore not specific to CPUs. We instantiate them on CPUs for two reasons. First, GB-scale last-level caches make modern multi-socket CPUs a natural substrate for studying cache-resident inference. Second, CPUs remain broadly available deployment hardware even when high-end accelerators, e.g. GPUs, are scarce because of supply chain capability and geopo-litical regulations [28]. Our evaluation shows that the prototype substantially out-performs equally provisioned llama.cpp . Measured end to end on the Llama-3.2-3B and Llama-2-7B deployments, it Softmax( )                             
+
+> (b) Linear Projection (W qkv T=QKV)
+> V
+> State
+> K State
+> MLP1 MLP2 Sigmoid( )
+> Q Weight K Weight V Weight
+> (c) Attention (Softmax(QK T)V )
+> (d) Feed Forward Network
+> =
+> =
+> =
+> Legend of Propagation
+> KV-Cache Append Tensor Operators
+> Static
+> model
+> weights
+> Runtime
+> state
+> Static model
+> weights and
+> activations
+> Xform 1 Xform 2 Xform N …
+> (a) Propagating Input Embeddings for Inference
+> Recurrence back for next token
+> Input
+> Output
+> (e) Multi-head Attention
+> Head 1
+> Head 2
+> Head 3
+> Q Proj. K Proj.
+> =
+> Multi-head attention appends KV-cache and
+> performs matrix multiplication locally in a sub-matrix
+
+Figure 1. Transformer-based LLM decodes each token by propagating the embeddings across operators. achieves 2.04× –11.51× TPOT speedup. Under model-based extrapolation, it further reaches up to 12.5× throughput speedup and up to 13.9× TPOT speedup across model sizes, context lengths, and batch sizes of Llama-family models. 
+
+2 Background & Motivation: LLM Inference 
+
+In this section, we first characterize transformer-based LLM inference. We then discuss a hardware-agnostic paradigm for clustered inference systems by analyzing its performance model, scalability limits, and the programming abstraction that motivates this work. 
+
+2.1 Transformer-based LLM Inference 
+
+Fig. 1(a) illustrates a transformer-based LLM inference: When decoding, each token is generated by propagating an em-bedding vector through a stack of transformer blocks. The output embedding of the final block is then projected to pro-duce the next token, which is fed back into the model for subsequent steps. Our system supports both prefilling and decoding (see §6), but the rest of the paper focuses on decoding because      
+
+> 2Cache-Resident LLM Inference in GB-Scale Last-Level Caches 124816 32
+> Batch Size
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> FLOPs / Byte
+
+Arithmetic Intensity vs Batch Size 
+
+> LLaMA 3B
+> LLaMA 7B
+
+Figure 2. FLOPs/Byte of Llama-2 3B & 7B during decoding with context length 4096 .it is the long-running steady state and dominates execution time. Fig. 1(b)–(d) zooms into a single transformer block, which typically consists of three phases: QKV projection, attention, and feed-forward network (FFN). 
+
+Common Linear Operations. The dominant computations across all transformer inference phases are matrix–vector multiplications (or thin matrix–matrix multiplications when batched). Such kernels provide very limited data reuse be-cause each weight parameter is typically consumed only once per token. Batching is commonly applied to mitigate such scarce data reuse, allowing shared model weights to be reused across multiple requests. However, sequence-specific runtime states (i.e., the KV-cache) must still be accessed in-dependently for each sequence. Consequently, as batch size increases, the effective arithmetic intensity improves only modestly and remains relatively low, as shown in Fig. 2. This observation suggests that decoding performance is still largely constrained by memory bandwidth, leaving substan-tial opportunities for improving data locality. 
+
+Static-weight operators. The QKV projection and FFN de-pend solely on model weights, which remain constant across different queries. Therefore, the data movement can be amor-tized by batching queries, which increases arithmetic inten-sity and reuses weights. However, batch size cannot be arbi-trarily large because of the latency requirements and cache footprint for operator optimization. 
+
+State-dependent attention. In contrast, attention introduces a dependence on dynamically growing runtime state, namely the KV cache [14, 25]. For each token, the query vector in-teracts with the accumulated KV states in the cache. Prior KV-vectors were stored in this cache, and newly projected KV vectors are appended to this cache. Unlike projection or FFN operators, whose weights are shared across queries, attention involves per-sequence state that grows with con-text length. Consequently, batching different queries does not increase data reuse within attention. 
+
+Takeaway. Decoding a single token under a conventional transformer-based LLM accesses all activated model weights along the forward path as well as the related accumulated KV cache for attention computation. This process is prominently dominated by data movement due to the low data reuse. Cluster Inter-node Communication Layer                                                 
+
+> Main Memory
+> Shared Cache
+> Private
+> Cache
+> Private
+> Cache
+> Private
+> Cache
+> Private
+> Cache
+> CU CU CU CU
+> …
+> (a) AClustered Inference System
+> Node 0 Node 1 Node 2 Node 3 Node N
+> (b) Atypical cluster node is composed by aset of resource domains
+> -Domain consist of computing units (CU) organized around memory hierarchy
+> -Thicker lines indicates higher the sustained data bandwidth between
+> …
+> Node Resource Domain Resources Legends: Abstract Comm.
+> Shared Cache
+> Private
+> Cache
+> Private
+> Cache
+> Private
+> Cache
+> Private
+> Cache
+> CU CU CU CU
+> …
+
+Figure 3. Architectural paradigm for LLM inference system. 
+
+2.2 A Paradigm of Clustered Processing Systems 
+
+Fig. 3 presents a high-level architectural paradigm commonly used for large-scale LLM inference. The abstraction is in-tentionally hardware-agnostic, without binding to a specific platform or topology. Computational units (CU) are organized around a hierar-chical memory system to sustain data for processing. The hi-erarchy consists of private caches and access to a shared last-level cache (LLC), backed by main memory. Higher levels in the memory hierarchy typically provide higher bandwidth but lower capacity. This bandwidth-capacity imbalance re-quires careful control of the active working set to maximize data reuse and CU utilization. A group of computing units sharing portions of the mem-ory hierarchy forms a resource domain . Within a resource domain, communication bandwidth is significantly higher than across domains, as illustrated by the thicker intercon-nect links in Fig. 3(b). Multiple resource domains are integrated into a node . In practice, node size is bounded by physical design constraints, including chip area, packaging, power, and manufacturing yield. Thus, a single node cannot scale arbitrarily in compute or cache capacity. To scale beyond the limits of a single node, multiple nodes are connected via an inter-node communication layer, form-ing a cluster. Inter-node bandwidth is typically lower and higher latency than intra-node communication, introducing additional costs for synchronization and data movement. This hierarchical organization introduces fundamental trade-offs among computation placement, data reuse, and commu-nication cost, which we leverage throughout the rest of the paper. Further, this scaling abstraction is intentionally separated from any specific hardware instantiation. However, in this work we realize and evaluate it on a multi-socket CPU clus-ter, whose GB-scale last-level caches make it a natural sub-strate for studying cache-resident LLM inference. 
+
+> 3Zhang et al. Xform 1
+> Xform 2
+> Xform N
+
+…     
+
+> (a) Tensor Parallelism (b) Pipeline Parallelism
+> Weight
+> Shard 1
+> Out
+> Weight
+> Shard 2
+> Weight
+> Shard 3
+
+…    
+
+> Domain 1
+> Domain 2
+> Domain 3 Node 1 Node 2 Node N
+> Operator Barrier
+> Embed Embed
+> KV-$
+> Sync each shard of comp
+> at a operator boundary
+> #KV-Cache is proportional
+> to on-fl ight query tokens
+
+Figure 4. Tensor and pipeline parallelism (TP & PP) scaling 
+
+2.3 Performance Scaling 
+
+We analyze performance scaling [20, 30] on the clustered system above using two widely adopted techniques, tensor parallelism (TP) and pipeline parallelism (PP), as illustrated in Fig. 4. TP shards individual operators across devices [27], while PP partitions consecutive layers into pipeline stages [13, 17]. Inference performance scales along two coupled dimen-sions: throughput and latency .
+
+Parallelization Strategy. Fig. 4(a) illustrates tensor paral-lelism, which distributes independent output computations of an operator across multiple resource domains, each has its own CUs and memory hierarchy. Partial results are syn-chronized at operator boundaries. In this work, we do not apply TP across nodes, as cross-node synchronization incurs substantial communication over-head. Instead, pipeline parallelism (PP) is used to scale across nodes by assigning consecutive transformer layers to differ-ent nodes. Only embeddings are exchanged between nodes, reducing inter-node communication volume. 
+
+Performance Upper Bound. We build an analytical model to characterize latency and throughput under PP scaling. Transformer-based LLMs are constructed by stacking nearly identical layers, allowing layers to be evenly partitioned across pipeline stages (nodes). Let the latency of a single evenly partitioned pipeline stage be 𝑙 , and let the pipeline depth be 
+
+𝑝 . The end-to-end latency of decoding one token is: 𝐿 = 𝑝 ⋅ 𝑙 .Under steady-state execution, throughput is bounded by the slowest stage: 𝑇 = 1𝑙 .Since transformer matrix-vector multiplication exhibits low arithmetic intensity and limited data reuse, the service time of a pipeline stage is typically memory-bound. Thus, 
+
+𝑙 ≥ Memory Footprint per Token Effective Memory Bandwidth ,
+
+where memory footprint per token includes model weights and runtime state, and the effective bandwidth of the high-est memory level that accommodates this footprint. 
+
+Opportunity 1: Cache-Resident Inference. A straightfor-ward response to the model above is to place the active work-ing set in the highest-bandwidth memory level available. Re-cent advancements in 3D-stacked cache technologies have enabled GB-scale on-chip caches. Accommodating both model weights and runtime state on chip could significantly im-prove the per-stage serve time. However, achieving cache residency introduces a fundamental paradox of scalability. 
+
+Challenge 1: KV-Cache Pressure Paradox. Cache-resident inference becomes fundamentally difficult when scaling to 
+
+larger models . Specifically, KV-cache is request-specific, so each KV-cache is separately maintained, and the total KV-cache scales with: KV Cache ∝ # Layers × Batch × (Ctx Len.) Scaling the model size increases the number of transformer layers, and the associated KV-cache sizes. Meanwhile, the model weights should also be partitioned across more pipeline stages, 𝑝 . To sustain steady-state throughput, at least 𝑝 de-coding requests must remain in flight to keep all stages busy. Assuming each node is evenly responsible for #Layers  
+
+> 𝑝
+
+layers, the per-node KV-cache pressure is: Per-node KV Cache ∝ #Layers 
+
+𝑝 × 𝑝 × Batch × (Ctx Len.) 
+
+∝ #Layers × Batch × (Ctx Len.) 
+
+Takeaway. A paradox emerges: assigning fewer layers to each pipeline node reduces the local weight footprint, but it also increases the number of pipeline stages and therefore the number of in-flight requests needed to keep the pipeline busy. These effects cancel, so the per-node KV-cache pressure remains unchanged. Simply allocating layers across more pipeline stages does not relieve cache pressure under a weight–KV co-located design. 
+
+This observation also guides our evaluation methodology. End-to-end evaluation on real machines is preferable, but limited hardware makes it practical to profile isolated per-node experiments under matched KV-cache pressure and then estimate end-to-end performance with an analytical model. See §6 for details. 
+
+Challenge 2: Synchronization Overhead. When execution is memory-bound, synchronization overhead is dwarfed by memory latency. Once cache residency is achieved, opera-tor kernels become much shorter, and synchronization is no longer negligible. All machine learning frameworks [1, 4, 18] adopt an operator-centric model. Operators serve both as units for model development and as boundaries for syn-chronization and scheduling. All parallelized shards must synchronize before downstream operators can proceed. 
+
+2.4 Operator-centric Execution 
+
+The operator-centric abstraction has been widely adopted in machine learning frameworks [1, 4, 18, 24] because it of-fers a near one-to-one correspondence between mathemat-ical formulations and execution units. This abstraction al-lows model developers and system engineers to focus on their respective scopes, but it also imposes an abstraction tax. Each operator forms a strict synchronization boundary: 
+
+> 4Cache-Resident LLM Inference in GB-Scale Last-Level Caches
+
+all partial results must be fully synchronized before feeding to downstream operators begin. While operator fusion mit-igates overhead for simple elementwise functions (e.g., sig-moid or exponential), it is ineffective for structurally inde-pendent matrix multiplications within transformer blocks. 
+
+Opportunity 2: Head Independence. In LLM inference, many computations are semantically independent at the attention-head granularity. As illustrated in Fig. 1(e), each head oper-ates on its own shard of QKV projections and corresponding KV state, and can compute attention independently. Never-theless, operator-centric execution enforces global synchro-nization at operator boundaries, introducing redundant co-ordination beyond true data dependencies. As operator kernels become smaller under cache-resident execution, their latency decreases, and the relative cost of cross-head coordination becomes increasingly significant. This mismatch between true data dependencies and operator-level synchronization limits scalability. 
+
+3 Architecture 
+
+The discussion above already identifies both the scalability paradox and the resulting synchronization overhead in cache-resident inference. Our goal is to sustain cache residency of the entire active working set, including reusable model weights and dynamically growing KV state, within high-bandwidth on-chip memory. We first introduce a weight–attention (WA) decoupled or-ganization, derived from the different behaviors of static weights and the growing KV cache, and then redesign syn-chronization around sub-operator data dependencies. 
+
+3.1 Weight–Attention Decoupled Organization 
+
+As discussed in §2.3, scaling to larger models requires deeper pipeline to shard model weights across nodes. However, deeper pipeline also enlarges the KV footprint, since at least 𝑝 in-flight decoding requests are required to sustain a pipeline of depth 𝑝 . As illustrated in Fig. 5(a), the growing KV caches and static weights compete for the same cache capacity, evict-ing reusable weight data to lower-level memory hierarchy with lower bandwidth. Under such naive resource alloca-tion, increasing the number of nodes further deepens the pipeline and proportionally amplifies the KV footprint. Our insight into this issue lies in a key behavior difference between weight-centric and attention operators. Weight-centric operators themselves (QKV projection and FFN) repeatedly access reusable model weights but do not depend on dynam-ically growing KV state. In contrast, the attention operators, expressed as 𝐴𝑡𝑡𝑛(𝑄) = Softmax (𝑄𝐾 ⊤)𝑉 , form a closed set that interacts exclusively with KV cache and local activa-tions, without accessing static weights. Such difference reveals a natural boundary between mem-ory and compute resource allocation, as shown in Fig. 5(b). Weight-centric operators are grouped into weight nodes that prioritize reusable weight residency, and no KV cache is maintained there. Attention-centric operators are instead isolated into attention domains dedicated to managing KV state. Additional KV-cache capacity can then be integrated by routing the outputs of weight-centric operators to decou-pled attention nodes, enabling scaling to deeper pipelines or longer contexts. 
+
+Scalability: Because weight-centric and attention operators are separated into different resource domains, KV-cache man-agement becomes independent of weight execution. In our design, each decoding sequence is associated with a spe-cific attention node that owns its KV-cache state, and the outputs of weight-centric operators are routed to that node. This routing mechanism lets the system scale KV capacity by attaching additional attention nodes without increasing the pipeline depth of the weight-centric stages. WA sepa-ration is optional: when KV-cache pressure is still modest, a colocated design remains more socket-efficient; when la-tency is the priority, dedicating an attention node removes KV interference from the weight-resident path. Even if the KV-cache working set eventually exceeds L3 capacity, the resulting performance degradation is confined to the cor-responding attention node, while weight-centric operators remain cache-resident on weight nodes and continue to ben-efit from high-bandwidth cache access. See our evaluation in §6 for more details on the effects of WA separation and sensitivity to cache overwhelming. By accommodating the working set in high-bandwidth cache, the compute pipeline stall caused by sustaining data is substantially reduced. However, the synchronization over-head does not shrink accordingly. As discussed in §2.4, operator-centric execution enforces dependencies at operator granu-larity even though only a subset of them is required by the underlying semantics. This motivates rethinking synchro-nization granularity beyond operator boundaries. 
+
+3.2 Sub-operator (A)synchronicity 
+
+After cache residency is achieved, synchronization overhead is no longer negligible. Under the operator-centric execu-tion model, each operator forms a strict synchronization boundary: all tensor-parallel partial results must be aggre-gated before proceeding. This enforcement creates a global fan-in at every operator boundary, as shown in Fig. 6(a). Such synchronization cost scales with fan-in: the more tensor-parallel shards converge on the same completion state, the higher the coordination overhead and contention on the shared lock state. However, the true data dependencies exist at sub-operator granularity. In multi-head attention, each head operates on its own shard of projections and KV state. One head does not semantically depend on the completion of others. Instead of synchronizing at the operator boundary, we allow each head to propagate its readiness independently. 
+
+> 5
+
+Zhang et al. KV Cache 1  
+
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> Cache Capacity
+> ❌Overwhelmed cache cannot be scaled up by adding more nodes
+> Embedding Flow
+
+(a)  Naively  Colocate  Static  Weight  and  KV  Cache        
+
+> Mem. Alloc
+> Node 1Node 2Node 3Node 4
+
+(b)  Decouple  Weight  and  Attention  Computation                   
+
+> Static Weight
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> Weight
+> Node 1
+> Attn
+> Node 5
+> Static Weight
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> Static Weight
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> Static Weight
+> KV Cache 1
+> KV Cache 2
+> KV Cache 3
+> KV Cache 4
+> QKV
+> Attn
+> FFN
+> QKV
+> Attn
+> FFN
+> Static Weight
+> QKV
+> Attn
+> FFN
+> Operator
+> QKV
+> Attn
+> FFN
+> Static Weight Static Weight Static Weight
+> QKV
+> Attn
+> FFN
+> QKV
+> Attn
+> FFN
+> QKV
+> Attn
+> FFN
+> QKV
+> Attn
+> FFN
+> No KV
+> here
+> Attn
+> Node 6Attn
+> Node 7Attn
+> Node 8
+> Weight
+> Node 2Weight
+> Node 3Weight
+> Node 3
+
+Figure 5. Comparison between weight–KV colocation and weight–attention decoupling As illustrated in Fig. 6(b), each head emits a ready sig-nal upon completion. Downstream computation is driven by these signals rather than by a shared global barrier. On the other hand, gated FFN, 𝜎(𝑀 1𝑣)⊙𝜎(𝑀 2𝑣) , requires the full embedding vector 𝑣 . This yields two options for co-ordinating partial progress across heads. Each has tradeoffs between memory traffic and synchronization. One option is to compute an outer-product-style partial update per seg-ment and then perform a single global synchronization to aggregate each partial sum of 𝑣 ; however, this approach in-curs large memory traffic between L1 and LLC. Instead, we perform a tree-based synchronization that bounds fan-in at each merge and then execute fused GEMV and elementwise operations, as shown in Fig. 6(b). See the next section for implementation details. To sum up, synchronization granularity is aligned with true data dependencies rather than operator abstraction bound-aries. Execution progresses according to per-head readiness and bounded-degree accumulation, reducing coordination overhead without altering semantic correctness. 
+
+4 Implementation 
+
+This section describes how the proposed design is realized on the clustered system of Fig. 3 and the hardware plat-form of Fig. 7. We prototype it on a server cluster built from AMD EPYC 9684X CPUs. Each server node contains two CPU sockets and connects to a central InfiniBand switch through PCIe NICs. 
+
+4.1 Resource Mapping for Parallelization Pipeline Parallelism across Rack Nodes. At the cluster level, the system applies pipeline parallelism (PP) by par-titioning consecutive transformer layers across rack nodes. Each rack node hosts multiple pipeline stages. Only acti-vation tensors are exchanged between rack nodes, while model weights remain local to the node that owns the stage. 
+
+Intra-Server Pipeline via WA Separation. Within each rack node, two CPU sockets are available (named CPU1 and FFN     
+
+> QKV Proj. (GEMV)
+> QKV Head 1
+> QKV Head 2
+> QKV Head N
+> …
+> Attention
+> Attn. Head 1
+> Attn. Head 2
+> Attn. Head N
+> …
+> Concat. Embed.
+> Weight Node Attention Node
+> FFN
+> Weight Node
+> GEMV 1
+> GEMV 2
+> Sigmoid( ⊙)
+> Elementwise
+> operator fused
+
+(a)  Operator-Centric  Synchronization  at  Boundary 
+
+(b)  Sub-Operator  (A)synchronicity           
+
+> QKV Proj. (GEMV)
+> QKV Head 1
+> QKV Head 2
+> QKV Head N
+> …
+> Weight Node
+> Attention
+> Attn. Head 1
+> Attn. Head 2
+> Attn. Head N
+> …
+> Attention Node
+> Sigmoid( ⊙)
+> Weight Node
+> Concat. Embed.
+> ❌A global fan-in synchronization at the boundary of each operator.
+> …
+> ✅Each dependence is driven by signal or lower fan-in degree.
+> Tree-based reduction
+> Concat. Embed.
+> GEMV 1
+> GEMV 2
+> Ready Signal Sync Lock
+
+Figure 6. Sub-operator coordination CPU2). We treat each CPU socket as a node in the archi-tectural sense defined in §2.2. As discussed in §3.1, The ex-ecution model partitions each transformer layer into two sequential stages: (i) weight-centric operators (QKV projec-tion and FFN), and (ii) attention-centric operators. CPU1 is designated as the weight node , and executes weight-centric operators, while CPU2 is designated as the attention node ,and maintains KV-cache state while executing attention com-putation. This intra-server inter-node pipeline prevents dynamically growing KV-cache from competing with reusable model weights for cache capacity within the same socket, while retaining a low communication overhead. 
+
+Tensor Parallelism within a Socket. Inside each socket-node, tensor parallelism (TP) is realized across physical cores. Each core is treated as a resource domain, providing an ex-ecution context with private L1/L2 caches. Matrix–vector multiplications are partitioned across cores, where each core 
+
+6Cache-Resident LLM Inference in GB-Scale Last-Level Caches 
+
+computes a disjoint shard of output channels. This aligns the scheduling granularity of TP with the smallest cache-resident compute domain. 
+
+4.2 Cache-resident Computational Kernels 
+
+LLM decoding is dominated by matrix–vector multiplica-tion (GEMV) with low data reuse in both linear projection and attention. To minimize data movement across memory hierarchies, large structures such as weights and KV cache are streamed from LLC, while KB-scale activation embed-dings are kept in L1. 
+
+GEMV Kernel. During decoding, QKV projection and FFN layers reduce to a sequence of independent inner products, so output channels are partitioned across cores to perform GEMV on its assigned weight shard. Since weight matrices have significantly larger footprint than private caches, we do not attempt to retain them in L1/L2. For example, three 4096 × 4096 INT8 projection ma-trices require 48MB. Each shard is 512KB when partitioned across 96 cores, which comfortably fits within the 12MB LLC slice. In contrast, the activation (embedding) vector is sufficiently small, around 1 ∼8KB depending on the model, to reside en-tirely within the 32KB L1 data cache. Under tensor paral-lelism, each core computes a disjoint weight shard but con-sumes the same activation vector. We therefore keep a per-core copy of the activation in L1, so that all high-frequency reuse occurs at the highest-bandwidth level. This organization establishes a simple design principle: LLC is treated as a streaming layer for large-footprint data, while L1 is reserved for high-frequency reuse. Computation is structured so that data cross the LLC–core boundary as few times as possible. The same bandwidth consideration also explains the syn-chronization design in the feed-forward (FFN) stage, as illus-trated in Fig. 6, which exposes a fundamental trade-off be-tween synchronization overhead and memory traffic: One option is to adopt an outer-product–style partial accumu-lation, where each core computes independent partial up-dates and avoids early synchronization. While this reduces synchronization cost, it would require repeatedly streaming weight tiles or materializing intermediate vectors in LLC, thereby increasing LLC-to-core traffic. Given that LLC band-width and latency remain substantially inferior to L1, re-peated weight streaming quickly dominates execution time. In contrast, a bounded fan-in synchronization scheme in-troduces moderate coordination overhead but ensures that weight tiles are streamed only once, preserving L1 reuse and minimizing LLC traffic. In the cache-resident regime targeted by this design, mem-ory traffic across the LLC boundary is more expensive than synchronization. Therefore, we explicitly favor controlled synchronization over additional LLC streaming. (a)  Rack  Server  Cluster                
+
+> CPU1
+> CPU2
+> In fi niBand
+> (b) Dual-Socket
+> Server
+> …
+> Glue
+> Connect.
+> CCD1-3
+> (c) AMD per-Socket Topology
+> CCD4-6
+> CCD7-9 CCD10-12
+> Core1
+> …
+> L1
+> L2
+> (d) CCD Arch
+> Core2
+> L1
+> L2
+> Core8
+> L1
+> L2
+> …Banked Shared L3 (LLC)
+> Node 1
+> Node 2
+> Node N
+> Resource
+> Domain
+> LLC: 12MB/core ×96 cores = 1152MB ~GB
+> 32KB
+> 1MB
+
+Figure 7. Prototyping Hardware Platform To improve locality further, weight shards are partitioned and initialized in a bank-aware manner so that each core predominantly accesses LLC slices that are physically close to it. This placement is established during cache warmup at system initialization— when each core first touches its as-signed weight shard, that first touch determines the shard’s home cache bank, which is crucial for keeping it near the consuming core. See §4.3 for more details on cache-aware thread placement and initialization. 
+
+Attention Kernel. Attention computation is executed on the attention socket using a Flash-style kernel [6]. KV-cache blocks are processed in a tiled fashion, computing attention scores and value aggregation without materializing large in-termediate matrices. Since KV-cache footprint grows with context length, we similarly rely on LLC streaming for KV blocks while maintaining query vectors in private cache. 
+
+4.3 Customized Thread Pool Runtime 
+
+All the cache-residency and scheduling mechanisms discussed above require precise control over execution placement, syn-chronization structure, and task ordering. We therefore im-plement a static thread pool runtime instead of relying on existing frameworks such as OpenMP [5]. OpenMP provides general-purpose dynamic scheduling, task stealing, and configurable affinity policies. However, its synchronization model operates primarily at global-barrier granularity. Under tensor-parallel execution, these primitives introduce additional overhead and do not map well to our sub-operator coordination scheme. Prior microsecond-scale runtime systems show the same pattern: once tasks become short-lived, generic scheduling overhead rapidly becomes visible [22, 23]. In addition, OpenMP exposes only a limited set of coarse-grained affinity policies (e.g., spread or close ) rather than deterministic per-core binding control. Our design relies on 
+
+> 7Zhang et al.
+
+fixed shard-to-core mapping and predictable cache bank al-location, so this interface is not sufficient. 
+
+Static Per-Socket Thread Pools. We instantiate one static thread pool per socket. Threads are created once at initializa-tion and permanently pinned to physical cores to repeatedly execute shard-local computation. Our design benefits from this static thread pool in two ways: First, model execution follows a fixed dependency struc-ture with deterministic shard-to-core mapping. Since each core is dedicated to the same weight shard of an operator, task progression reduces to lightweight state transitions within a fixed execution loop, rather than general-purpose task sched-uling. Even a minimal task queue requires shared atomic counters or lock-protected data structures to coordinate pro-ducers and consumers. Such atomic operations introduce non-trivial contention and cache-line bouncing across cores, especially in this highly concurrent setting. By reducing ex-ecution to state transitions within a fixed execution loop, we avoid most shared atomic data structures. Second, because each thread is permanently bound to a specific core, the same pinned thread can first touch the weight shard that it later consumes during cache warmup. As discussed above, this first touch follows the same local-ity principle as first-touch NUMA placement [9] and helps keep the shard on LLC slices closest to the consuming core. Two thread pools are isolated per socket. No thread mi-grates across sockets, and each socket-node maintains an independent execution context. This per-socket isolation is essential for enforcing the weight–attention (WA) separa-tion: the weight socket executes weight-centric operators, while the attention socket maintains KV-cache state and ex-ecutes attention kernels, without cross-socket interference at the thread level. 
+
+Hierarchical Synchronization. To implement sub-operator asynchronicity, we employ a hierarchical synchronization structure built on lightweight atomic integers. Instead of maintaining a single global atomic counter that all cores up-date, we partition synchronization across CCD boundaries. Each CCD maintains a local atomic counter shared only by cores within that CCD. Threads first synchronize within their local CCD, propagating completion signals to a per-CCD coordinator. Only after intra-CCD synchronization com-pletes do representatives from each CCD participate in a second-level synchronization step. This follows the same ba-sic principle as scalable shared-memory synchronization and NUMA-aware locking [7, 16]: keep highly contended state local and limit cross-domain ownership transfer. This two-level design explicitly bounds the fan-in degree at each synchronization point. In a flat global barrier, a sin-gle synchronization variable is updated by all participating cores. The fan-in degree in this case equals the total num-ber of cores, and each additional participant introduces an-other potential owner of the corresponding cache line. As the atomic counter is repeatedly modified, its cache line must transfer ownership among all participants, causing cache-line bouncing proportional to the fan-in degree. In contrast, our hierarchical design limits fan-in locally. Within each CCD, only cores in that CCD participate in the first-level synchronization, so cache-line ownership trans-fers remain confined to that local domain. At the second level, only one representative per CCD participates in the cross-CCD synchronization, reducing the number of bounc-ing parties to the CCD representatives rather than all cores. Bounding fan-in therefore directly bounds the number of ownership transfers and coherence traffic, instead of allow-ing them to scale with total core count. There is a tradeoff between synchronization overhead and memory traffic: As discussed in the FFN implementation (Fig. 6), we choose global hierarchical synchronization, which ensures that weight shards are streamed only once and avoids execution strategies that would otherwise increase repeated LLC traffic. In the cache-resident regime targeted by this de-sign, bouncing shared cache lines is cheaper than streaming weight tiles multiple times from the LLC. 
+
+4.4 Inter-node Communication 
+
+As discussed above, within a server node the weight and at-tention sockets communicate through shared memory and lightweight synchronization between two pinned thread pools. The rest of this section therefore focuses on communication among cluster nodes. Our profiling shows that a naïve Ethernet connection re-quires roughly 0.5 ms per hop to transfer a simple 4KB em-bedding packet. This overhead is already comparable to the execution time of cache-resident operator kernels. As prior low-latency dataplane systems show [3], once the compute path shrinks to microseconds, software overhead in the com-munication stack becomes part of the critical path. To re-duce communication latency, the prototype adopts Infini-Band RDMA to transfer activation tensors between consecu-tive pipeline stages. Inter-node communication occurs only when embeddings produced by one pipeline stage are for-warded to the next stage. To minimize runtime overhead, RDMA queue pairs are established during initialization and reused throughout ex-ecution. Communication buffers are pre-registered so that transfers bypass the kernel networking stack and avoid dy-namic memory registration. Since pipeline stage mappings are static, the communication topology also remains fixed during decoding, eliminating connection setup and routing overhead on the critical path. Our evaluation shows that RDMA communication across four pipeline nodes incurs about 50 𝜇 s (roughly 0.5% of the end-to-end latency) in end-to-end LLaMA-3B decoding. Re-fer to the execution-time breakdown in the evaluation sec-tion for details. 
+
+> 8Cache-Resident LLM Inference in GB-Scale Last-Level Caches
+> LLaMA-3.2 3B LLaMA-2 7B Qwen-3 8B LLaMA-2 70B
+
+#Layers 28 32 36 80 #Sockets 4+1 8+1 9+1 80+1 Layers/socket 7 4 4 1INT8 wt. (GB) 3.21 6.74 8.19 68.98 
+
+Table 1. Model partitioning parameters. “+1” indicates an additional serving socket for embedding/argmax stages. 
+
+5 Experiment Setup 
+
+This section describes the experimental platform, models, baselines, and evaluation metrics used in our study. 
+
+Hardware Platform. We prototype the design on a 4-rack-node server cluster with AMD EPYC 9684X processors. Each server node contains two CPU sockets with built-in moth-erboard interconnection. The aggregated LLC capacity per socket is 1152MB (96 cores × 12MB), providing sufficient ca-pacity for cache-resident execution. Each node is equipped with an NVIDIA ConnectX-7 NIC connected through PCIe; nodes communicate via a non-blocking Ethernet switch at 400 Gbps. Each node also has 1.5TB DDR5 memory ( ≈ 400GB/s memory bandwidth). 
+
+Models and Quantization. The prototype is evaluated on three representative models, LLaMA-3.2-3B, LLaMA-2-7B, and Qwen-3-8B, plus a larger LLaMA-2-70B configuration for performance simulation. All models are evaluated in a fully INT8 configuration, in-cluding the KV cache. Prior work such as SmoothQuant [32] shows that INT8 LLM inference can preserve accuracy suf-ficiently for practical deployment. This setting enables x86 VNNI acceleration for dot-product-heavy kernels. Table 1 summarizes each pipeline partition. Unless otherwise stated, transformer layers are evenly split across pipeline sockets. INT8 indicates one byte per parameter. Socket counts are written as “compute + serving”, where an extra serving socket is needed for input embedding and output argmax, while “Layers/socket” counts only the transformer layers assigned to each compute socket. 
+
+Baselines. We compare the prototype with llama.cpp [8], a widely used LLM inference engine with strong CPU sup-port, which follows a conventional operator-centric execu-tion model and provides a CPU backend for inference. To ensure a fair comparison, both systems are evaluated on the same hardware platform using identical model check-points and quantization configurations. 
+
+6 Evaluation 
+
+We use the hardware platform described in §5. Unless other-wise stated, we compare against llama.cpp running on an equally provisioned cluster with the same models, quantiza-tion configuration, context lengths (from 1024 to 4096 ), and batch sizes (from 1 to 32 ). With regard to correctness, both the Llama-3.2-3B and Llama-2-7B prototype deployments exactly match the corresponding original model outputs. Our evaluation proceeds in three steps. The default config-uration uses single-socket execution (i.e., no weight-attention separation) and the specialized thread pool. We first mea-sure end-to-end performance on the available Llama-3.2-3B and Llama-2-7B deployments. We then use those measure-ments to validate an analytical model that captures the dom-inant performance trends of the prototype from per-node profiles. Finally, we use that validated model together with controlled single-node ablations to study scaling behavior and isolate the contributions of the specialized thread pool and weight-attention (WA) separation. This staged method-ology separates direct end-to-end measurement from model-based extrapolation and mechanism-focused ablation, while keeping all three tied to the cache-pressure bottleneck iden-tified in Challenge 1 in §2.3. The key findings are as follows: 
+
+• Measured end-to-end. On the Llama-3.2-3B and Llama-2-7B deployments at context length 4096 , the proto-type reduces end-to-end TPOT by 2.04× –11.51× over 
+
+llama.cpp , with the largest gains at small batch sizes. 
+
+• Validated trend model. Our analytical model cap-tures the batch-scaling trend of measured end-to-end TPOT. For the Llama-3.2-3B deployment, measured-to-estimated TPOT stays close to 1 ( 1.26× –1.48× ), while for Llama-2-7B it is systematically higher ( 1.15× –1.52× ), indicating that the model slightly underestimates TPOT on the deeper pipeline while preserving the correct trend despite additional inter-node interference and cache thrashing. 
+
+• Thread pool ablation. The specialized static thread pool usually removes a mostly fixed runtime over-head, saving tens of microseconds per transformer block. Its geomean speedup is modest ( 1.05× –1.16× 
+
+across models) but reaches up to 1.56× at small batches. 
+
+• Weight-Attention separation ablation. WA sepa-ration is workload dependent. At context length 4096 ,the dual-socket design is nearly neutral on Llama-3.2-3B ( 1.00× geomean) and provides moderate gains on the larger Llama models ( 1.13× on Llama-2-7B and 
+
+1.16× on Llama-2-70B). Figure 9 suggests why: sep-arating weight-centric operators from attention pre-vents the two phases from polluting the same socket-level cache, so extra sockets can be translated into lower latency. 
+
+6.1 End-to-end Performance 
+
+End-to-end experiments provide the ground-truth reference for our design. Due to limited hardware availability, we re-port them only for the representative Llama-3.2-3B and Llama-2-7B deployments. We focus on TPOT decoding because it occupies most of the inference time. The current prototype                                                                   
+
+> 9Zhang et al.
+> Batch size 124816 32
+> (a) TPOT (ms) - LLaMA-3.2-3B
+> llama.cpp 48.6 49.0 53.7 82.1 138.5 215.8 Measured 4.2 8.4 15.7 24.4 43.8 76.3 Speedup (x) 11.51 5.83 3.41 3.37 3.16 2.83 Estimated 2.9 5.8 11.9 19.3 32.7 59.8 Meas./Est. (x) 1.48 1.46 1.32 1.26 1.34 1.28
+> (b) TPOT (ms) - LLaMA-2-7B
+> llama.cpp 82.5 82.6 111.8 146.1 227.4 378.7 Measured 7.9 17.8 29.7 63.2 87.6 185.8 Speedup (x) 10.43 4.64 3.77 2.31 2.60 2.04 Estimated 6.9 14.9 24.2 43.0 69.0 122.0 Meas./Est. (x) 1.15 1.20 1.23 1.47 1.27 1.52
+
+Table 2. End-to-end performance of LLaMA-3.2-3B and LLaMA-2-7B at context length 4096 .prioritizes decoding performance, and we leave a detailed treatment of prefill to future work. Table 2 summarizes the context-length-4096 end-to-end TPOT results. For Llama-3.2-3B, the TPOT speedup ranges from 11.51× at batch size 1 to 2.83× at batch size 32 ; for Llama-2-7B, it ranges from 10.43× to 2.04× (Table 2(a) and (b)). In both models, the relative advantage is strongest at small batch sizes and shrinks as batch size grows, which is consistent with the expectation that larger batches bet-ter amortize the cost of loading weights from memory and therefore narrow the gap to the prototype. 
+
+6.2 Analytical Model Validation 
+
+Because our available hardware only supports end-to-end deployment up to the Llama-2-7B configuration, we next validate a simple analytical model before extrapolating to larger models. Our goal is not exact point prediction, but faithful trend prediction under the same KV-cache pressure as the deployed system, so that profiled single-layer latency remains representative of the actual decoding regime. 
+
+The number of in-flight instances. As shown in Table 1, each model requires 𝑛 + 1 sockets to support end-to-end de-coding, where 𝑛 is the number of transformer-compute sock-ets and +1 accounts for the dedicated embedding/argmax socket. However, the load across these sockets is highly asym-metric: our profiling shows that embedding/argmax typi-cally takes ∼ 10𝜇 s, whereas a transformer socket typically takes hundreds of microseconds to a few milliseconds. We therefore model the system with only 𝑛 in-flight instances rather than 𝑛 + 1 . This choice may leave a small amount of throughput on the table, depending on the share of em-bedding/argmax latency in TPOT, but it better matches the latency-oriented scheduling policy of the current prototype. Accordingly, #Sockets below refers only to transformer sock-ets (without the extra embedding/argmax socket). We estimate the model with the following decomposition: Throughput = (Batch size) (Per-stage latency) ,
+
+TPOT = # Sockets × ((Per-stage latency) + (Nw. latency)) 
+
++ Embedding .
+
+Here, the per-stage latency is the measured execution time of one socket processing all stages assigned to it in Table 1, and the network latency is measured as 5𝜇 s per communi-cation. Because decoding traverses the transformer pipeline together with the dedicated embedding/argmax stage, we model #Sockets communications per decoded token. The TPOT blocks in Table 2(a) and Table 2(b) show that this model captures the measured batch-scaling trend, but with some residual error. Across the representative deploy-ments, the Llama-3.2-3B measured-to-estimated ratios remain close to 1 ( 1.26× –1.48× ), whereas the Llama-2-7B ratios are systematically higher ( 1.15× –1.52× ), meaning that the model slightly underestimates TPOT on the deeper pipeline. We at-tribute this stable Llama-2-7B gap to additional inter-node interference and cache thrashing in the full end-to-end sys-tem, which are not captured by the simplified layer-plus-network decomposition. Even so, the model preserves the correct batch-scaling trend and order of magnitude. We there-fore use it as a trend-level extrapolator, rather than an exact absolute predictor, for the larger-model results below. With this validation in place, the remainder of the eval-uation focuses on controlled single-node studies, which let us vary cache pressure, working-set composition, and place-ment decisions while remaining faithful to the underlying performance bottleneck. 
+
+6.3 Sensitivity to Context Length and Batch Size 
+
+After validating the analytical model, we can directly use the per-layer latency profiles to extrapolate the end-to-end performance of larger models and more configurations. Fig-ure 8 shows that the prototype achieves up to 13.9× TPOT speedup and 12.5× throughput speedup over llama.cpp un-der this extrapolation. Across the full grid, the geomean speedup remains substantial at 3.7× –5.0× for throughput and 5.3× –
+
+6.7× for TPOT, depending on the model. The relative speedup shrinks as batch size increases, which is consistent with the measured end-to-end trend in Table 2: larger batches better amortize weight-loading overhead in the baseline and therefore narrow the relative advantage of the prototype. Further, the per-stage execution time often increases sharply from batch size 1 to 2, then grows more gently from batch size 4 onward. This suggests that batch size 2 already exposes enough data parallelism to keep the 96 AVX-512 cores well utilized, while larger batches increas-ingly help amortize weight movement from LLC rather than scaling compute time proportionally. Large batches can improve hardware utilization, but they require request accumulation and often worsen queueing 
+
+> 10
+
+Cache-Resident LLM Inference in GB-Scale Last-Level Caches 1K 
+
+> 2K
+> 4K
+> Thruput
+> 12.0x
+> 1.8k/s
+> 8.6x
+> 2.4k/s
+> 5.2x
+> 2.4k/s
+> 4.7x
+> 3.0k/s
+> 4.6x
+> 3.6k/s
+> 5.2x
+> 4.1k/s
+> 10.0x
+> 1.5k/s
+> 6.7x
+> 1.9k/s
+> 3.6x
+> 1.6k/s
+> 3.0x
+> 2.0k/s
+> 3.1x
+> 2.4k/s
+> 3.4x
+> 2.7k/s
+> 11.5x
+> 947/s
+> 5.8x
+> 952/s
+> 3.4x
+> 1.0k/s
+> 3.4x
+> 1.3k/s
+> 3.2x
+> 1.5k/s
+> 2.8x
+> 1.7k/s
+
+Llama 3.2 3B      
+
+> 124816 32
+> 1K
+> 2K
+> 4K
+> TPOT
+> 13.9x
+> 2.2ms
+> 11.6x
+> 3.4ms
+> 8.2x
+> 6.7ms
+> 9.0x
+> 10.6ms
+> 8.9x
+> 18.0ms
+> 8.2x
+> 31.3ms
+> 11.5x
+> 2.7ms
+> 9.1x
+> 4.3ms
+> 5.6x
+> 9.8ms
+> 5.8x
+> 16.3ms
+> 6.1x
+> 26.4ms
+> 5.4x
+> 47.6ms
+> 11.5x
+> 4.2ms
+> 5.8x
+> 8.4ms
+> 3.4x
+> 15.7ms
+> 3.4x
+> 24.4ms
+> 3.2x
+> 43.8ms
+> 2.8x
+> 76.3ms
+> 12.4x
+> 1.7k/s
+> 5.9x
+> 1.6k/s
+> 4.7x
+> 2.1k/s
+> 3.3x
+> 2.2k/s
+> 3.7x
+> 3.1k/s
+> 4.3x
+> 4.0k/s
+> 10.7x
+> 1.5k/s
+> 5.0x
+> 1.3k/s
+> 3.5x
+> 1.6k/s
+> 2.8x
+> 1.8k/s
+> 2.8x
+> 2.3k/s
+> 3.1x
+> 2.9k/s
+> 10.4x
+> 1.0k/s
+> 4.6x
+> 898/s
+> 3.8x
+> 1.1k/s
+> 2.3x
+> 1.0k/s
+> 2.6x
+> 1.5k/s
+> 2.0x
+> 1.4k/s
+
+Llama 2 7B      
+
+> 124816 32
+> 13.7x
+> 4.7ms
+> 7.8x
+> 10.3ms
+> 7.6x
+> 15.4ms
+> 6.1x
+> 29.3ms
+> 7.3x
+> 41.1ms
+> 7.0x
+> 64.5ms
+> 11.8x
+> 5.4ms
+> 6.6x
+> 12.0ms
+> 5.7x
+> 20.5ms
+> 5.2x
+> 34.9ms
+> 5.4x
+> 55.1ms
+> 5.1x
+> 88.1ms
+> 10.4x
+> 7.9ms
+> 4.6x
+> 17.8ms
+> 3.8x
+> 29.7ms
+> 2.3x
+> 63.2ms
+> 2.6x
+> 87.6ms
+> 2.0x
+> 186ms
+> 1K
+> 2K
+> 4K
+> Thruput
+> 12.3x
+> 1.7k/s
+> 6.1x
+> 1.6k/s
+> 4.2x
+> 1.9k/s
+> 3.9x
+> 2.6k/s
+> 3.5x
+> 3.0k/s
+> 3.9x
+> 3.7k/s
+> 10.8x
+> 1.5k/s
+> 5.1x
+> 1.3k/s
+> 3.4x
+> 1.5k/s
+> 2.9x
+> 2.0k/s
+> 2.6x
+> 2.3k/s
+> 2.9x
+> 2.7k/s
+> 7.6x
+> 1.0k/s
+> 3.8x
+> 983/s
+> 2.6x
+> 1.1k/s
+> 2.0x
+> 1.4k/s
+> 1.8x
+> 1.6k/s
+> 2.0x
+> 1.9k/s
+
+Qwen 3 8B      
+
+> 124816 32
+> 1K
+> 2K
+> 4K
+> TPOT
+> 12.8x
+> 5.5ms
+> 7.2x
+> 11.4ms
+> 5.9x
+> 19.4ms
+> 6.4x
+> 27.3ms
+> 5.9x
+> 47.6ms
+> 5.7x
+> 77.5ms
+> 11.3x
+> 6.2ms
+> 6.0x
+> 13.7ms
+> 4.8x
+> 23.9ms
+> 4.7x
+> 36.9ms
+> 4.4x
+> 63.8ms
+> 4.2x
+> 105ms
+> 7.9x
+> 8.9ms
+> 4.5x
+> 18.3ms
+> 3.6x
+> 31.4ms
+> 3.3x
+> 53.0ms
+> 3.0x
+> 92.5ms
+> 2.9x
+> 152ms
+> 12.5x
+> 2.7k/s
+> 4.4x
+> 2.5k/s
+> 3.4x
+> 2.3k/s
+> 3.3x
+> 3.4k/s
+> 3.3x
+> 4.7k/s
+> 3.7x
+> 5.3k/s
+> 11.7x
+> 2.5k/s
+> 4.0x
+> 2.3k/s
+> 3.0x
+> 2.1k/s
+> 2.8x
+> 2.9k/s
+> 2.7x
+> 3.8k/s
+> 3.0x
+> 4.4k/s
+> 10.0x
+> 2.1k/s
+> 3.3x
+> 1.9k/s
+> 2.5x
+> 1.7k/s
+> 2.2x
+> 2.2k/s
+> 2.0x
+> 2.9k/s
+> 2.3x
+> 3.3k/s
+
+Llama 2 70B            
+
+> 124816 32
+> 12.2x
+> 30.2ms
+> 6.4x
+> 64.1ms
+> 5.6x
+> 138ms
+> 6.5x
+> 187ms
+> 7.5x
+> 273ms
+> 6.5x
+> 480ms
+> 11.4x
+> 32.4ms
+> 5.8x
+> 71.1ms
+> 5.1x
+> 152ms
+> 5.5x
+> 220ms
+> 6.1x
+> 335ms
+> 5.4x
+> 579ms
+> 9.8x
+> 37.8ms
+> 4.8x
+> 85.6ms
+> 4.2x
+> 184ms
+> 4.2x
+> 286ms
+> 4.6x
+> 448ms
+> 4.1x
+> 765ms
+> 2x 4x 8x 12x
+> Thruput
+> 2x 4x 8x 12x
+> TPOT
+
+Batch size 
+
+> Context length
+
+Figure 8. Model-based throughput and TPOT speedups over llama.cpp across context lengths and batch sizes for four models. The speedup is on top of each cell, and the cor-responding absolute throughput (tokens/s) or TPOT (ms) is at the bottom. and tail latency in user-facing serving systems. This makes the small-batch regime (1–8) the practically relevant operat-ing point for latency-sensitive serving, and Figure 8 shows that this is also where the proposed design is strongest. 
+
+6.4 Effect of the Specialized Thread Pool 
+
+We compare our specialized static thread pool against an OpenMP-based runtime in the controlled single-socket study of Figure 10. The specialized runtime usually removes a mostly fixed latency overhead per transformer block, typically tens of microseconds and occasionally more than 100 𝜇 s. As a re-sult, its overall geomean speedup is modest ( 1.05× –1.16× 
+
+across models), but it reaches up to 1.56× when batches are small. In that regime ( 1–8), a transformer block itself takes only hundreds of microseconds, so removing tens of microsec-onds translates into a large relative improvement. As batch size increases, however, block latency moves into the mil-lisecond range, so the same fixed microsecond-scale saving is amortized and shrinks to only a few percent at the largest batches. This is consistent with our discussion in §4.3. Our runtime uses permanently pinned threads with deterministic shard-to-core mapping to avoid fixed runtime overheads from a generic runtime, such as affinity setup and global barrier management. Once cache residency shortens kernel service time, they become visible in the small-batch regime; once computation dominates at larger batches, the same abso-lute saving remains but its relative impact becomes much smaller. 
+
+6.5 Effect of Weight-Attention Separation 
+
+We next isolate the effect of WA separation by comparing the full design, which places weight-centric operators and attention on different sockets, against a colocated variant that executes both on the same socket. Figure 9 shows that the benefit depends strongly on cache pressure, which is jointly determined by model size, con-text length, and batch size. At context length 4096 , the ge-omean per-block speedup is essentially neutral for Llama-3.2-3B ( 1.00× ), rises to 1.13× for Llama-2-7B, and to 1.16× 
+
+for Llama-2-70B. When both batch size and context length are small, the combined weight and KV-cache working set is still modest enough to fit in LLC even without separa-tion. The coordination overhead of the dual-socket design can then outweigh the cache benefit, and Llama-3.2-3B in-deed shows a slowdown at many points. As the working set grows, however, the benefit becomes more systematic. Llama-2-7B shows a clear but moderate improvement, while Llama-2-70B becomes more consistently positive in the high-pressure region. The pattern suggests that weight-centric operators and attention interfere much less once they stop sharing the same socket-level cache and memory path. In the colocated design, their footprints compete in the same cache hierarchy and can evict one another; with WA sepa-ration, the two phases no longer mutually pollute the same socket, so the larger working set can be sustained with less interference. Figure 11 zooms into the Llama-2-70B case at context length 4096. Both attention and weight-centric op-erators are accelerated because the growing KV cache no longer evicts weight-resident data, and attention no longer competes for cache resources as in the single-socket design. This latency improvement is therefore not free: it opens a tradeoff between per-request latency and throughput effi-ciency at a fixed socket budget. WA separation dedicates one socket to weight-centric computation and another to atten-tion, which doubles the socket budget for a decoding stream. Because the resulting latency speedup is usually sublinear in socket count, the throughput efficiency per socket is re-duced even when latency improves. We therefore view WA separation as a good way to scale latency with additional resources: once cache pressure is high enough, spending an-other socket to keep weights and attention from interfering is often worthwhile even if the throughput gain per socket is sublinear. The larger-model results are therefore best read as 
+
+11 Zhang et al. 1 2 4 8 16 32 
+
+1K 
+
+2K 
+
+4K 
+
+> Context length
+
+0.84x 
+
+> +101us
+
+0.96x 
+
+> +36.6us
+
+1.13x 
+
+> -189us
+
+1.17x 
+
+> -391us
+
+1.14x 
+
+> -568us
+
+0.98x 
+
+> +132us
+
+0.87x 
+
+> +98.2us
+
+1.09x 
+
+> -92.9us
+
+1.26x 
+
+> -510us
+
+1.03x 
+
+> -124us
+
+0.97x 
+
+> +234us
+
+1.03x 
+
+> -353us
+
+0.91x 
+
+> +96.6us
+
+0.94x 
+
+> +113us
+
+1.15x 
+
+> -514us
+
+1.06x 
+
+> -342us
+
+0.99x 
+
+> +140us
+
+0.98x 
+
+> +331us
+
+Llama 3.2 3B 
+
+1 2 4 8 16 32 
+
+Batch size 
+
+0.90x 
+
+> +66.7us
+
+1.32x 
+
+> -309us
+
+1.44x 
+
+> -592us
+
+1.21x 
+
+> -645us
+
+1.29x 
+
+> -1.2ms
+
+1.07x 
+
+> -528us
+
+1.06x 
+
+> -35.5us
+
+1.34x 
+
+> -381us
+
+1.39x 
+
+> -725us
+
+1.17x 
+
+> -619us
+
+1.27x 
+
+> -1.5ms
+
+1.03x 
+
+> -270us
+
+1.27x 
+
+> -206us
+
+1.35x 
+
+> -547us
+
+1.03x 
+
+> -101us
+
+1.07x 
+
+> -411us
+
+1.10x 
+
+> -881us
+
+0.98x 
+
+> +354us
+
+Llama 2 7B 
+
+1 2 4 8 16 32 
+
+0.97x 
+
+> +11.3us
+
+0.95x 
+
+> +39.1us
+
+1.04x 
+
+> -65.7us
+
+1.04x 
+
+> -81.7us
+
+1.06x 
+
+> -205us
+
+1.06x 
+
+> -350us
+
+0.99x 
+
+> +3.31us
+
+1.06x 
+
+> -51.4us
+
+1.09x 
+
+> -150us
+
+1.09x 
+
+> -231us
+
+1.17x 
+
+> -600us
+
+1.13x 
+
+> -848us
+
+1.01x 
+
+> -5.67us
+
+1.12x 
+
+> -116us
+
+1.14x 
+
+> -286us
+
+1.21x 
+
+> -625us
+
+1.30x 
+
+> -1.3ms
+
+1.19x 
+
+> -1.5ms
+
+Llama 2 70B 
+
+0.8x 
+
+0.9x 
+
+1x 
+
+1.2x 
+
+1.4x 
+
+1.6x 
+
+Figure 9. Effect of weight-attention separation on per-transformer-block latency in Llama-family models. The speedup is on top of each cell, and the absolute time saving per transformer block ( 𝜇 s) is at the bottom. 1K 
+
+> 2K
+> 4K
+> 1.47x
+> -37.0us
+> 1.32x
+> -38.5us
+> 1.16x
+> -39.0us
+> 1.11x
+> -41.1us
+> 1.05x
+> -31.1us
+> 1.06x
+> -64.3us
+> 1.56x
+> -53.2us
+> 1.26x
+> -40.0us
+> 1.12x
+> -41.2us
+> 1.08x
+> -46.8us
+> 1.07x
+> -69.4us
+> 1.02x
+> -41.6us
+> 1.33x
+> -44.3us
+> 1.18x
+> -50.0us
+> 1.07x
+> -37.6us
+> 1.05x
+> -49.6us
+> 1.05x
+> -70.2us
+> 1.01x
+> -19.1us
+
+Llama 3.2 3B 
+
+> 1.46x
+> -66.3us
+> 1.14x
+> -44.3us
+> 1.09x
+> -44.4us
+> 1.06x
+> -51.1us
+> 1.04x
+> -54.0us
+> 1.05x
+> -91.0us
+> 1.38x
+> -64.3us
+> 1.15x
+> -57.5us
+> 1.07x
+> -47.0us
+> 1.04x
+> -46.6us
+> 0.99x
+> +11.4us
+> 1.03x
+> -73.2us
+> 1.25x
+> -61.6us
+> 1.11x
+> -56.7us
+> 1.06x
+> -49.7us
+> 1.03x
+> -41.1us
+> 1.02x
+> -57.3us
+> 1.06x
+> -243us
+
+Llama 2 7B      
+
+> 124816 32
+> 1K
+> 2K
+> 4K
+> 1.35x
+> -53.3us
+> 1.13x
+> -41.7us
+> 1.03x
+> -15.8us
+> 1.01x
+> -8.90us
+> 1.01x
+> -10.5us
+> 1.02x
+> -35.1us
+> 1.30x
+> -52.4us
+> 1.11x
+> -41.8us
+> 1.03x
+> -21.0us
+> 1.02x
+> -17.3us
+> 1.01x
+> -24.1us
+> 1.00x
+> -3.91us
+> 1.15x
+> -36.9us
+> 1.09x
+> -48.2us
+> 1.02x
+> -20.6us
+> 1.01x
+> -21.0us
+> 1.01x
+> -29.7us
+> 1.01x
+> -35.3us
+
+Qwen 3 8B      
+
+> 124816 32
+> 1.14x
+> -51.1us
+> 1.06x
+> -50.3us
+> 1.04x
+> -60.6us
+> 1.03x
+> -76.6us
+> 1.02x
+> -59.3us
+> 1.00x
+> -21.3us
+> 1.12x
+> -48.4us
+> 1.06x
+> -49.5us
+> 1.04x
+> -83.5us
+> 1.02x
+> -58.2us
+> 1.01x
+> -36.4us
+> 1.00x
+> -11.3us
+> 1.13x
+> -62.3us
+> 1.05x
+> -49.2us
+> 1.06x
+> -131us
+> 1.02x
+> -78.8us
+> 1.01x
+> -67.8us
+> 1.01x
+> -75.4us
+
+Llama 2 70B     
+
+> 0.8x 0.9x 1x 1.2x 1.4x
+
+Batch size 
+
+> Context length
+
+Figure 10. Customized thread pool versus OpenMP in a single-socket, per-transformer-block comparison. The speedup is on top of each cell, and the absolute time sav-ing per transformer block ( 𝜇 s) is at the bottom. support for the underlying cache-pressure hypothesis, but with moderate and workload-dependent gains rather than a universal large win. 
+
+7 Discussion 
+
+7.1 Related Works Dedicated Resource Allocations: Prior systems have ex-plored phase-aware LLM serving [2, 19, 34], separating pre-fill and decoding or scheduling them differently to better 2 4 8 16 32   
+
+> Batch size
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Normalized per-block latency  0.93x
+> 0.87x
+> 0.72x
+> 0.81x 0.83x
+> weight attn
+
+Figure 11. Llama-2-70B at ctx=4096 weight attention sepa-ration breakdown. The left bars are single-socket (=1), and the right bars are weight-attention separated. match distinct compute and memory characteristics on GPUs. In contrast, this work approaches this issue through weight– attention separation to specialize for the different compute and memory patterns. 
+
+KV-cache Management: Recent systems optimize infer-ence by managing the growing KV cache more efficiently. PagedAttention[14] reduces fragmentation through a paged KV layout, vAttention [21] retains a contiguous virtual lay-out while allocating physical memory on demand, and In-finiGen [15] reduces long-context fetch overhead by selec-tively loading KV entries. This work makes a different CPU-oriented tradeoff: because extra instructions and pointer in-directions fall directly on our critical path, we cannot adopt a PagedAttention-style address-translation layer in the at-tention loop. Instead, we keep the KV layout simple and iso-late KV interference from weight-resident execution through weight–attention separation. 
+
+Cache-resident Inference: The proposed design shares a similar SRAM-resident intuition with specialized accelera-tors such as Groq [10], but operates under a fundamentally different set of constraints. Recent work such as WaferLLM [12] also redesigns inference around massive on-chip memory, but on wafer-scale accelerators rather than commodity CPUs. Groq relies on a highly specialized LPU architecture and a tightly integrated software stack for large-model execu-tion, which allows it to push tensor parallelism and inter-device communication optimization much further. Systems such as FlexGen [26] instead target limited-resource infer-ence through offloading across GPU, CPU, and disk. In con-trast, this work is built entirely within the commodity CPU ecosystem, where cache coherence, fixed hardware topol-ogy, and general-purpose runtime overhead impose much stronger constraints. Our contribution is therefore not to replicate accelerator-style execution, but to show that a re-lated locality-centered principle can be realized in software on widely available CPUs. 
+
+CPU Inference: Before the LLM era, CPUs were widely used for inference [11], but the scale and performance re-quirements of LLMs have led to a shift towards GPU-only serving for dense and conventional models. T-Mac enables CPU-based LLM inference through a table-lookup approach [31], 
+
+12 Cache-Resident LLM Inference in GB-Scale Last-Level Caches 
+
+but is limited to small models and short contexts due to its re-liance on a large precomputed table of activations. The pro-posed design, in contrast, is designed to scale to larger mod-els and longer contexts by optimizing execution on com-modity CPUs. 
+
+7.2 Future Works 
+
+Several directions could extend this design. Continuous batch-ing [2, 33] would require online KV-cache reclamation and batch reconfiguration while preserving socket-local hot state. Mixture-of-Experts models would introduce routing-dependent communication and would require topology-aware expert placement to keep sparse activation from turning into cross-socket traffic. Another direction is extreme latency optimiza-tion for interactive workloads such as AI-assisted coding, prioritizing per-request token latency through dedicated cores and lower-overhead synchronization. 
+
+7.3 Conclusion 
+
+This work rethinks LLM serving as both a systems prob-lem and a resource-allocation problem. For an important class of workloads, it shows that commodity CPUs can sus-tain serving when execution is organized around cache resi-dency and topology-aware coordination, rather than assum-ing GPUs as the default platform. This can reserve scarce accelerator capacity for training and fast iteration while us-ing CPUs for deployment. Although the design is instanti-ated on CPUs, it also offers scalability guidance for cache-resident accelerators, where bounded on-chip memory makes resource isolation, locality preservation, and topology-aware coordination equally central. 
+
+References 
+
+[1] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, Sanjay Ghemawat, Geoffrey Irv-ing, Michael Isard, Manjunath Kudlur, Josh Levenberg, Rajat Monga, Sherry Moore, Derek G. Murray, Benoit Steiner, Paul Tucker, Vijay Vasudevan, Pete Warden, Martin Wicke, Yuan Yu, and Xiaoqiang Zheng. Tensorflow: a system for large-scale machine learning. In 
+
+Proceedings of the 12th USENIX Conference on Operating Systems De-sign and Implementation , OSDI’16, page 265–283, USA, 2016. USENIX Association. [2] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav Gulavani, Alexey Tumanov, and Ramachandran Ramjee. Taming Throughput-Latency tradeoff in LLM inference with Sarathi-Serve. In 18th USENIX Symposium on Operating Systems De-sign and Implementation (OSDI 24) , pages 117–134, Santa Clara, CA, July 2024. USENIX Association. [3] Adam Belay, George Prekas, Ana Klimovic, Samuel Grossman, Chris-tos Kozyrakis, and Edouard Bugnion. IX: A protected dataplane op-erating system for high throughput and low latency. In 11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14) , pages 49–65. USENIX Association, 2014. [4] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Yan, Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin, and Arvind Krishnamurthy. TVM: An auto-mated End-to-End optimizing compiler for deep learning. In 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18) , pages 578–594, Carlsbad, CA, October 2018. USENIX Asso-ciation. [5] Leonardo Dagum and Ramesh Menon. Openmp: An industry-standard api for shared-memory programming. IEEE Computational Science and Engineering , 5(1):46–55, 1998. [6] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Re. Flashattention: Fast and memory-efficient exact attention with IO-awareness. In Advances in Neural Information Processing Systems ,volume 35, 2022. [7] David Dice, Virendra J. Marathe, and Nir Shavit. Lock cohorting: a general technique for designing NUMA locks. In Proceedings of the 17th ACM SIGPLAN Symposium on Principles and Practice of Parallel Programming , pages 247–256, 2012. [8] ggml-org contributors. llama.cpp. https://github.com/ggml-org/llama.cpp. Accessed: 2026-04-01. [9] Brice Goglin and Nathalie Furmento. Memory migration on next-touch. In Proceedings of the Linux Symposium , pages 149–156, 2009. [10] Groq. Groq lpu. https://groq.com. Accessed: 2026-04-01. [11] Kim Hazelwood, Sarah Bird, David Brooks, Soumith Chintala, Utku Diril, Dmytro Dzhulgakov, Mohamed Fawzy, Bill Jia, Yangqing Jia, Aditya Kalro, James Law, Kevin Lee, Jason Lu, Pieter Noordhuis, Misha Smelyanskiy, Liang Xiong, and Xiaodong Wang. Applied ma-chine learning at facebook: A datacenter infrastructure perspective. In 2018 IEEE International Symposium on High Performance Computer Architecture (HPCA) , pages 620–629, 2018. [12] Congjie He, Yeqi Huang, Pei Mu, Ziming Miao, Jilong Xue, Lingxiao Ma, Fan Yang, and Luo Mai. Waferllm: Large language model infer-ence at wafer scale. In 19th USENIX Symposium on Operating Systems Design and Implementation (OSDI 25) . USENIX Association, 2025. [13] Yanping Huang, Youlong Cheng, Ankur Bapna, Orhan Firat, Dehao Chen, Mia Xu Chen, HyoukJoong Lee, Jiquan Ngiam, Quoc V. Le, Yonghui Wu, and Zhifeng Chen. Gpipe: Efficient training of giant neural networks using pipeline parallelism. In Advances in Neural Information Processing Systems 32 , pages 103–112, 2019. [14] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention, 2023. SOSP 2023. [15] Wonbeom Lee, Jungi Lee, Junghwan Seo, and Jaewoong Sim. Infini-Gen: Efficient generative inference of large language models with dy-namic KV cache management. In 18th USENIX Symposium on Oper-ating Systems Design and Implementation (OSDI 24) , pages 155–172, Santa Clara, CA, July 2024. USENIX Association. [16] John M. Mellor-Crummey and Michael L. Scott. Algorithms for scalable synchronization on shared-memory multiprocessors. ACM Transactions on Computer Systems , 9(1):21–65, February 1991. [17] Deepak Narayanan, Aaron Harlap, Amar Phanishayee, Vivek Se-shadri, Nikhil R. Devanur, Gregory R. Ganger, Phillip B. Gibbons, and Matei Zaharia. Pipedream: generalized pipeline parallelism for DNN training. In Proceedings of the 27th ACM Symposium on Operating Systems Principles , pages 1–15, 2019. [18] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, Alban Desmaison, Andreas Köpf, Edward Yang, Zach DeVito, Martin Raison, Alykhan Tejani, Sasank Chil-amkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. Pytorch: an imperative style, high-performance deep learning library. In Advances in Neural Information Processing Systems 32 (NeurIPS 2019) , pages 8024–8035, Red Hook, NY, USA, 2019. Curran Associates Inc. [19] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo Goiri, Saeed Maleki, and Ricardo Bianchini. Splitwise: Efficient gen-erative LLM inference using phase splitting, 2023. 13 Zhang et al. 
+
+[20] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin, James Bradbury, Anselm Levskaya, Jonathan Heek, Kefan Xiao, Shiv-ani Agrawal, and Jeff Dean. Efficiently scaling transformer inference, 2022. [21] Ramya Prabhu, Ajay Nayak, Jayashree Mohan, Ramachandran Ram-jee, and Ashish Panwar. vattention: Dynamic memory management for serving llms without pagedattention. In Proceedings of the 30th ACM International Conference on Architectural Support for Program-ming Languages and Operating Systems, Volume 1 , pages 1133–1150, 2025. [22] George Prekas, Marios Kogias, and Edouard Bugnion. Zygos: Achiev-ing low tail latency for microsecond-scale networked tasks. In Pro-ceedings of the 26th Symposium on Operating Systems Principles , pages 325–341, October 2017. [23] Henry Qin, Qian Li, Jacqueline Speiser, Peter Kraft, and John Ouster-hout. Arachne: Core-Aware thread management. In 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18) , Carlsbad, CA, October 2018. USENIX Association. [24] Jonathan Ragan-Kelley, Connelly Barnes, Andrew Adams, Sylvain Paris, Frédo Durand, and Saman Amarasinghe. Halide: a language and compiler for optimizing parallelism, locality, and recomputation in image processing pipelines. SIGPLAN Not. , 48(6):519–530, June 2013. [25] Noam Shazeer. Fast transformer decoding: One write-head is all you need, 2019. [26] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin, Beidi Chen, Percy Liang, Christopher Re, Ion Stoica, and Ce Zhang. FlexGen: High-throughput generative inference of large language models with a single GPU. In Andreas Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett, editors, Proceedings of the 40th International Con-ference on Machine Learning , volume 202 of Proceedings of Machine Learning Research , pages 31094–31116. PMLR, 23–29 Jul 2023. [27] Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, and Bryan Catanzaro. Megatron-lm: Training multi-billion parameter language models using model parallelism, 2019. [28] U.S. Department of Commerce. Statement on uae and saudi chip exports. https://www.commerce.gov/news/press-releases/2025/11/statement-uae-and-saudi-chip-exports, 2025. Accessed: 2025-11-19. [29] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Ł ukasz Kaiser, and Illia Polosukhin. Atten-tion is all you need. In I. Guyon, U. Von Luxburg, S. Bengio, H. Wal-lach, R. Fergus, S. Vishwanathan, and R. Garnett, editors, Advances in Neural Information Processing Systems , volume 30. Curran Associates, Inc., 2017. [30] Minjie Wang, Chien-chin Huang, and Jinyang Li. Supporting very large models using automatic dataflow graph partitioning. In Pro-ceedings of the Fourteenth EuroSys Conference 2019 , EuroSys ’19, New York, NY, USA, 2019. Association for Computing Machinery. [31] Jianyu Wei, Shijie Cao, Ting Cao, Lingxiao Ma, Lei Wang, Yanyong Zhang, and Mao Yang. T-mac: Cpu renaissance via table lookup for low-bit llm deployment on edge. In Proceedings of the Twentieth Eu-ropean Conference on Computer Systems , EuroSys ’25, page 278–292, New York, NY, USA, 2025. Association for Computing Machinery. [32] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song Han. Smoothquant: accurate and efficient post-training quantization for large language models. In Proceedings of the 40th International Conference on Machine Learning , ICML’23. JMLR.org, 2023. [33] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed serving system for Transformer-Based generative models. In 16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22) , pages 521– 538, Carlsbad, CA, July 2022. USENIX Association. [34] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-anzhe Liu, Xin Jin, and Hao Zhang. DistServe: Disaggregating pre-fill and decoding for goodput-optimized large language model serv-ing. In 18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24) , pages 193–210, Santa Clara, CA, July 2024. USENIX Association. 14
