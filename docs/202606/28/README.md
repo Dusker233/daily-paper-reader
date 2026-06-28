@@ -1,85 +1,44 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
-</div>
+# 日报 · 2026-06-28
 
-## 每次日报
-- 最新运行日期：2026-06-28
-- 运行时间：2026-06-28 21:35:09 UTC
-- 运行状态：成功
-- 本次总论文数：13
+- 生成时间：2026-06-28 21:35:09 UTC
+- 当次推荐总数：13
 - 精读区：2
 - 速读区：11
 
-### 今日简报（AI）
-今天集中阅读了无线隐私、加密流量识别与AI安全防护相关的13篇研究进展。  
-最值得关注的是MAC地址随机化仍可能被机器学习破解，以及基于DoH/3的网站指纹识别依然具有较高可行性，同时RAG系统的安全威胁开始系统化梳理。  
-普通用户可优先关注设备隐私设置与网络加密配置，同时留意AI应用中的数据泄露风险。
-- 详情：[/202606/28/README](/202606/28/README)
+## 今日简报（AI）
+今天整理了13篇网络安全与隐私相关论文，覆盖无线网络、加密流量分析与智能电网安全等方向。  
+值得关注的主线包括：Wi\-Fi MAC随机化仍可能被机器学习推断破解，以及基于DoH/HTTPS的流量指纹识别能力持续增强，同时RAG系统的安全与隐私风险正在被系统性梳理。  
+普通读者可以重点关注隐私防护技术（如随机化与抗指纹识别手段）的进展，以及AI与真实网络环境结合后带来的新型安全问题。
 
-### 精读区论文标签
-1. [Can Machine Learning Break Wi\-Fi Privacy? A Study on MAC Address Randomization](/202606/28/2606.25788v1-can-machine-learning-break-wi-fi-privacy-a-study-on-mac-address-randomization)  
-   标签：评分：8.1/10、query:q9
+## 精读区
+1. [机器学习能否破解 Wi\-Fi 隐私？一项关于 MAC 地址随机化的研究](/202606/28/2606.25788v1-can-machine-learning-break-wi-fi-privacy-a-study-on-mac-address-randomization)（8.1/10）
    摘要：论文研究MAC地址随机化在Wi\-Fi隐私中的有效性，提出利用Probe帧中的信息元素分解、IFAT时间特征以及（模拟）RSSI信号构建无监督机器学习聚类模型，实现设备去随机化与指纹识别。基于22台设备实验，在HT能力位分解与SRSSI组合条件下，DBSCAN达到最高89.6%识别准确率，表明现有随机化机制仍可被被动侧信号有效破解。结果显示ML可显著削弱MAC随机化隐私保护，方法与结论对无线安全研究具有较高参考价值，值得进一步精读方法与实验部分。
-   evidence：Wi\-Fi探测帧机器学习指纹识别
-2. [DoHFuse: A Dual\-Branch Architecture with DMAGLSTM for Website Fingerprinting over DNS over HTTPS/3](/202606/28/2606.24105v1-dohfuse-a-dual-branch-architecture-with-dmaglstm-for-website-fingerprinting-over-dns-over-https3)  
-   标签：评分：8.0/10、query:q4
+2. [DoHFuse：一种基于 DMAG\-LSTM 的双分支架构，用于 DNS over HTTPS/3 上的网站指纹识别](/202606/28/2606.24105v1-dohfuse-a-dual-branch-architecture-with-dmaglstm-for-website-fingerprinting-over-dns-over-https3)（8.0/10）
    摘要：本文研究DNS over HTTPS/3（DoH/3）在真实部署环境下是否仍易受网站指纹攻击。作者首先构建并公开首个DoH/3网站指纹数据集，随后提出融合时序分支与统计特征分支的双分支模型DoHFuse，并设计DMAG\-LSTM增强对突发时序模式的建模。实验显示，该方法在449类闭世界和开放世界场景均取得较高性能，说明现有DoH/3填充策略不足以有效抵御网站指纹攻击。若关注加密DNS流量分析、隐私攻击或流量识别，值得继续精读。
-   evidence：加密DNS流量指纹识别与分类分析
 
-### 速读区论文标签
-1. [Security and Privacy in Retrieval\-Augmented Generation: Architectures, Threats, Defenses, and Future Directions for Building Trustworthy Systems](/202606/28/2606.25533v1-security-and-privacy-in-retrieval-augmented-generation-architectures-threats-defenses-and-future-directions-for-building-trustworthy-systems)  
-   标签：评分：7.8/10、query:q9
+## 速读区
+1. [检索增强生成中的安全与隐私：用于构建可信系统的体系架构、威胁、防御与未来发展方向](/202606/28/2606.25533v1-security-and-privacy-in-retrieval-augmented-generation-architectures-threats-defenses-and-future-directions-for-building-trustworthy-systems)（7.8/10）
    摘要：本文系统综述RAG在安全与隐私方面的威胁与防御，覆盖集中式、端侧、联邦与混合架构，构建威胁分类并分析攻击与防护方法，指出上下文构建与检索链路的风险及未来研究方向，具有较强参考价值，适合速览后决定是否精读。涉及prompt injection、数据泄露、模型与索引投毒等关键问题。
-   evidence：RAG系统中的安全与隐私研究综述
-2. [CITADEL: CSI\-Based Jamming Detection and Open\-Set Classification for IIoT Networks](/202606/28/2606.22939v1-citadel-csi-based-jamming-detection-and-open-set-classification-for-iiot-networks)  
-   标签：评分：7.6/10、query:q4
+2. [CITADEL：面向工业物联网（IIoT）网络的基于CSI的干扰检测与开放集分类](/202606/28/2606.22939v1-citadel-csi-based-jamming-detection-and-open-set-classification-for-iiot-networks)（7.6/10）
    摘要：提出CITADEL，利用WiFi CSI实现IIoT无线环境中的射频干扰检测与开放集分类。方法采用端侧轻量模型与边缘GPU联合的两阶段架构，在资源受限设备上完成已知攻击识别、零日攻击检测与对抗鲁棒性保障。实验覆盖多类攻击与零日场景，检测率高且延迟极低，显示出工业落地潜力，整体值得进一步精读。
-   evidence：基于CSI的IIoT网络干扰检测与分类
-3. [A Hybrid CNN\-LSTM Intrusion Detection Framework for Cybersecurity in Smart Renewable Energy Grids](/202606/28/2606.25200v1-a-hybrid-cnn-lstm-intrusion-detection-framework-for-cybersecurity-in-smart-renewable-energy-grids)  
-   标签：评分：7.5/10、query:q5
+3. [用于智能可再生能源电网网络安全的混合CNN\-LSTM入侵检测框架](/202606/28/2606.25200v1-a-hybrid-cnn-lstm-intrusion-detection-framework-for-cybersecurity-in-smart-renewable-energy-grids)（7.5/10）
    摘要：本文面向智能可再生能源电网中的入侵检测问题，提出CNN\-LSTM混合模型结合空间特征提取与时序建模，并配合SMOTE与特征选择处理数据不平衡。在CICIDS/NSL\-KDD上取得最高约98%精度，同时支持27,800流/秒实时推理与低延迟部署，整体优于传统方法，兼具性能与工程落地潜力，值得进一步精读。
-   evidence：基于CNN\-LSTM的网络入侵检测与攻击识别
-4. [Cross\-Layer Intrusion Detection in 5G O\-RAN: Gains and Limits of Fusing Radio Telemetry with Network Flow Records](/202606/28/2606.22450v1-cross-layer-intrusion-detection-in-5g-o-ran-gains-and-limits-of-fusing-radio-telemetry-with-network-flow-records)  
-   标签：评分：7.4/10、query:q5
+4. [5G O\-RAN中的跨层入侵检测：融合无线遥测与网络流记录的收益与局限](/202606/28/2606.22450v1-cross-layer-intrusion-detection-in-5g-o-ran-gains-and-limits-of-fusing-radio-telemetry-with-network-flow-records)（7.4/10）
    摘要：本文研究在5G O\-RAN中融合DU无线遥测与CU网络流记录是否能够提升入侵检测性能。作者基于真实O\-RAN数据集，采用运行级隔离划分、10个随机种子、7种模型，对单模态与分数级融合进行系统比较，并同时考察ROC\-AUC、1%误报率下检测率和多分类F1。结果显示无线遥测整体不逊于甚至优于网络流，融合收益有限且依赖模型与场景，值得关注其实验设计和负结果分析。
-   evidence：利用网络流量与无线遥测进行5G入侵检测
-5. [From CVE to CWE: Syscall\-Based HIDS Generalisation](/202606/28/2606.22581v1-from-cve-to-cwe-syscall-based-hids-generalisation)  
-   标签：评分：7.3/10
+5. [从 CVE 到 CWE：基于系统调用的主机入侵检测系统泛化](/202606/28/2606.22581v1-from-cve-to-cwe-syscall-based-hids-generalisation)（7.3/10）
    摘要：本文研究基于系统调用的主机入侵检测（HIDS）能否从按CVEs训练的检测迁移到CWE层级泛化。作者在LID\-DS\-2021的6个容器场景、3类CWE上，采用Isolation Forest与一类SVM，并在固定误报率（FPR）校准下评估跨CVE转移能力。实验表明仅CWE\-307可实现较稳定泛化（F1≈0.70），而CWE\-89与CWE\-434几乎失效。结论指出CWE级检测在部分弱点族中可行，但强依赖正常行为分布覆盖。整体方法清晰、实验有针对性，值得进一步精读。
-   evidence：基于系统调用的入侵检测泛化研究
-6. [IndicGuard: A Multilingual Safety Guard Model and Dataset for Indic Languages](/202606/28/2606.22841v1-indicguard-a-multilingual-safety-guard-model-and-dataset-for-indic-languages)  
-   标签：评分：7.3/10、query:q9
+6. [IndicGuard：面向Indic语言的多语言安全防护模型与数据集](/202606/28/2606.22841v1-indicguard-a-multilingual-safety-guard-model-and-dataset-for-indic-languages)（7.3/10）
    摘要：本文提出IndicGuard，面向10种印地语系语言构建多语种安全数据集，并基于Gemma\-3\-4B\-IT微调安全守护模型，用于实时内容审核与越狱防护。实验表明其在多语言一致性、对抗鲁棒性及低资源语言泛化上均优于CultureGuard，并在XSTest上实现零安全过拒绝，整体表现稳定，具有进一步精读价值。
-   evidence：LLM安全守卫模型用于检测有害内容与越狱攻击
-7. [Verifying Intent and Harm: A Unified Defense Against LLM\-Generated Threats](/202606/28/2606.26377v1-verifying-intent-and-harm-a-unified-defense-against-llm-generated-threats)  
-   标签：评分：6.9/10、query:q9
+7. [意图与危害验证：一种针对LLM生成威胁的统一防御方法](/202606/28/2606.26377v1-verifying-intent-and-harm-a-unified-defense-against-llm-generated-threats)（6.9/10）
    摘要：论文针对LLM攻击中提示词与响应割裂导致的安全检测失效问题，提出联合验证提示意图与输出危害的多代理框架，通过Safety Analyst、Task Analyst与Judge协同判定，在多个威胁类别实验中将F1提升至0.95并显著降低攻击成功率与误报，整体显示出优于单侧防御方法的稳定性，值得进一步精读验证其可扩展性与鲁棒性。
-   evidence：LLM安全防御用于识别恶意提示与有害输出
-8. [Agents That Know Too Much: A Data\-Centric Survey of Privacy in LLM Agents](/202606/28/2606.26627v1-agents-that-know-too-much-a-data-centric-survey-of-privacy-in-llm-agents)  
-   标签：评分：6.9/10、query:q9
+8. [知道过多的智能体：大语言模型智能体隐私的数据中心视角综述](/202606/28/2606.26627v1-agents-that-know-too-much-a-data-centric-survey-of-privacy-in-llm-agents)（6.9/10）
    摘要：本文综述LLM智能体在数据中心场景下的隐私问题，从数据源视角而非攻击类型出发，系统梳理RAG、数据库查询、工具调用、记忆与多智能体通信等数据面临的泄露风险与治理机制，并总结评测基准缺口。研究指出信息流控制可覆盖跨会话与组合推理泄露，但目前缺乏统一跨数据面的隐私评测框架。适合关注智能体安全与隐私的读者快速判断是否精读。
-   evidence：LLM安全与隐私
-9. [Detecting Malicious Agent Skills in the Wild using Attention](/202606/28/2606.23416v1-detecting-malicious-agent-skills-in-the-wild-using-attention)  
-   标签：评分：6.8/10、query:q9
+9. [基于注意力机制的真实环境恶意智能体技能检测](/202606/28/2606.23416v1-detecting-malicious-agent-skills-in-the-wild-using-attention)（6.8/10）
    摘要：提出针对LLM agent技能市场中恶意技能检测问题，设计Locate\-and\-Judge两阶段注意力定位\+LLM判别框架，通过注意力对结构片段进行风险定位，再由轻量筛选后的关键片段交给强判别模型分析，实现低成本全市场扫描。在13.4万技能实测中发现131个确认恶意技能（约83%精度），相较全量扫描显著降低约2.8倍token成本，同时保持较高检出能力，整体具有较强工程落地价值，值得进一步精读。
-   evidence：LLM智能体安全与恶意技能检测
-10. [A Red Teaming Framework for Large Language Models: A Case Study on Faithfulness Evaluation](/202606/28/2606.25476v1-a-red-teaming-framework-for-large-language-models-a-case-study-on-faithfulness-evaluation)  
-   标签：评分：6.8/10、query:q9
+10. [面向大语言模型的红队测试框架：忠实性评估的案例研究](/202606/28/2606.25476v1-a-red-teaming-framework-for-large-language-models-a-case-study-on-faithfulness-evaluation)（6.8/10）
    摘要：本文提出一种面向大语言模型的红队评估框架，通过“攻击者\-目标模型\-评审”多角色架构自动生成对抗提示并评估输出忠实性，在问答与摘要任务及英阿跨语言场景中系统挖掘模型不忠实与脆弱性。实验基于2.4万次交互显示对抗提示可将攻击成功率提升最高7.9%，并发现结构约束与架构设计对安全性的影响可能超过参数规模。框架支持自动化评估但在多语言对抗生成与细粒度不忠实检测方面仍有限，整体具有较高方法论参考价值，值得进一步精读。
-   evidence：LLM红队测试用于安全与可靠性评估
-11. [Chai: Agentic Discovery of Cryptographic Misuse Vulnerabilities](/202606/28/2606.26933v1-chai-agentic-discovery-of-cryptographic-misuse-vulnerabilities)  
-   标签：评分：6.8/10、query:q9
+11. [Chai：基于智能体的密码学误用漏洞发现](/202606/28/2606.26933v1-chai-agentic-discovery-of-cryptographic-misuse-vulnerabilities)（6.8/10）
    摘要：本文提出Chai，一种结合AI代理与差分测试的加密误用漏洞发现系统，通过利用自然差异信号与“差异追踪”机制，在库级别识别漏洞并向依赖传播，从而替代传统逐项目审计范式。系统无需手工协议语法即可提升检测精度，并在X.509、JWT、SAML等场景中发现100\+漏洞及一个影响数十亿设备的SSL关键漏洞，展示对密码学误用的高效挖掘能力，值得精读方法与评估部分。
-   evidence：密码学误用漏洞AI检测
 
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
-</div>
+---
+使用键盘方向键可在日报/论文之间快速切换。
