@@ -1,0 +1,185 @@
+Title: BipBipCache: Pipeline-Aware Integration of Low-Latency Tweakable Encryption in an Embedded Cache Controller
+
+URL Source: https://arxiv.org/pdf/2606.23941v1
+
+Published Time: Wed, 24 Jun 2026 00:20:02 GMT
+
+Number of Pages: 8
+
+Markdown Content:
+IACR Transactions on Cryptographic Hardware and Embedded Systems ISSN XXXX-XXXX, Vol. 0, No. 0, pp. 1–8. DOI:XXXXXXXX 
+
+# BipBipCache: Pipeline-Aware Integration of Low-Latency Tweakable Encryption in an Embedded Cache Controller 
+
+## Corbin Hibler 1, Firas Hassan 2 and Eric McKanna 3 
+
+> 1
+
+Ohio Northern University, Ada, USA 
+
+c-hibler@onu.edu  
+
+> 2
+
+f-hassan@onu.edu  
+
+> 3
+
+ewmckanna@gmail.com 
+
+Abstract. Consumer and embedded processors store sensitive data in on-chip SRAM caches that remain readable after power loss or physical probing unless ciphertext is maintained in the memory array itself. This paper presents BipBipCache, a direct-mapped cache controller that integrates the BipBip tweakable block cipher (TBC) to encrypt cache data and tags in real time using a C 3-style 24+40 bit decomposition of each 64-bit word. We reconstruct the first pipelined hardware BipBip encryptor from a decryptor-centric specification and coordinate it with a 3-cycle decryptor inside the cache datapath. Our threat model targets confidentiality of cache-resident contents against cold-boot, bus, and SRAM readout attacks—not microarchitectural side channels, which require randomized caches rather than encrypted ones. A key architectural result is that 6-cycle encryption latency does not fully translate into 6-cycle write penalty: the first three encryptor stages overlap with tag decryption and hit detection, leaving an effective 3-cycle write commitment after hit verification. We verify encryptor and decryptor correctness against the official BipBip C++ reference (five vectors each), report FPGA resource utilization on Xilinx Artix-7 (3 356 LUTs, 16.1% of device; crypto logic ≈79% of LUTs), and confirm end-to-end operation on hardware. 
+
+Keywords: Cache encryption · tweakable block ciphers · BipBip · embedded systems · FPGA · low-latency cryptography 
+
+# 1 Introduction 
+
+Low-cost embedded and consumer devices—IoT SoCs, smart peripherals, and portable electronics—increasingly process credentials, personal data, and firmware secrets in on-chip SRAM. Unlike main memory, cache contents are rarely encrypted in commercial microarchitectures, leaving them exposed to cold-boot attacks [ HSH +08 ], direct SRAM probing, and offline observation of memory buses or modules. Hardware countermeasures that operate transparently at cache access latency are attractive for these platforms because software-only protections often impose unacceptable overhead. A distinct line of work addresses microarchitectural side channels such as Prime+Probe and Flush+Reload through cache randomization : ScatterCache [ WUM19 ] and SCARF [ CGL +23 ]encrypt or permute set indices so attackers cannot build reliable eviction sets. BipBipCache pursues a complementary goal: encrypted-cache confidentiality, in which stored data and tags are ciphertext rather than plaintext. This protects against physical and bus-level readout but does not mitigate contention-based side channels; we state that limitation explicitly in Section 3. 
+
+Licensed under Creative Commons License CC-BY 4.0. 
+
+> arXiv:2606.23941v1 [cs.CR] 22 Jun 2026
+
+2 BipBipCache Several low-latency ciphers target memory and pointer protection. QARMA [ Ava ] and MANTIS [ BJK +] were designed for memory encryption with competitive ASIC latency. PRINCE [ BCG +] optimizes single-cycle encryption in hardware. Cryptographic Capability Computing (C 3) [ LRD +] introduced pointer encryption using ultra-low-latency primitives; BipBip [ BDD +23a ] was designed for C 3 with a 24-bit block, 40-bit tweak, and 3-cycle ASIC decryption latency. What distinguishes our work is the combination of (i) the first pipelined BipBip 
+
+encryptor in hardware, reverse-engineered from a decryptor-only publication, and (ii) a pipeline-aware cache controller that exploits asymmetric 6-cycle encryption and 3-cycle decryption to hide part of the write latency behind tag verification. Our contributions are: 1. First hardware BipBip encryptor. We invert decryptor round functions and realize a 6-cycle pipelined encryptor in VHDL, verified against the reference imple-mentation [BDD +23b]. 2. Encrypted cache integration prototype. We present a direct-mapped cache controller with three BipBip instances (data encrypt, data decrypt, tag decrypt) and document the 64-bit-to-(24+40) cryptographic mapping used on both data and tag paths. 3. Pipeline overlap analysis. We show how tag-path decryption synchronizes with the encryptor so that only three additional cycles contribute to effective write latency after hit detection. 4. FPGA evaluation. We report synthesis and implementation results on Artix-7, hierarchical crypto overhead, and board-level functional tests. 
+
+# 2 Background 
+
+## 2.1 Tweakable Block Ciphers 
+
+A tweakable block cipher (TBC) is a family of permutations ˜E : K × T × { 0, 1}n → { 0, 1}n,where K is the key space, T the tweak space, and n the block size [ LRW11 ]. For fixed key 
+
+K and tweak T , ˜ETK (·) is a permutation on n bits. The public tweak diversifies encryptions without changing the secret key—natural for memory encryption when each address or context supplies a distinct tweak [Rog, CS]. 
+
+## 2.2 The BipBip Cipher 
+
+BipBip [ BDD +23a ] is a TBC with n= 24 , |T | = 40 , and a 256-bit master key, designed for C3 pointer encryption. Figure 1 summarizes its decryptor-oriented structure; we refer to Belkheyar et al. [BDD +23a] for round definitions ( R, R′, G, G′) and key scheduling. 
+
+Figure 1: BipBip high-level decryptor structure (adapted from Belkheyar et al. [BDD +23a]). Corbin Hibler, Firas Hassan and Eric McKanna 3Our encryptor inverts the published decryptor datapath and runs the tweak schedule forward. Wang et al. [ WBD +] later refuted the designers’ 96-bit security claim with a full-round attack at ≈ 292 complexity that remains impractical. We use BipBip as a case-study primitive; the integration principles transfer to other low-latency TBCs. 
+
+# 3 Threat Model and Security Goals 
+
+BipBipCache is an encrypted cache , not a randomized cache . Table 1 states our goals and non-goals. 
+
+Table 1: Threat model for BipBipCache.    
+
+> In scope Out of scope
+> Confidentiality of data/tags held in cache SRAM Prime+Probe, Flush+Reload, Spectre-class leakage Protection against cold-boot and physical SRAM readout Set-index privacy (index bits not encrypted) Binding stored words to tweak context via TBC Strong authentication (no MAC; encrypted tag ̸=AE) Hit requires decrypt-and-compare of stored tag Active integrity against key-bearing adver-sary
+
+Why encrypt tags? The logical address tag supplied by the processor is not stored verbatim. A hit requires decrypting the stored tag and comparing it to the (pipeline-delayed) incoming tag. An adversary who patches SRAM with arbitrary ciphertext cannot synthesize a valid hit without knowing the key and correct tweak binding. This is tamper-evident lookup metadata, not a cryptographic MAC. 
+
+Relation to randomized caches. ScatterCache [ WUM19 ] and SCARF [ CGL +23 ] target side-channel resistance by randomizing set mapping with low-latency ciphers on index bits. BipBipCache instead ciphertext-protects line contents and tags; the 7-bit set index remains in cleartext for direct-mapped lookup. 
+
+# 4 System Design 
+
+## 4.1 Cache Organization 
+
+BipBipCache is a direct-mapped cache with a 64-bit address space decomposed as: 52-bit tag (bits 63–12), 7-bit set index (11–5), 2-bit word offset (4–3), and 3-bit byte offset (2–0). Each of 128 sets stores four 64-bit words (256-bit line), a 52-bit tag, a valid bit, and a dirty bit. Table 2 summarizes metadata roles. We use direct mapping to minimize control complexity while validating the crypto-graphic datapath. Tag and valid arrays are modeled as OS-provisioned ROM-like structures in simulation; the controller reads but does not rewrite them. 4 BipBipCache 
+
+Table 2: Cache metadata and encryption coverage.                         
+
+> Field Width Encrypted? Writer Role in pipeline
+> Set index 7No Address SRAM row select Data word 64 Partial †Controller Payload; 24 bits via BipBip Tag 52 Partial †OS / ROM model Hit detect after decrypt Valid 1No OS / ROM model Gates hit signal Dirty 1No Controller Write-back hint
+> †See Section 4.2: 24 bits encrypted, 40 bits as tweak context.
+
+## 4.2 Cryptographic Mapping 
+
+BipBip operates on 24-bit blocks with 40-bit tweaks—not on full 64-bit words. Following the C 3 pointer layout [LRD +, BDD +23a], each 64-bit cache word W is decomposed as: 
+
+T ← W [63:58] ∥ W [33:0] (40-bit tweak) 
+
+P ← W [57:34] (24-bit plaintext) 
+
+W ′ ← T ′[39:34] ∥ ˜ETK (P ) ∥ T ′[33:0] (stored word) where T ′ denotes tweak bits after pipeline registration (unchanged on the 34-bit passthrough portion in practice). One BipBip invocation per 64-bit word suffices; ciphertext does not expand beyond 64 bits. Figure 2 illustrates the bit layout. Bits W [33 :0] and the upper six tweak bits W [63 :58] 
+
+are not fed through the 24-bit datapath permutation; they provide public context binding the encrypted 24-bit slice to the containing word.                
+
+> Bits 63–58 (6): tweak Thi Bits 57–34 (24): BipBip plaintext PBits 33–0 (34): tweak
+> Tlo
+> |Thi |P|Tlo |←64-bit cache word W; stored word replaces Pwith
+
+˜ETK (P ), passthrough tweak fields unchanged. 
+
+Figure 2: C3-style decomposition of a 64-bit cache word into 24-bit BipBip plaintext and 40-bit tweak ( T = Thi ∥ Tlo ). The same layout applies to padded tags on the hit-detection path. 
+
+Tag path. The hit detector pads the 52-bit stored tag to 64 bits as cache_tag ∥ 012 , then decrypts with the tag decryptor. The recovered logical tag is decrypted [63 : 12] , compared against the incoming address tag delayed by three cycles to align with decryptor latency. 
+
+Worked example. With the fixed verification test key (Appendix A), encrypting 0x0123456789ABCDEF 
+
+yields 0x0008C70789ABCDEF : the lower 32 bits are tweak passthrough while the middle slice is permuted (Table 6). 
+
+## 4.3 Pipeline and Controller 
+
+Three BipBip instances serve data encryption (6-cycle latency), data decryption (3-cycle), and tag decryption within hit detection (3-cycle). The 6-cycle encrypt path buffers plaintext while the tweak schedule advances; this is a pipeline scheduling choice, not a requirement of the cipher (Appendix B). 
+
+Read path. Tag and data decryptors run in parallel. The incoming address tag is delayed three cycles to align with decrypted tag comparison; plaintext and hit are valid on cycle 3. Corbin Hibler, Firas Hassan and Eric McKanna 5
+
+Write path. Plaintext enters the encryptor immediately while the tag path evaluates a hit. Write enable is asserted on cycle 6 only when a hit is confirmed, overlapping the first three encryptor cycles with hit detection (Table 3). 
+
+Table 3: Cache access timing (cycles after request).             
+
+> Operation Crypto active Hit/WE valid Data valid
+> Read Decrypt (3) Cycle 3 Cycle 3 Write (total) Encrypt (6) Cycle 3 (hit) Cycle 6 (store) Write (effective overhead) Overlap 0–2 Cycle 3 Cycle 6
+
+# 5 Related Work 
+
+Table 4 contrasts BipBip with other low-latency primitives used in memory or cache protection. BipBip’s small block fits C 3-style partial encryption but requires careful mapping for full cache words; wide-block designs (QARMA, PRINCE) simplify line encryption at higher area and latency cost. 
+
+Table 4: Low-latency ciphers relevant to cache integration (typical published ASIC targets).                          
+
+> Cipher Block Tweak ASIC latency Typical use
+> BipBip 24 40 3-cycle decrypt C3pointers; our cache QARMA-64 64 64 ≈1–2 cycles Memory encryption PRINCE 64 —1-cycle encrypt Pervasive crypto MANTIS 64 64 Low-latency Memory/tweakable AE SCARF 10 —Ultra-low Set randomization
+
+Randomized caches (ScatterCache, SCARF) and encrypted caches address orthogonal threats. MATTER [ ADM ] and QARMAv2 [ ABD +] extend memory-encryption TBCs with stronger bounds. Our prototype does not implement set randomization; future work could combine encrypted lines with SCARF-style index encryption. 
+
+# 6 Evaluation 
+
+We implemented BipBipCache in VHDL and verified it with AMD Vivado 2025.2 simulation and Xilinx Artix-7 synthesis. Encryptor and decryptor testbenches match the official BipBip C++ reference [ BDD +23b ] on N = 5 vectors (Appendix A); all report MATCH .Pipelined tests confirm 6-cycle encrypt and 3-cycle decrypt latency. Synthesis targets xc7a35tcpg236-1 (Artix-7, 20 800 LUTs). Figure 3 shows the inte-grated design. Table 5 summarizes post-implementation resources; cryptographic logic consumes ≈79% of LUTs, indicating that cipher pipelines dominate area on consumer-scale FPGAs. The design runs at 100 MHz in simulation and on a Nexys A7 board (XC7A100T) with UART-based system tests. Table 6 summarizes one board-level round-trip. 
+
+# 7 Conclusion 
+
+We presented BipBipCache, a feasibility study of embedding BipBip tweakable encryption in an embedded direct-mapped cache. By documenting the C 3-style 24+40 bit mapping, reconstructing the first pipelined BipBip encryptor, and overlapping encryption with tag 6 BipBipCache 
+
+Figure 3: BipBipCache block diagram: data encryptor, data decryptor, tag decryptor, and direct-mapped SRAM. 
+
+Table 5: Post-implementation resources on Artix-7 ( xc7a35tcpg236-1 , Vivado 2025.2).               
+
+> Resource / module Used Utilization
+> Slice LUTs (total) 3 356 16.1% of 20 800 Data encryptor 1 185 —Data decryptor 661 —Tag path (hit detector) 818 —Slice registers 1 500 3.6% of 41 600 Block RAM tiles 48.0% of 50
+
+decryption, we show that ultra-low-latency TBCs can be integrated with bounded pipeline overhead. FPGA results on Artix-7 demonstrate practicality for consumer-scale devices, with crypto logic dominating area. 
+
+Limitations. BipBip’s theoretical security margin is tight after full-round cryptanaly-sis [ WBD +]; only 24 bits per word are strongly permuted; set indices remain cleartext; and we do not evaluate side-channel leakage. Future work includes primitive substitution (e.g., QARMA, MANTIS), set-index protection, formal side-channel analysis, and SoC integration with workload benchmarks. 
+
+# A Reference Verification Vectors 
+
+All vectors use a fixed 256-bit test key derived from the ASCII string SuperCoolBipBipPasswordForTestin .Encryptor tests supply ciphertext and expect plaintext; decryptor tests supply plaintext and expect ciphertext. Corbin Hibler, Firas Hassan and Eric McKanna 7
+
+Table 6: Hardware round-trip verification on Nexys A7. 
+
+Stage Tag Data 
+
+Plaintext input 0x00000000ABCD1234 0x0123456789ABCDEF 
+
+Stored ciphertext 0x03FC3D94ABCD1234 0x0008C70789ABCDEF 
+
+Decrypted output 0x00000000ABCD1234 0x0123456789ABCDEF 
+
+Table 7: Encryptor/decryptor reference vectors ( N =5 , all pass).       
+
+> Input Expected output
+> 00CD22C000000000 0000000000000000 10A93BE49ABCDEF0 123456789ABCDEF0 FF7C6AEC76543210 FEDCBA9876543210 015D888400000000 0000000400000000 FFB9B073FFFFFFFF FFFFFFFFFFFFFFFF
+
+# B Encryptor Reconstruction Notes 
+
+The BipBip publication specifies decryptor rounds R and R′ and tweak functions G, G′.Our encryptor applies inverse (R) and inverse (R′) in reverse round order with forward tweak scheduling. Extractors E0, E1 map 53-bit tweak states to 24-bit round keys identically to decryption. 
+
+θ′ correction. An earlier draft claimed that singular θ′ prevented 3-cycle encryption. This was incorrect: on 53-bit states with fixed MSB, θ′ is invertible by back-substitution (x52 = y52 , x51 = y51 ⊕ x52 , . . . ). The 6-cycle encryptor latency is a pipeline scheduling choice, not a mathematical impossibility. 
+
+# References 
+
+[ABD +] Roberto Avanzi, Subhadeep Banik, Orr Dunkelman, Maria Eichlseder, Shibam Ghosh, Marcel Nageler, and Francesco Regazzoni. The QARMAv2 Family of Tweakable Block Ciphers. [ADM] Roberto Avanzi, Orr Dunkelman, and Kazuhiko Minematsu. MATTER: A Wide-Block Tweakable Block Cipher. [Ava] Roberto Avanzi. The QARMA Block Cipher Family. Almost MDS Matri-ces Over Rings With Zero Divisors, Nearly Symmetric Even-Mansour Con-structions With Non-Involutory Central Rounds, and Search Heuristics for Low-Latency S-Boxes. pages 4–44. [BCG +] Julia Borghoff, Anne Canteaut, Tim Güneysu, Elif Bilge Kavun, Miroslav Knezevic, Lars R. Knudsen, Gregor Leander, Ventzislav Nikov, Christof Paar, Christian Rechberger, Peter Rombouts, Søren S. Thomsen, and Tolga Yalçın. PRINCE – A Low-Latency Block Cipher for Pervasive Computing Applica-tions. In Xiaoyun Wang and Kazue Sako, editors, Advances in Cryptology – ASIACRYPT 2012 , pages 208–225. Springer. [BDD +23a] Yanis Belkheyar, Joan Daemen, Christoph Dobraunig, Santosh Ghosh, and Shahram Rasoolzadeh. BipBip: A low-latency tweakable block cipher with small dimensions. IACR TCHES , 2023(1):326–368, 2023. 8 BipBipCache [BDD +23b] Yanis Belkheyar, Joan Daemen, Christoph Dobraunig, Santosh Ghosh, and Shahram Rasoolzadeh. Bipbip tweakable block cipher reference implemen-tation. https://gitlab.science.ru.nl/shahramr/bipbip_tweakable_ block_cipher , 2023. Accessed 2026-03-16. [BJK +] Christof Beierle, Jérémy Jean, Stefan Kölbl, Gregor Leander, Amir Moradi, Thomas Peyrin, Yu Sasaki, Pascal Sasdrich, and Siang Meng Sim. The SKINNY Family of Block Ciphers and Its Low-Latency Variant MANTIS. In Matthew Robshaw and Jonathan Katz, editors, Advances in Cryptology – CRYPTO 2016 , pages 123–153. Springer. [CGL +23] Federico Canale, Tim Güneysu, Gregor Leander, Jan Philipp Thoma, Yosuke Todo, and Rei Ueno. SCARF – a low-latency block cipher for secure cache-randomization. In 32nd USENIX Security Symposium (USENIX Security 23) ,pages 1937–1954. USENIX Association, 2023. [CS] Debrup Chakraborty and Palash Sarkar. A General Construction of Tweakable Block Ciphers and Different Modes of Operations. 54(5):1991–2006. [HSH +08] J. Alex Halderman, Seth D. Schoen, Nadia Heninger, William Clarkson, William Paul, Joseph A. Calandrino, Ariel J. Feldman, Jacob Appelbaum, and Edward W. Felten. Lest we remember: Cold-boot attacks on encryption keys. In 16th USENIX Security Symposium (USENIX Security 08) , pages 45–60. USENIX Association, 2008. [LRD +] Michael LeMay, Joydeep Rakshit, Sergej Deutsch, David M. Durham, Santosh Ghosh, Anant Nori, Jayesh Gaur, Andrew Weiler, Salmin Sultana, Karanvir Grewal, and Sreenivas Subramoney. Cryptographic Capability Computing. In 
+
+MICRO-54: 54th Annual IEEE/ACM International Symposium on Microar-chitecture , MICRO ’21, pages 253–267. Association for Computing Machinery. [LRW11] Moses Liskov, Ronald L. Rivest, and David Wagner. Tweakable block ciphers. 
+
+Journal of Cryptology , 24(3):588–613, July 2011. [Rog] Phillip Rogaway. Efficient Instantiations of Tweakable Blockciphers and Refinements to Modes OCB and PMAC. In Pil Joong Lee, editor, Advances in Cryptology - ASIACRYPT 2004 , pages 16–31. Springer. [WBD +] Jinliang Wang, Christina Boura, Patrick Derbez, Kai Hu, Muzhou Li, and Meiqin Wang. Cryptanalysis of Full-Round BipBip. 2024(2):68–84. [WUM19] Michael Werner, Martin Unterguggenberger, and Stefan Mangard. Scat-terCache: Thwarting cache attacks via cache set randomization. In 28th USENIX Security Symposium (USENIX Security 19) , pages 675–692. USENIX Association, 2019.
