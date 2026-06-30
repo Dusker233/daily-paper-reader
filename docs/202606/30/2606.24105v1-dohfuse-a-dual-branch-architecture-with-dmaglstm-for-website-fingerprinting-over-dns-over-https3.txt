@@ -1,0 +1,609 @@
+Title: DoHFuse: A Dual-Branch Architecture with DMAGLSTM for Website Fingerprinting over DNS over HTTPS/3
+
+URL Source: https://arxiv.org/pdf/2606.24105v1
+
+Published Time: Wed, 24 Jun 2026 00:30:04 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+> JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 1
+
+# DoHFuse: A Dual-Branch Architecture with DMAGLSTM for Website Fingerprinting over DNS over HTTPS/3 
+
+ZunDong Zhang, Yanan Cheng, Zhaoxin Zhang, Xueyang Huo, Changjiang Wu 
+
+Abstract —As personal data privacy becomes increasingly crit-ical in Internet of Things (IoT) environments, secure DNS protocols such as DNS over HTTPS (DoH) and DNS over TLS (DoT) have been widely adopted to protect device communi-cations. However, without effective obfuscation, these protocols remain vulnerable to Website Fingerprinting (WF) attacks that can reveal user activity. With the ongoing deployment of DNS over HTTP/3 (DoH/3) in modern networked systems, padding strategies have been increasingly applied in practice. It is therefore essential to investigate whether DoH/3 can effectively mitigate WF attacks in realistic IoT and edge-network scenarios. To address this, we first collect and publicly release the first real-world benchmark dataset of DoH/3 traffic, generated from domain resolution processes in practical network environments. We further propose DoHFuse, a dual-branch learning framework that integrates inter-arrival time sequences and refined statistical features through an improved DMAG-LSTM, specifically de-signed to capture burst-aligned temporal patterns. Experimental results show that DoHFuse achieves an accuracy of 88.05% (precision 88.56, recall 87.96, F1 87.83) in a closed-world setting of 449 classes, and an AUPRC of 0.975 with an F1 score of 0.951 (precision 0.906, recall 1.0) in open-world detection. These findings demonstrate that DoH/3 traffic remains susceptible to WF attacks, suggesting that commonly deployed padding mechanisms alone are insufficient to ensure privacy protection in IoT-scale encrypted DNS communications. 
+
+Index Terms —Dns over Https; Encrypted Traffic; Website fingerprint; privacy risk 
+
+I. I NTRODUCTION 
+
+Website fingerprinting (WF) attacks pose a severe threat to online privacy: by analyzing patterns in encrypted traffic, a passive adversary can infer the sites a user visits, assemble behavioral profiles, and mount targeted phishing or social-engineering campaigns. This threat is particularly concerning in Internet of Things (IoT) environments, where large numbers of devices rely on encrypted communications while often lack-ing strong endpoint protections. This capability undermines the privacy guarantees users expect from encryption and has kept WF an active research topic for more than a decade. Most prior WF work has focused on anonymity systems such as Tor and encrypted HTTPS traffic between clients and web servers. With the widespread deployment of encrypted 
+
+Z. Zhang, Y. Cheng, and Z. Zhang are with the Faculty of Computing, Harbin Institute of Technology, China (e-mail: 22b903090@stu.hit.edu.cn; chengyn@hit.edu.cn; zhangzhaoxin@hit.edu.cn). X. Huo and C. Wu are with the China Mobile Research Institute, China (e-mail: huoxueyang@cmict.chinamobile.com; wuchangjiang@cmict.chinamobile.com). Corresponding author: Yanan Cheng, Zhaoxin Zhang. 
+
+DNS—most notably DNS over HTTPS (DoH) and DNS over TLS (DoT)—DNS resolution itself has emerged as a distinct and increasingly important attack surface [1, 2]. Against this backdrop, it is natural to ask how WF translates to encrypted DNS, particularly in large-scale IoT and edge-network deploy-ments where DNS traffic is both frequent and latency-sensitive. Compared to HTTPS, encrypted DNS offers a uniquely advantageous vector for fingerprinting. Queries for a recursive resolver are less contaminated by the complexities of CDN resources, advertisements, and heterogeneous web objects that confound HTTPS-based WF [3]. Feature extraction can thus be cleaner and more directly attributable to a target website. Fur-thermore, DNS resolution logically precedes the establishment of HTTPS connections, so a successful DNS-based WF attack can provide an earlier signal of user intent, potentially enabling earlier interception or policy enforcement. In IoT scenarios, such early-stage inference can expose device behavior patterns and application usage at scale. Although numerous studies have shown that DoH, DoT, and DNS over QUIC (DoQ) are vulnerable to fingerprinting in the absence of padding strategies, there is still no system-atic investigation of such attacks under the DoH/3 protocol [4, 5]. DoH/3—a modern variant of DoH built atop QUIC— is gaining momentum due to low latency, multiplexing, and connection reuse, with growing deployment in platforms such as Chrome and Cloudflare DNS. Compared with DoH over HTTP/2, DoH/3 introduces new obfuscation of the transport layer and traffic patterns [6]: HTTP/3 (QUIC) supports stream and connection multiplexing, yielding intertwined flows of queries, responses, and control messages (e.g., SETTINGS ,
+
+ACK , PRIORITY_UPDATE ) [7]. These characteristics com-plicate traffic separation and make traditional length-based features far less effective. This creates a critical gap: the feasibility and effectiveness of WF under realistic DoH/3 conditions remain unclear, especially in IoT-scale encrypted DNS deployments. 
+
+Research Objectives. This study aims to: 1) Systematically assess DoH/3’s susceptibility to WF un-der realistic HTTP/3/QUIC conditions. 2) Establish and publicly release a reusable and standard-ized DoH/3 WF benchmark (data, code, and evaluation templates). 3) Develop and validate DoHFuse —a dual-branch model with DMAG-LSTM —for robust closed world and open world evaluation.  
+
+> arXiv:2606.24105v1 [cs.CR] 23 Jun 2026 JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 2
+
+4) Provide empirical insights that inform modeling choices, privacy assessment, and defense design, with implica-tions for large-scale IoT traffic analysis. 
+
+Contributions. To address these challenges, we conduct a systematic study and make the following key contributions:  
+
+> •
+
+We construct and publicly release the first dedicated DoH/3 WF dataset, comprising traffic traces from 449 websites collected over multiple rounds to enable repro-ducible research.  
+
+> •
+
+We propose DMAG-LSTM, a gated LSTM with multi-scale forget-gate fusion tailored to capture the interleaved burst structures prevalent in DoH/3, enhancing temporal modeling.  
+
+> •
+
+We design DoHFuse, a dual-branch architecture that softly fuses discriminative statistical features with DMAG-LSTM sequences, improving robustness and gen-eralization.  
+
+> •
+
+We characterize DoH/3 traffic by isolating valid re-quest–response pairs and exposing a burst-gap request pattern, laying the groundwork for targeted, timing-aware defenses in encrypted DNS environments. Through extensive experiments in both closed world and open world scenarios with varying class granularities (up to 449 websites), we demonstrate the superior performance and robustness of our approach compared to state-of-the-art baselines under a unified protocol. II. R ELATED WORK 
+
+A. Website Fingerprinting Attacks on Tor and HTTPS 
+
+Recent studies have advanced website fingerprinting attacks in both Tor and HTTPS traffic. Sirinam et al pioneered the use of deep learning for fingerprinting in their Deep Fingerprinting model, significantly outperforming previous ML-based meth-ods and demonstrating strong robustness even against various defenses [8]. Cherubin et al. proposed a dynamic expansion architecture for class-incremental WF in real-world Tor set-tings [9]. Shen et al. introduced Robust Fingerprinting using a traffic aggregate matrix to build resilient traffic representations against defenses [10]. Abolfathi et al. developed SuperLearner, an ensemble-based model that achieved up to 97. 2% accuracy in HTTPS traffic [11]. Jansen, Wails, and Johnson review the real-world evaluation of WF by reconstructing labeled entry-side traces from genuine Tor traffic [12]. Despite these advances, existing models remain highly data-dependent and struggle to generalize to dynamic or updated websites, limiting their real-world applicability. Methodological advances in WF include signal-efficient at-tacks and low-sample generalization. Attarian and Keshavarz-Haddad show that even the first-packet direction can be remarkably informative [13]; the few shot WF is explored by Chen et al. [14] and extended the cross-domain via Brownian distance covariance by Zou et al. [15]. Zhan et al. study WF on early QUIC traffic [16]. However, most of these techniques were developed for Tor/HTTPS or for DNS settings without robust padding and HTTP/3 multiplexing. 
+
+B. Encrypted Malicious-Traffic and TLS Fingerprinting 
+
+Beyond DNS, several works analyze encrypted malicious traffic at the transport layer. Yu et al. propose a TLS finger-printing approach with an attributed graph kernel [17], and Hong et al. use graph-based multiview features for encrypted malicious traffic detection [18]. In parallel, Keshk et al. introduce an explainable deep learning intrusion detection framework for IoT networks [19], and earlier traffic classifica-tion systems explore dynamic multiclass pipelines [20]. These directions inform feature modeling and interpretability, but differ from our objective: they target malware/attack detection on TLS/IoT traffic rather than DoH/3 website fingerprinting. 
+
+C. Encrypted DNS Detection and DNS-based Security 
+
+A complementary line of work focuses on detecting en-crypted DNS usage or DNS-based malicious activity, rather than inferring website identity. Crucially, these methods help 
+
+separate DoH flows from background HTTPS traffic , pro-viding the pre-filtering and labeling capability our study also relies on. Jerabek et al. comparatively evaluate DoH detectors [21]; Zhan et al. detect data exfiltration over DoH [22]; and Quezada et al. build a real-time bot infection detector using DNS fingerprinting and ML [23]. Although these systems primarily target DoH/DoT (not DoH/3’s HTTP/3-over-QUIC setting), they offer practical front-end tools, DoH-vs-HTTPS separation and anomaly flags, that act as prerequisites to our DoH/3 WF pipeline (e.g., curated trace selection and ground truth preparation). In contrast, our work asks: once DoH/3 flows are isolated , can site identity still be inferred under padding and multiplexing? 
+
+D. Website Fingerprinting Attacks on Encrypted DNS 
+
+The growing deployment of encrypted DNS protocols such as DoH and DoQ has prompted extensive research into their vulnerability to website fingerprinting (WF). For example, Bushart and Rossow systematically evaluated padding-based countermeasures in encrypted DNS and found that simple padding is insufficient to thwart WF attacks [24]. Similarly, Hynek and Cejka showed that unpadded DoH leaks domain information through packet length correlations, creating a’privacy illusion’ unless padding mechanisms are applied[25]. Siby et al. demonstrated that even encrypted DNS queries can leak significant identifying information through observable traffic patterns, particularly when packet length features are not adequately obfuscated [4]. Mazzuz and Shabtai showed that even with domain name encryption, website fingerprinting remains effective, proposing a Siamese network–based few-shot attack that achieves high accuracy with limited samples [26]. Many studies have shown that packet length-related char-acteristics are among the most critical factors in website fin-gerprinting. Zou et al. proposed DePL, which uses encrypted traffic packet length feature sequences and employs a BiLSTM model to detect privacy leakage in DNS-over-HTTPS [27]. Trevisan et al. demonstrated that, despite using DoH and ECH, traffic analysis based on encrypted flow features can still ef-fectively infer user-visited services, revealing residual privacy JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 3
+
+leakage risks [28]. Hu and Fukuda analyzed DNS-over-QUIC traffic and showed that packet length and timing features can leak queried domain information, proposing padding-based countermeasures to mitigate such privacy risks [29]. Several works have explored timing-based WF under en-crypted DNS protocols. Shao et al. proposed a lightweight feature extraction approach based on interpacket intervals and showed competitive results using traditional classifiers like Random Forests [30]. In contrast, Dahanayaka et al. investigated inline traffic analysis attacks on DoH, highlighting the vulnerability of passive observers to extract features from QUIC traffic streams [31]. Recent advances in machine learning have also been applied to encrypted DNS traffic analysis. Salari et al. proposed a hybrid deep learning approach that combines statistical fea-tures and sequence models, achieving improved accuracy over previous baselines when evaluating oblivious DoH (ODoH) [5]. Meanwhile, Csikor et al. introduced Transformer-based models for privacy analysis on HTTP/3 and DoQ traffic, high-lighting the need for adaptive architectures that can capture fine-grained temporal dynamics [32]. Although these efforts provide valuable information, most of them rely heavily on the length or size of the packet as a primary discriminative feature. As shown in our experiments and consistent with the findings in [4], such characteristics become significantly less effective in the presence of EDNS(0) padding and QUIC-level obfuscation, which are prevalent in DoH/3. Furthermore, although previous work has assessed website fingerprinting in DoH, DoT, and DoQ, a systematic evaluation targeting DoH/3 is still lacking. In summary, while previous literature has explored website fingerprinting across various encrypted DNS protocols, our work is among the first to offer a dedicated dataset, a customized temporal modeling architec-ture, and a systematic evaluation for DoH/3 fingerprinting. III. P RELIMINARIES 
+
+A. Motivation and Current Status 
+
+DNS over HTTPS encapsulates DNS messages inside HTTPS requests and responses, providing end-to-end con-fidentiality and integrity [33]. This design prevents on-path eavesdropping and tampering and limits inspection or manip-ulation that relies on plaintext DNS. With the maturation of HTTP/3 (RFC 9114) over QUIC (RFC 9000), DoH can run atop HTTP/3—referred to in this paper as DoH/3 [34, 35]. DoH/3 benefits directly from QUIC’s properties: a 1-RTT TLS 1.3 handshake (and 0-RTT for ses-sion resumption), built-in stream multiplexing, and resilience to head-of-line blocking, which together reduce latency and improve robustness. On the resolver side, major public resolvers already sup-port DoH and expose secure transports suitable for HTTP/3. Google Public DNS documents DoH with modern TLS 1.3 practices and QUIC/HTTP/3 paths, and recommends EDNS(0) padding (RFC 7830/8467) to shrink the attack surface of size-based traffic analysis [36, 37]. Cloudflare’s 1.1.1.1 similarly supports DoH over HTTP/2 and HTTP/3 with multiplexing, (1)Pre-resolve (2)Reslove response  (2a)  QUIC+TLS 1.3 (ALPN=h3)   
+
+> via HTTPS RR
+> （2b ）Connect via HTTP/2 (TLS/TCP)
+> （2b ）Read Alt-Svc: h3:port
+> （2b ）Dial new QUIC+TLS 1.3 (ALPN=h3) (3) Create HTTP/3 stream (4)Send the DoH request (RFC 8484) (5) Receive and reuse
+> Recursive Resolver Client （Chrome ）DoH3 Server
+
+Fig. 1: DoH/3 connection establishment schematic. encouraging at least HTTP/2 and taking advantage of HTTP/3 when available[38]. On the client side, Chrome has shipped HTTP/3/QUIC support broadly[39], so when a resolver advertises HTTP/3 the browser can issue DoH queries over HTTP/3. Android has also integrated encrypted DNS with support for DoH/3 (initially targeting well-known providers such as Google and Cloudflare)[40]. 
+
+B. DoH/3 Connection Establishment and Query Flow 
+
+Figure 1 summarizes the establishment of DoH/3 and the query flow between the client (e.g. Chrome) and a public resolver. 
+
+(1)Pre-resolve. Send a conventional DNS query to the recursive resolver configured in the system (typically provi-sioned by DHCP), requesting the A, AAAA , and HTTPS (SVCB/HTTPS, type 65) [41] records for the DoH hostname (e.g., dns.google.com ). 
+
+(2) Resolver response. Receive DNS responses from the system-configured recursive resolver; responses include 
+
+A/AAAA and may include an HTTPS (SVCB/HTTPS, type 65) record for the DoH hostname. 
+
+(2a) HTTPS RR present. If an HTTPS record is present, consume the advertised parameters (e.g., alpn="h3,h2" ,
+
+ipv4hint/ipv6hint , ECHConfig) and establish 
+
+QUIC + TLS 1.3 (ALPN =h3 ) directly to the indicated endpoint. (See the HTTPS-RR note for a canonical example.) 
+
+HTTPS RR example 
+
+cloudflare-dns.com. 65 IN HTTPS 1 . alpn="h3,h2" ipv4hint=104.16.248.249,104.16.249.249 ipv6hint=2606:4700::6810:... , 2606:4700::6810:... 
+
+(2b) No HTTPS RR. If no HTTPS record is present, first connect over HTTP/2 (TLS /TCP) to the DoH endpoint and read the server’s Alt-Svc: h3 ; if accepted by policy, initiate a new QUIC + TLS 1.3 connection ( ALPN =h3 ) and proceed over HTTP/3. Note: Alt-Svc announces an alternative endpoint rather than upgrading the existing TCP connection. JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 41.Traing classifier 
+
+> 3. Hijack traffic
+> User
+> Attacker Fingerprint database
+> TLS/QUIC Classifier DoH Server
+> 2.DoH3 resolution
+> 4.Predict
+> Predicted website
+
+Fig. 2: Threat model for DoH/3 website fingerprinting. 
+
+(3) Establish HTTP/3 session. After the handshake (typi-cally 1-RTT; 0-RTT on resumption), create an HTTP/3 stream (headers encoded with QPACK). 
+
+(4) Send the DoH request (RFC 8484). Use either 
+
+GET /dns-query?dns=BASE64URL(dns-wire, nopadding) with Accept:application/ dns-message , or POST /dns-query carrying the raw DNS wire message with 
+
+Content-Type:application/dns-message ;
+
+POST offers better privacy, while GET remains cache-friendly. 
+
+(5) Receive and reuse. Receive 200 OK (application/dns-message) and multiplex subsequent queries on the same HTTP/3 connection. In our measurements, Google Public DNS does not publish an HTTPS record for its DoH endpoint, whereas Cloudflare DNS does publish an HTTPS record. In both cases, Chrome issues DoH queries using POST to /dns-query with Content Type: application/dns-message , and the HTTP body carries the raw DNS wire message. We observe that this payload includes EDNS(0) padding (per RFC 7830/8467), which helps obscure message size and mitigates length-based traffic fingerprinting. IV. M ETHOD 
+
+A. Threat Model 
+
+Our threat model, depicted in Figure 2, follows the tradi-tional approach in WFP attacks. The adversary is a passive on-path observer between the client and the DoH/3 resolver: able to monitor traffic but unable to inject, drop, or modify packets and unable to decrypt TLS/QUIC. Observable features include the 5-tuple, connection start/finish times, and the QUIC packet sequence (timestamps, directions, sizes). Flows are coarsely segmented by 5-tuple and idle timeouts. We study whether an adversary can identify user visits solely from DoH/3 traffic. The adversary first gathers in-situ measurements in the target network environment (e.g., the same geographic or ISP region as the victim). Specifically, the adversary visits a set of websites of interest over DoH/3 and records the resulting packet traces, which serve as labeled data to train a supervised classifier. After training, the adversary applies the model to real-world traffic traces collected from passive observation. Given a new DoH/3 flow, the classifier analyzes its observable features and attempts to predict the most likely target website. If successful, this reveals the user’s browsing behavior without decrypting any content, demonstrating a privacy vulnerability even in the presence of strong encryption of the transport layer. 
+
+B. Data Collection 
+
+To enhance the robustness and generalizability of our anal-ysis, we collected DoH/3 traffic from two geographically distinct vantage points in the United States during [July 2025] . Specifically, we deployed Virtual Private Servers (VPS) located in Los Angeles, California and San Jose, California ,each configured as an independent client host. Both instances ran Ubuntu 24.04 on x64 hardware with identical default net-work configurations (the same kernel, TCP stack parameters and DNS system settings). The same Selenium-based crawling script and identical versions of Chromedriver (v141.0) and Google Chrome (v.141.0) were executed across both vantage points to ensure consistency in client behavior. Candidate domains were drawn from two established rank-ings: Majestic Million (top 400) and Tranco (top 200) [42, 43]. After merging and deduplication, we obtained 449 unique domains. Entries corresponding to CDN/API endpoints or persistently unreachable names (e.g. blocked by firewalls) were excluded from the target set. Each reachable domain was visited 100 times using aSelenium automation framework with Chromedriver that con-trols headless Chrome. This resulted in approximately 44,900 valid sessions after filtering out failures. A new Chrome profile and process were instantiated for each visit to prevent DNS caching. All DNS queries were forced to use DoH/3 via dns.google. Traffic was recorded with tcpdump ,and TLS session keys were logged via SSLKEYLOGFILE for optional validation, although our features do not require decryption. For closed world evaluation, we use all 449 domains. For open world tests, we additionally sampled domains ranked 500–600 in Majestic (ten visits per domain) to form a back-ground set unseen during training. Regarding trace scope, for 226 domains we retained full-session captures (entire page load); for the remaining domains we retained DoH-only captures by filtering resolver-bound UDP/443 traffic to known DoH addresses. We release both the raw packet captures (PCAP) and the derived per-visit CSV statistics produced by our feature pipeline (e.g. request counts and timing summaries). These artifacts are provided in the accompanying data set repository so that other researchers can directly reuse the raw traces or the precomputed statistics without replicating the entire parsing stack. All traffic comes from our own clients visiting public websites; no third-party user data was collected. The dataset is available on Scidb. 1
+
+C. DoHFuse Overall Architecture 
+
+To provide a clearer understanding of our system design, the following section presents the overall architecture of DoHFuse,  
+
+> 1https://www.scidb.cn/anonymous/clFCUkZ2 (anonymous link for double-blind review). JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 5
+
+outlining the relationship between its feature inputs, model training, and classification pipeline. Figure 3 presents the overall architecture of the proposed DoHFuse model. The framework is designed to jointly leverage fine-grained tempo-ral request patterns and coarse-grained statistical traffic fea-tures to enhance robustness under diverse DoH/3 conditions. In HTTP/3-over-QUIC, encryption, padding, and multiplex-ing obscure size cues while producing interleaved burst–gap 
+
+timing. Hence, DoHFuse adopts a timing-first, dual-branch 
+
+design that fuses short-term burst dynamics and long-term statistical regularities, aligning more naturally with transport-layer realities than length-centric pipelines. DMAG-LSTM (128)    
+
+> GAP (128)
+> Fully Connected (32)
+> Stat Input (2-D)
+> Count
+> CV
+> Concat (128+32)
+> Fully Connected (256)
+> Fully Connected (128)
+> Softmax
+> Classification Probability
+> Hidden State (200×1)
+> ∆tCalc
+> ③Temporal Banch
+> ④Statistical Branch
+> Masking
+> Padding
+> Truncate
+> Filter
+> ∆t(200×1)
+> DoH/3 packet
+> DoH/3 packet
+> DoH/3 packet
+> ...
+> ①Input Packets
+> ②Feature engineering ⑤Feature Fusion
+
+Fig. 3: Overview of the proposed DoHFuse architecture. The model integrates a timing-sensitive temporal branch based on DMAG-LSTM and a statistics-based branch for coarse traffic summarization. As shown in Figure 3, DoHFuse is organized into five sequential components: (1) Input (Packets) , (2) Feature Engi-neering , (3) Temporal Branch , (4) Statistical Branch , and (5) 
+
+Feature Fusion . This modular structure provides a clean pro-cessing flow from raw QUIC packets to the final classification output while separating heterogeneous timing and statistical signals. 
+
+(1) Input (Packets) The first stage of our pipeline converts raw DoH/3 traffic into a structured CSV format suitable for later processing. Each website visit was originally recorded as a QUIC pcap trace. From this trace, we isolate only DoH/3-related packets by filtering UDP traffic on port 443 and retaining flows whose source or destination corresponds to known DoH resolvers. For every retained packet, we extract its arrival timestamp, compute the relative time (offset from the first DoH packet of the visit), calculate the inter-packet interval, and record essential metadata such as IP addresses, ports, packet length, and direction. These packet-level attributes are written sequentially into a per-visit CSV file, where each row represents one DoH/3 packet and each column corresponds to a normalized field required for the subsequent feature engineering stage. The CSV files produced in this step form the actual input to DoHFuse. Although this conversion is performed offline in our dataset pipeline, the same filtering and extraction logic can be applied to a live capture stream, enabling real-time generation of CSV traces for online analysis. 
+
+(2) Feature Engineering. From the filtered DoH/3 packet stream, we compute two complementary feature groups: a sequence of inter-request intervals ( Δt) and a set of coarse statistical attributes. Operations such as truncation, padding, and masking are applied to standardize the sequence length (200×1). Since this step involves several domain-specific op-erations tailored to DoH/3 timing, the complete formulation and justification are presented separately in Section IV-D. 
+
+(3) Temporal Branch. The Δt sequence is processed by a dedicated temporal encoder. After masking variable-length inputs, the sequence is fed into the proposed DMAG-LSTM 
+
+module (128 units), followed by normalization, regularization, and global average pooling to obtain a compact temporal embedding. DMAG-LSTM is designed to capture both micro-burst and long-gap timing structures that naturally arise in multiplexed DoH/3 traffic. Because the internal computation and the relationship between DMAG-LSTM and standard LSTM are central contributions of this work, they are detailed later in Section IV-E. 
+
+(4) Statistical Branch. In parallel to the temporal encoder, the statistical branch operates on two global indicators derived from each DoH/3 trace: the total number of client-to-resolver request packets ( query count ) and the coefficient of variation (CV ) of their inter-packet intervals. These variables capture complementary aspects of the DoH/3 behavior. The query count reflects the overall intensity of DNS activity triggered by a webpage, which correlates with its resource structure and is largely unaffected by padding or frame coalescing. Together, these two statistics provide a coarse but reliable description of the global request shape, serving as padding-invariant, low-variance signals that compensate for the fine-grained sensitivity of the temporal branch. They are fed into a lightweight feedforward block consisting of a dense pro-jection layer with ReLU activation, BatchNormalization, and Dropout regularization, expanding the two inputs into a 32-dimensional embedding. This embedding acts as a global prior that stabilizes training, constrains the fused representation, and improves generalization when the number of classes scales up or when timing variability increases across vantage points. 
+
+(5) Feature Fusion and Classification. The outputs of the two branches are concatenated to form a unified latent representation. This fused vector is then processed through a lightweight classifier composed of:  
+
+> •
+
+Dense (256 units, ReLU) + BatchNormalization +Dropout  
+
+> •
+
+Dense (128 units, ReLU)  
+
+> •
+
+Output Dense layer producing class logits Training uses categorical cross-entropy loss with balanced class weighting to mitigate label imbalance. A late soft fusion 
+
+strategy is adopted to allow each branch to preserve its inductive bias (local timing vs. global traffic shape) before integration. This design avoids modality dominance and yields a calibrated fused space suitable for both large-class closed-world recognition and open-world rejection. Following the fusion stage, DoHFuse employs a struc-tured training procedure to ensure stable optimization of both branches. In addition to the architectural components described above, DoHFuse adopts a structured training pipeline that JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 6
+
+is conceptually aligned with its dual-branch design. The optimization process follows a two-stage procedure. In the first stage, the model is trained with an adaptive learning-rate schedule and early stopping to stabilize both branches and ensure that the temporal and statistical representations converge to consistent scales. In the second stage, a low learning-rate fine-tuning step is applied to refine the fused representation and sharpen the decision boundary. Overall, these five components together form a coherent dual-branch framework that remains robust under the timing distortions, padding behavior, and multiplexing characteristics inherent to DoH/3 traffic. Detailed feature engineering proce-dures are discussed in Section IV-D, while the DMAG-LSTM module is analyzed in depth in Section IV-E. 
+
+D. Feature engineering 
+
+By observation, we found that DoH/3 traffic contains a significant volume of QUIC-layer control frames that are not related to DNS requests or responses. Consequently, these must be excluded during feature extraction. Due to EDNS(0) padding and HTTP/3 framing (QPACK), DoH/3 request and response payloads exhibit highly concentrated size distributions. Specifically, more than 99% of the request packets fall within the range of 233–350 bytes, while more than 99% of response packets lie between 555–777 bytes. Within these ranges, non-query and non-response packets are extremely rare. This distribution can be attributed to the use of padding and the multi-stream transmission pattern. Each query is carried over at least two streams: the first is STREAM X (where X is even), which contains the DNS message and is padded to a fixed size due to EDNS(0); the second is STREAM 2, which sets the priority of STREAM X to 1. In a few cases, additional streams may appear to convey auxiliary information, but their contribution is negligible. A similar mechanism applies to response packets, which also involve at least two streams: STREAM Y (carrying the DNS response) and STREAM 11, which are used for header compression ref-erences that facilitate client-side interpretation. This streaming strategy explains why queries and responses are confined to narrowly defined size ranges. This clear separation facilitates the straightforward extrac-tion of request and response datasets. However, it simulta-neously limits the versatility of packet length features for broader classification tasks, rendering them ineffective for model training. Although requests and responses typically form pairs of one-to-one, network conditions introduce greater variability in response timing and sequencing. The client-initiated request timing exhibits comparatively higher stability. Therefore, we exclusively extract features from uplink packets (client →
+
+resolver). For encrypted traffic, the selection of features is inherently constrained, generally falling into three categories: timing, counts, and packet size[44]. Given size obfuscation through padding, timing-based features become the primary depen-dency. Accordingly, we selected inter-request intervals as the key discriminative feature: 
+
+∆tk = tk − tk−1, k = 2 , . . . , n, ∆t1 = 0 .
+
+Here, tk denotes the timestamp at which the k-th request packet is sent from the client, measured relative to the start of the capture session. The inter-request interval ∆tk therefore represents the elapsed time between two consecutive request packets, with ∆t1 defined as zero for initialization. To ensure uniform input dimensionality for the model, each interval sequence is truncated or padded to a fixed length L (e.g., L =200 ). Missing positions are assigned a sentinel value of −1
+
+and subsequently masked during training ( mask_value=-1 )so that they do not contribute to gradient updates. In addition, two statistical features are incorporated as aux-iliary inputs: the total packet count and burstiness, quantified by the coefficient of variation (CV). count = n, CV = std( {∆tk}k≥2)mean( {∆tk}k≥2) + ε ,
+
+where ε avoids division by near-zero means. These two fea-tures are selected because of their ability to reflect overall flow activity and temporal irregularity. In particular, the coefficient of variation (CV) characterizes the burst of query intervals —-a key discriminative trait in DoH/3 traffic —- by capturing the extent of timing fluctuation between adjacent packets [45]. The resulting input consists of a length-L sequence x(seq ) ∈
+
+RL and a 2-D vector x(stat ) ∈ R2 that feed the temporal and statistical branches of our model, respectively. 
+
+E. DMAG-LSTM 
+
+Long Short-Term Memory (LSTM) is a recurrent neural network architecture designed to model sequential data while mitigating the vanishing-gradient problem in long sequences. At each time step, a standard LSTM maintains a hidden state and a memory cell, and updates them through three gates: the forget gate, which controls how much past memory is retained; the input gate, which determines how much new information is written into the cell; and the output gate, which regulates how much cell information is exposed to the hidden state. This gating mechanism allows LSTM to capture both short-term variations and longer-range dependencies in temporal sequences. In our setting, LSTM provides a natural baseline for model-ing inter-request interval sequences in DoH/3 traffic. However, DoH/3 traces often exhibit a mixture of tightly clustered micro-bursts and relatively stable inter-burst gaps. Under such burst–gap patterns, a standard single-scale gating scheme may either smooth out fine-grained burst structures or fail to retain useful information across longer gaps. This motivates the design of our DMAG-LSTM (Dual-scale Modulated and 
+
+Adaptive-Gated LSTM). DMAG-LSTM preserves the standard LSTM recurrence, including hidden-state propagation and cell-state update, but refines several internal gating operations to better match the temporal dynamics of encrypted DoH/3 traffic. As illustrated in Fig. 4, the proposed cell introduces three main modifica-tions: (1) multi-scale forget-gate fusion, (2) dynamic input modulation, and (3) CIFG-based gate simplification. JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 7α    
+
+> tanh tt
+> σσσσ
+
++ 
+
+> X
+> X
+> X
+> X
+
++
+
+> tanh
+> Multi-scale forget-gate fusion
+> CIFG
+> DIMG
+
+Fig. 4: DMAGLSTM: Internal structure of the proposed multi-scale gated LSTM cell. 0.0 0.1 0.2 0.3 0.4 0.5  
+
+> time (s)
+> 0.000
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> Interval of DoH requests (s)
+> micro-burst #1 micro-burst #2
+> steady gaps
+> steady gaps
+> DoH request-only intervals: micro-bursts + intermittent steady gaps
+
+Fig. 5: An illustrative example of DoH/3 request-only in-tervals, showing characteristic micro-bursts and intermittent steady gaps. DMAG-LSTM preserves this fundamental structure but replaces—and in some cases merges , several internal gates to better align with the temporal characteristics of encrypted DoH/3 traffic. 
+
+Multi-scale forget-gate fusion: As illustrated in Fig. 5, many DoH/3 request sequences exhibit a characteristic pat-tern composed of several short micro-bursts, each containing tightly clustered queries issued in parallel to multiple domains during page loading. Between these bursts, we often observe intermittent and relatively stable timing gaps. Such dual-scale behavior—dense intra-burst activity versus sparse inter-burst intervals—poses a challenge for a conventional LSTM with a single forget gate, which must simultaneously suppress local noise and preserve longer-range temporal dependencies. To address this issue, we introduce two separate forget gates: a short-term forget gate f (s) 
+
+> t
+
+and a long-term forget gate f (l) 
+
+> t
+
+:
+
+zt = [ ht−1, x t], (1) 
+
+f (s) 
+
+> t
+
+= σ(W (s) 
+
+> f
+
+zt + b(s) 
+
+> f
+
+), (2) 
+
+f (l) 
+
+> t
+
+= σ(W (l) 
+
+> f
+
+zt + b(l) 
+
+> f
+
+), (3) where xt ∈ R denotes the input inter-request interval at time 
+
+t, and ht−1 ∈ Rh is the previous hidden state. The short-term forget gate is initialized with bias b(s) 
+
+> f
+
+= −1, encouraging faster forgetting of transient fluctuations within local bursts. In contrast, the long-term forget gate is initialized with b(l) 
+
+> f
+
+=+1 , promoting stronger retention of dependencies across burst boundaries. To adaptively balance these two temporal scales, we intro-duce a fusion gate αt ∈ [0 , 1] , which is dynamically computed from the current input and hidden state. The resulting forget gate is defined as 
+
+αt = σ(Wαzt + bα), (4) 
+
+ft = αt · f (s) 
+
+> t
+
++ (1 − αt) · f (l) 
+
+> t
+
+. (5) This adaptive fusion yields a context-sensitive forget gate that can switch between fine-grained temporal sensitivity and coarse-grained memory retention. Importantly, the resulting ft
+
+remains a drop-in replacement for the conventional LSTM forget gate and therefore preserves compatibility with the standard cell-state update rule. 
+
+Dynamic Input Modulation Gate (DIMG): To enhance the flexibility of the LSTM cell in handling varying traffic rhythms, we introduce a dynamic input modulation gate 
+
+mt ∈ [0 , 1] , which adaptively controls the influence of current input xt on candidate memory content. Unlike conventional LSTM designs where the input gate solely determines the contribution of xt, our formulation adds a modulation term that explicitly conditions the relative magnitude of xt with respect to the recent history. Formally, the modulated input is computed as follows: 
+
+mt = σ(Wmzt + bm), (6) 
+
+˜xt = mt · xt, (7) where zt = [ ht−1, x t] is the combined input and hidden state. The modulated input ˜xt replaces xt in the calculation of the candidate memory cell ˜Ct. This allows the network to dynamically suppress or amplify the current input signal based on its temporal context. In the context of DoH/3 traffic, where input intervals xt
+
+can alternate between sparse background pulses and dense bursts, this modulation helps the model to better attenuate noise or emphasize salient timing cues. For example, queries to auxiliary Google domains often appear between major bursts and can be down-weighted, while tightly packed DoH requests in a burst receive stronger emphasis. This mechanism improves the model’s discriminative capac-ity for subtle, yet temporally meaningful, differences in DoH access patterns. 
+
+Gate Simplification via Coupled Input and Forget Gate (CIFG): To reduce parameter redundancy and stabilize train-ing, we adopt the Coupled Input and Forget Gate (CIFG) 
+
+mechanism [46]. Instead of learning separate input and forget gates, CIFG ties them together through a simple coupling: 
+
+it = 1 − ft (8) where it is the input gate. This reduces the number of parameters and ensures a complementary balance between memory retention and update. Given that our input is a 1-D sequence of DoH/3 request intervals, the CIFG strategy introduces no performance bot-tleneck while improving generalization and simplifying the temporal gating logic. JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 8
+
+Algorithm 1: Forward pass of the proposed DMAG-LSTM cell 
+
+Input: Input interval xt, previous hidden state ht−1,previous cell state Ct−1
+
+Output: Updated hidden state ht, updated cell state Ct
+
+// Concatenate input and previous hidden state  
+
+> 1
+
+zt ← [ht−1, x t]
+
+// Multi-scale forget-gate fusion  
+
+> 2
+
+f (s) 
+
+> t
+
+← σ(W (s) 
+
+> f
+
+zt + b(s) 
+
+> f
+
+) 
+
+> 3
+
+f (l) 
+
+> t
+
+← σ(W (l) 
+
+> f
+
+zt + b(l) 
+
+> f
+
+) 
+
+> 4
+
+αt ← σ(Wαzt + bα) 
+
+> 5
+
+ft ← αt · f (s) 
+
+> t
+
++ (1 − αt) · f (l)
+
+> t
+
+// Coupled Input{Forget Gate (CIFG)  
+
+> 6
+
+it ← 1 − ft
+
+// Dynamic input modulation  
+
+> 7
+
+mt ← σ(Wmzt + bm) 
+
+> 8
+
+˜xt ← mt · xt
+
+// Cell state update and output gate  
+
+> 9
+
+˜Ct ← tanh( Wc[ht−1, ˜xt] + bc) 
+
+> 10
+
+Ct ← ft ⊙ Ct−1 + it ⊙ ˜Ct 
+
+> 11
+
+ot ← σ(Wozt + bo) 
+
+> 12
+
+ht ← ot ⊙ tanh( Ct) 
+
+> 13
+
+return ht, C t
+
+Summary of Relationship to Standard LSTM: DMAG-LSTM is not an entirely new recurrent architecture inde-pendent of LSTM. Rather, it is an LSTM-compatible exten-sion that preserves the standard recurrence while refining selected gating operations. Specifically, the forget gate is enhanced through dual-scale fusion, the input pathway is adap-tively modulated, and the input–forget interaction is simplified through CIFG. In contrast, the cell-state update rule and the output gate remain unchanged. Therefore, DMAG-LSTM retains structural compatibility with a standard LSTM while improving its ability to model the multi-scale burst–gap timing patterns that characterize DoH/3 request sequences. The forward procedure is summarized in Algorithm 1. In implementation, DMAG-LSTM is realized as a custom recurrent layer in PyTorch and directly replaces the standard LSTM block in the temporal branch of DoHFuse without changing the overall architecture. 
+
+F. Open World Handling 
+
+In addition to the closed world classification task, we extend our approach to the open world setting, where the classifier may encounter traffic from websites outside the monitored set. To address this challenge, we adopt a probability-thresholding strategy based on the maximum softmax probability (MSP) [47]. Specifically, for each test sample, the model first com-putes the posterior probability distribution over all monitored classes. If the highest probability exceeds a given threshold τ ,the corresponding class is selected as the prediction; otherwise, the sample is labeled as unmonitored . This mechanism effec-tively enables the model to reject unknown classes without requiring any additional training. In practice, we either fix 
+
+τ = 0 .5 or sweep across a range of thresholds to analyze the trade-off between precision and recall. V. E XPERIMENTS 
+
+A. Experimental Environment 
+
+All experiments were conducted on a server equipped with 16 virtual CPU cores, 60 GiB of RAM, and an NVIDIA A10 GPU, running Ubuntu 24.04 LTS (64-bit). The software environment is based on Python 3.13.3, with the following key libraries and dependencies:  
+
+> •
+
+PyTorch: 2.8.0  
+
+> •
+
+TensorFlow: 2.20.0rc0  
+
+> •
+
+Scikit-learn: 1.7.1  
+
+> •
+
+CUDA: 12.8 (Build V12.8.93)  
+
+> •
+
+cuDNN: compatible with CUDA 12.8 To facilitate reproducibility, we have made our complete codebase publicly available 2.
+
+B. Limitations of Length-Based Features in DoH/3 
+
+Among prior studies, [24] is the most closely aligned with our setting in that it de-emphasizes length information. That said, their assumptions and traffic model differ from DoH/3, where padding and HTTP/3-over-QUIC multiplexing reshape the available signal and complicate direct transfer of length-centric pipelines. In contrast, most other approaches treat packet length as a core discriminative feature, and heavily exploit it for classification. However, as highlighted by [4], once packet length information is obfuscated or padded, the classification accuracy of such models drops significantly. To illustrate the limitation of length-based features under DoH/3, we conducted a sanity check using a widely adopted packet length representation scheme. Based on the packet filtering strategy described in Section IV-D, we extracted DoH/3-related request and response packets and constructed input sequences based on their packet lengths. Each packet is encoded by its size and signed by direction (positive for client-to-server, negative for server-to-client), a representation commonly used in existing works. We then evaluated three standard classifiers, Random Forest (RF), LSTM, and CNN, which are frequently adopted or extended in previous studies [27, 31, 28, 30, 5]. The results, as summarized in Table I, reveal a notable degradation in classification performance across all models. While Random Forest achieved an accuracy of 67.39%, the result is far from satisfactory for a closed world setting with 449 classes. More critically, both LSTM and CNN models performed extremely poorly, yielding accuracy scores below 10%—barely above random guessing. This suggests that deep models, which typically rely on sequential patterns in input features, failed to extract meaningful temporal signals from padded and encrypted packet length sequences under DoH/3.  
+
+> 2https://github.com/grasstractor/DoHFuse JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 9
+
+These findings confirm that packet size alone is no longer a reliable signal in the DoH/3 setting, due to the protocol’s encryption and obfuscation mechanisms. Consequently, rely-ing solely on direction-signed length features leads to severe performance degradation, motivating the need for more robust temporal representations and multimodal fusion strategies. TABLE I: Performance of common models on DoH/3 packet length sequences (direction-signed).                 
+
+> Model Accuracy Precision Recall F1 Score
+> RF 67.39% 68.74% 67.40% 66.07% LSTM 8.95% 2.80% 8.93% 3.73% CNN 7.43% 2.02% 7.39% 2.74%
+
+C. Closed World Comparison 
+
+To evaluate the scalability and robustness of existing web-site fingerprinting techniques under HTTP/3-based DNS-over-HTTPS (DoH/3), we re-implement five representative models sourced from the recent literature [24, 30, 31, 32, 5]. All mod-els preserve their original architectures and training strategies. The sole adaptation concerns the input representation: each trace is mapped to a timing-only format as a sequence of inter-request intervals ∆t, allowing fair and consistent comparison under the length-obfuscated setting that DoH/3 enforces via QUIC padding and EDNS(0) behavior. The specific adap-tations applied to each baseline model are summarized as follows. 
+
+(1)k-Nearest Neighbors. Bushart and Rossow [24] pro-posed a KNN-based classifier operating on symbolic “DNS sequences” that jointly encode padded message sizes and inter-response delays, with edit distance as the similarity metric. In our adaptation, only timing information is preserved. Each trace is represented as a fixed-length vector of inter-request intervals (padding values set to −1), and Euclidean KNN (default k = 1 ) is applied. A grid search on k ∈ { 1, 3, 5, 7, 9}
+
+is also performed. This yields a non-parametric, timing-only baseline that reflects temporal proximity between traffic traces. 
+
+(2) Random Forest with time n-grams. Shao et al. [30] introduced a Random Forest classifier that uses bag-of-n-gram features constructed over packet-length tokens. We preserve their methodology but adapt it to timing: each inter-request interval ∆t is multiplied by a scale factor (e.g., 10 ms), rounded, and mapped to discrete tokens. Unigram and bigram vocabularies are built on the training set, and token count per-sample histograms serve as input to a Random Forest with 70 trees, Gini impurity, and subsampling of features √d.This preserves the lightweight and interpretable design of the original while aligning with the DoH/3 timing-only constraint. 
+
+(3) LSTM with masked timing sequences. Dahanayaka et al. [31] proposed a recurrent model using two stacked LSTM layers with 128 units and 0.2 dropout, designed for inline DoH fingerprinting. Their input format is a 1-D signed packet-length sequence. In our version, the architecture and training pipeline (Adam optimizer, class-balanced cross-entropy, early stopping validation) are retained, but the input is replaced with masked sequences ∆t (padding represented by −1). Masking is handled via built-in recurrent layer support, preserving variable-length behavior. 
+
+(4) Transformer-based timing classifier. Csikor et al. [32] proposed the first Transformer-based model for DNS web fin-gerprinting, using a ViT-style encoder operating on per-packet embeddings that include direction, packet length, timing, size ratios, and Δ timestamp. Their published code supports both closed-world and open-world classification using a confidence threshold on softmax probabilities. Among all baselines, this is the only one with publicly available code, which we directly reuse, adjusting only the input embedding: each DoH/3 trace is represented as a (L, 1) tensor of inter-request intervals, padded to length L = 200 . We preserve their use of a learnable ”SLA token”, sinusoidal positional encodings, two Transformer Encoder layers (8 heads, 256 ff-dim), and a multi-layer perceptron (MLP) head. 
+
+(5) Hybrid FCNN+GRU ensemble. Salari et al. [5] intro-duced a hybrid ensemble architecture that combines a fully-connected network over flow-level statistics, a CNN over packet-length sequences, and a GRU over timing for query/response pairs. Noting that packet-length sequences lose discriminative power under HTTP/3 padding (see Table I), we remove the CNN branch while retaining the FCNN (statistical features) and GRU (timing features) components. Predictions are fused via soft voting, matching the original ensemble principle while discarding length-only structure. All models are run under the same preprocessing pipeline, with trace length padded to L = 200 and inter-request intervals normalized when necessary. The hyperparameters for each baseline follow their respective original publications whenever applicable. For components not fully specified in the original works, we adopt a unified tuning strategy: model parameters are selected based on performance on a held-out validation set under the same data split and preprocessing conditions. For clarity, we note that only the implementation by Csikor et al. is publicly available, which we directly reuse with min-imal modification to the input representation. The remaining baselines are re-implemented according to their methodologi-cal descriptions. To ensure fairness, all models are trained and evaluated under identical data splits, preprocessing steps, and evaluation metrics. No model-specific optimization beyond validation-based tuning is applied. As shown in Figure 6, we compare the performance of all methods across four widely used metrics: accuracy, precision, recall, and F1-score. In general, the performance of all models declines as the number of classes increases, which is expected because the classification task becomes progressively more difficult. Nevertheless, the relative ranking of the methods remains consistent across metrics. Among the compared baselines, models that emphasize sequential temporal modeling generally achieve better perfor-mance than traditional statistical or shallow methods. In partic-ular, LSTM is the strongest timing-only deep baseline across all settings, while KNN and Random Forest still retain reason-able discriminative ability as the number of classes grows. In contrast, the vanilla Transformer consistently underperforms, suggesting that a purely attention-based architecture is less effective at capturing the fine-grained temporal dependencies JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 10 
+
+Fig. 6: Performance metrics of different models under varying classification granularities (100, 200, 449 classes). embedded in one-dimensional DoH/3 interval sequences. A particularly noteworthy case is FCNN+GRU. Although it remains competitive in the simpler setting, its performance drops sharply in the 200-class scenario. This suggests that the statistical features processed by the FCNN branch are not sufficiently discriminative when class overlap increases, and that assigning equal importance to statistical and temporal cues may lead the model to overemphasize noisy or weakly informative inputs. Overall, our proposed DoHFuse consistently outperforms all baselines under every class configuration and across all evaluation metrics. The performance gap becomes especially pronounced in the full 449-class setting, where the compet-ing methods suffer more severe degradation, while DoHFuse maintains strong classification performance. We attribute this advantage to two main factors: (1) the dual-branch design effectively integrates temporal and statistical views through a balanced fusion strategy, rather than relying on either one in isolation; and (2) the DMAG-LSTM module is better suited to modeling the burst–gap temporal patterns that become increasingly important as the classification granularity grows. While Figure 6 presents representative results, a single run does not fully reflect the statistical stability of each method. To provide a more comprehensive evaluation, we further repeat the key closed-world experiments under multiple random seeds and summarize the aggregated results in Table II. As shown in Table II, DoHFuse not only achieves the best average accuracy across all three class settings, but also maintains relatively small standard deviations, indicating stable optimization and strong robustness under the unified DoH/3 protocol. Among the baseline models, LSTM is the strongest and most stable timing-only deep model. In contrast, the vanilla Transformer is not only substantially weaker on average, but also noticeably less stable across random seeds, especially in the 449-class setting, where the standard devia-tion exceeds 5 percentage points. This indicates that a standard Transformer is not well matched to the burst–gap temporal dynamics of DoH/3 traffic in our setting. FCNN+GRU also exhibits comparatively large variance, particularly in the 200-class setting, which is consistent with the trend observed in Figure 6. This result further suggests that statistical features alone, or overly balanced fusion without sufficiently strong temporal modeling, may become unreliable when inter-class boundaries become more complex. Tradi-tional machine learning baselines such as KNN and Random Forest remain competitive in simpler settings, but their per-formance degrades more noticeably as the task becomes finer-grained. In particular, KNN shows relatively large variance in JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 11 
+
+TABLE II: Statistical comparison of closed-world performance (mean ± std). 
+
+Model CW-100 Accuracy (mean ± std) CW-200 Accuracy (mean ± std) CW-449 Accuracy (mean ± std) KNN 84.95 ± 0.88 82.87 ± 1.67 75.48 ± 1.12 Random Forest with time n-grams 81.61 ± 0.73 80.95 ± 0.91 74.13 ± 0.95 FCNN+GRU 82.93 ± 1.12 66.74 ± 2.36 77.98 ± 1.48 LSTM 89.70 ± 0.61 90.77 ± 0.81 83.75 ± 0.92 Transformer 75.93 ± 2.18 71.05 ± 1.08 61.50 ± 5.29 DoHFuse 95.48 ± 0.32 94.33 ± 0.14 89.08 ± 0.49 
+
+the 200-class setting, indicating greater sensitivity to neigh-borhood instability under increased class overlap. Taken together, these closed-world results directly answer our motivating question: even in the presence of EDNS(0) padding and QUIC multiplexing, DoH/3 remains vulnerable to timing-based website fingerprinting. Inter-arrival structures still preserve site-specific regularities that are sufficiently strong for high-accuracy identification. Therefore, padding and multiplexing alone are not enough to eliminate website fingerprinting leakage in practice. ftc.gov     
+
+> ailawandorder.com
+> geocities.com
+> openx.net
+> domainmarket.com
+> forms.gle
+> telegraph.co.uk
+> kickstarter.com
+> adobe.com
+> example.com
+> Website
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> Accuracy
+> 1
+> 1
+> 1
+> 2
+> 2
+> 12211Low Accuracy Sites and Their DNS Query Count
+
+Fig. 7: Accuracy of the least identifiable websites and their cor-responding number of observable non-Google DNS queries. The numeric label above each point indicates the maximum number of such queries observed in a single visit. 
+
+D. Failure Analysis of Hard-to-Classify Websites 
+
+Figure 7 illustrates our focused analysis on the websites that perform the lowest in our dataset - those with the poorest classification accuracy under our DoH/3 fingerprinting framework. These domains typically generate extremely sparse DoH traffic, with only one or two observable non-Google DNS queries per visit. This lack of query activity results in highly indistinct temporal patterns, which offer an insufficient signal for the classifier to learn from. As shown in the figure, all these sites show a classification precision below 30%, with domains such as ftc.gov and 
+
+ailawandorder.com performing near zero. This observation highlights a fundamental limitation in cur-rent fingerprinting approaches: lightweight or static websites with minimal DNS interactions are inherently difficult to dis-tinguish, especially over DoH/3 where padding and encryption already reduce feature visibility. The absence of burstiness or well-separated timing gaps makes accurate identification particularly challenging in these cases. 
+
+E. Open World Evaluation 
+
+Fig. 8: Precision–Recall curve of the proposed model in the open world setting. The red marker denotes the best-threshold operating point. To further assess the practicality of our proposed model, we perform open world experiments in which the classifier en-counters both monitored and unmonitored websites. Following prior work, we adopt the maximum softmax probability (MSP) as the confidence measure and apply a probability threshold to differentiate monitored traffic from previously unseen traffic. Specifically, if the highest predicted probability of a sample falls below the threshold, it is labeled as unmonitored. As shown in Fig 8, our model achieves strong performance in the open world setting. The Precision–Recall (PR) curve yields an AUPRC of 0.975, suggesting that the model reliably detects monitored websites even in the presence of large-scale unmonitored traffic. The best F1-score reaches 0.951 with a precision of 0.906 and a recall of 1.0, showing that all monitored websites are correctly identified while maintaining a relatively low false positive rate. Even when using the default threshold of 0.5, the model still achieves an F1-score of 0.918, highlighting its robustness across different operating points. These findings confirm that the proposed approach generalizes well under realistic open world conditions. 
+
+F. Ablation Study 
+
+To further investigate the effectiveness of each architectural component in our model, we performed two ablation experi-ments in the full 449-class closed world setting. 
+
+(1) Removing statistical features: We disable the statistical branch and retain only the temporal input processed by the JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 12 
+
+TABLE III: Ablation results under the full 449-class closed world setting.                 
+
+> Model Variant Accuracy Precision Recall F1-score
+> Full Model (Ours) 0.8908 0.8856 0.8796 0.8783
+> w/o Statistical Features 0.8771 0.8796 0.8758 0.8732 Replace DMAGLSTM with LSTM 0.8542 0.8597 0.8584 0.8590
+
+DMAGLSTM module. This experiment evaluates whether the statistical branch contributes to the classification performance. 
+
+(2) Replacing DMAGLSTM with standard LSTM: We retain the dual-branch architecture but substitute our custom DMAGLSTM module with a standard LSTM layer of iden-tical dimensionality. This isolates the impact of our temporal module design. The comparison results are summarized in Table III. We report four common metrics to comprehensively assess the performance of the model. From the results, we observe that both the statistical features and the DMAGLSTM module contribute significantly to the final performance. Removing statistical features results in a moderate performance drop, confirming their value as com-plementary inputs. Meanwhile, replacing DMAGLSTM with a standard LSTM yields a larger degradation across all metrics, highlighting the temporal modeling strength of DMAGLSTM. These findings validate our design choices and suggest that both branches and the custom temporal module are essential to achieve robust classification in complex DoH/3 scenarios. This ablation analysis also provides interpretability into DoHFuse’s decision process: the temporal component ex-tracts fine-grained inter-request dynamics, while the statistical branch contributes global behavior cues that remain robust under padding or stream coalescing. The dual-branch architec-ture thus synthesizes local and global timing patterns, which proves crucial to classification accuracy across diverse DoH/3 scenarios. VI. D ISCUSSION 
+
+A. Computational Overhead and Deployment Considerations. 
+
+We briefly discuss the computational overhead of the pro-posed DoHFuse framework. The model consists of a dual-branch architecture combining a temporal recurrent component (DMAG-LSTM) and a lightweight fully connected network over statistical features. From a complexity perspective, DMAG-LSTM retains the same order of computational complexity as a standard LSTM, with only modest additional gating operations, resulting in linear time complexity with respect to the input sequence length. The statistical branch introduces negligible overhead due to its low-dimensional input and shallow structure. Importantly, website fingerprinting is typically performed in an offline or post-processing setting, where strict real-time constraints are not required. Therefore, inference latency is not a primary bottleneck in most practical deployments. In our implementation, inference for a single trace is lightweight and can be efficiently parallelized across batches, making the model suitable for large-scale traffic analysis scenarios. Overall, the proposed architecture achieves a favorable balance between modeling capacity and computational cost, and is practical for real-world deployment in monitoring or analysis systems. 
+
+B. Applicability to DoQ Traffic 
+
+While our study focuses on DoH/3 (DNS-over-HTTP/3), the proposed methodology is theoretically compatible with DNS-over-QUIC (DoQ) traffic as well, since both protocols share similar bursty and encrypted communication characteristics. However, based on our observation, native DoQ traffic remains scarce in the wild [48]. Currently, there is little support from mainstream operating systems and browser engines for DoQ [49]; prior studies that investigated DoQ fingerprinting often relied on artificial environments, such as setting up ‘dnsproxy‘ on Ubuntu [29, 5]. Such configurations are rarely found among real users, which limits their generalizability. A notable exception is AdGuard, a Windows commercial security application that can intercept system-wide DNS re-quests and automatically encrypt them; When configured with AdGuard DNS, it can forward queries over DNS-over-QUIC (DoQ) to AdGuard’s own encrypted resolvers [50]. In our con-trolled Windows measurements (with the AdGuard forwarding system DNS over QUIC to AdGuard DNS), we consistently observed nearly uniform DoQ packet sizes for queries and responses; we attribute this effect to strict EDNS(0) padding, although we are not aware of any official statement confirming such a default (background on EDNS(0) padding and padding policies). While uniformly sized packets can reduce size-based leakage, AdGuard’s broader adoption may be constrained by its closed-source model and the presence of paid subscription plans for its products and DNS service. 
+
+C. Challenges from Sparse Website Traffic 
+
+Our empirical results (see Section V-D) show that certain websites consistently yield very low classification accuracy. Closer inspection reveals that these sites typically generate only one or two observable DoH queries during page load-ing, leaving almost no meaningful temporal patterns for the model to learn from. This highlights a practical limitation of fingerprinting sparse or static websites. Nevertheless, such cases are relatively rare. Most real-world websites, especially popular and media-rich portals, tend to have complex page structures that involve multiple third-party DNS lookups, resulting in more chaotic and distinguishable traffic patterns [51]. Our model demonstrates robust perfor-mance across these more representative examples. 
+
+D. LLMs in Website Fingerprinting 
+
+Although large language models (LLMs) have achieved remarkable success in many sequence modeling tasks, they JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 13 
+
+are currently unsuitable for DoH/3 traffic fingerprinting. Key limitations include modality mismatch (between numeric time-series data and textual language data), interference from pre-training noise, and practical difficulties in performing frequent scenario-specific fine-tuning as typically required in finger-printing attacks. Nevertheless, LLMs hold considerable promise for future defense mechanisms, particularly in automating the design of countermeasures. For example, their strong generative and reasoning capabilities could be leveraged to assist in designing adaptive traffic perturbation strategies, such as dynamically injecting dummy queries or adjusting packet intervals, while respecting operational constraints and countering specific at-tacker models. Therefore, while this work prioritizes lightweight time series models to address immediate challenges, we encourage future research to explore (i) developing time-series or multimodal foundation models tailored to encrypted traffic analysis and (ii) focusing on the potential of LLMs to aid in the synthesis of defense policies and adaptive traffic shaping. 
+
+E. Limitations and Future Work 
+
+Although our study demonstrates that DoHFuse remains robust under DoH/3 traffic, several limitations deserve discus-sion. First, our analysis primarily focuses on the timing features extracted from Chrome, the only major browser currently supporting DoH/3 natively using its built-in QUIC stack. We further verified that Chrome exhibits consistent DoH/3 resolu-tion behavior across Windows, macOS, and Linux, indicating that operating system differences do not alter the timing char-acteristics used in our study. Other browsers such as Firefox (which currently relies on DoH/2) and Safari (which requires non-standard system-level configuration and does not provide practical DoH/3 deployment) were therefore not included, limiting cross-client generalizability. Moreover, prior empirical studies have shown that encrypted DNS mechanisms do not impose significant CPU or memory overhead under normal browsing conditions[52, 53], and DoH/3, based on QUIC, is expected to introduce even less performance interference, suggesting that client resource availability is unlikely to mean-ingfully distort timing features except under extreme load. Second, our closed-world setting treats each full-page visit as a distinct classification target. However, certain domains may have rich hierarchical structures where visiting a deep link (e.g., store.example.com/product/) triggers a markedly different DNS query pattern from the homepage. Although these are currently treated as “different websites,” further work is needed to explore structured labels or hierarchical site modeling to better capture such real-world behaviors. Third, although our dataset is collected from two geograph-ically distinct vantage points and covers a large selection of sites, we observed that some websites exhibit content-level variations across regions (e.g., CDN-driven resource changes). This suggests that location-aware adaptation might be required for real-world attacks, posing practical challenges for large-scale deployment of timing-based fingerprinting models. Fourth, our study does not explicitly evaluate robustness under active defensive countermeasures such as randomized padding, traffic shaping, or cover traffic. While such mecha-nisms can potentially reduce the distinguishability of timing patterns, they often introduce non-negligible bandwidth and latency overhead. In practice, unless combined with stronger obfuscation strategies, residual timing structures may still remain observable. A systematic evaluation of these defense mechanisms would require a substantially expanded experi-mental framework and is left for future work. Despite these limitations, the findings highlight the persis-tent risks associated with timing side channels in encrypted DNS traffic. Future efforts could explore browser-agnostic modeling, hierarchical classification schemes, defense-aware evaluation, and extensive global data collection to further enhance robustness and generalizability. VII. C ONCLUSION 
+
+This work establishes that website fingerprinting (WF) remains feasible under DoH/3 even when packet sizes are obfuscated by encryption, padding, and QUIC multiplexing. Theoretically, our analysis shows that the decisive signal in DoH/3 lies in timing specifically, the burst-gap request dynamics - rather than in packet lengths. Practically, these findings mean that DoH/3 should not be assumed to deliver anonymity by default: effective defenses must explicitly target timing leakage (e.g. shaping that disrupts burst regularity) and be evaluated against timing-aware adversaries, not just length-based ones. Methodologically, we contribute a DoH/3-specific perspec-tive that differs from most prior WF studies centered on Tor/HTTPS or on DoH/DoT without robust padding. We re-lease a standardized DoH/3 benchmark and a unified protocol for same dataset comparisons; and we introduce DoHFuse, a dual-branch architecture that fuses inter-arrival timing with compact statistics. Its DMAG-LSTM encoder embodies the required multi-scale gating and aligns with DoH/3’s burst-aligned request patterns. Ablations and baseline comparisons indicate that length-centric pipelines do not transfer cleanly to DoH/3, whereas timing-first fusion provides robust closed world and open world behavior. Beyond academic interest, this work sheds light on practical scenarios where DoH/3 traffic analysis may assist security and performance management. For instance, enterprise networks or national-scale CERTs may deploy passive monitoring tools to detect anomalous DoH/3 patterns that suggest malware activity or domain fronting. Similarly, content delivery providers and DNS resolvers may leverage traffic fingerprinting to optimize caching and prefetching schemes tailored to specific website access behaviors. ACKNOWLEDGMENTS 
+
+This work is supported by the Shandong Provincial Natural Science Foundation(Grant No. ZR2024QF138), the S&T Pro-gram of Shijiazhuang (Grant No. XXXX) , and the Scientific Research Innovation Fund of Harbin Institute of Technology [Grant No. IDGAZMZ00210335]. JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 14 
+
+REFERENCES 
+
+[1] R. Li, X. Jia, Z. Zhang, J. Shao, R. Lu, J. Lin, X. Jia, and G. Wei, “A longitudinal and comprehensive measurement of dns strict privacy,” IEEE/ACM Transactions on Networking , vol. 31, no. 6, pp. 2793–2808, 2023. [Online]. Available: https://ieeexplore.ieee.org/abstract/ document/10091202 [2] J. Lee, D. Mohaisen, and M. S. Kang, “Measuring DNS-over-HTTPS downgrades: Prevalence, techniques, and bypass strategies,” in Proceedings of the ACM CoNEXT 2024 , 2024. [Online]. Available: https://doi. org/10.1145/3696385 [3] S. Englehardt and A. Narayanan, “Online tracking: A 1-million-site measurement and analysis,” in 
+
+Proceedings of the 2016 ACM SIGSAC confer-ence on computer and communications security .ACM, 2016, pp. 1388–1401. [Online]. Available: https://doi.org/10.1145/2976749.2978313 [4] S. Siby, M. Juarez, C. Diaz, N. Vallina-Rodriguez, and C. Troncoso, “Encrypted DNS: Privacy? a traffic analysis perspective,” in Proceedings of the 27th Annual Network and Distributed System Security Symposium (NDSS 2020) . The Internet Society, 2020. [Online]. Available: https://dx.doi.org/10.14722/ndss.2020.24301 [5] M. A. Salari, A. Kumar, and F. Rinaudi, “Privacy analysis of oblivious DNS over HTTPS: A website fingerprinting study,” in Proceedings of the 55th Annual IEEE/IFIP International Conference on Dependable Systems and Networks (DSN ’25) . IEEE, 2025. [Online]. Available: https://ieeexplore.ieee.org/document/11068816 [6] R. Li, B. Liu, C. Lu, H. Duan, and J. Shao, “A worldwide view on the reachability of encrypted DNS services,” in 
+
+Proceedings of the ACM Web Conference 2024 (WWW ’24) . ACM, 2024, pp. 1193–1202. [Online]. Available: https://doi.org/10.1145/3589334.3645539 [7] J.-P. Smith, P. Mittal, and A. Perrig, “Website fingerprinting in the age of QUIC,” Proceedings on Privacy Enhancing Technologies , vol. 2021, no. 2, pp. 1–22, 2021. [Online]. Available: https://doi.org/10.2478/ popets-2021-0017 [8] P. Sirinam, M. Imani, M. Juarez, and M. Wright, “Deep fingerprinting: Undermining website fingerprinting defenses with deep learning,” in Proceedings of the 2018 ACM SIGSAC Conference on Computer and Communications Security (CCS ’18) .ACM, 2018, pp. 1928–1943. [Online]. Available: https://doi.org/10.1145/3243734.3243768 [9] G. Cherubin, R. Jansen, and C. Troncoso, “Online website fingerprinting: Evaluating website fingerprinting attacks on Tor in the real world,” in 31st USENIX Security Symposium (USENIX Security 22) . USENIX Association, 2022, pp. 753–770. [Online]. Available: https://www.usenix.org/conference/ usenixsecurity22/presentation/cherubin [10] M. Shen, K. Ji, Z. Gao, Q. Li, L. Zhu, and K. Xu, “Subverting website fingerprinting defenses with robust traffic representation,” in 32nd USENIX Security Symposium (USENIX Security 23) , 2023, pp. 607–624. [Online]. Available: https://www.usenix.org/conference/ usenixsecurity23/presentation/shen-meng [11] M. Abolfathi, S. Inturi, F. Banaei-Kashani, and J. H. Jafarian, “Toward enhancing web privacy on HTTPS traffic: A novel superlearner attack model and an efficient defense approach with adversarial examples,” Computers & Security , vol. 139, p. 103673, 2024. [Online]. Available: https://www.sciencedirect.com/science/article/ pii/S0167404823005837 [12] R. Jansen, R. Wails, and A. Johnson, “Repositioning real-world website fingerprinting on tor,” in Proceedings of the 23rd ACM Workshop on Privacy in the Electronic Society (WPES ’24) . ACM, 2024, salt Lake City, Oct. 14, 2024. [Online]. Available: https: //doi.org/10.1145/3689943.3695047 [13] R. Attarian and A. Keshavarz-Haddad, “Effective website fingerprinting attack based on the first packet direction only,” Computer Networks , vol. 231, p. 109811, 2023. [Online]. Available: https://doi.org/10. 1016/j.comnet.2023.109811 [14] M. Chen, Y. Wang, H. Xu, and X. Zhu, “Few-shot website fingerprinting attack,” Computer Networks ,vol. 198, p. 108298, 2021. [Online]. Available: https: //doi.org/10.1016/j.comnet.2021.108298 [15] H. Zou, J. Su, Z. Wei, S. Chen, and B. Zhao, “An efficient cross-domain few-shot website fingerprinting attack with brownian distance covariance,” Computer Networks , vol. 219, p. 109461, 2022. [Online]. Available: https://doi.org/10.1016/j.comnet.2022.109461 [16] P. Zhan, L. Wang, and Y. Tang, “Website fingerprinting on early QUIC traffic,” Computer Networks , vol. 200, p. 108538, 2021. [Online]. Available: https: //doi.org/10.1016/j.comnet.2021.108538 [17] L. Yu, J. Tao, Y. Xu, W. Sun, and Z. Wang, “Tls fingerprint for encrypted malicious traffic detection with attributed graph kernel,” Computer Networks ,vol. 247, p. 110475, 2024. [Online]. Available: https: //doi.org/10.1016/j.comnet.2024.110475 [18] Y. Hong, Q. Li, Y. Yang, and M. Shen, “Graph based encrypted malicious traffic detection with hybrid analysis of multi-view features,” Information Sciences ,vol. 644, p. 119229, 2023. [Online]. Available: https: //doi.org/10.1016/j.ins.2023.119229 [19] M. Keshk, N. Koroniotis, N. Pham, N. Moustafa, B. Turnbull, and A. Zomaya, “An explainable deep learning-enabled intrusion detection framework in iot networks,” Information Sciences , vol. 639, p. 119000, 2023. [Online]. Available: https://doi.org/10.1016/j.ins. 2023.119000 [20] X. Xiao, R. Li, H. Zheng, R. Ye, A. Kumar Sangaiah, and S. Xia, “Novel dynamic multiple classification system for network traffic,” Information Sciences ,vol. 479, pp. 526–541, 2019. [Online]. Available: https://doi.org/10.1016/j.ins.2018.10.039 [21] K. Jerabek, K. Hynek, and O. Rysavy, “Comparative analysis of DNS over HTTPS detectors,” Computer Networks , vol. 247, p. 110452, 2024. [Online]. Available: JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 15 
+
+https://doi.org/10.1016/j.comnet.2024.110452 [22] M. Zhan, Y. Li, G. Yu, B. Li, and W. Wang, “Detecting DNS over HTTPS based data exfiltration,” Computer Networks , vol. 209, p. 108919, 2022. [Online]. Available: https://doi.org/10.1016/j.comnet.2022.108919 [23] V. Quezada, F. Astudillo-Salinas, L. Tello-Oquendo, and P. Bernal, “Real-time bot infection detection system using DNS fingerprinting and machine-learning,” 
+
+Computer Networks , vol. 228, p. 109725, 2023. [Online]. Available: https://doi.org/10.1016/j.comnet.2023.109725 [24] J. Bushart and C. Rossow, “Padding ain’t enough: Assessing the privacy guarantees of encrypted DNS,” in 10th USENIX Workshop on Free and Open Communications on the Internet (FOCI 20) , 2020. [Online]. Available: https://www.usenix.org/conference/ foci20/presentation/bushart [25] K. Hynek and T. Cejka, “Privacy illusion: Beware of unpadded doh,” in 2020 11th IEEE Annual Information Technology, Electronics and Mobile Communication Conference (IEMCON) , 2020, pp. 0621–0628. [Online]. Available: https://ieeexplore.ieee. org/document/10165086 [26] N. Mazzuz and A. Shabtai, “Domain name encryption does not ensure privacy: Website fingerprinting attack with only a few samples using siamese network,” in 
+
+International Conference on Detection of Intrusions and Malware, and Vulnerability Assessment , 2025, pp. 26–45. [Online]. Available: https://doi.org/10.1007/ 978-3-031-97620-9 2 [27] F. Zou, D. Meng, W. Gao, and L. Li, “Depl: Detecting privacy leakage in dns-over-https traffic,” in 2021 IEEE 20th International Conference on Trust, Security and Privacy in Computing and Communications (TrustCom) , 2021, pp. 577–586. [Online]. Available: https://ieeexplore.ieee.org/document/9724408 [28] M. Trevisan, F. Soro, M. Mellia, I. Drago, and R. Morla, “Attacking DoH and ech: Does server name encryption protect users’ privacy?” ACM Transactions on Internet Technology , vol. 23, no. 1, pp. 1–22, 2023. [Online]. Available: https://dl.acm.org/doi/full/10.1145/3570726 [29] G. Hu and K. Fukuda, “Privacy leakage of dns over quic: Analysis and countermeasure,” in 2024 International Conference on Artificial Intelligence in Information and Communication (ICAIIC) , 2024, pp. 518–523. [Online]. Available: https://ieeexplore.ieee.org/ document/10463369 [30] Y. Shao, K. Hernandez, K. Yang, E. Chan-Tin, and M. Abuhamad, “Lightweight and effective website fingerprinting over encrypted dns,” in 2023 Silicon Valley Cybersecurity Conference (SVCC) , 2023, pp. 1–8. [Online]. Available: https://ieeexplore.ieee.org/document/ 10165086 [31] T. Dahanayaka, Z. Wang, G. Jourjon, and S. Seneviratne, “Inline traffic analysis attacks on dns over https,” in 2022 IEEE 47th Conference on Local Computer Networks (LCN) , 2022, pp. 132–139. [Online]. Available: https://ieeexplore.ieee.org/abstract/document/9843593 [32] L. Csikor, Z. Lian, H. Zhang, N. Lakshmanan, and D. M. Divakaran, “Dns-over-quic and http/3 in the era of transformers: The new internet privacy battle,” IEEE Communications Magazine , pp. 1–7, 2025. [Online]. Available: https://ieeexplore.ieee.org/abstract/document/ 11020583 [33] P. Hoffman and P. McManus, “RFC 8484: DNS queries over HTTPS (DoH),” IETF, RFC 8484, 2018. [Online]. Available: https://www.rfc-editor.org/rfc/rfc8484 [34] M. Bishop, “RFC 9114: HTTP/3,” IETF, RFC 9114, 2022. [Online]. Available: https://www.rfc-editor.org/rfc/ rfc9114 [35] J. Iyengar and M. Thomson, “RFC 9000: QUIC: A UDP-based multiplexed and secure transport,” IETF, RFC 9000, 2021. [Online]. Available: https://www. rfc-editor.org/rfc/rfc9000 [36] A. Mayrhofer, “RFC 7830: The EDNS(0) padding option,” IETF, RFC 7830, 2016. [Online]. Available: https://www.rfc-editor.org/rfc/rfc7830 [37] ——, “RFC 8467: Padding policies for extension mechanisms for DNS (EDNS(0)),” IETF, RFC 8467, 2018. [Online]. Available: https://www.rfc-editor.org/rfc/ rfc8467 [38] Cloudflare, “Make api requests to 1.1.1.1 over DoH,” Apr. 2025. [On-line]. Available: https://developers.cloudflare.com/1.1. 1.1/encryption/dns-over-https/make-api-requests/ [39] Chromium Blog, “Making chrome QUICer,” Dec. 2024. [Online]. Available: https://blog.chromium.org/2024/12/ making-chrome-quicer.html [40] M. Maurer and M. Yu, “DNS-over-HTTP/3 in android,” Jul. 2022. [Online]. Available: https://security. googleblog.com/2022/07/dns-over-http3-in-android.html [41] B. Schwartz, M. Bishop, and E. Nygren, “RFC 9460: Service binding and parameter specification via the DNS (svcb and HTTPS resource records),” IETF, RFC 9460, 2023. [Online]. Available: https: //www.rfc-editor.org/rfc/rfc9460 [42] Majestic, “Majestic million,” https://majestic.com/ reports/majestic-million, 2011, top 1,000,000 domains ranked by referring subnets; CSV export available. [43] V. L. Pochat, T. van Goethem, S. Tajalizadehkhoob, M. Korczynski, and W. Joosen, “Tranco: Aresearch-oriented top sites ranking hardened against manipulation,” in 26th Annual Network and Distributed System Security Symposium, NDSS 2019, San Diego, California, USA, February 24-27, 2019 . The Internet Society, 2019. [Online]. Available: https://www.ndss-symposium.org/ndss-paper/ tranco-a-research-oriented-top-sites-ranking-hardened-against-manip [44] A. Niakanlahiji, S. Orlowski, A. Vahid, and J. H. Jafarian, “Toward practical defense against traffic analysis attacks on encrypted DNS traffic,” Computers & Security , vol. 124, p. 103001, 2023. [Online]. Available: https://doi.org/10.1016/j.cose.2023.103673 [45] K.-I. Goh and A.-L. Barab´ asi, “Burstiness and memory in complex systems,” Europhysics Letters , vol. 81, no. 4, p. 48002, 2008. [Online]. Available: https: //doi.org/10.1209/0295-5075/81/48002 JOURNAL OF L ATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 16 
+
+[46] K. Greff, R. K. Srivastava, J. Koutn´ ık, B. R. Steunebrink, and J. Schmidhuber, “LSTM: A search space odyssey,” 
+
+IEEE Transactions on Neural Networks and Learning Systems , vol. 28, no. 10, pp. 2222–2232, 2016. [Online]. Available: https://doi.org/10.1109/TNNLS.2016.2582924 [47] D. Hendrycks and K. Gimpel, “A baseline for detecting misclassified and out-of-distribution examples in neural networks,” in International Conference on Learning Representations , 2017. [Online]. Available: https://doi.org/10.48550/arXiv.1610.02136 [48] M. Kosek, T. V. Doan, M. Granderath, and V. Bajpai, “One to rule them all? a first look at DNS over QUIC,” in International Conference on Passive and Active Network Measurement (PAM) . Springer, 2022, pp. 537–551. [Online]. Available: https://doi.org/10.1007/ 978-3-030-98785-5 24 [49] M. Kosek, L. Schumann, R. Marx, T. V. Doan, and V. Bajpai, “DNS privacy with speed? evaluating DNS over QUIC and its impact on web performance,” in 
+
+Proceedings of the 22nd ACM Internet Measurement Conference (IMC ’22) . ACM, 2022, pp. 44–50. [Online]. Available: https://doi.org/10.1145/3517745.3561445 [50] V. Bagirov, “Adguard DNS-over-QUIC,” 2023, updated 2023-04-07. [Online]. Available: https://adguard-dns.io/ en/blog/dns-over-quic.html [51] T. Urban, M. Degeling, T. Holz, and N. Pohlmann, “Beyond the front page: Measuring third party dynamics in the field,” in Proceedings of the web conference 2020 (WWW ’20) , 2020, pp. 1275–1286. [Online]. Available: https://doi.org/10.1145/3366423.3380203 [52] T. B¨ ottger, F. Cuadrado, G. Antichi, E. L. a. Fernandes, G. Tyson, I. Castro, and S. Uhlig, “An empirical study of the cost of dns-over-https,” in 
+
+Proceedings of the Internet Measurement Conference ,ser. IMC ’19. New York, NY, USA: Association for Computing Machinery, 2019, p. 15–21. [Online]. Available: https://doi.org/10.1145/3355369.3355575 [53] A. Hounsel, K. Borgolte, P. Schmitt, J. Holland, and N. Feamster, “Comparing the effects of dns, dot, and doh on web performance,” in Proceedings of The Web Conference 2020 , ser. WWW ’20. New York, NY, USA: Association for Computing Machinery, 2020, p. 562–572. [Online]. Available: https://doi.org/10.1145/3366423.3380139

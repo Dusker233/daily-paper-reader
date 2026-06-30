@@ -1,0 +1,707 @@
+Title: SrDetection: A Self-Referential Framework for Data Leakage Detection in Code Large Language Models
+
+URL Source: https://arxiv.org/pdf/2606.29815v1
+
+Published Time: Tue, 30 Jun 2026 01:45:06 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# SrDetection: A Self-Referential Framework for Data Leakage Detection in Code Large Language Models 
+
+Shuaimin Li 1, Liyang Fan 2,6,1 , Zeyang Li 3, Zhuoyue Wan 4, Yufang Lin 5, Shiwen Ni ∗6, Feiteng Fang 1,Hamid Alinejad-Rokny 7, Yuanfeng Song , Kun Jing 8, Chen Jason Zhang 4, Min Yang *1,6 
+
+> 1
+
+Shenzhen Key Laboratory for High Performance Data Mining, Shenzhen Institutes of Advanced Technology, Chinese Academy of Sciences 2Shenzhen University 3 University of Science and Technology of China 4PolyU 
+
+> 5
+
+East China Normal University 6Artificial Intelligence Research Institute, Shenzhen University of Advanced Technology 7University of New South Wales 8Anhui University  
+
+> Correspondence: {sm.li2, min.yang}@siat.ac.cn; nishiwen@suat-sz.edu.cn
+
+Abstract 
+
+Evaluating code large language models (Code LLMs) requires reliable detection of data leak-age, where benchmark performance is artifi-cially inflated by exposure to benchmark data during pre-training. Existing approaches either assume access to proprietary training corpora, rely on brittle heuristics such as timestamp fil-tering, or use external reference sets with manu-ally tuned, non-generalizable thresholds. To ad-dress these limitations, we introduce SrDetec-tion , a unified self-referential leakage detection framework for both gray-box (access to model logits) and black-box (access to model outputs) settings. SrDetection generates semantically equivalent variants of a benchmark sample and detects leakage by contrasting the model’s be-havior on the original versus its variants, flag-ging cases where the original is disproportion-ately easier for the model. We further design a controlled leakage detection testbed and eval-uate SrDetection in this environment. Across different models and training stages, SrDetec-tion improves average F1 by 21.52 points in the gray-box setting and 14.46 points in the black-box setting over strong baselines, demonstrat-ing robust, threshold-independent leakage de-tection. Finally, a gray-box study of 15 widely used Code LLMs on four popular benchmarks reveals benchmark-specific leakage patterns be-yond prior overlap-based analyses 1.
+
+1 Introduction 
+
+Code Large Language Models (Code LLMs) now underpin code generation, completion, and under-standing in modern software development (Jiang et al., 2025; Joel et al., 2024; Hou et al., 2024; Yu et al., 2024). As these models are increasingly evaluated and ranked by public code benchmarks, ensuring the fairness and reliability of evaluation has become critical (Yang et al., 2024b; López et al.,  
+
+> *Corresponding authors.
+> 1Source code and data are available at https://github. com/SMinL/SrDetectionCode
+
+2025). A central threat is data leakage : if a model has already seen benchmark samples during pre-training, apparent performance gains may reflect memorization rather than generalization, inflating metrics and misleading model comparisons (Mat-ton et al., 2024; Riddell et al., 2024). This issue has two major consequences. First, it complicates the assessment of whether strong LLM performance stems from true innovation or prior exposure to benchmark data. Second, it in-troduces unfairness when comparing LLM-based methods to non-learning-based approaches, such as traditional program analysis, which do not rely on training data and cannot benefit from leaked sam-ples. These concerns motivate code data leakage detection : given a model and a single code sample, decide whether the sample was likely present in the model’s pre-training corpus (Zhou et al., 2025). Current detectors leave a key gap: they either require information that is unavailable in practice or rely on brittle assumptions that break for code. Overlap-based methods (e.g., n-gram matching) depend on access to pre-training corpora (Zhou et al., 2025; López et al., 2025), yet leading mod-els’ training data are typically proprietary and undisclosed (Team, 2025; Meta AI, 2024). Time-based heuristics assume post-release code cannot be in training (Jain et al., 2025), but reuse, inheri-tance, and forking routinely violate this assumption. Confidence-based approaches such as Perplexity (PPL) (Xu et al., 2024; Shi et al., 2024; Dong et al., 2024; Deng et al., 2024; Zhang et al., 2024; Yang et al., 2023) avoid corpus access, but require an external reference set to tune a threshold; these ref-erence sets often rely on the same temporal heuris-tics, and thresholds calibrated on natural language transfer poorly to the structural regularities of code. We address this gap with SrDetection , a self-
+
+referential leakage detector that requires no exter-nal reference data and no manually defined thresh-olds. The key idea is to compare a snippet to 
+
+> arXiv:2606.29815v1 [cs.CL] 29 Jun 2026
+
+semantics-preserving variants derived from the sample itself: a leaked sample is often unusually easy for the model in its exact surface form. We generate functionality-preserving transformations using an auxiliary LLM, forming a contrastive set. In a gray-box setting (access to logits), we com-pute PPL for the original and variants and flag cases where the original is consistently much easier than its variants. In a black-box setting (access only to outputs), we prompt completions from prefixes and compare surface-level similarity to true suffixes, flagging the same discrepancy pattern. By relying on relative differences within the self-generated set, SrDetection avoids external anchors and brit-tle global thresholds. To evaluate SrDetection, we construct a general testbed capable of supporting different datasets and open-source Code LLMs. We explicitly control sample inclusion through contin-ued pre-training, yielding a reliable split between training-seen and held-out samples. This design enables precise leakage measurement under both gray-box and black-box detection scenarios, with-out relying on temporal heuristics. Extensive exper-iments on this testbed demonstrate that SrDetection consistently outperforms strong baselines across models and training stages, achieving average F1 gains of 21.52 and 14.46 points in gray-box and black-box settings, respectively. In summary, our main contributions are: (1) We present SrDetection , a self-referential 
+
+framework for sample-level leakage detection that replaces external overlap checks and threshold cali-bration with within-sample contrast between a code snippet and its semantics-preserving variants, cov-ering both gray-box and black-box access. (2) We propose an automatic semantics-preserving code augmentation method tailored to leakage detection, producing contrastive variants that expose memorization under common code ed-its and refactorings. (3) We introduce a controlled training-based testbed and a large-scale measurement study ,demonstrating robust improvements over compet-itive baselines and revealing benchmark-specific leakage patterns across widely used Code LLMs. 
+
+2 Related Work 
+
+Data Leakage Detection for General LLMs. De-tecting whether a data sample was included in a model’s training corpus, a problem commonly stud-ied through Membership Inference Attacks (MIAs), has a long history in machine learning (Shokri et al., 2017; Sablayrolles et al., 2019; Song and Shmatikov, 2019).For LLMs, many approaches leverage signals derived from output likelihoods. Perplexity (PPL) was introduced as an early base-line for membership inference (Carlini et al., 2021), followed by Min-K% Prob (Shi et al., 2024), which averages the probabilities of the least confident to-kens to obtain a more robust score. Subsequent variants refine this direction through theoretical interpretation (Zhang et al., 2025) or calibration techniques that reduce the influence of frequent tokens (Zhang et al., 2024). Several works also target black-box settings where only generated text is observable. VeilProbe (Hu et al., 2025) trains a sequence-to-sequence model to capture discrepan-cies between inputs and LLM outputs using token perturbations, while DPDLLM (Zhou et al., 2024) extracts features from generated text via a refer-ence language model for downstream membership classification. Despite methodological differences, most of these methods ultimately rely on an exter-nal reference set (or a proxy) to calibrate a decision threshold, which is commonly constructed via tem-poral splits or heuristic curation. 
+
+Data Leakage Detection for Code LLMs. Ex-tending data leakage analysis to Code LLMs has re-cently attracted growing attention. Empirical stud-ies reveal that large code models can memorize substantial portions of their training data verba-tim (Yang et al., 2024b). Beyond memorization within a single dataset, inter-dataset code duplica-tion further threatens evaluation validity (López et al., 2025). Several works systematically ana-lyze contamination in code generation benchmarks, quantifying both surface-level and semantic over-lap with pre-training data (Riddell et al., 2024; Mat-ton et al., 2024; Zhou et al., 2025). Despite these insights, most existing studies focus on empirical analysis or dataset curation, rather than providing practical detection methods. Moreover, the exter-nal reference-based strategies commonly adopted in general-domain leakage detection, which rely on timestamp-based data partitioning, are not suited for Code LLMs due to pervasive code reuse and the weak correspondence between repository times-tamps and code originality. 
+
+3 Methodology 
+
+In this section, we first introduce the proposed SrDetection, then describe the construction of our ⓶ Self -Referential 
+
+> Decision
+> ⓵ Code
+> Transformation
+
+(b) Our proposed SrDetection framework 
+
+(a) Previous conventional threshold -based pipelines 
+
+Target data 𝑥 
+
+Score of 𝑥              
+
+> def has_close_elements (numbers :
+> List[ float ], threshold :float )
+> def
+> has_elements_nearby (list_of_numb
+> ers :List[ float ], diff_threshold :float )
+> >>> has_close_elements ([1.0, 2.0,
+> 3.0], 0.5)
+> False
+> >>> has_elements_nearby ([ -1.0,
+> 0.5], 1.0)
+> False
+> for idx ,elem in
+> enumerate (numbers):
+> for i, num in
+> enumerate (list_of_numbers ):
+> Function
+> name
+> Test
+> case
+> Variant
+> name
+
+Score 
+
+function 
+
+> >𝑡 ℎ𝑟 𝑒 𝑠
+> ℎ𝑜 𝑙 𝑑 ?
+> Target data  𝑥
+
+Trained 
+
+data! Trained data! 
+
+> Variant  𝑥 1
+> …
+> Variant  𝑥 2
+> Variant  𝑥 𝑛
+> Target data  𝑥
+
+Check: Is 𝑠 (𝑥 0) Minimal? 
+
+𝑠 (𝑥 0) < min (𝑠 (𝑥 𝑖 ))
+
+𝑠 (𝑥 0)
+
+𝑠 (𝑥 𝑛 )
+
+𝑠 (𝑥 0)
+
+𝑠 (𝑥 0)
+
+Check: Is 𝑠 (𝑥 0) Maximal? 
+
+𝑠 (𝑥 0) > m𝑎𝑥 (𝑠 (𝑥 𝑖 ))
+
+> ⓵ Code transformation ⓶ Self -Referential decision
+
+Gray -box Setting  Black -box Setting 
+
+PPL 
+
+Calculation 
+
+Prefix  GT 
+
+Suffix 
+
+NGO 
+
+Sim 
+
+Model 
+
+completion 
+
+y y
+
+(b) (a) 
+
+Benchmark 
+
+Code LLMs 
+
+> Train
+> Code
+> Data
+> Test
+> Code
+> Data
+
+Leakage? 
+
+Calculate Scores              
+
+> Threshold
+> Leaked data
+> in test set
+> Non -Leaked data
+> in test set
+> def
+> has_close_elements (numbers :
+> List[ float ], threshold :float )
+> Function
+> Renaming
+> def
+> has_elements_nearby (list_of_numbe
+> rs :List[ float ], diff_threshold :float )
+> >>> has_close_elements ([1.0,
+> 2.0, 3.0], 0.5)
+> False
+> >>> has_elements_nearby ([ -1.0, 0.5],
+> 1.0)
+> False
+> Variable
+> Renaming
+> for idx ,elem in
+> enumerate (numbers): for i, num in
+> enumerate (list_of_numbers ):
+> Test Case
+> Transform
+> Sample data
+> Sample data
+> …
+> …𝑥 1
+> 𝑥 𝑛 𝑥 𝑛 −1
+> 𝑥 0
+
+𝑠 (𝑥 0)
+
+𝑠 (𝑥 𝑛 )
+
+Gray -box Setting 
+
+> PPL
+> Calculation
+
+𝑠 (𝑥 0)
+
+𝑠 (𝑥 𝑛 )
+
+Black -box Setting     
+
+> Prefix
+> GT Suffix
+> NGO
+> Sim
+> Model
+> Completion
+> Min
+> Max
+> Leaked
+> data
+> Non -
+> Leaked
+> data
+> 𝑠 (𝑥 0)<min (𝑠 (𝑥 𝑖 ))
+> 𝑠 (𝑥 0)>m𝑎𝑥 (𝑠 (𝑥 𝑖 ))
+
+Figure 1: Comparison between conventional threshold-based pipelines (a) and the SrDetection framework (b). SrDetection consists of a code transformation module followed by a self-referential detection module that can operate under gray-box or black-box settings to detect potential data leakage in the input sample x.
+
+Leakage Testbed, which provides a controlled testbed for assessing detection performance. 
+
+3.1 SrDetection 
+
+Let M denote a Code LLM and x be a sample from a benchmark dataset B. If x was present in the pre-training corpus of M , we consider it a leaked sample. Our objective is to assess the degree of leakage in B with respect to M . For each 
+
+x ∈ B, we aim to determine whether x has been memorized by M without relying on any external reference data or pre-defined thresholds. We introduce SrDetection, a unified self-referential detection framework designed for both gray-box (with access to model logits) and black-box (with access only to model outputs) scenarios, as illustrated in Figure 1. The core hypothesis is that if M has memorized x during pre-training, it will exhibit significantly more predictable behav-ior for the original form of x compared to its se-mantically equivalent variants . Formally, for the original sample x0, we generate a set of n variants 
+
+V = {x1, x 2, . . . , x n} via semantics-preserving transformations. Detection is then performed by comparing a detection score SM (·) across the set 
+
+X = {x0} ∪ V :Leakage (x) = I
+
+ SM (x0) is the most indicative of memorization in X
+
+
+
+,
+
+(1) where I is the indicator function, and the defini-tion of “most indicative” differs between gray-box and black-box settings as detailed in subsequent sections. Our framework consists of two main compo-nents: (1) Code Transformation Module , which generates semantically equivalent variants; (2) 
+
+Leakage Decision Module , which defines the de-tection function I and detection score SM (·) for leakage decision. Algorithm 1 summarizes the overall pipeline, providing a high-level view of the detection process. As illustrated in the algo-rithm, our method operates in three concise steps: generating semantically equivalent variants, com-puting detection scores under gray and black-box settings, and making a self-referential leakage de-cision based on relative comparison within the gen-erated set. 
+
+3.1.1 Code Transformation Module 
+
+This module generates semantically equivalent vari-ants of a code sample via minimal, localized sur-face edits that preserve execution behavior and program structure. By altering lexical form while Algorithm 1 Self-Referential Code Data Leakage Detection                                         
+
+> Require: Code LLMs M, code sample x0, number of vari-ants n, access type A ∈ { gray -box ,black -box }
+> Ensure: Leakage label l∈ { 0,1}
+> ▷Generate semantic variants 1: X ← { x0} ∪ { xi}ni=1
+> ▷Compute detection scores 2: for each x∈ X do
+> 3: s(x)←
+> (
+> PPL( x;M),A= gray -box NGO( x;M),A= black -box
+> 4: end for
+> ▷Self-referential decision 5: l←I
+> "
+> s(x0) =
+> (
+> min is(xi),A= gray -box max is(xi),A= black -box
+> #
+
+keeping semantics fixed, any systematic change in model behavior between the original and its vari-ants is more likely attributable to memorization of the original lexical/syntactic patterns rather than semantic drift or major structural changes. Given a code sample x, this module generates a set of variants V = {x1, x 2, . . . , x n}. We focus on three distinct, localized transformation operations as follows: 
+
+Function Name Renaming ( τf ): All function names (including method declarations and their call sites) are replaced with semantically equivalent al-ternatives. For instance, a function named “solve” 
+
+might be renamed to “compute” or “calculate” .This transformation is applied consistently through-out the entire code snippet and any associated con-text. 
+
+Variable Name Renaming ( τv): All variable identifiers (local variables and parameters, etc.) are systematically replaced with alternative names. For example, a variable “nums” could be renamed to 
+
+“arr” or “numbers” . Consistency is maintained across all references within the same scope. 
+
+Test Case Transformation ( τt): We use an LLM to propose new test inputs that are seman-tically similar to the originals, then run the original code to obtain outputs and verify consistency. Only regenerated tests that pass this execution-based val-idation replace the original ones, preserving seman-tic fidelity. Formally, let the original sample be x0. A trans-formed variant xi is produced by applying a combi-nation of these operations: xi = ( τt ◦ τv ◦ τf )( x0).By construction, the execution behavior of xi re-mains identical to x0, ensuring S(x0) = S(xi),where S denotes the semantic functionality. Cru-cially, each transformation is designed to be min-imal and localized, thereby maintaining a close lexical and structural resemblance to the original. 
+
+3.1.2 Leakage Decision Module 
+
+This module defines the detection score function 
+
+SM (·) and the indicator function I of SrDetection under both gray-box and black-box settings. The specific computation and decision rules are de-scribed in the following sections. 
+
+Gray-box Detection via Perplexity. Under the gray-box setting, we have access to the token-level probabilities of the target Code LLM M . For a given set X = {x0} ∪ V , consisting of the original sample x0 and its semantic variants V, the key observation is that, if the model has memorized 
+
+x0, its perplexity will be lower than that of any variant. Accordingly, we define the detection score func-tion SM (x) as: 
+
+SM (x) := PPL (x), (2) where the perplexity of sample x is PPL (x) = exp   − 1
+
+> |x|
+
+P|x| 
+
+> t=1
+
+log PM (xt | x<t ), and xt de-notes the t-th token in the sequence. The final leakage decision under the gray-box setting is made using the indicator function I[·]:Leakage gray (x0) = I
+
+h
+
+SM (x0) < min  
+
+> xi∈V
+
+SM (xi)
+
+i
+
+,
+
+where I[·] = 1 if the condition holds (indicating leakage) and 0 otherwise. By comparing scores only within the self-generated set X , this approach remains threshold-free and directly implements the self-referential decision principle of SrDetection. 
+
+Black-box Detection via Generation Similarity. 
+
+In the black-box setting, only the generated outputs of Code LLMs are accessible. For each sample 
+
+xi ∈ X = {x0} ∪ V , we construct a prefix xpre  
+
+> i
+
+and feed it to the model M to obtain a generated suffix 
+
+ˆci = M (xpre  
+
+> i
+
+). We denote the ground-truth suffix as cgt  
+
+> i
+
+.Then, the detection score function under the black-box setting is defined as the n-gram over-lap (NGO) between the generated and ground-truth suffix: 
+
+SM (xi) := NGO (ˆ ci, c gt  
+
+> i
+
+), (3) where the NGO of sample x is NGO (ˆ ci, c gt  
+
+> i
+
+) =    
+
+> |N-grams (ˆ ci)∩N-grams (cgt
+> i)||N-grams (cgt
+> i)|
+
+, and N-grams (·) denotes the set of all consecutive N-token sequences in a code snippet. This metric robustly captures the surface-level similarity of code sequences. The final leakage decision under black-box set-ting is made using the indicator function I[·]:Leakage black (x0) = I
+
+h
+
+SM (x0) > max  
+
+> xi∈V
+
+SM (xi)
+
+i
+
+.
+
+Here, I[·] outputs 1 if the condition holds (indicat-ing leakage) and 0 otherwise. Overall, by comparing detection scores only within the self-generated set X , this approach re-mains threshold-free and directly implements the self-referential decision principle of SrDetection. 
+
+3.2 Leakage Testbed Construction 
+
+To evaluate code leakage detection methods un-der precise conditions, we constructed a general testbed capable of supporting different datasets and open-source Code LLMs. 
+
+Dataset and Model Preparation. We first se-lected a publicly available code benchmark dataset to serve as the evaluation corpus. To minimize pre-existing exposure, we filtered samples by comput-ing the PPL of each original sample and its gener-ated variants under the target model, removing any sample whose original form was already the easiest (lowest PPL) among its variants. The remaining samples were then split equally into training and test subsets to support controlled evaluation. 
+
+Simulating Data Leakage via Continued Pre-Training. To emulate realistic code memorization, each model was further pre-trained on the training subset while keeping the test subset held out. To re-flect typical pre-training pipelines, where code rep-resents only a small fraction of the overall corpus, the training subset was mixed with a publicly avail-able, well-known pre-training corpus. Detection performance was then evaluated on the held-out test subset under this mixed-corpus training setup. 
+
+4 Experimental Settings 
+
+In this section, we present the evaluation metrics and a set of competitive baseline methods. Detailed implementation settings and dataset statistics are reported in Appendix A. 
+
+Evaluation Metrics. We evaluated detection per-formance using standard binary classification met-rics: Accuracy, Precision, Recall, and F1-score. 
+
+Baseline Methods. We compared SrDetection against competitive baselines in both gray-box and black-box settings: (1) Gray-box Baselines. These methods required access to token-level probabili-ties: PPL (Gonen et al., 2023) used raw perplex-ity as the detection signal, where lower perplex-ity indicates a higher likelihood of memorization; 
+
+Zlib (Carlini et al., 2021) computed the ratio be-tween model perplexity and Zlib compression en-tropy to normalize for text complexity; Lower-case (Carlini et al., 2021) computed the perplexity ratio between the original text and its lowercase variant; Min-K% Prob (Shi et al., 2024) used the average log probability of the lowest K% tokens as the detection score, assuming non-member sam-ples contain outlier tokens; Min-K%++ (Zhang et al., 2025) extended Min-K% Prob with local-mode normalization for improved robustness; DC-PDD (Zhang et al., 2024) incorporated divergence calibration between the model distribution and token frequency statistics. (2) Black-box Base-lines. These methods operated using only model-generated text: VeilProbe (Hu et al., 2025) learned a sequence-to-sequence mapping between inputs and model outputs, using token perturbations to strengthen detection; DPDLLM (Zhou et al., 2024) used a reference model to extract features from gen-erated text for membership classification. 
+
+5 Results and Analysis 
+
+5.1 Main Results 
+
+The performance of SrDetection against state-of-the-art gray-box and black-box baselines across different continued pre-training epochs is reported in Table 1 and Table 2. 
+
+Gray-box Setting. As shown in Table 1, SrDetec-tion consistently outperformed all gray-box base-lines across both model families and all reported epochs. At 1 epoch, it achieved F1 scores of 74.76 on Qwen2.5-7B and 69.99 on LLaMA3.1-8B, sub-stantially higher than competing approaches, many of which remained random predictions. Some base-lines (e.g., Min-K%++ and Lowercase) showed gains at specific epochs, but performance was un-stable and model-dependent. In contrast, SrDetec-tion remained strong and stable across epochs and models. This robustness arises from comparing each sample to its semantics-preserving variants, which provides an internal reference and avoids reliance on externally calibrated thresholds. 
+
+Black-box Setting. Table 2 reports black-box per-formance. On Qwen2.5-7B, SrDetection surpassed all baselines at every epoch, with F1 improving from 53.09 at 1 epoch to 82.06 at 5 epochs. On Table 1: Detection performance comparison (F1-Macro, %) between SrDetection and gray-box baselines on the continued pre-trained Qwen2.5-7B and Llama3.1-8B models across different training epochs. The bold number indicates the best performance, while the underlined number represents the second-best.                                                                                                                                                                                      
+
+> Epochs Methods Qwen2.5-7B Llama3.1-8B
+> Acc. Prec. Rec. F1 Acc. Prec. Rec. F1 1PPL (Gonen et al., 2023) 50.85 71.94 50.62 34.88 50.34 64.03 50.11 33.77 Lowercase (Carlini et al., 2021) 59.09 69.93 58.92 52.44 66.95 69.16 66.88 65.91 Zlib (Carlini et al., 2021) 50.24 25.12 50.00 33.44 50.25 58.45 50.02 33.52 Min-K% Prob (Shi et al., 2024) 50.43 66.83 50.19 33.94 50.57 68.06 50.34 34.31 Min-K%++ Prob (Zhang et al., 2025) 54.31 64.03 54.11 44.36 55.94 69.67 55.75 46.34 DC-PDD (Zhang et al., 2024) 51.47 70.75 51.24 36.36 53.54 69.80 53.33 41.18
+> SrDetection (Ours) 74.95 75.00 75.81 74.76 70.01 70.10 70.03 69.99
+> 3PPL (Gonen et al., 2023) 50.38 75.15 50.14 33.75 50.39 75.15 50.16 33.79 Lowercase (Carlini et al., 2021) 52.27 73.51 52.05 37.98 53.94 75.78 53.73 41.26 Zlib (Carlini et al., 2021) 50.28 75.13 50.05 33.54 50.29 75.13 50.07 33.59 Min-K% Prob (Shi et al., 2024) 50.90 75.29 50.67 34.90 50.93 75.29 50.71 34.98 Min-K%++ Prob (Zhang et al., 2025) 70.83 80.62 70.70 68.22 55.21 76.21 55.01 43.72 DC-PDD (Zhang et al., 2024) 54.88 75.84 54.66 43.10 52.40 74.67 52.19 38.18
+> SrDetection (Ours) 88.59 89.70 88.55 88.50 82.43 86.42 82.36 81.92
+> 5PPL (Gonen et al., 2023) 50.43 75.17 50.19 33.86 50.66 75.22 50.43 34.39 Lowercase (Carlini et al., 2021) 59.80 77.06 59.61 51.97 57.91 77.06 57.72 48.63 Zlib (Carlini et al., 2021) 50.28 75.13 50.05 33.54 50.27 75.12 50.05 33.54 Min-K% Prob (Shi et al., 2024) 51.37 75.41 51.14 35.93 52.20 75.06 51.98 37.72 Min-K%++ Prob (Zhang et al., 2025) 78.55 84.36 78.45 77.56 60.29 77.49 60.11 52.73 DC-PDD (Zhang et al., 2024) 54.69 75.27 54.47 42.79 54.56 75.49 54.35 42.52
+> SrDetection (Ours) 90.53 91.56 90.49 90.47 84.47 87.96 84.41 84.09
+
+LLaMA3.1-8B, performance at 1 epoch was lower (F1 49.58) and comparable to VeilProbe. Never-theless, SrDetection separated clearly from base-lines at 3 and 5 epochs, indicating that the self-referential, code-aware comparison remained effec-tive even under output-only access. Most baselines stayed near chance across epochs, underscoring the difficulty of black-box leakage detection and the advantage of relative comparison. 
+
+Gray-box vs. Black-box. Overall, gray-box evalu-ation yielded higher absolute performance due to access to token probabilities, whereas black-box evaluation relied only on generated outputs. Impor-tantly, both settings shared the same self-referential framework and semantics-preserving comparison, differing only in the evidence available to the detec-tor. This consistency suggests that SrDetection’s effectiveness is driven by within-sample relative comparison rather than by specific access assump-tions. 
+
+5.2 Sensitivity Analysis 
+
+In the following, we examine the sensitivity of SrDetection under two key factors: (1) the number of semantics-preserving variants generated per orig-inal sample, and (2) the proportion of code in the continued pre-training corpus. Since gray-box eval-uation provides more direct access to model logits and generally yields more stable performance, we focus our detailed analysis on the gray-box setting. Black-box sensitivity results, which rely solely on generated outputs, are reported in Appendix B. 
+
+Variants Quantity. As shown in Table 3, detection performance improved as the number of semantics-preserving variants increased, supporting the ben-efit of relative comparison between each original sample and its variants. Even with a small number of variants (e.g., n = 3 ), SrDetection exceeded ran-dom baselines. Performance continued to improve over the tested range, suggesting that additional variants strengthen robustness across models and training epochs. 
+
+Mixing Ratio. Figure 3 reports results under dif-ferent code-to-text mixing ratios, obtained by mix-ing the training subset with a well-known, publicly available pre-training dataset (Gao et al., 2020). We evaluated ratios ranging from 1:1, 1:5, to 1:10 (code to general web data). Across all ratios, SrDetec-tion consistently outperformed baseline methods. While probability-based baselines were sensitive to the data mix ratio, the self-referential, threshold-free design of SrDetection remained stable, demon-Table 2: Detection performance comparison (F1-Macro, %) between our method and black-box baselines on the continued pre-trained Qwen2.5-7B and Llama3.1-8B models across different training epochs. The bold number indicates the best performance, while the underlined number represents the second-best. 
+
+Epochs Methods Qwen2.5-7B LLaMA3.1-8B 
+
+Acc. Prec. Rec. F1 Acc. Prec. Rec. F1 1DPDLLM (Zhou et al., 2024) 49.62 49.42 11.97 41.22 50.23 50.23 100.00 33.59 VeilProbe (Hu et al., 2025) 51.04 51.10 50.96 49.33 51.56 51.60 51.58 51.48 SrDetection (Ours) 54.64 54.73 55.51 53.02 51.59 52.00 51.68 49.58 3DPDLLM (Zhou et al., 2024) 50.28 50.26 98.68 34.84 50.34 50.28 99.95 33.88 VeilProbe (Hu et al., 2025) 50.95 50.93 50.91 50.68 51.27 51.28 51.28 51.25 
+
+SrDetection (Ours) 66.24 66.28 66.78 66.00 63.06 63.45 63.09 62.82 
+
+5DPDLLM (Zhou et al., 2024) 46.21 47.72 73.89 41.70 49.07 49.64 95.35 34.99 VeilProbe (Hu et al., 2025) 51.75 51.83 51.69 50.78 51.61 51.64 51.63 51.53 
+
+SrDetection (Ours) 81.91 81.89 82.27 81.85 78.60 79.02 78.58 78.51 APPS 
+
+> Qwen2.5-3B
+> Qwen2.5-3B-Instruct
+> Qwen2.5-7B
+> Qwen2.5-7B-Instruct
+> Qwen2.5-72B
+> Qwen2.5-72B-Instruct
+> LLaMA-3.1-8B
+> LLaMA-3.1-8B-Instruct
+> LLaMA-3.1-70B-Instruct
+> DeepSeek-Coder-6.7B-Instruct
+> StarCoder2-3B
+> StarCoder2-7B
+> StarCoder2-15B
+> CodeLlama-7B-hf
+> Qwen2.5-Coder-7B
+> 70.3
+> 67.5
+> 70.0
+> 65.2
+> 78.6
+> 83.5
+> 48.5
+> 42.5
+> 54.5
+> 42.7
+> 41.3
+> 44.0
+> 54.5
+> 32.7
+> 60.8
+> HumanEval
+> 58.5
+> 67.1
+> 70.7
+> 70.1
+> 86.0
+> 87.8
+> 30.5
+> 26.2
+> 26.8
+> 22.6
+> 6.7
+> 9.1
+> 9.8
+> 15.8
+> 70.7
+> MBPP
+> 5.4
+> 6.4
+> 8.5
+> 8.4
+> 15.2
+> 11.2
+> 5.3
+> 1.1
+> 1.9
+> 10.3
+> 5.7
+> 7.1
+> 9.4
+> 3.4
+> 9.3
+> BigCodeBench
+> 94.2
+> 96.6
+> 92.9
+> 97.7
+> 92.3
+> 97.4
+> 95.4
+> 93.2
+> 94.8
+> 91.5
+> 68.2
+> 68.5
+> 64.9
+> 90.3
+> 91.3
+> 20
+> 40
+> 60
+> 80
+> Leakage Rate (%)
+
+Figure 2: Data leakage rates (%) of mainstream Code LLMs on standard benchmarks in the gray-box setting. Table 3: Detection performance (F1-Macro, %) under different numbers of variants and training epochs under the gray-box setting. 
+
+Model Variants ( n) Training Epochs 1 3 5
+
+Llama-3.1-8B 1 33.43 33.43 33.43 3 65.30 69.65 72.03 5 67.20 74.89 77.05 10 69.99 81.92 84.09 
+
+Qwen2.5-7B 1 33.44 33.44 33.44 3 69.32 75.56 77.45 5 71.56 81.44 83.05 10 74.76 88.50 90.47 
+
+strating robustness to variations in pre-training cor-pus composition. 
+
+5.3 Data Leakage across Benchmarks 
+
+To assess leakage in widely used Code LLMs, we applied our gray-box detector to 15 publicly re-leased models across four popular code generation benchmarks: APPS (Hendrycks et al., 2021), Hu-manEval (Chen et al., 2021), MBPP (Austin et al., PPL 
+
+> Lowercase
+> Zlib
+> Min-K% Prob
+> Min-K%++ Prob
+> DC-PDD
+> Our Method
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> F1-score (%)
+> Qwen2.5-7B
+> Ratio
+> 1:1
+> 1:5
+> 1:10
+> PPL
+> Lowercase
+> Zlib
+> Min-K% Prob
+> Min-K%++ Prob
+> DC-PDD
+> Our Method
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> F1-score (%)
+> Llama3.1-8B
+> Ratio
+> 1:1
+> 1:5
+> 1:10
+
+Figure 3: Detection performance (F1-score, %) under different mixed ratios during continued pre-training with 1 epoch in gray-box setting. 
+
+2021), and BigCodeBench (Zhuo et al., 2025), as summarized in Figure 2. Leakage was evaluated di-rectly from model behavior under gray-box access. APPS exhibited consistently higher leakage for several Qwen2.5 variants, in line with overlap-based trends reported in prior work (Zhou et al., 2025), which used MinHash+LSH near-duplicate Table 4: Thresholds and scores of baselines on sample #1061 under the gray-box setting. All baseline methods failed to detect leakage because their scores did not fall below the respective thresholds, whereas our method correctly identified the leaked sample. 
+
+Method Score Threshold Correct? 
+
+PPL -1.9485 -21.6516 ✗
+
+Lowercase -0.9486 -0.9820 ✗
+
+Zlib -0.0008 -0.0195 ✗
+
+Min-K% -2.7820 -7.9785 ✗
+
+Min-K%++ -0.6970 -1.5204 ✗
+
+DC-PDD 0.0098 0.0090 ✗
+
+Our Method – – ✓
+
+> def shipWithinDays(weights, D) :left = max(weights) right = left * len(weights) // D while left < right: mid = left + (right - left ) // 2 c = 0 d = 1 for w in weights: if c + w <= mid: c += w else: d += 1 c = w if d > D: left = mid + 1 else: right = mid return left # ...
+
+(a) PPL=1.71 
+
+> def getMinimumDaysForShipping( cargo_weights, num_days) :left_limit = max( cargo_weights) right_limit = left_limit * len(cargo_weights) // num_days while left_limit < right_limit: mid_range = left_limit + ( right_limit - left_limit ) // 2 weight_sum = 0 load_count = 1 for cargo in cargo_weights :if weight_sum + cargo <= mid_range: weight_sum += cargo else: # ...
+
+(b) PPL=2.31 
+
+Figure 4: Comparison of an original code sample (a) and one of its semantics-preserving variants (b). 
+
+detection followed by manual verification. Hu-manEval showed moderate leakage, consistent with previous analyses indicating small but nonzero con-tamination. MBPP was largely unaffected for most models, reflecting its low leakage in the same study. Notably, BigCodeBench demonstrated high leak-age in our gray-box evaluation, suggesting that behavior-based detection can reveal potential leak-age beyond strict data overlap. Overall, these results largely align with overlap-based findings while providing complementary, benchmark-specific insights. Related black-box experiments are reported in Appendix B. 
+
+5.4 Case Study 
+
+To illustrate why the self-referential design of the proposed SrDetection method succeeds where con-ventional detectors fail, we analyze some cases and present a representative code sample. As shown in Table 4, established gray-box baselines, including PPL, Zlib, and Min-K%, failed to detect leakage for this example. These methods typically rely on absolute scores and fixed thresholds; here, all scores remained above their thresholds, producing a false negative and underscoring the brittleness of thresholded, natural-language-oriented detectors on code. In contrast, SrDetection evaluates each sample 
+
+relative to its semantics-preserving variants. For the sample in Figure 4, we generated ten variants that preserved core logic while altering surface form (e.g., variable and function names). The original sample yielded the minimum perplexity (PPL=1.7082), while all variants had higher per-plexity (2.0287–2.7565). This pronounced local minimum indicates memorization tied to the origi-nal surface form. As shown in Figure 4, which com-pares the original sample with one variant, SrDe-tection correctly flagged leakage while threshold-based baselines failed. 
+
+6 Discussion and Conclusion 
+
+SrDetection reframes data leakage detection for Code LLMs as a self-referential problem: in-stead of depending on inaccessible pretraining cor-pora, fragile temporal rules, or externally cali-brated thresholds, it measures leakage through rel-ative behavioral discrepancies between an original code sample and its semantics-preserving variants. This perspective is particularly well matched to code benchmarks, where surface forms can be al-tered without changing functionality, and where reuse and refactoring routinely break timestamp-and overlap-based assumptions. To support rigor-ous evaluation, we further introduce a controlled testbed that enables precise attribution of leakage by explicitly separating seen and unseen samples through continued pre-training. This testbed is model- and dataset-agnostic, and allows leakage detectors to be compared under reproducible con-ditions. Empirically, our results show that SrDe-tection can reliably identify leaked samples in both gray-box and black-box settings and can surface benchmark-specific contamination patterns that are not revealed by overlap checks alone. Beyond de-tection performance, these findings suggest that leakage is not a marginal artifact but a systematic confounder in current evaluation practice, reinforc-ing the need for leakage-aware benchmark design and reporting. Limitations 
+
+While SrDetection demonstrates robust perfor-mance in detecting memorization of code samples, there remain opportunities for further improvement. The effectiveness of detection depends on the di-versity and quality of semantics-preserving vari-ants; exploring additional transformation strate-gies could strengthen the contrastive signal. In black-box settings, subtle output differences may be masked in very large or instruction-tuned mod-els, suggesting that alternative or complementary signals could further enhance detection. Future work may also extend SrDetection to cover broader code modalities and to integrate adaptive transfor-mation strategies that better reflect real-world code variability. 
+
+Acknowledgments 
+
+We would like to thank the anonymous review-ers for their valuable comments and suggestions to improve this paper. We used AI assistants only for minor language polishing and grammar correction. All research ideas, methodology, ex-periments, and conclusions were developed and verified by the authors. Min Yang was sup-ported by National Key Research and Develop-ment Program of China (2024YFF0908200), Na-tional Natural Science Foundation of China (Grant No. 62376262), the Natural Science Foundation of Guangdong Province of China (2024A1515030166, 2025B1515020032). Shiwen Ni was sup-ported by GuangDong Basic and Applied Ba-sic Research Foundation (2023A1515110718 and 2024A1515012003) and Shenzhen Science and Technology Program (JCYJ20250604182917023). 
+
+References 
+
+Jacob Austin, Augustus Odena, Maxwell I. Nye, Maarten Bosma, Henryk Michalewski, David Dohan, Ellen Jiang, Carrie J. Cai, Michael Terry, Quoc V. Le, and Charles Sutton. 2021. Program synthesis with large language models. CoRR , abs/2108.07732. Nicholas Carlini, Florian Tramèr, Eric Wallace, Matthew Jagielski, Ariel Herbert-Voss, Katherine Lee, Adam Roberts, Tom B. Brown, Dawn Song, Úl-far Erlingsson, Alina Oprea, and Colin Raffel. 2021. Extracting training data from large language models. In 30th USENIX Security Symposium, USENIX Se-curity 2021, August 11-13, 2021 , pages 2633–2650. USENIX Association. Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Pondé de Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas Joseph, Greg Brockman, Alex Ray, Raul Puri, Gretchen Krueger, Michael Petrov, Heidy Khlaaf, Girish Sastry, Pamela Mishkin, Brooke Chan, Scott Gray, and 39 others. 2021. Evaluating large language models trained on code. CoRR , abs/2107.03374. Chunyuan Deng, Yilun Zhao, Xiangru Tang, Mark Ger-stein, and Arman Cohan. 2024. Investigating data contamination in modern benchmarks for large lan-guage models. In NAACL 2024 , pages 8706–8719. Association for Computational Linguistics. Yihong Dong, Xue Jiang, Huanyu Liu, Zhi Jin, Bin Gu, Mengfei Yang, and Ge Li. 2024. Generalization or memorization: Data contamination and trustworthy evaluation for large language models. In Findings of the Association for Computational Linguistics, ACL 2024, Bangkok, Thailand and virtual meeting, August 11-16, 2024 , pages 12039–12050. Association for Computational Linguistics. Leo Gao, Stella Biderman, Sid Black, Laurence Gold-ing, Travis Hoppe, Charles Foster, Jason Phang, Horace He, Anish Thite, Noa Nabeshima, and 1 others. 2020. The pile: An 800gb dataset of di-verse text for language modeling. arXiv preprint arXiv:2101.00027 .Hila Gonen, Srini Iyer, Terra Blevins, Noah A. Smith, and Luke Zettlemoyer. 2023. Demystifying prompts in language models via perplexity estimation. In 
+
+Findings of the Association for Computational Lin-guistics: EMNLP 2023, Singapore, December 6-10, 2023 , pages 10136–10148. Association for Computa-tional Linguistics. Dan Hendrycks, Steven Basart, Saurav Kadavath, Man-tas Mazeika, Akul Arora, Ethan Guo, Collin Burns, Samir Puranik, Horace He, Dawn Song, and Jacob Steinhardt. 2021. Measuring coding challenge com-petence with APPS. In Proceedings of the Neural Information Processing Systems Track on Datasets and Benchmarks 1, NeurIPS Datasets and Bench-marks 2021, December 2021, virtual .Xinyi Hou, Yanjie Zhao, Yue Liu, Zhou Yang, Kailong Wang, Li Li, Xiapu Luo, David Lo, John Grundy, and Haoyu Wang. 2024. Large language models for software engineering: A systematic literature review. 
+
+ACM Trans. Softw. Eng. Methodol. , 33(8):220:1– 220:79. Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. 2022. Lora: Low-rank adaptation of large language models. In The Tenth International Conference on Learning Representations, ICLR 2022, Virtual Event, April 25-29, 2022 . OpenReview.net. Ruihan Hu, Yu-Ming Shang, Jiankun Peng, Wei Luo, Yazhe Wang, and Xi Zhang. 2025. Automated de-tection of pre-training text in black-box llms. In 
+
+Proceedings of the Thirty-Fourth International Joint Conference on Artificial Intelligence , IJCAI ’25. Naman Jain, King Han, Alex Gu, Wen-Ding Li, Fanjia Yan, Tianjun Zhang, Sida Wang, Armando Solar-Lezama, Koushik Sen, and Ion Stoica. 2025. Live-codebench: Holistic and contamination free evalua-tion of large language models for code. In The Thir-teenth International Conference on Learning Repre-sentations, ICLR 2025, Singapore, April 24-28, 2025 .OpenReview.net. Juyong Jiang, Fan Wang, Jiasi Shen, Sungju Kim, and Sunghun Kim. 2025. A survey on large language models for code generation. ACM Trans. Softw. Eng. Methodol. 
+
+Sathvik Joel, Jie JW Wu, and Fatemeh H. Fard. 2024. A Survey on LLM-based Code Generation for Low-Resource and Domain-Specific Programming Lan-guages. arXiv e-prints , arXiv:2410.03981. José Antonio Hernández López, Boqi Chen, Mootez Saad, Tushar Sharma, and Dániel Varró. 2025. On inter-dataset code duplication and data leakage in large language models. IEEE Trans. Software Eng. ,51(1):192–205. Alexandre Matton, Tom Sherborne, Dennis Aumiller, Elena Tommasone, Milad Alizadeh, Jingyi He, Raymond Ma, Maxime Voisin, Ellen Gilsenan-McMahon, and Matthias Gallé. 2024. On leakage of code generation evaluation datasets. In Findings of the Association for Computational Linguistics: EMNLP 2024 , pages 13215–13223. Association for Computational Linguistics. Meta AI. 2024. Introducing meta llama 3: The most capable openly available llm to date. Martin Riddell, Ansong Ni, and Arman Cohan. 2024. Quantifying contamination in evaluating code genera-tion capabilities of language models. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics, ACL 2024 , pages 14116– 14137. Association for Computational Linguistics. Alexandre Sablayrolles, Matthijs Douze, Cordelia Schmid, Yann Ollivier, and Hervé Jégou. 2019. White-box vs black-box: Bayes optimal strategies for membership inference. In Proceedings of the 36th International Conference on Machine Learning, ICML 2019, 9-15 June 2019, Long Beach, California, USA , volume 97 of Proceedings of Machine Learning Research , pages 5558–5567. PMLR. Weijia Shi, Anirudh Ajith, Mengzhou Xia, Yangsibo Huang, Daogao Liu, Terra Blevins, Danqi Chen, and Luke Zettlemoyer. 2024. Detecting pretraining data from large language models. In The Twelfth Inter-national Conference on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . Open-Review.net. Reza Shokri, Marco Stronati, Congzheng Song, and Vi-taly Shmatikov. 2017. Membership inference attacks against machine learning models. In 2017 IEEE Sym-posium on Security and Privacy, SP 2017, San Jose, CA, USA, May 22-26, 2017 , pages 3–18. IEEE Com-puter Society. Congzheng Song and Vitaly Shmatikov. 2019. Audit-ing data provenance in text-generation models. In 
+
+Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining, KDD 2019, Anchorage, AK, USA, August 4-8, 2019 ,pages 196–206. ACM. Llama Team. 2024. The llama 3 herd of models. CoRR ,abs/2407.21783. OpenAI Team. 2025. Chatgpt: optimizing language models for dialogue. 2022. Accessed on , 31. Ruijie Xu, Zengzhi Wang, Run-Ze Fan, and Pengfei Liu. 2024. Benchmarking benchmark leakage in large language models. CoRR , abs/2404.18824. An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayi-heng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Ji-axi Yang, Jingren Zhou, Junyang Lin, Kai Dang, and 22 others. 2024a. Qwen2.5 technical report. CoRR ,abs/2412.15115. Shuo Yang, Wei-Lin Chiang, Lianmin Zheng, Joseph E. Gonzalez, and Ion Stoica. 2023. Rethinking bench-mark and contamination for language models with rephrased samples. CoRR , abs/2311.04850. Zhou Yang, Zhipeng Zhao, Chenyu Wang, Jieke Shi, Dongsun Kim, DongGyun Han, and David Lo. 2024b. Unveiling memorization in code models. In Proceed-ings of the 46th IEEE/ACM International Conference on Software Engineering, ICSE 2024, Lisbon, Portu-gal, April 14-20, 2024 , pages 72:1–72:13. ACM. Hao Yu, Bo Shen, Dezhi Ran, Jiaxin Zhang, Qi Zhang, Yuchi Ma, Guangtai Liang, Ying Li, Qianxiang Wang, and Tao Xie. 2024. Codereval: A benchmark of prag-matic code generation with generative pre-trained models. In Proceedings of the 46th IEEE/ACM Inter-national Conference on Software Engineering, ICSE 2024, Lisbon, Portugal, April 14-20, 2024 , pages 37:1–37:12. ACM. Jingyang Zhang, Jingwei Sun, Eric Yeats, Yang Ouyang, Martin Kuo, Jianyi Zhang, Hao Frank Yang, and Hai Li. 2025. Min-k%++: Improved baseline for pre-training data detection from large language models. In The Thirteenth International Conference on Learn-ing Representations .Weichao Zhang, Ruqing Zhang, Jiafeng Guo, Maarten de Rijke, Yixing Fan, and Xueqi Cheng. 2024. Pre-training data detection for large language models: A divergence-based calibration method. In Proceed-ings of the 2024 Conference on Empirical Methods in Natural Language Processing, EMNLP 2024, Miami, FL, USA, November 12-16, 2024 , pages 5263–5274. Association for Computational Linguistics. Baohang Zhou, Zezhong Wang, Lingzhi Wang, Hongru Wang, Ying Zhang, Kehui Song, Xuhui Sui, and Kam-Fai Wong. 2024. DPDLLM: A black-box framework for detecting pre-training data from large language models. In Findings of the Association for Com-putational Linguistics: ACL 2024 , pages 644–653, Bangkok, Thailand. Association for Computational Linguistics. Xin Zhou, Martin Weyssow, Ratnadira Widyasari, Ting Zhang, Junda He, Yunbo Lyu, Jianming Chang, Beiqi Zhang, Dan Huang, and David Lo. 2025. Lessleak-bench: A first investigation of data leakage in llms across 83 software engineering benchmarks. CoRR ,abs/2502.06215. Terry Yue Zhuo, Minh Chien Vu, Jenny Chim, Han Hu, Wenhao Yu, Ratnadira Widyasari, Imam Nur Bani Yusuf, Haolan Zhan, Junda He, Indraneil Paul, Simon Brunner, Chen Gong, James Hoang, Armel Randy Zebaze, Xiaoheng Hong, Wen-Ding Li, Jean Kad-dour, Ming Xu, Zhihan Zhang, and 2 others. 2025. Bigcodebench: Benchmarking code generation with diverse function calls and complex instructions. In 
+
+The Thirteenth International Conference on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025 . OpenReview.net. A Implementation Details 
+
+A.1 SrDetection 
+
+Table 5: Statistics of the filtered APPS-based datasets after PPL-based exclusion.       
+
+> Model Number of Instances Training Test
+> Qwen2.5-7B 1061 1051 LLaMA-3.1-8B 2216 2196
+
+Table 6: Threshold values used by baseline methods across training epochs (1, 3, 5) for Qwen2.5-7B and LLaMA3.1-8B, organized by method and epoch.                                       
+
+> Method Qwen2.5-7B LLaMA3.1-8B 1 Epoch
+> PPL -21.6516 -23.4101 Lowercase -0.9820 -0.9681 Zlib -0.0195 -0.0188 Min-K% Prob -7.9785 -7.9442 Min-K%++ Prob -1.5204 -1.5833 DC-PDD 0.0090 0.0091
+> 3 Epochs
+> PPL -36.1829 -36.1829 Lowercase -1.0078 -1.0078 Zlib -0.0217 -0.0217 Min-K% Prob -9.5799 -9.5799 Min-K%++ Prob -5.8413 -5.8413 DC-PDD 0.0082 0.0082
+> 5 Epochs
+> PPL -86.3298 -86.3298 Lowercase -1.0021 -1.0021 Zlib -0.0272 -0.0272 Min-K% Prob -11.8104 -11.8104 Min-K%++ Prob -18.4400 -18.4400 DC-PDD 0.0073 0.0073
+
+All experiments are implemented using Py-Torch 2 and the Hugging Face Transformers library 3
+
+, running on a system with four NVIDIA A100 GPUs. We evaluate our proposed method, SrDetec-tion, under both gray-box and black-box scenarios. For SrDetection, we generate n = 10 semantic-preserving variants per code sample to enable self-referential comparison. In the black-box setting, we additionally employ N-gram overlap (NGO) with N = 7 . To create semantic variants, we de-sign prompt templates targeting two key transfor-mations: identifier renaming (Table 7) and test case replacement (Table 8). These templates preserve 
+
+> 2https://pytorch.org
+> 3https://huggingface.co/docs/transformers
+
+the core logic, functionality, and overall code struc-ture of the original samples while introducing suffi-cient syntactic diversity to challenge conventional detectors. Table 6 provides a supplementary ref-erence by reporting the threshold values used by the baseline methods across different models with different training epochs (1, 3, 5), corresponding to the performance results shown in Table 1 in the main text. 
+
+Table 7: Prompt template for identifier renaming. 
+
+> User:
+> You are given a Python code snippet:
+> {{python_code_snippet}}
+> Task:
+> Generate 10 alternative versions of the snippet by renaming function names, parameters, and variable identifiers.
+> Constraints:
+> – Preserve comments, formatting, indentation, spacing, and line breaks exactly. – Update identifiers consistently if they appear in comments. – Do not change the logic or functionality. Return each version as a single string, using \n for newlines.
+
+Table 8: Prompt template for test case transformation.   
+
+> User:
+> You are given a programming problem:
+> {{question}}
+> Provided Test Cases: Input: {{test_case_input}}
+> Output: {{test_case_output}}
+> Task:
+> Replace the sample test cases in the problem with the pro-vided examples.
+> Constraints:
+> – Preserve structure, formatting, indentation, and line breaks. – Only replace input/output sections. – Do not modify any other text. Return the modified problem as a single string, using \n for newlines.
+
+A.2 Leakage Testbed 
+
+In our study, we instantiated the leakage testbed us-ing the APPS dataset (Hendrycks et al., 2021) and selected representative open-source Code LLMs as target models, including Qwen2.5-7B (Yang et al., 2024a) and LLaMA-3.1-8B (Team, 2024). Table 5 reports the number of instances in the fil-tered APPS-based datasets after PPL-based exclu-sion. To support controlled evaluation, the dataset was split into training and test subsets at a 1:1 ratio, resulting in model-specific dataset sizes summa-rized in Table 5. To simulate realistic pre-training conditions in which code constitutes a minor por-tion of the overall corpus, the APPS training subset was mixed with general web data from Refined-Web (Gao et al., 2020). A mixing ratio of 1:5 (code to general web data) was adopted to approximate typical code concentrations. All models undergo continued pre-training on our filtered datasets us-ing LoRA (Hu et al., 2022) with a learning rate of 
+
+1.0 × 10 −4, batch size of 32, and training epochs of 1, 3, and 5. 
+
+B Supplementary Black-box Experiments 
+
+In addition to the gray-box analyses reported in the main text, we conducted a series of experiments under the black-box setting. 
+
+Black-box Detection Across Models and Benchmarks. Table 9 presents data leakage detec-tion rates (%) for several widely used Code LLMs across three benchmarks: HumanEval, MBPP, and BigCodeBench. Our method achieves consistently higher detection rates compared with baseline ap-proaches, highlighting its ability to identify po-tential leakage even with limited access to model internals. Notably, leakage is more pronounced on BigCodeBench for most models, consistent with trends observed in gray-box evaluations. 
+
+Sensitivity to Data Composition. Table 10 re-ports F1-Macro performance under varying code-to-text mixing ratios during continued pre-training (1 epoch). SrDetection maintains strong, stable per-formance across all ratios (1:1, 1:5, 1:10), while baseline methods exhibit more variable results, demonstrating the resilience of our self-referential, threshold-free approach under different data distri-butions. 
+
+Impact of Variant Quantity. Table 11 shows performance under varying numbers of semantic-preserving variants. Increasing the number of vari-ants generally improves detection, confirming that relative comparisons between the original sample and its variants are effective even when only the generated outputs are available. This trend mirrors observations in the gray-box setting, indicating that the self-referential mechanism is robust to the level of access provided. Overall, these black-box experiments comple-ment the gray-box analyses, demonstrating that SrDetection’s relative, variant-based framework can reliably detect code leakage even under re-stricted observational settings. 
+
+Table 9: Data leakage detection rates (%) across differ-ent Code LLMs and benchmarks (black-box).                     
+
+> Model Humaneval MBPP BigCodeBench
+> Qwen2.5-7B 16.46 10.68 52.94 LLaMA-3.1-8B 7.93 9.45 61.19 DeepSeek-Coder-6.7B-Instruct 7.93 10.78 35.21 StarCoder2-7B 7.93 6.16 35.03 CodeLlama-7B-hf 11.59 12.73 49.96 Qwen2.5-Coder-7B 18.90 18.17 44.78
+
+Table 10: Detection performance (F1-Macro, %) under different mixed ratios during continued pre-training with 1 epoch under the black-box setting.                                                 
+
+> Mixed Ratio Method Qwen2.5-7B Llama3.1-8B
+> 1:1 PPL 33.86 59.68 Lowercase 54.68 53.11 Zlib 33.65 58.45 Min-K% Prob 34.03 58.44 Min-K%++ Prob 44.85 56.28 DC-PDD 35.69 57.12
+> SrDetection (Ours) 69.86 69.33
+> 1:5 PPL 33.75 33.77 Lowercase 52.44 65.91 Zlib 33.44 33.52 Min-K% Prob 33.61 34.31 Min-K%++ Prob 44.36 46.34 DC-PDD 36.36 41.18
+> SrDetection (Ours) 74.76 69.99
+> 1:10 PPL 60.46 59.29 Lowercase 53.68 52.58 Zlib 58.32 57.82 Min-K% Prob 59.41 57.86 Min-K%++ Prob 57.70 56.27 DC-PDD 57.24 57.24
+> SrDetection (Ours) 74.13 69.58
+
+Table 11: Detection performance (F1-Macro, %) under different numbers of variants and training epochs under the black-box setting.
