@@ -1,0 +1,569 @@
+Title: LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas
+
+URL Source: https://arxiv.org/pdf/2607.03884v1
+
+Published Time: Tue, 07 Jul 2026 01:41:05 GMT
+
+Number of Pages: 11
+
+Markdown Content:
+# LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas 
+
+# Juepeng Wang 
+
+Sun Yat-sen University Zhuhai, China wangjp39@mail2.sysu.edu.cn 
+
+# Jinyang Liu 
+
+The Chinese University of Hong Kong Hong Kong, China jyliu@cse.cuhk.edu.hk 
+
+# Zhuangbin Chen ∗
+
+Sun Yat-sen University Zhuhai, China chenzhb36@mail.sysu.edu.cn 
+
+# Zibin Zheng 
+
+Sun Yat-sen University Zhuhai, China zhzibin@mail.sysu.edu.cn 
+
+## Abstract 
+
+Logs are essential for system monitoring and failure diagnoses in modern software systems, yet querying them through natural lan-guage remains an open challenge. Existing approaches either treat logs as plain text, generate queries for schema-light backends, or assume predefined relational schemas, but none addresses a funda-mental obstacle: raw logs carry no executable schema over which structured queries can be defined and run. To address these limita-tions, we present LogNLQ, a framework that formulates natural-language log querying as executable SQL generation over parser-induced and semantically grounded schemas. LogNLQ parses raw logs into template-partitioned relational tables, then applies dual-granularity semantic grounding to annotate both templates and parameter columns with interpretable names and descriptions. At query time, relevant schema candidates are retrieved via semantic search, and a large language model (LLM) generates executable SQL constrained to the retrieved context. To support rigorous evaluation, we introduce LogNLQ-Bench, an execution-verified benchmark of 8,895 queries over four real-world log datasets. Experimental results demonstrate that LogNLQ consistently outperforms all representa-tive baselines by wide margins, with especially pronounced gains on analytically complex scenario queries. 
+
+## CCS Concepts 
+
+• Software and its engineering → Software maintenance tools ;
+
+• Information systems → Relational database query languages .
+
+## Keywords 
+
+Log Analysis, Natural Language Querying, Text-to-SQL, Log Pars-ing, Observability, AIOps 
+
+ACM Reference Format: 
+
+Juepeng Wang, Jinyang Liu, Zhuangbin Chen, and Zibin Zheng. 2018. LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas. In Proceedings of Make sure to enter the correct con-ference title from your rights confirmation email (Conference acronym ’XX). 
+
+ACM, New York, NY, USA, 11 pages. https://doi.org/XXXXXXX.XXXXXXX  
+
+> ∗Zhuangbin Chen is the corresponding author. Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+> Conference acronym ’XX, Woodstock, NY
+> ©2018 Copyright held by the owner/author(s). Publication rights licensed to ACM. ACM ISBN 978-1-4503-XXXX-X/2018/06 https://doi.org/XXXXXXX.XXXXXXX
+
+## 1 Introduction 
+
+Logs are a foundational source of runtime observability in modern software systems [ 9 , 21 ], routinely produced at scales of millions to billions of lines per day. Engineers rely on them to diagnose failures, inspect anomalies [ 2], audit system behavior, and understand oper-ational trends [ 3, 10 , 11 ]. Although modern observability platforms provide powerful search and analytics capabilities, these are typi-cally exposed through backend-specific query languages, operators, and ad-hoc regular expressions, requiring users to translate natu-rally expressed diagnostic intent into low-level query formulations. Natural-language querying (NLQ) is therefore a promising di-rection for closing this gap. Existing approaches primarily fall into three categories (Section 2), each capturing part of the solution but missing a critical piece. Text-based Log QA methods [ 13 , 23 ]retrieve relevant log snippets and extract local answer spans, but they operate at the granularity of individual lines and cannot faith-fully execute corpus-level operations such as counting, grouping, or filtering by parameter role. Log-DSL Generation methods [ 24 , 27 ]translate natural language into backend-native query languages such as LogQL [ 5 ] or KQL [ 20 ], which are in principle executable; in practice, however, raw logs expose no stable schema, so models are forced to guess field names and frequently produce halluci-nated or empty results [ 14 ]. Text-to-SQL for Logs [22 , 35 ] is the most naturally aligned with analytical querying, as SQL natively supports filtering, aggregation, and grouping. However, it presumes the existence of stable, human-authored schemas with semantically meaningful tables and columns, an assumption that raw logs funda-mentally violate. The core difficulty shared by all three is therefore not translating natural language into queries, but first establishing the executable schema that raw logs do not provide. This analysis reveals a fundamental prerequisite that all three paradigms overlook: before any query can be generated, an exe-cutable schema must first be induced from raw logs. Although logs lack predefined schemas, they are not entirely unstructured. Log messages are produced by logging statements in source code [ 7,17 , 36 ], generating recurring textual templates whose dynamic seg-ments carry typed runtime values (e.g., IP addresses, error codes, resource identifiers). This regularity makes it possible to parse raw logs into structured event templates and explicit parameter columns, yielding a relational substrate over which SQL queries can be pre-cisely defined and executed. Structural induction alone, however, is not sufficient. The resulting parameter columns are positional placeholders that the execution engine can process but that an LLM cannot reliably map to user-facing concepts such as “source IP.” Se-mantic grounding is therefore needed to annotate induced schema  
+
+> arXiv:2607.03884v1 [cs.SE] 4 Jul 2026 Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Juepeng Wang, Jinyang Liu, Zhuangbin Chen, and Zibin Zheng
+
+elements with meaningful names and descriptions, completing the bridge between raw log structure and natural-language intent. Based on this analysis, we present LogNLQ , a framework that formulates natural-language log querying as executable SQL gener-ation over parser-induced and semantically grounded schemas. In the offline phase, LogNLQ parses raw logs into template-partitioned relational tables and applies dual-granularity semantic grounding to annotate both event templates and individual parameter columns with interpretable labels and descriptions. In the online phase, given a user query, LogNLQ retrieves the most relevant schema candidates through semantic search, constructs a grounded prompt, and directs an LLM to generate executable SQL constrained to the retrieved schema context. To support rigorous evaluation, we also introduce 
+
+LogNLQ-Bench , an execution-verified benchmark of 8,895 natural-language log queries over four real-world datasets, covering both retrieval and aggregation tasks under basic and scenario-driven settings. Experiments on LogNLQ-Bench show that LogNLQ con-sistently outperforms all representative baselines by wide margins, achieving retrieval F1 scores above 0.89 on basic queries where the strongest baselines remain below 0.25, with especially pronounced gains on analytically complex scenario queries. The contributions of this paper are summarized as follows: 
+
+• Problem reformulation. We formulate natural-language log querying as executable query generation over induced rather than pre-authored schemas, highlighting the schema-missing assumption gap that prevents conventional Text-to-SQL and text-based QA methods from directly handling raw logs. 
+
+• Schema-induction-based framework. We present LogNLQ, a framework that couples parsing-based structural induction with semantic grounding, schema retrieval, and constrained SQL generation to support executable natural-language query-ing over logs. 
+
+• LogNLQ-Bench. We introduce an execution-verified bench-mark of 8,895 natural-language log queries over four real-world datasets, covering both retrieval and aggregation tasks under basic and scenario-driven settings. 
+
+• Empirical evaluation. We show that parser-induced structur-ing is an absolute prerequisite for executable log analytics, and that semantic grounding further yields substantial gains over representative baselines, with especially clear improvements on scenario-driven and analytically complex queries. The remainder of this paper is organized as follows. Section 2 presents background and motivating examples. Section 3 describes the design of LogNLQ. Section 4 introduces the benchmark, base-lines, and evaluation setup. Section 5 reports the experimental results. Section 6 discusses related work, and Section 7 concludes the paper. 
+
+## 2 Background and Motivation 2.1 Logs and Log Querying 
+
+Logs are timestamped records emitted continuously by running software, capturing events such as service requests, errors, state transitions, and resource usage. They serve as a primary observabil-ity primitive across diverse operational scenarios: engineers inspect logs to diagnose failures and anomalies, security teams mine them for audit trails and intrusion detection, and SRE teams rely on them for performance analysis and capacity planning. As log volumes have grown to billions of lines per day, the tooling for log querying has evolved accordingly. Early practice depended on command-line tools such as grep for manual inspection of local files. Modern systems ingest logs into centralized platforms such as Elasticsearch [ 4] and Grafana Loki [ 6], which support efficient search, filtering, and aggregation at scale. Yet this evolution does not close the gap between user intent and system interface. These platforms improve storage and execution, but they still expose backend-native query languages such as LogQL and Elasticsearch Query DSL, both of which require mastery of platform-specific syntax and weakly exposed schema fields. The burden of translat-ing diagnostic intent into executable queries remains on the user, motivating the search for natural-language log querying interfaces. 
+
+## 2.2 Motivating Example 
+
+To concretize the challenges outlined above, we trace a representa-tive diagnostic query through three existing paradigms. Consider the request: “Count failed SSH logins from IP 10.0.0.1.” Although this query appears straightforward, answering it correctly requires the system to jointly satisfy three conditions: identifying the correct event type (failed authentication), targeting the correct parameter role (source IP rather than some other string position), and exe-cuting a corpus-wide aggregation ( COUNT ). These conditions reveal that natural-language log querying is not merely a retrieval prob-lem over text, but an execution problem over latent structure that raw logs do not explicitly expose. Three Existing Paradigms (Failures)                        
+
+> Count failed SSH logins from IP 10.0.0.1 ?
+> Log corpus fl ow
+> Log A (Target ✅):
+> Log B (Noise ❌):
+> Log C (Hard Noise ❌):
+> ... Failed password for admin from 10.0.0.1 ... ... Accepted password for root from 10.0.0.1 ... ... Failed password for 10.0.0.1 from 192.168.1.5 ...
+> (a) Text-based Log QA (b) Log-DSL Generation (c) Text-to-SQL for Logs
+> Log A
+> "admin"
+> Extracting Fragment
+> ❌No Aggregation
+> {job="ssd"} |= "Failed" | source_ip = "10.0.0.1"
+> Non-existent schema fields
+> ❌Field Hallucination
+> SELECT count(*)
+> WHERE Content LIKE '%Failed'
+> AND Content LIKE '%10.0.0.1%'
+> Log A Log C
+> The Setup (Input and Data)
+> ❌False Positives
+> ❌✅
+
+Figure 1: Motivating Example of NL Log Querying. 
+
+As illustrated in Figure 1, the raw log corpus contains not only simple noise (e.g., Log B, a successful login), but also “hard noise” such as Log C, where the target IP ( 10.0.0.1 ) appears in a struc-turally misleading position as a username. This example exposes a common failure mode across existing paradigms. As shown in Figure 1(a), Text-based Log QA methods may recover local entities from individual log lines, but they cannot faithfully execute corpus-level analytical operations such as COUNT . Figure 1(b) shows that 
+
+Text-to-SQL for Logs over monolithic raw-log storage can generate executable SQL, yet typically relies on coarse substring predicates LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+(e.g., LIKE ) that ignore parameter roles and therefore wrongly count Log C as a match. Figure 1(c) illustrates the opposite failure mode for Log-DSL Generation : because raw logs do not expose a stable relational schema, the model may hallucinate plausible but nonex-istent fields such as source_ip , causing failed or empty executions. Across all three cases, the underlying problem is the same: they attempt query resolution without first establishing an executable and semantically interpretable schema over logs. This example reveals not just what goes wrong, but why : all three paradigms attempt query resolution against a representation that lacks the necessary structure. The root cause is that raw logs are semi-structured streams with no stable, human-authored schema, yet precise parameter-level filtering and corpus-scale aggregation both depend on exactly such structure. This points to a clear design imperative. We need, first, structural induction : raw logs must be parsed into typed event templates and parameter columns, so that execution targets specific parameter roles rather than fragile sub-string patterns. We need, second, semantic grounding : the induced schema elements (positional columns such as p_1 and p_2 ) must be annotated with meaningful names and descriptions, so that an LLM can map user-facing concepts to the correct physical fields. Without the first, corpus-level aggregation collapses entirely. Without the second, the LLM cannot navigate the induced structure reliably. LogNLQ is built around this precise combination: induce a rela-tional schema from raw logs, ground it semantically, and generate constrained SQL over the grounded schema. 
+
+## 3 Methodology 3.1 Overview 
+
+In this section, we present the design of LogNLQ. Given a corpus of raw logs 𝐿 and a natural-language query 𝑄 , the goal is to generate an executable SQL query 𝑆 whose execution returns results consistent with the user’s intent. Unlike conventional Text-to-SQL settings, where a semantically meaningful database schema is assumed to exist a priori , LogNLQ must first induce such a schema from raw logs before query generation can proceed. LogNLQ therefore couples structural induction, semantic grounding, schema retrieval, and constrained SQL generation into a single querying workflow. As illustrated in Figure 2, LogNLQ comprises an offline prepa-ration phase and an online querying phase that together form a unified schema-synthesis workflow. In the offline phase, raw logs are processed by the schema induction layer into event templates and dynamic parameters, materialized into relational storage, se-mantically grounded, and indexed as schema documents. In the online phase, a user query retrieves the most relevant schema can-didates, an LLM generates SQL under the retrieved schema context, and the query is executed over the structured log store. The interface between the two phases is a set of schema docu-ments , which serve as the final induced schema abstraction exposed to retrieval and SQL generation. Each schema document encapsu-lates not only the parser-induced physical structure of one event template, but also the semantic information required to make that structure understandable to the LLM. We define this central data structure formally as follows. 
+
+Definition 1 (Schema Document). A schema document D𝑘 for template 𝑇 𝑘 is a tuple ⟨𝑒 𝑘 , 𝑇 𝑘 , 𝑠 𝑘 , {( 𝑐 𝑖 , 𝑛 𝑖 , 𝑑 𝑖 , 𝜎 𝑖 )} 𝑚 𝑖 =1⟩, where 𝑒 𝑘 is the event identifier, 𝑇 𝑘 is the template string, 𝑠 𝑘 is a natural-language summary of the event semantics, and each (𝑐 𝑖 , 𝑛 𝑖 , 𝑑 𝑖 , 𝜎 𝑖 ) describes one parameter column by its physical name 𝑐 𝑖 (e.g., p_1 ), canonical semantic name 𝑛 𝑖 (e.g., Source IP), natural-language description 𝑑 𝑖 ,and statistical profile 𝜎 𝑖 (comprising value cardinality, range, and top-𝐾 most frequent values). 
+
+Schema documents serve as both the retrieval units for online schema selection and the grounded context for SQL generation. Figure 3 traces a concrete example through the full pipeline, which we use as a running example throughout this section. 
+
+## 3.2 Execution-Oriented Schema Induction 
+
+Schema induction establishes the physical foundation of the LogNLQ pipeline by transforming raw logs into an executable relational rep-resentation. The key observation is that each log message can be decomposed into two parts: a recurring event template 𝑇 𝑘 (the static portion shared across similar messages) and an ordered sequence of dynamic parameters 𝑃 𝑖 = [𝑝 𝑖, 1, 𝑝 𝑖, 2, . . . , 𝑝 𝑖,𝑛 ] (the runtime-specific values). This decomposition maps naturally to a relational model in which each distinct template defines a logical table and each param-eter position defines a column within that table. LogNLQ exploits this correspondence by parsing each log line 𝑙 𝑖 into a tuple (𝑇 𝑘 , 𝑃 𝑖 )
+
+and materializing the results into a template-partitioned columnar store, producing the physical substrate over which downstream SQL generation and execution operate. 
+
+Streaming dispatch and schema management. Because logs arrive as a continuous stream rather than a static corpus, the schema inducer must discover and manage templates incrementally. Each incoming log line is routed through one of three paths. If the line matches an existing template 𝑇 𝑘 , its extracted parameters are batched and appended to the corresponding partition. If the schema inducer identifies a previously unseen message pattern, a new tem-plate is registered, a dedicated partition is created, and the semantic grounding pipeline (Section 3.3) is triggered asynchronously for the new template. If a newly stabilized template is found to carry additional parameter positions not present in earlier records, the partition schema is extended with the new columns, and previously stored records are retroactively subjected to positional parameter extraction under the updated schema, with the extracted values populated in the new columns. 
+
+Template-partitioned columnar storage. To enable column-level SQL operations over the induced structure, LogNLQ materi-alizes each template 𝑇 𝑘 as an independent partition in a column-oriented store, identified by its event identifier 𝑒 𝑘 . The partition schema contains metadata columns ( LineId , Timestamp ) together with positional parameter columns p_1 , p_2 , . . . corresponding to the extracted positions. Each original log line is fully recon-structable by substituting the stored parameter values back into the template string, so raw log content need not be stored separately. This template-partitioned layout has two practical advantages. First, schema evolution is partition-local: modifications triggered by tem-plate refinement affect only the relevant partition, leaving all others unchanged. Second, query execution can prune irrelevant partitions entirely and access only the columns required by the predicate, en-abling efficient analytical operations over large log corpora. More Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Juepeng Wang, Jinyang Liu, Zhuangbin Chen, and Zibin Zheng 1. Parser-Induced Relational Structuring (Of fl ine) 2. Dual-Granularity Semantic Grounding (Of fl ine)   
+
+> 3. Schema-Aware Query Generation & Execution (Online)
+> Static Template Grounding Pipeline Schema Documents Semantic Vector Index Natural Language Query Semantic Retriever Schema-aware SQL Agent
+> Top-k Schemas Executable SQL Execution Engine (OLAP) Resutl
+> Raw Logs Streaming Parser Static Template Dynamic Parameters Relational Columnar Storage
+
+Figure 2: Overview of the LogNLQ Pipeline. 
+
+importantly, this materialization step turns parser output from a de-scriptive artifact into an executable database substrate. The induced templates are no longer merely mined patterns; they become the actual relational units over which downstream querying operates. 
+
+Statistical profiling. While the induced schema provides the structural context that an LLM needs to identify correct tables and columns, generating precise filter predicates also requires knowl-edge of the actual values that appear in each column. For each parameter column 𝑐 𝑖 of template 𝑇 𝑘 , LogNLQ therefore derives a lightweight statistical profile 𝜎 𝑖 comprising cardinality (number of distinct values), value range, and the top-𝐾 most frequent values. Rather than being updated incrementally on every record write, a background process periodically recomputes profiles from each partition. Because parameter value distributions in structured logs stabilize quickly as partitions grow, profiles derived at query time reliably capture the operational data characteristics. They are sup-plied alongside the schema document during SQL generation to guide precise filter construction. 
+
+Figure 3: End-to-End Walkthrough of LogNLQ. 
+
+## 3.3 Dual-Granularity Semantic Grounding 
+
+The relational structure induced by parsing is executable, but it is not yet a usable schema for LLM-based query generation. Positional columns such as p_1 and p_2 expose structural boundaries without revealing semantic roles, making the induced database legible to the execution engine but largely opaque to the model. LogNLQ therefore performs semantic grounding as the logical induction layer 
+
+that complements parser-induced structure. The goal is not merely to enrich the schema with additional descriptions, but to complete the induced schema so that it becomes interpretable enough for the LLM to align user intent with physical fields. 
+
+Template-level grounding. Users express diagnostic intent in terms of event semantics (e.g., “failed login,” “disk error”) rather than raw template strings. To bridge this gap, LogNLQ generates a short natural-language summary 𝑠 𝑘 for each parsed template 𝑇 𝑘 ,capturing the operational meaning of the event. The input includes the template string together with representative log instances sam-pled from the materialized partition. The resulting summary en-ables schema retrieval to connect high-level user queries with the corresponding induced table. 
+
+Parameter-level grounding. Similarly, users refer to specific data fields by their semantic roles (e.g., “source IP,” “user name”) rather than by positional indices. To make individual columns inter-pretable, LogNLQ infers a canonical semantic name 𝑛 𝑖 and descrip-tion 𝑑 𝑖 for each parameter column 𝑐 𝑖 of template 𝑇 𝑘 by presenting an LLM with the template string and a sample of representative values. The LLM produces a space-separated canonical name fol-lowing a consistent capitalization convention (e.g., Source IP , User Name , Port Number ) together with a one-sentence description. A key challenge is ensuring cross-template consistency: semanti-cally equivalent parameters may appear under different positional indices across templates, with a source IP address appearing as p_1 
+
+in one template and p_2 in another. If these receive different labels, retrieval may miss relevant templates and cross-template SQL gener-ation (e.g., UNION operations) cannot reliably align columns across partitions. To address this, LogNLQ maintains a global parameter vocabulary G that accumulates canonical name-description pairs LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+across all processed templates. When grounding a new column, rather than injecting the full G into the prompt, LogNLQ retrieves the most semantically similar entries from G via lightweight vec-tor search and provides only this focused subset as context. The LLM is instructed to reuse an existing entry if one is semantically equivalent, or to introduce a new entry otherwise. This vocabulary-anchored grounding ensures that parameters sharing the same operational role receive consistent labels regardless of their posi-tional index, enabling retrieval and SQL generation to reason over semantic roles rather than positional proxies. 
+
+Schema document construction and indexing. Because user queries may target either event-type semantics (“failed SSH login”) or specific parameter roles (“source IP”), the retrieval index must capture both levels in a single searchable representation. For each template 𝑇 𝑘 , LogNLQ assembles the physical and semantic informa-tion into the schema document D𝑘 defined above. The template-level summary 𝑠 𝑘 and the parameter annotations {( 𝑐 𝑖 , 𝑛 𝑖 , 𝑑 𝑖 )} are concatenated into a single composite text and encoded into a dense vector. Schema documents are indexed with FAISS, forming the retrieval layer for the online phase. The statistical profiles 𝜎 𝑖 are not part of the indexed vector representation; they are computed on demand at query time and attached to the retrieved schema documents to enrich the SQL generation prompt. 
+
+## 3.4 Schema-Aware Query Generation and Execution 
+
+At query time, LogNLQ translates a natural-language request into an executable SQL query through a three-step online workflow: schema retrieval, constrained SQL generation, and execution. Be-cause the offline phase has already induced and grounded the schema, the online phase operates over a compact set of semanti-cally annotated schema candidates rather than over raw log text. 
+
+Semantic schema retrieval. The full set of induced templates may contain hundreds of event types, most of which are irrelevant to any given query. To focus the generation context on the most pertinent schemas, LogNLQ embeds the user query 𝑄 and performs nearest-neighbor search over the schema-document index, retriev-ing the Top-𝐾 candidates whose event semantics and parameter annotations are most relevant to 𝑄 . Unlike snippet retrieval over raw logs, this process retrieves candidate executable schemas that define the feasible space for downstream SQL generation. 
+
+Schema-constrained SQL generation. Unconstrained genera-tion over log data risks producing references to field names that do not exist in the induced schema. To prevent this, LogNLQ constructs a prompt containing all Top-𝐾 retrieved schema documents and explicitly constrains the LLM to reference only the columns enumer-ated in these documents. The prompt enumerates each candidate’s table name, template string, summary, available columns with their canonical names and descriptions, and representative statistics. In most cases the generated SQL targets a single template partition. When the query semantics require it, the LLM is explicitly prompted to generate SQL spanning multiple candidate partitions via UNION or JOIN operations. This is made tractable by the bounded candi-date set (Top-𝐾 schemas rather than an unbounded table catalog) and aided by the global parameter vocabulary, which aligns seman-tically equivalent fields across templates. Figure 3 illustrates how this grounded schema context guides the model to map user intent to exact physical columns during SQL generation. 
+
+Execution. The generated SQL is executed over the template-partitioned store. Because the storage layout is template-aware and column-oriented, the execution engine prunes irrelevant partitions and accesses only the columns required by the query. The final result is returned to the user. 
+
+## 4 Experimental Setup 
+
+We evaluate LogNLQ along three dimensions: end-to-end effective-ness, system overhead, and component contribution. This section introduces the benchmark, baselines, evaluation metrics, and im-plementation details. 
+
+## 4.1 Benchmark Construction 
+
+No existing benchmark directly targets natural language log query-ing with execution-verified analytical grounding, so we construct LogNLQ-Bench. The benchmark covers common operational query-ing needs while remaining independent of the LogNLQ pipeline. Following prior empirical taxonomies of industrial log analysis, we organize the benchmark along two levels of difficulty: 
+
+• Basic Queries: These queries cover common ad hoc requests such as straightforward filtering, counting, and simple aggre-gation. 
+
+• Scenario Queries: These queries model more involved diag-nostic workflows, including alert inspection, triage, mitigation, root cause analysis, auditing, and reporting. Many scenario queries inherently span multiple event types and thus require cross-template SQL generation. Across both difficulty levels, we consider two task categories that define the evaluation scope of LogNLQ-Bench: 
+
+• Log Retrieval: the system returns the set of log records satis-fying a natural language condition. 
+
+• Metric Aggregation: the system returns a derived analytical result, such as a count, grouped summary, or other aggregate statistic computed from the log corpus. LogNLQ-Bench is constructed through a scenario-driven, execution-verified pipeline. First, we sample raw-log windows from each dataset as the basis for question generation. Guided by the SRE operational workflows outlined in [ 1], the LLM proposes a plau-sible diagnostic question based on a sampled log window and a specific scenario type, while simultaneously synthesizing an exe-cutable analysis program to derive the ground-truth answer directly from the raw logs. We then retain only examples whose generated analysis programs execute successfully and yield valid non-empty outputs. Exact and near-duplicate questions are removed, and am-biguous phrasing is refined when necessary. Finally, we manually inspect a stratified sample of 200 benchmark instances (approx-imately 2% of the total) to assess linguistic naturalness, answer plausibility, and consistency with operational workflows. We apply this pipeline to four widely used datasets from LogHub-2.0 [ 16 ]: OpenSSH, HDFS, Spark, and BGL. They span different systems and log characteristics, enabling evaluation across diverse operational domains. The final benchmark contains 8,895 queries in total. Table 1 summarizes dataset scale and benchmark composition. Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Juepeng Wang, Jinyang Liu, Zhuangbin Chen, and Zibin Zheng 
+
+The 1,139 scenario queries are distributed nearly uniformly across the six types (Alert, Triage, Mitigation, RCA, Audit, and Report), with each type accounting for roughly one-sixth of the total. 
+
+## 4.2 Baseline Methods 
+
+We compare LogNLQ against several representative systems. Our goal is to evaluate end-to-end utility under the native storage and querying assumptions of these methods rather than retrofitting them with our parser-induced representations. 
+
+• LogQA : LogQA fine-tunes a BERT model with log question-answer pairs to locate specific answer spans within matching log entries. We reproduced this method using LogNLQ-Bench pairs for the Log Retrieval task exclusively, extracting results matching the ground-truth answer length from its ranked sim-ilarity list because it lacks analytical aggregation capabilities. 
+
+• LogSay : LogSay is a retriever-reader system that incorporates a numerical reasoner to handle logical operations over localized text snippets. We deployed it to process our benchmark queries to evaluate its capacity for extracting or computing answers without relational aggregation. 
+
+• Elasticsearch : Elasticsearch is a distributed search engine utilizing inverted indices for efficient keyword-based content retrieval. We constructed an LLM-based query generator to translate user intents into native Elasticsearch syntax and exe-cuted these queries over an inverted-indexed raw log layout. 
+
+• Loki : Grafana Loki is a log aggregation system that evalu-ates LogQL queries over label-indexed log streams rather than relying on full-text indexing. We prompted a large language model to synthesize LogQL queries from natural language and executed them against a Loki backend to assess performance without explicit parameter columns. 
+
+• LogQLLM : LogQLLM leverages large language models to trans-late natural language questions directly into executable LogQL statements. We evaluated its end-to-end translation efficacy on our datasets to test its reliance on content matching and weak field inference over semi-structured logs. 
+
+• DIN-SQL : DIN-SQL serves as a strong baseline for Text-to-SQL tasks by decomposing query generation into structured sub-tasks like schema linking and self-correction through in-context learning. We adapted this approach to operate over a monolithic text storage layout to determine if step-by-step generation can compensate for the absence of parser-induced structures. 
+
+## 4.3 Evaluation Metrics 
+
+We evaluate generated queries using task-specific metrics for re-trieval and aggregation. 
+
+• F1 Score: For retrieval queries, we compare the set of returned log identifiers ( LineId ) against the ground-truth set and report Precision, Recall, and F1-score: 
+
+𝐹 1 = 2 × 𝑃𝑟𝑒𝑐𝑖𝑠𝑖𝑜𝑛 × 𝑅𝑒𝑐𝑎𝑙𝑙 𝑃𝑟𝑒𝑐𝑖𝑠𝑖𝑜𝑛 + 𝑅𝑒𝑐𝑎𝑙𝑙 . (1) 
+
+• Result-Oriented Match: For aggregation queries, the out-put is a derived analytical result rather than a set of raw log instances, and multiple executable queries may legitimately satisfy the same intent. We therefore adopt a Result-Oriented Match metric (RO-Match), which evaluates the executed result rather than the surface form of the generated query. A generated result is counted as a match if it is either numerically or structurally identical to the ground-truth result after canonical-ization, or, for set-valued or grouped analytical outputs, a strict subset of the ground-truth result that contains no incorrect extra entries. Subset matching is never credited for scalar outputs such as 
+
+COUNT or AVG , for which exact value equality is required. Matching is determined by a rule-based comparator over structured execu-tion outputs, including exact value equality, canonicalized table comparison, and containment checks where applicable. 
+
+## 4.4 Implementation Details 
+
+The offline pipeline is implemented using a custom schema in-duction component whose streaming template extraction builds on the cache-tree dispatch mechanism of LILAC [ ? ], extended to support execution-oriented relational structuring. Dense vector representations for schema documents are generated using the 
+
+doubao-embedding model and indexed with FAISS (CPU version). Online query execution is performed by DuckDB over Snappy-compressed Parquet files. For a fair comparison, all generative base-lines and LogNLQ use the same foundation model ( doubao-seed-2.0-pro via API) with generation temperature set to 0.0. All exper-iments are conducted on a Linux server with an Intel Xeon CPU and 32GB of RAM. These components constitute a representative prototype imple-mentation rather than a prescribed deployment stack. The core de-sign of LogNLQ (parser-induced relational structuring and semantic grounding) is independent of any particular execution engine and can in principle be integrated with other local or distributed an-alytical backends. Unless otherwise noted, all main experiments use doubao-seed-2.0-pro as the shared backbone for all genera-tive methods to ensure fair, controlled comparison. The effect of alternative backbones on LogNLQ is studied separately in RQ3. 
+
+## 5 Evaluation Results 
+
+In this section, we present the results of our evaluation, which aim to answer the following three research questions: 
+
+• RQ1 (Effectiveness): How accurately does LogNLQ execute retrieval and aggregation queries compared with representative baselines? 
+
+• RQ2 (Efficiency): What overhead does LogNLQ introduce in storage, offline preprocessing, and online latency? 
+
+• RQ3 (Ablation and Sensitivity): How much do parser-induced structuring and semantic grounding each contribute, how sen-sitive is the system to the number of retrieved schema candi-dates, and how does the choice of LLM backbone affect SQL generation accuracy? 
+
+## 5.1 RQ1: Effectiveness 
+
+Table 2 reports end-to-end performance on Log Retrieval (F1) and Metric Aggregation (RO-Match). LogNLQ achieves the best perfor-mance in every setting, with especially wide margins on scenario queries and aggregation tasks. 
+
+Log Retrieval. LogNLQ leads all baselines by a wide margin in every setting: on basic queries, the best baseline reaches around LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+Table 1: Dataset Properties and LogNLQ-Bench Statistics                                      
+
+> Basic Queries Scenario Queries Dataset Raw Logs Retrieval Aggregation Retrieval Aggregation Total OpenSSH 638,947 116 158 133 141 548
+> HDFS 11,167,740 314 279 142 146 881
+> Spark 16,075,117 1,315 1,662 143 143 3,263
+> BGL 4,631,261 1,911 2,001 146 145 4,203
+> Total 32,513,065 3,656 4,100 564 575 8,895
+
+Table 2: Performance Comparison on Log Retrieval (F1) and Metric Aggregation (RO-Match)                                                                                                                                    
+
+> Method Metric OpenSSH HDFS Spark BGL Basic Scenario Basic Scenario Basic Scenario Basic Scenario
+> LogQA F1 0.092 0.161 0.154 0.132 0.081 0.045 0.076 0.051 RO --------LogSay F1 0.125 0.084 0.182 0.045 0.114 0.072 0.203 0.068 RO 0.031 0.006 0.018 0.004 0.025 0.008 0.041 0.009 LogQLLM F1 0.148 0.104 0.115 0.072 0.142 0.095 0.131 0.092 RO 0.128 0.085 0.112 0.062 0.118 0.078 0.105 0.075 Elasticsearch F1 0.162 0.151 0.158 0.232 0.124 0.108 0.135 0.161 RO 0.114 0.078 0.041 0.022 0.065 0.015 0.062 0.055 Loki F1 0.098 0.085 0.092 0.148 0.058 0.038 0.071 0.085 RO 0.108 0.088 0.058 0.042 0.092 0.038 0.078 0.068 DIN-SQL F1 0.131 0.089 0.169 0.106 0.035 0.060 0.060 0.083 RO 0.050 0.016 0.066 0.136 0.027 0.039 0.053 0.022
+> LogNLQ F1 0.892 0.690 0.948 0.935 0.887 0.547 0.910 0.771 RO 0.854 0.504 0.774 0.425 0.776 0.643 0.705 0.331
+
+0.20 while LogNLQ exceeds 0.89; on scenario queries, baselines cluster below 0.25 while LogNLQ remains above 0.54 on all datasets. Among baselines, Elasticsearch occasionally achieves the highest F1 through broad inverted-index recall, but high recall does not translate into precision; text-based QA methods (LogQA, LogSay) score lowest throughout. 
+
+Metric Aggregation. The RO rows of Table 2 report RO-Match for aggregation queries, which require jointly resolving event type, filter conditions, aggregation target, and grouping logic. The per-formance gap between LogNLQ and baselines is even wider than in retrieval. On scenario aggregation, most baselines drop to near zero. LogQLLM is the strongest baseline overall, yet it still falls far be-low LogNLQ on both basic and scenario queries across all datasets. The consistent advantage of LogNLQ on this more demanding task type confirms that it is capable of supporting complex grouped and multi-condition aggregations where all baselines effectively fail. 
+
+Error analysis. Manual inspection of failed predictions reveals four recurring failure patterns. (1) Over-broad content matching :raw-log Text-to-SQL and DIN-SQL predicates capture target key-words without preserving parameter roles, admitting structurally misleading matches (e.g., an IP appearing as a username satisfies a 
+
+LIKE predicate). (2) Field and label hallucination : Log-DSL Genera-tion methods produce plausible but nonexistent field names over schema-light backends, causing empty or failed executions and preventing distinction between semantically similar parameters in the same log line. (3) Incorrect aggregation resolution : without explicit parameter columns, methods cannot reliably identify group-ing keys or aggregation targets under scenario-level complexity. LogSay lacks structured output capacity entirely, while DIN-SQL’s schema-free generation fails to resolve the correct fields across varying template diversity. (4) LogNLQ retrieval misses : LogNLQ’s own failures concentrate in schema retrieval coverage, where the relevant template falls outside the top-𝐾 candidates, or residual semantic ambiguity, where a user expression underspecifies which of multiple candidate columns is intended. Patterns (1)–(3) explain the baseline failures; LogNLQ’s own errors (pattern 4) are qualitatively different, arising from retrieval coverage gaps rather than the absence of executable structure. 
+
+## 5.2 RQ2: Efficiency and Overhead 
+
+We next evaluate the overhead of LogNLQ in terms of storage footprint, offline build cost, and online latency. Our goal is not to compare against fully distributed production deployments, but to assess whether the LogNLQ design can be realized with practical overhead in a representative analytical implementation. 
+
+Storage footprint. Figure 4 compares the storage cost of LogNLQ with representative backend systems under two views: absolute Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Juepeng Wang, Jinyang Liu, Zhuangbin Chen, and Zibin Zheng 0 30 60 90 120 
+
+Storage Size (MB) 
+
+> OpenSSH
+> 9.6 MB
+> 70 MB
+> 85 MB
+> 44 MB
+
+0 0.5 1.0 1.5 2.0 
+
+Storage Size (GB)    
+
+> HDFS
+> Spark
+> BGL
+> 247 MB
+> 150 MB
+> 110 MB
+> LogNLQ Raw Logs Elasticsearch Loki
+
+Figure 4: Storage Overhead Comparison. 0 25 50 75 100               
+
+> 0%
+> 25%
+> 50%
+> 75%
+> 100%
+> Templates Found (%)
+> Converged
+> OpenSSH
+> 025 50 75 100
+> 0%
+> 25%
+> 50%
+> 75%
+> 100%
+> Converged
+> HDFS
+> 025 50 75 100
+> Build Progress (%)
+> 0%
+> 25%
+> 50%
+> 75%
+> 100%
+> Templates Found (%)
+> Converged
+> Spark
+> 025 50 75 100
+> Build Progress (%)
+> 0%
+> 25%
+> 50%
+> 75%
+> 100%
+> Converged
+> BGL
+> 0
+> 2
+> 4
+> 6
+> 8
+> Throughput (K logs/s)
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> Throughput (K logs/s)
+> Template Discovery (%) Throughput (K logs/s) All templates discovered
+
+Figure 5: Offline Build Throughput. 
+
+size (log scale) and size relative to raw logs. The key finding is that LogNLQ consistently compresses relative to raw logs, ranging from 33% to 62% of the original size, while Elasticsearch and Loki both 
+
+expand beyond the raw-log baseline (108%–133%). For example, on HDFS, LogNLQ requires 247 MB, compared with around 1.5 GB for Elasticsearch and 1.3 GB for Loki. This result shows that explicit re-lational structuring, when paired with columnar compression, does not trade storage efficiency for richer structure; it actually reduces footprint relative to both raw-log and index-based backends. 
+
+Offline build throughput. Figure 5 tracks per-interval through-put and cumulative template discovery across four datasets. Through-put starts near zero during the cold-start phase while new templates 0.0 2.5 5.0 7.5 10.0 12.5 15.0 
+
+Cumulative Log Volume (M logs)  
+
+> 0
+> 1000
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> Cumulative LLM API Calls
+> OpenSSH (34 tpl, ×7.1/tpl) HDFS (46 tpl, ×7.4/tpl)
+> Spark
+> (243 tpl, ×6.9/tpl)
+> BGL
+> (319 tpl, ×6.7/tpl)
+> OpenSSH
+> HDFS
+> Spark
+> BGL
+> O(logs) reference
+
+Figure 6: LLM API Call Scalability. 
+
+are registered, then rises sharply and stabilizes once the template vo-cabulary converges. The cold-start duration tracks template count: HDFS (46 templates) converges quickly while BGL (319 templates) takes longer. After convergence, the two largest datasets sustain throughputs of hundreds of thousands of lines per minute, com-pleting on a single machine in approximately 30 minutes (HDFS, 11.2 M lines) and 40 minutes (Spark, 16.1 M lines). Figure 6 shows that cumulative LLM API calls flatten well before the full corpus is ingested. The per-template call ratio is stable at approximately 7× across all four datasets, meaning API cost can be estimated from the template vocabulary size alone. Once the vocabulary stabilizes, additional log lines incur zero extra cost. 
+
+Online latency. Figure 7 breaks down end-to-end latency into three components for basic and scenario queries across all four datasets. Schema retrieval over FAISS takes 119–201 ms and SQL ex-ecution over Parquet takes 7–48 ms; both remain negligible regard-less of dataset or query type. SQL generation by the LLM accounts for 5,692–7,669 ms, or over 90% of the total. The overall latency range is narrow across four datasets spanning very different log formats and scales, showing that the system’s structural overhead is stable and not sensitive to log diversity. The sole bottleneck is LLM inference, which is external to our design and will improve as model serving advances. Taken together, these results show that LogNLQ can be real-ized with practical storage and latency overhead in a single-node analytical setting. 
+
+## 5.3 RQ3: Ablation and Sensitivity 
+
+Component analysis. We examine the contribution of LogNLQ’s main components by evaluating three ablation variants. Figure 8 reports the average Retrieval F1 and Aggregation RO-Match across all datasets on scenario queries at 𝐾 =5, with each variant’s bars annotated by the performance drop ( Δ) relative to the full system: 
+
+• w/o parameter grounding : During online query prompt as-sembly, parameter semantic annotations (canonical name 𝑛 𝑖 ,description 𝑑 𝑖 ) and statistical profiles 𝜎 𝑖 are removed; only physical column names ( p_1 , p_2 , . . . ) are retained. 
+
+• w/o semantic grounding : Templates are vectorized directly from their raw template strings 𝑇 𝑘 for retrieval, and the prompt provides only the bare physical structure: event identifier 𝑒 𝑘 ,LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 6000 
+
+> 6250
+> 6500
+> 6750
+> 7000
+> 7250
+> 7500
+> Latency (ms)
+
+OpenSSH  
+
+> Basic Scenario
+> 0
+> 100
+> 200
+> Latency (ms)
+> 6600
+> 6800
+> 7000
+> 7200
+> 7400
+> 7600
+> 7800
+> 8000
+
+HDFS  
+
+> Basic Scenario
+> 0
+> 100
+> 200
+> 5500
+> 5750
+> 6000
+> 6250
+> 6500
+> 6750
+> 7000
+> 7250
+
+Spark  
+
+> Basic Scenario
+> 0
+> 100
+> 200
+> 6400
+> 6600
+> 6800
+> 7000
+> 7200
+> 7400
+> 7600
+
+BGL    
+
+> Basic Scenario
+> 0
+> 100
+> 200
+> Schema Retrieval SQL Generation SQL Execution
+
+Figure 7: End-to-End Query Latency. 
+
+the symbolic template string 𝑇 𝑘 , and original column names, with no semantic information of any kind. 
+
+• w/o parsing-based structuring : We equate this variant with the DIN-SQL baseline already reported in RQ1, which oper-ates over a monolithic Content storage layout without any parser-induced structure or semantic index, and represents the strongest schema-free approach in our comparison. 0.0 0.2 0.4 0.6 0.8 1.0 
+
+> Score
+> w/o parsing-based
+> structuring
+> w/o semantic
+> grounding
+> w/o parameter
+> grounding
+> Full LogNLQ
+> 0.092
+> 0.451
+> 0.658
+> 0.763
+> 0.051
+> 0.298
+> 0.487
+> 0.541
+> F1 -0.671
+> RO -0.490
+> F1 -0.312
+> RO -0.243
+> F1 -0.105
+> RO -0.054
+> Retrieval F1
+> Aggregation RO-Match
+
+Figure 8: Component Analysis on Scenario Queries. 
+
+The results reveal a clear hierarchical dependency among LogNLQ’s three components. The full system achieves a Retrieval F1 of 0.763 and an Aggregation RO-Match of 0.621. The most striking finding is the near-complete collapse of aggregation when parsing-based structuring is removed. Aggregation RO-Match drops to 0.032 while Retrieval F1 falls to 0.092. This confirms that parser-induced rela-tional structure is not merely a performance booster but an absolute prerequisite. Without explicit template partitions and parameter columns, the system cannot perform corpus-level analytical com-putation at all. Removing all semantic grounding (while retaining the parser-induced structure) causes the next-largest drop, with F1 falling by 0.312 and RO-Match by 0.243. This shows that executable structure alone is insufficient when the induced schema remains opaque. Positional columns such as p_1 and p_2 provide correct 1 3 5 10       
+
+> Top-K
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> 0.80
+> 0.85
+> 0.90
+> Score
+> (a) Retrieval F1
+> Default
+> (K=5)
+> 13510
+> Top-K
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> Score
+> (b) Aggregation RO-Match
+> OpenSSH HDFS Spark BGL
+
+Figure 9: Top-𝐾 Sensitivity. 0.7 0.8 0.9   
+
+> OpenSSH
+> HDFS
+> BGL
+> Spark
+> (a) Basic Queries
+> 0.4 0.6 0.8
+> OpenSSH
+> HDFS
+> BGL
+> Spark
+> (b) Scenario Queries
+> doubao-seed-2.0-pro (Main)
+> deepseek-v3.2
+> GLM-4.7
+> doubao-seed-1.6
+> F1 Score Track
+> RO-Match Track
+
+Figure 10: LLM Backbone Sensitivity. 
+
+execution boundaries but cannot be reliably aligned to user intent without interpretable semantic annotations. Finally, removing only parameter-level grounding causes a more targeted degradation (F1 
+
+−0.105, RO-Match −0.054), with a proportionally larger impact on aggregation, consistent with the intuition that aggregation tasks require precise column-level alignment for correct grouping keys and filter targets. 
+
+Top-𝐾 sensitivity. We evaluate sensitivity to the number of retrieved schema candidates across all four datasets. This parame-ter controls a trade-off in online schema selection: using too few candidates may omit the relevant induced template, while using too many may introduce distracting schema context into the generation prompt. As shown in Figure 9, performance is best at moderate Top-𝐾 values across all datasets, while both overly small and overly large settings lead to some degradation. Adding more candidates ini-tially improves coverage but eventually dilutes the LLM’s attention. At 𝐾 =5, both Retrieval F1 and Aggregation RO-Match consistently peak across all four datasets, outperforming both 𝐾 =3 and 𝐾 =10 .
+
+Sensitivity to LLM Backbone. Because LogNLQ relies on an LLM for schema-aware SQL generation, we also evaluate its sensitivity to the choice of foundation model. To ensure a fair and controlled comparison, all generative baselines in our main experiments share the doubao-seed-2.0-pro backbone. Here, we further examine how the choice of backbone affects performance Conference acronym ’XX, June 03–05, 2018, Woodstock, NY Juepeng Wang, Jinyang Liu, Zhuangbin Chen, and Zibin Zheng 
+
+by additionally instantiating LogNLQ with three alternative models: 
+
+deepseek-v3.2 , GLM4.7 , and doubao-seed-1.6 .Figure 10 illustrates the averaged performance of these models. 
+
+doubao-seed-2.0-pro achieves the strongest results overall, with the most pronounced advantage on scenario queries and aggrega-tion tasks that demand rigorous multi-step reasoning. For instance, replacing it with doubao-seed-1.6 reduces the average Scenario F1 from 0.736 to 0.643 and Basic RO-Match from 0.777 to 0.694. As the dumbbell plots visually confirm, the performance gap between the reference model and alternative models is relatively narrow on basic queries, but widens substantially on complex diagnostic sce-narios. Crucially, all tested backbones consistently and substantially outperform the baselines reported in RQ1, confirming that parser-induced structuring and semantic grounding remain the dominant enablers of executable log analytics, and that LogNLQ provides a robust, model-agnostic execution substrate whose accuracy scales natively alongside advances in foundational LLMs. 
+
+## 5.4 Threats to Validity 
+
+The primary threat to internal validity lies in the implementation of our proposed approach and the baselines. To mitigate this, we utilize author-provided implementations for the baselines and perform meticulous code reviews and testing of our own approach and experimental scripts. Threats to external validity concern generalizability. We mitigate this by evaluating on four real-world log datasets from LogHub-2.0 (OpenSSH, HDFS, Spark, and BGL) that span varying system types and scales, and by covering both Basic and Scenario query work-loads against baselines from three distinct paradigms: Text-based Log QA, Log-DSL Generation, and Text-to-SQL. Our evaluation also includes storage footprint, build throughput, and online la-tency metrics. Finally, while LogNLQ supports cross-template SQL generation, the quality of such queries depends on the LLM’s multi-table reasoning capability and may degrade for highly complex join conditions; a systematic characterization is left for future work. Threats to construct validity are mainly related to whether our evaluation metrics accurately reflect the effectiveness of the ap-proach. To alleviate it, we adopt execution-verified metrics—F1 score for log retrieval and Result-Oriented Match (RO-Match) for metric aggregation—that evaluate the actual executed outputs rather than just the surface form of the generated queries. Furthermore, we conduct a manual error analysis to provide fine-grained insight into failure patterns across all methods. 
+
+## 6 Related Work 6.1 Automated Log Parsing and Schema Induction 
+
+Automated log parsing [ 12 ] is the foundational step for transform-ing semi-structured raw logs into structured data. Classical ap-proaches, such as Drain [ 8 ], rely on syntax-based heuristics to sepa-rate static templates from dynamic variables. Recently, the field has experienced a paradigm shift towards semantic and LLM-assisted parsing. For instance, DivLog [ 33 ] and LibreLog [ 19 ] leverage in-context learning to extract log templates without extensive rule engineering. To mitigate the latency bottlenecks of LLMs in produc-tion environments, frameworks like InferLog [ 29 ] and LILAC [ 15 ]introduce adaptive caching mechanisms. Furthermore, recent large-scale evaluations [ 16 , 37 ] emphasize that semantic understanding is becoming the new standard for log parsing. While most of these recent advancements optimize parsing as a strict preprocessing step for downstream tasks—such as auto-mated anomaly detection [ 31 , 32 ] or multi-modal root cause anal-ysis [ 25 , 30 ]— LogNLQ takes a divergent approach. Rather than merely cleaning data for classifiers, our framework uniquely re-purposes log parsing as an execution-oriented schema induction 
+
+mechanism, dynamically constructing relational tables to support analytical querying. 
+
+## 6.2 Natural Language Interfaces for Log Analysis 
+
+As modern systems generate logs at an unprecedented scale, re-searchers have explored various techniques to facilitate log manage-ment, ranging from advanced log compression [ 26 , 34 ] to intelligent querying interfaces. Natural language querying (NLQ) over logs has gained traction to lower the barrier for developers and SREs. Existing approaches generally fall into two categories. The first is Text-based Log QA , such as LogQA [ 13 ] and LogSay [ 23 ]. More recent explorations in this vein, including LogPrompt [ 18 ] and Lo-gExpert [ 28 ], investigate prompt engineering to enable zero-shot log analysis directly from text. While effective for localized trou-bleshooting, direct LLM-based QA often struggles with complex mathematical aggregations across millions of log lines and is suscep-tible to hallucination. The second category is Log-DSL Generation ,exemplified by LogQLLM [ 24 ], which translates user intents into domain-specific query languages. However, relying on custom DSLs often tightly couples the interface to specific backend architectures. 
+
+LogNLQ bridges the gap between these paradigms. By treat-ing the parsed logs as a dynamic schema and employing dual-granularity semantic grounding, LogNLQ empowers the LLM to act as a constrained SQL generator. This ensures that the analytical reasoning is offloaded to a deterministic, verifiable SQL execution engine, offering both the flexibility of natural language and the rigorous accuracy required for operational data analysis. 
+
+## 7 Conclusion 
+
+In this paper, we present LogNLQ , a framework for natural-language log querying over parser-induced and semantically grounded schemas. By treating log parsing as an execution-oriented schema induction mechanism and complementing it with dual-granularity semantic grounding, LogNLQ enables an LLM to act as a constrained SQL generator over induced relational structures rather than reasoning directly over raw log text. For rigorous evaluation, we also intro-duce LogNLQ-Bench, an execution-verified benchmark of 8,895 queries over four real-world datasets. Experiments validate the ef-fectiveness of LogNLQ . It consistently outperforms representative baselines across all datasets and query types, with especially clear gains on scenario-driven and analytically complex queries. In the fu-ture, we intend to extend this paradigm toward richer cross-system and multi-modal observability analysis involving logs, traces, and metrics, as well as more complex multi-hop diagnostic scenarios that require reasoning across heterogeneous event sources. LogNLQ: Natural-Language Log Querying with Parser-Induced and Semantically Grounded Schemas Conference acronym ’XX, June 03–05, 2018, Woodstock, NY 
+
+## Data Availability 
+
+The implementation of LogNLQ and LogNLQ-Bench are available on https://doi.org/10.5281/zenodo.19251973. 
+
+## References 
+
+[1] Betsy Beyer, Chris Jones, Jennifer Petoff, and Niall Richard Murphy. 2016. Site Reliability Engineering: How Google Runs Production Systems (1st ed.). O’Reilly Media, Inc. Available at https://sre.google/sre-book/. [2] Zhuangbin Chen, Jinyang Liu, Wenwei Gu, Yuxin Su, and Michael R Lyu. 2021. Ex-perience report: Deep learning-based system log analysis for anomaly detection. 
+
+arXiv preprint arXiv:2107.05908 (2021). [3] Min Du, Feifei Li, Guineng Zheng, and Vivek Srikumar. 2017. Deeplog: Anomaly detection and diagnosis from system logs through deep learning. In Proceedings of the 2017 ACM SIGSAC conference on computer and communications security .1285–1298. [4] Elastic. 2026. Elasticsearch: The Heart of the Free and Open Elastic Stack. https: //www.elastic.co/elasticsearch/. Accessed: 2026-03-27. [5] Grafana Labs. 2023. LogQL: Log Query Language . https://grafana.com/docs/loki/ latest/logql/ Accessed: 2026-03-20. [6] Grafana Labs. 2026. Loki: Like Prometheus, but for logs. https://grafana.com/ oss/loki/. Accessed: 2026-03-27. [7] Pinjia He, Zhuangbin Chen, Shilin He, and Michael R. Lyu. 2018. Characterizing the natural language descriptions in software logging statements. In Proceedings of the 33rd ACM/IEEE International Conference on Automated Software Engineering, ASE 2018, Montpellier, France, September 3-7, 2018 , Marianne Huchard, Christian Kästner, and Gordon Fraser (Eds.). ACM, 178–189. doi:10.1145/3238147.3238193 [8] Pinjia He, Jieming Zhu, Zibin Zheng, and Michael R Lyu. 2017. Drain: An online log parsing approach with fixed depth tree. In 2017 IEEE international conference on web services (ICWS) . IEEE, 33–40. [9] Shilin He, Pinjia He, Zhuangbin Chen, Tianyi Yang, Yuxin Su, and Michael R. Lyu. 2022. A Survey on Automated Log Analysis for Reliability Engineering. 
+
+ACM Comput. Surv. 54, 6 (2022), 130:1–130:37. doi:10.1145/3460345 [10] Shilin He, Xu Zhang, Pinjia He, Yong Xu, Liqun Li, Yu Kang, Minghua Ma, Yining Wei, Yingnong Dang, Saravanakumar Rajmohan, et al . 2022. An empirical study of log analysis at Microsoft. In Proceedings of the 30th ACM Joint European Software Engineering Conference and Symposium on the Foundations of Software Engineering . 1465–1476. [11] Shilin He, Jieming Zhu, Pinjia He, and Michael R Lyu. 2016. Experience re-port: System log analysis for anomaly detection. In 2016 IEEE 27th international symposium on software reliability engineering (ISSRE) . IEEE, 207–218. [12] Junjie Huang, Zhihan Jiang, Zhuangbin Chen, and Michael R. Lyu. 2025. No More Labelled Examples? An Unsupervised Log Parser with LLMs. Proc. ACM Softw. Eng. 2, FSE (2025), 2406–2429. doi:10.1145/3729377 [13] Shaohan Huang, Yi Liu, Carol Fung, Jiaxing Qi, Hailong Yang, and Zhongzhi Luan. 2023. Logqa: Question answering in unstructured logs. arXiv preprint arXiv:2303.11715 (2023). [14] Ziwei Ji, Nayeon Lee, Rita Frieske, Tiezheng Yu, Dan Su, Yan Xu, Etsuko Ishii, Yejin Bang, Andrea Madotto, and Pascale Fung. 2023. Survey of Hallucination in Natural Language Generation. ACM Comput. Surv. 55, 12 (2023), 248:1–248:38. doi:10.1145/3571730 [15] Zhihan Jiang, Jinyang Liu, Zhuangbin Chen, Yichen Li, Junjie Huang, Yintong Huo, Pinjia He, Jiazhen Gu, and Michael R Lyu. 2024. Lilac: Log parsing using llms with adaptive parsing cache. Proceedings of the ACM on Software Engineering 
+
+1, FSE (2024), 137–160. [16] Zhihan Jiang, Jinyang Liu, Junjie Huang, Yichen Li, Yintong Huo, Jiazhen Gu, Zhuangbin Chen, Jieming Zhu, and Michael R Lyu. 2024. A large-scale evaluation for log parsing techniques: How far are we?. In Proceedings of the 33rd ACM SIGSOFT International Symposium on Software Testing and Analysis . 223–234. [17] Yichen Li, Jinyang Liu, Junsong Pu, Zhihan Jiang, Zhuangbin Chen, Xiao He, Tieying Zhang, Jianjun Chen, Yi Li, Rui Shi, and Michael R. Lyu. 2025. Automated Proactive Logging Quality Improvement for Large-Scale Codebases. In 40th IEEE/ACM International Conference on Automated Software Engineering, ASE 2025, Seoul, Korea, Republic of, November 16-20, 2025 . IEEE, 3426–3437. doi:10.1109/ ASE63991.2025.00283 [18] Yilun Liu, Shimin Tao, Weibin Meng, Feiyu Yao, Xiaofeng Zhao, and Hao Yang. 2024. LogPrompt: Prompt Engineering Towards Zero-Shot and Interpretable Log Analysis. In Proceedings of the 2024 IEEE/ACM 46th International Conference on Software Engineering: Companion Proceedings, ICSE Companion 2024, Lisbon, Portugal, April 14-20, 2024 . ACM, 364–365. doi:10.1145/3639478.3643108 [19] Zeyang Ma, Dong Jae Kim, and Tse-Hsun Peter Chen. 2025. LibreLog: Accurate and Efficient Unsupervised Log Parsing Using Open-Source Large Language Models. In 47th IEEE/ACM International Conference on Software Engineering, ICSE 2025, Ottawa, ON, Canada, April 26 - May 6, 2025 . IEEE, 924–936. doi:10.1109/ ICSE55347.2025.00103 [20] Microsoft. 2023. Kusto Query Language (KQL) Overview. https://learn.microsoft. com/en-us/azure/data-explorer/kusto/query/. Accessed: 2026-03-20. [21] Adam J. Oliner, Archana Ganapathi, and Wei Xu. 2012. Advances and challenges in log analysis. Commun. ACM 55, 2 (2012), 55–61. doi:10.1145/2076450.2076466 [22] Mohammadreza Pourreza and Davood Rafiei. 2023. Din-sql: Decomposed in-context learning of text-to-sql with self-correction. Advances in neural information processing systems 36 (2023), 36339–36348. [23] Jiaxing Qi, Zhongzhi Luan, Shaohan Huang, Carol Fung, and Hailong Yang. 2024. LogSay: An Efficient Comprehension System for Log Numerical Reasoning. IEEE Trans. Comput. 73, 7 (2024), 1809–1821. [24] Vishwanath Seshagiri, Siddharth Balyan, Vaastav Anand, Kaustubh Dhole, Ishan Sharma, Avani Wildani, José Cambronero, and Andreas Züfle. 2024. Chatting with logs: An exploratory study on finetuning llms for logql. arXiv preprint arXiv:2412.03612 (2024). [25] Shiwen Shan, Yintong Huo, Yuxin Su, Yichen Li, Dan Li, and Zibin Zheng. 2024. Face It Yourselves: An LLM-Based Two-Stage Strategy to Localize Configuration Errors via Logs. In Proceedings of the 33rd ACM SIGSOFT International Symposium on Software Testing and Analysis, ISSTA 2024, Vienna, Austria, September 16-20, 2024 , Maria Christakis and Michael Pradel (Eds.). ACM, 13–25. doi:10.1145/ 3650212.3652106 [26] Shiwen Shan, Yintong Huo, Hongzhan Zhong, Zhining Wang, Yuxin Su, and Zibin Zheng. 2026. LogFold: Compressing Logs with Structured Tokens and Hybrid Encoding. arXiv preprint arXiv:2603.20618 (2026). [27] Xinye Tang, Amir H Abdi, Jeremias Eichelbaum, Mahan Das, Alex Klein, Ni-hal Irmak Pakis, William Blum, Daniel L Mace, Tanvi Raja, Namrata Padmanab-han, et al . 2024. Nl2kql: From natural language to kusto query. arXiv preprint arXiv:2404.02933 (2024). [28] Jiabo Wang, Guojun Chu, Jingyu Wang, Haifeng Sun, Qi Qi, Yuanyi Wang, Ji Qi, and Jianxin Liao. 2024. LogExpert: Log-based Recommended Resolutions Generation using Large Language Model. In Proceedings of the 2024 ACM/IEEE 44th International Conference on Software Engineering: New Ideas and Emerging Results, NIER@ICSE 2024, Lisbon, Portugal, April 14-20, 2024 . ACM, 42–46. doi:10. 1145/3639476.3639773 [29] Yilun Wang, Pengfei Chen, Haiyu Huang, Zilong He, Gou Tan, Chuanfu Zhang, Jingkai He, and Zibin Zheng. 2025. InferLog: Accelerating LLM Inference for Online Log Parsing via ICL-oriented Prefix Caching. CoRR abs/2507.08523 (2025). arXiv:2507.08523 doi:10.48550/ARXIV.2507.08523 [30] Yidan Wang, Zhouruixing Zhu, Qiuai Fu, Yuchi Ma, and Pinjia He. 2024. MRCA: Metric-level Root Cause Analysis for Microservices via Multi-Modal Data. In 
+
+Proceedings of the 39th IEEE/ACM International Conference on Automated Software Engineering, ASE 2024, Sacramento, CA, USA, October 27 - November 1, 2024 ,Vladimir Filkov, Baishakhi Ray, and Minghui Zhou (Eds.). ACM, 1057–1068. doi:10.1145/3691620.3695485 [31] Pei Xiao, Chiming Duan, Minghua He, Tong Jia, Yifan Wu, Jing Xu, Gege Gao, Lingzhe Zhang, Weijie Hong, Ying Li, and Gang Huang. 2025. CoorLog: Efficient-Generalizable Log Anomaly Detection via Adaptive Coordinator in Software Evolution. In 40th IEEE/ACM International Conference on Automated Software Engineering, ASE 2025, Seoul, Korea, Republic of, November 16-20, 2025 . IEEE, 1119–1131. doi:10.1109/ASE63991.2025.00097 [32] Yongzheng Xie, Hongyu Zhang, and Muhammad Ali Babar. 2024. LogSD: De-tecting Anomalies from System Logs through Self-Supervised Learning and Frequency-Based Masking. Proc. ACM Softw. Eng. 1, FSE (2024), 2098–2120. doi:10.1145/3660800 [33] Junjielong Xu, Ruichun Yang, Yintong Huo, Chengyu Zhang, and Pinjia He. 2024. DivLog: Log Parsing with Prompt Enhanced In-Context Learning. In Proceedings of the 46th IEEE/ACM International Conference on Software Engineering, ICSE 2024, Lisbon, Portugal, April 14-20, 2024 . ACM, 199:1–199:12. doi:10.1145/3597503. 3639155 [34] Siyu Yu, Yifan Wu, Ying Li, and Pinjia He. 2024. Unlocking the Power of Num-bers: Log Compression via Numeric Token Parsing. In Proceedings of the 39th IEEE/ACM International Conference on Automated Software Engineering, ASE 2024, Sacramento, CA, USA, October 27 - November 1, 2024 , Vladimir Filkov, Baishakhi Ray, and Minghui Zhou (Eds.). ACM, 919–930. doi:10.1145/3691620.3695474 [35] Tao Yu, Rui Zhang, Kai Yang, Michihiro Yasunaga, Dongxu Wang, Zifan Li, James Ma, Irene Li, Qingning Yao, Shanelle Roman, et al . 2018. Spider: A large-scale human-labeled dataset for complex and cross-domain semantic parsing and text-to-sql task. In Proceedings of the 2018 conference on empirical methods in natural language processing . 3911–3921. [36] Ding Yuan, Soyeon Park, and Yuanyuan Zhou. 2012. Characterizing logging practices in open-source software. In 34th International Conference on Software Engineering, ICSE 2012, June 2-9, 2012, Zurich, Switzerland , Martin Glinz, Gail C. Murphy, and Mauro Pezzè (Eds.). IEEE Computer Society, 102–112. doi:10.1109/ ICSE.2012.6227202 [37] Chenbo Zhang, Wenying Xu, Jinbu Liu, Lu Zhang, Guiyang Liu, Jihong Guan, Qi Zhou, and Shuigeng Zhou. 2025. LogBase: A Large-Scale Benchmark for Semantic Log Parsing. Proc. ACM Softw. Eng. 2, ISSTA (2025), 2091–2112. doi:10. 1145/3728969
