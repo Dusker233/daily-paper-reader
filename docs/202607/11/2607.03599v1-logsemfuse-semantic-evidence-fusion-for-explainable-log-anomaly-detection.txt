@@ -1,0 +1,410 @@
+Title: LogSemFuse: Semantic Evidence Fusion for Explainable Log Anomaly Detection
+
+URL Source: https://arxiv.org/pdf/2607.03599v1
+
+Published Time: Tue, 07 Jul 2026 01:18:53 GMT
+
+Number of Pages: 12
+
+Markdown Content:
+# LogSemFuse: Semantic Evidence Fusion for Explainable Log Anomaly Detection 
+
+Hassan Jabri †, Zeyang Ma †* , Zhijie Wang §, Tse-Hsun (Peter) Chen †
+
+> †
+
+Software PErformance, Analysis and Reliability (SPEAR) Lab, Concordia University, Montreal, Quebec, Canada 
+
+> §
+
+Concordia University, Montreal, Quebec, Canada hajabri95@gmail.com m zeyang@encs.concordia.ca zhijie.wang@concordia.ca peterc@encs.concordia.ca 
+
+Abstract —Log anomaly detection is critical for reliability monitoring and failure diagnosis in modern software systems. Existing model-based detectors provide useful anomaly signals, but they can still miss anomalous sessions and typically expose only scores or labels rather than the operational semantics behind a decision. This lack of semantic evidence limits their ability to explain why a session is anomalous, even when the final anomaly label is correct. The gap matters in practice because operators need to distinguish urgent failures from benign deviations and trace suspicious sessions back to concrete operational behavior. LLMs can recover richer log semantics, but using them as stan-dalone detectors or repeatedly generating free-form explanations can be costly and difficult to reuse. We present LogSemFuse, an evidence-guided plug-in framework that enhances existing backbone detectors without replacing their original pipelines. LogSemFuse combines backbone predictions with reusable se-mantic evidence from local event patterns, LLM-based semantic reasoning, and cluster-derived executable rules to produce both anomaly decisions and evidence-based explanations. The resulting output reports the final label together with the semantic evidence that supports it, such as fired local patterns, triggered rules, and LLM rationale. We evaluate LogSemFuse on HDFS, BGL, and Liberty using DeepLog, LogAnomaly, LogBERT, and NeuralLog as backbones. LogSemFuse improves every non-perfect baseline, preserves the already perfect case, recovers 98.8% of backbone false negatives, and produces explanations preferred over direct LLM explanations in a human study. These gains require only modest and stable inference-time overhead, showing that semantic augmentation can improve detection effectiveness and interpretability without imposing large runtime costs. 
+
+Index Terms —Log Analysis, Log Anomaly Detection, Large Language Models, Semantic Reasoning, Knowledge Reuse 
+
+I. I NTRODUCTION 
+
+Modern software systems generate large volumes of logs that record execution states, component interactions, warnings, and failures. These logs are widely used for system monitor-ing, failure diagnosis, and reliability engineering, making log anomaly detection a critical software engineering task [1]– [3]. However, logs are often lengthy, repetitive, and difficult to interpret manually. To automate log analysis, log anomaly detection techniques commonly parse raw messages into tem-plates, map templates to EventIds, group events into sessions, and classify each session as normal or anomalous [2], [4]–[6]. Existing model-based detectors learn statistical, sequential, contextual, or semantic patterns from these logs and achieve 
+
+> *Zeyang Ma is the corresponding author.
+
+strong anomaly detection performance [7]–[12]. These detec-tors typically output only an anomaly score or label, without explaining which log evidence supports the decision or what abnormal operational behavior it represents. Operators must therefore inspect the logs themselves to understand why a session was flagged, limiting the usefulness of detection results for diagnosis and incident response [13]–[15]. General-purpose XAI methods, such as LIME [16] and SHAP [17], mainly provide feature-level attributions and do not directly explain log-specific operational behavior. Gen-erating such explanations requires connecting low-level log evidence, including raw messages, templates, and EventId sequences, to the higher-level operational behavior represented by the session. Large language models (LLMs) provide a promising way to interpret such semi-structured evidence, and recent work has explored their use for log anomaly detection and log interpretation [18]–[21]. However, directly prompting an LLM does not ensure that its explanation is grounded in the evidence underlying the anomaly decision [22]. At the same time, applying an LLM directly to every log session can be costly and may not be practical for large-scale deployment [23]. Meanwhile, existing model-based log anomaly detectors already achieve strong detection perfor-mance on many benchmarks. This motivates a different design: rather than replacing existing detectors, can LLMs be used se-lectively to provide complementary reasoning and explanatory capabilities while keeping inference costs low? In this paper, we propose LogSemFuse. LogSemFuse is a plug-in framework: it does not replace the backbone detector or change its training objective, but augments the backbone decision with structured semantic evidence derived from log events, templates, LLM reasoning, and anomaly clusters iden-tified during training. Specifically, LogSemFuse uses three semantic evidence modules: (1) a local event-pattern matcher that mines discriminative unigrams, bigrams, and trigrams from labeled training sessions; (2) an LLM-based semantic reasoning module that produces a high-risk prediction, confi-dence score, and expected-versus-observed rationale for each session; and (3) a cluster-derived rule construction module that converts LLM analyses of anomalous training-session clusters into rules. The event patterns and cluster-derived rules learned during training are stored in an event-pattern bank and a rule bank, respectively, to support their efficient retrieval and reuse across 
+
+> arXiv:2607.03599v1 [cs.SE] 3 Jul 2026
+
+sessions. Both knowledge banks remain fixed at inference time, while session-level LLM reasoning results are cached by session identifier to avoid redundant inference. For each incoming session, LogSemFuse combines four binary signals from the backbone, local event-pattern matcher, cluster-derived rule bank matcher, and LLM-based semantic reasoning module using a fusion operator selected on the validation set. It then reports the matched patterns, triggered rules, and LLM rationale as evidence supporting the final decision. We evaluate LogSemFuse on HDFS, BGL, and Liberty using DeepLog, LogAnomaly, LogBERT, and NeuralLog as backbone detectors [7]–[9], [12]. LogSemFuse improves every non-perfect baseline while preserving the already perfect case, and recovers 98.8% of backbones’ false negatives across test sets. Furthermore, a within-subject user study ( N = 14 )shows that LogSemFuse can generate high-quality explana-tions compared to a baseline approach. Participants rated the explanations from LogSemFuse higher than the baseline LLM in overall quality, with mean scores of 4.13 versus 3.06 on a five-point Likert scale. With modest and stable inference-time overhead, LogSemFuse improves detection effectiveness, provides evidence-based explanations, and amortizes LLM usage through reusable knowledge-bank artifacts, making it a practical framework for semantic augmentation. The paper makes the following contributions:  
+
+> •
+
+We propose LogSemFuse, a plug-in semantic augmen-tation framework that enhances existing backbone log detectors with executable semantic evidence while pre-serving their original training and inference pipelines.  
+
+> •
+
+We design a knowledge bank that stores reusable local event patterns and cluster-derived rules, while caching session-level LLM-based semantic reasoning results to enable efficient and low-cost reuse.  
+
+> •
+
+We design an evidence-based explanation approach for log anomaly detection that explains each anomaly de-cision using fired local event patterns, triggered cluster-derived rules, and LLM-based semantic reasoning results.  
+
+> •
+
+We evaluate LogSemFuse across three log anomaly detection datasets and four backbone detectors, showing that it improves or preserves detection performance with modest and stable runtime overhead and LLM cost, while providing high quality explanations for human developers. 
+
+Paper Organization. Section II formulates the task and reviews related work. Section III presents the LogSemFuse framework. Section IV describes the experimental setup, and Section V reports the evaluation results. Section VI discusses threats to validity. Section VII concludes the paper. II. B ACKGROUND AND RELATED WORK 
+
+This section formulates the log anomaly detection problem and positions LogSemFuse against related work. 
+
+A. Background 
+
+Log-based Anomaly Detection. System logs record execution states, resource events, warnings, errors, and component inter-actions, making them a common data source for reliability monitoring and failure diagnosis. Because raw logs contain variable fields such as identifiers, paths, timestamps, and sizes, log anomaly detection pipelines usually first parse messages into templates and assign each template an EventId [1], [2], [6]. The parsed events are first ordered chronologically and grouped into sessions according to the dataset semantics. Events sharing an execution identifier, such as a block, request, or trace ID, are grouped into one session. For example, [E3, E 7, E 7, E 12 , E 5] may form a session because the events have the same block ID. When no such identifier is available, sessions are constructed using rules such as fixed-length windows. Most log anomaly detection models operate on the parsed EventId or template sequence associated with each session [7]–[9], [12]. From the training logs, they learn recurring sequential, co-occurrence, or contextual pat-terns. At inference time, they identify sessions whose event patterns deviate from those observed during training. 
+
+Current Challenge. Despite strong detection performance, many model-based anomaly detectors provide only an anomaly score or label, with limited evidence explaining the decision. Although log templates often retain operationally meaning-ful information, detectors typically model these templates as symbolic inputs without translating their predictions back into such semantics. Operators may therefore know that a session is anomalous but not which behavior caused the alert or how it supports triage and debugging. This limitation motivates tech-niques that complement existing detectors with interpretable semantic evidence. 
+
+B. Related Work 
+
+Model-based Log Anomaly Detection. Many log anomaly detectors rely on parsed representations produced by log parsers such as Spell [4] and Drain [5], and recent work studies how parsing quality affects downstream anomaly detection [3], [6], [24]. Classical methods model statistical regularities, event counts, or invariants [25], [26], while clustering methods such as LogCluster [27] group related log sequences for problem identification. Deep learning-based methods learn richer tem-poral or contextual patterns from event sequences, including recurrent, feature-enhanced, Transformer-based, graph-based, parser-free, and pretraining-based approaches [7]–[9], [12], [28]–[30]. Hybrid detectors such as LogRobust and PLELog further incorporate semantic representations to improve ro-bustness under unstable or weakly labeled logs [10], [11]. LogSemFuse complements these detectors because it treats them as backbones rather than replacing their architecture, input representation, or training pipeline. LogSemFuse’s se-mantic artifacts are fused at the decision level and returned as evidence supporting the explanation, including matched local event patterns, triggered cluster-derived rules, LLM-based semantic reasoning results, and cluster-level explanations. 
+
+LLM-based Log Anomaly Detection and Diagnosis. Recent work explores LLMs for log anomaly detection and online log interpretation. LogGPT [18] investigates ChatGPT-style models for log anomaly detection, LogPrompt studies prompt strategies for anomaly detection and interpretable online log analysis [20], and LogLLM [21] trains an LLM-based frame-work for log anomaly detection. These approaches show that LLMs can surface useful log semantics that may not be exposed by EventId-only detector outputs. At the same time, reported detection results for LLM-based detectors remain uneven. For example, LogGPT reports an F1-score of 0.618 on BGL under its default content-sequence prompt, while LogPrompt reports an F1-score of 0.384 on BGL under its CoT prompt strategy [18], [20]. In contrast, traditional detectors such as DeepLog [7] and LogAnomaly [8] model stable sequential and quantitative log patterns and have been reported to achieve BGL F1-scores above 0.9 in prior benchmarks. This contrast suggests that LLM-centric detection can benefit from being combined with traditional detector signals rather than re-placing them. However, LLM-centric detection raises concerns about inference cost and response variability. LogSemFuse instead uses LLM-based semantic reasoning as one semantic evidence module, while the backbone remains responsible for sequence-based anomaly detection. 
+
+Explaining Log Anomalies and Rule-based Evidence. Previ-ous studies have shown that explainable AI (XAI) can improve user trust and confidence in AI [13]–[15]. General-purpose XAI methods such as LIME [16] and SHAP [17] explain model predictions through local surrogate models or feature attributions. Systems like DeepSeer [15] show the value of interactive explanations for sequence models. However, these methods are not designed around log-specific artifacts such as EventId sequences, templates, session-level failure semantics, or reusable operational rules. Rule-based log analysis, such as LogRules [31], is rele-vant to LogSemFuse because a matched rule identifies both the event pattern that triggered the alert and its operational meaning. However, LogSemFuse does not explain a prediction from rule matches alone. It also compares the target session with similar historical log sequences, integrates evidence from its detection signals, and uses an LLM to synthesize this evidence into a session-specific semantic explanation. The findings become more natural and easier for developers to understand. 
+
+Position of LogSemFuse. Compared with prior model-based, LLM-based, rule-based, and explainability-oriented ap-proaches, LogSemFuse is best understood as a semantic aug-mentation framework for existing log anomaly detectors. Its contribution is not a new standalone detector, LLM-centered rule repository, or post-hoc explanation tool, but a unified way to enhance backbone detectors with reusable semantic evi-dence while producing evidence-based semantic explanations. III. M ETHODOLOGY 
+
+LogSemFuse is a plug-in framework designed to improve the accuracy and explainability of existing log anomaly detec-tors by incorporating semantic evidence from log sessions. Rather than modifying or replacing the detector, LogSem-Fuse preserves the backbone’s original training and inference pipeline. It combines backbone prediction with semantic evi-dence to improve final anomaly detection and to explain why a session is classified as anomalous. Figure 1 illustrates the workflow. Raw logs are parsed into templates, ordered by timestamp, and grouped into sessions. The backbone detector is trained and executed using its original pipeline. Separately, LogSemFuse constructs reusable evidence from the training data and stores it in a knowledge bank K. At inference time, an incoming session is evaluated by the backbone, matched against reusable evidence, and an-alyzed through LLM-based semantic reasoning. These signals are fused to produce a final session-level prediction together with evidence supporting the decision and its explanation. 
+
+A. Input Representation and Backbone Interface 
+
+Log Representation. LogSemFuse converts raw logs into structured event sequences using a standard preprocessing pipeline [1], [2]. First, log lines are parsed into templates using Drain [5]. Each template is assigned a unique EventId , which transforms raw log text into a discrete event sequence. Variable fields, such as identifiers, sizes, and file paths, are replaced with placeholders to support consistent template matching across sessions. We then order log entries by timestamp and group them into sessions using dataset-specific identifiers, such as block IDs or request IDs [2], [7], [32]. Each session rep-resents a coherent execution trace. The detailed sessionization rules for each dataset are described in Section IV-A. For window-based backbone detectors, LogSemFuse con-structs fixed-length windows over the event sequence fol-lowing prior sequence-based log anomaly detectors [7], [8]. Window-level predictions are later aggregated into session-level decisions to ensure a consistent evaluation granularity across all detectors. For each session, LogSemFuse maintains three aligned views of the same log behavior: raw log text for human-readable tracing, template sequences for semantic analysis, and EventId sequences for backbone modeling and deterministic evidence matching. 
+
+Backbone Interface. LogSemFuse performs semantic aug-mentation during inference-time decision making. The back-bone is trained and executed on EventId sequences using its original architecture, input representation, and learning objective. After the backbone produces an anomaly score or label, LogSemFuse fuses its output with signals from the local event-pattern matcher, cluster-derived rule bank matcher, and LLM-based semantic reasoning module. Keeping these se-mantic evidence modules outside backbone training preserves compatibility with existing detectors while adding evidence for final decision and its explanation. 
+
+B. Training-Time Reusable Evidence Construction 
+
+LogSemFuse constructs reusable evidence from training logs before inference. This evidence captures recurring local patterns and higher-level operational behaviors that help iden-tify and explain anomalous sessions. At inference, LogSem-Fuse matches this evidence to a new session to support its anomaly prediction. Let x denote a log session, and let E(x)Template extraction  &    
+
+> EventId assignment
+> Log Parsing &
+> Sessionization
+> Timestamp ordering
+> Session grouping
+> Windowing (for
+> window-based
+> backbones)
+> D) Module III: LLM-Based Semantic Reasoning and
+> Explanation (Inference only)
+
+Training-Time Backbone and Knowledge Bank Construction   
+
+> B) Module I: Local Event-Pattern Matcher (uses )
+
+Inference-Time 
+
+Semantic 
+
+Augmentation    
+
+> Evaluate session against compiled rules
+> Stores and
+> Match anomaly-associated patterns
+> Session-specific semantic judgment and rationale
+> A) Trained Backbone Detector (Backbone path)
+> Incoming session x
+> (parsed and ordered)
+> Knowledge Bank
+> Local event patterns Cluster-derived rules
+> Template
+> sequence
+> Raw text
+> sequence
+> EventId
+> sequence
+
+Raw 
+
+Logs             
+
+> Backbone Detector
+> Training (original
+> backbone pipeline)
+> Train the backbone in its
+> original manner
+> (e.g., DeepLog / LogBERT)
+> Input: EventId windows
+> Module I: Local Event-
+> Pattern Mining
+> Mine anomaly-oriented unigram
+> /bigram/trigram patterns
+> Apply validation-selected
+> support thresholds.
+> Module II: Cluster-Derived Rule
+> Bank Construction
+> LLM generates cluster-level
+> explanation and rule candidates.
+> Normalize and validate executable
+> rules.
+> Policies: OR/ AND/ Vote-k
+> Inference-Time Fusion
+> of Backbone and
+> Semantic Signals
+> Fusion policy and
+> thresholds tuned on
+> validation split
+> Session-level
+> Decision +
+> Evidence-Based
+> Explanation
+> Final label
+> (normal / anomaly)
+> Backbone score
+> Matched local event patterns
+> Fired cluster-derived rules
+> LLM-based semantic reasoning
+> label ,
+> confidence,
+> and rationale fields
+> C) Module II: Cluster-Derived Rule Matcher (uses )
+> Outputs session-level score
+
+Semantic Augmentation Modules Fig. 1. Overview of LogSemFuse pipeline. 
+
+denote its sequence of event identifiers. LogSemFuse builds a 
+
+knowledge bank K containing two types of evidence: a local event-pattern bank Kngram and a cluster-derived rule bank 
+
+Krule . The local event-pattern bank captures short, discrimi-native event patterns, whereas the cluster-derived rule bank captures broader recurring operational behaviors summarized from groups of similar anomalous sessions. Both types of evidence are constructed exclusively from the training split and are matched deterministically against new sessions at inference. 
+
+1) Local Event-Pattern Mining : Local event patterns pro-vide simple but interpretable evidence for abnormal execution. Many log anomalies appear through short event combinations, such as repeated retries, exception-following operations, or unusual local transitions around a failure point [33]. Although neural detectors may learn such patterns implicitly, explicit event-pattern evidence is useful because it is deterministic, reusable, and directly inspectable [34]. To construct Kngram , LogSemFuse extracts unigrams, bi-grams, and trigrams from EventId sequences in the training sessions. Each candidate pattern is counted at the session level in anomalous and normal sessions. Anomalous-session and normal-session support are calculated as the frequen-cies of anomalous and normal training sessions that contain the pattern, respectively. For each candidate, lift measures anomalous-session support relative to normal-session support, and candidates are ranked by lift in the descending order. Overall, anomalous-session support , normal-session support ,and minimum lift obtained from the training data determine the initial candidate pool. The validation data is further used to remove patterns that fire excessively on normal validation sessions or have low validation F1-score. The remaining patterns form Kngram .During inference, LogSemFuse first matches the EventId sequence E(x) of a new session against Kngram . A pattern fires if it appears as a contiguous subsequence of E(x). If one or 
+
+TABLE I EXAMPLE CONTIGUOUS TRIGRAM (n = 3 ) MATCH IN A LOG SESSION .EventId Log Template 
+
+E22 BLOCK* NameSystem.addStoredBlock: blockMap updated: <*> is added to <*> size <*>E29 PacketResponder <*> Exception java.io.EOFException 
+
+E41 Received block <*> of size <*> from <*>E41 Received block <*> of size <*> from <*>E44 Deleting block <*> file <*>
+
+more patterns fire, the local event-pattern module produces an evidence signal sn(x) = 1 ; otherwise, it produces sn(x) = 0 .Formally, 
+
+sn(x) = 1{∃ p ∈ K ngram : p ⊑ E(x)} (1) where p ⊑ E(x) means that the EventId sequence pattern p
+
+appears as a contiguous subsequence of E(x). The matched patterns are also recorded as explanation evidence together with their corresponding log templates. Table I shows an example of deterministic local event-pattern matching. The session is represented by the ordered event sequence [E22 , E 29 , E 41 , E 41 , E 44 ]. For each stored pat-tern p = ( e1, . . . , e n) ∈ K ngram , the module slides a length-n
+
+window over the session and fires when any window is exactly equal to p. In this example, the length-3 window beginning at the second event is (E29 , E 41 , E 41 ). If this trigram is present in Kngram , the module outputs sn(x) = 1 and reports the fired trigram as the supporting evidence. 
+
+2) Cluster-Derived Rule Bank Construction : Local event patterns capture short contiguous behaviors, but many log anomalies involve broader operational patterns. Examples in-clude related events that occur non-contiguously, repeated state transitions, missing expected steps, or abnormal combinations of event counts. To capture these behaviors, LogSemFuse constructs the cluster-derived rule bank Krule from anomalous training sessions. We first representeach anomalous training session as a Term ### LLM Task ###            
+
+> Given an anomalous session cluster and EventId -
+> template metadata,
+> summarize the shared anomalous behavior and induce
+> reusable rules.
+> Return structured JSON only.
+> ### Output Schema ###
+> rules: [{name, if_any ,if_all , explanation}]
+> ### Allowed Rule Primitives ###
+> contains_ngram ,ordered_subset
+> min_count ,absent_within
+> ### Input: Anomalous Cluster ###
+> -cluster_id ,cluster_size
+> -representative anomalous sessions
+> -EventId -template map
+> ### Example Output ###
+> rules:
+> name: exception_after_receive
+> if_any : [ ordered_subset ([14, 7, 9])]
+> explanation: receive → exception → completion anomaly
+> Prompt
+> Cluster -derived
+> Rules Induction Fig. 2. Example cluster-level prompt and LLM response for cluster-derived rule generation.
+
+Frequency–Inverse Document Frequency (TF-IDF) vector over its EventId sequence [35]. We then apply HDBSCAN [36] to group sessions with similar event-distribution patterns. Clustering-based log analysis has been shown to be effective and efficient for log-related tasks such as probabilistic label es-timation, problem identification, and log-key abstraction [11], [27], [37]. We chose HDBSCAN for three reasons. First, the number of recurring anomaly behaviors is not known in advance, so methods that require a predefined number of clusters, such as K-means [38], are less suitable. Second, HDBSCAN is density-based and can identify stable groups while treating sparse or idiosyncratic sessions as noise. Third, HDBSCAN has a small number of user-facing parameters and has been reported to be robust to parameter selection in practice [39]. This allows LogSemFuse to summarize recurring anomaly behaviors at the cluster level rather than generating rules from isolated sessions. For each cluster, LogSemFuse selects representative ses-sions and provides them to an LLM together with their EventId sequences, the EventId-template mapping, and basic cluster statistics. Figure 2 shows the cluster-level prompt and an example structured response used for rule generation. The LLM is prompted to produce two outputs: a human-readable summary of the recurring operational behavior and structured rule candidates that describe conditions associated with this behavior. The generated rules are normalized into a constrained rule format over EventId sequences. Each rule contains a name, an explanation, and one or more conditions built from a fixed set of primitives: contains_ngram ,
+
+ordered_subset , min_count , and absent_within .These primitives check whether a contiguous event subse-quence appears, whether events appear in a specified order, whether an event appears at least a specified number of times, and whether an expected event is absent within a local window. A rule is represented as structured output: {name, if_any, if_all, explanation }. A rule is considered fired on session x when all clauses in if_all are satisfied and, if if_any is non-empty, at least one clause in if_any is satisfied. If one or more rules fire, the cluster-derived rule bank matcher produces an evidence signal sr (x) = 1 ; otherwise, it produces sr (x) = 0 . Formally, 
+
+sr (x) = 1{∃ r ∈ K rule : r(E(x)) = 1 } (2) The triggered rules and their cluster-level explanations are retained as evidence for explaining why the session was flagged. Before a rule is stored in Krule , LogSemFuse validates it against the rule schema, checks allowed primitives and type correctness, and ensures consistency with the cluster’s tem-plate dictionary. Rules that fail these validations are discarded. At inference, each retained rule is evaluated directly in code against E(x), without invoking LLMs. This design confines LLM involvement to the training-time rule discovery, making inference-time rule matching deterministic and efficient. 
+
+C. Inference-Time LLM-Based Semantic Reasoning and Ex-planation 
+
+For each unique log session, LogSemFuse uses an LLM to 1) generate a semantic explanation and 2) assess whether that behavior indicates a high-risk anomaly during inference. The explanation complements the rules derived during training, while the anomaly assessment provides an additional signal for the final decision. The LLM-based semantic reasoning module uses a fixed prompt containing the ordered event-template sequence of the target session. The prompt asks the LLM to identify the expected behavior, summarize the observed behavior, and de-termine whether the difference indicates a high-risk anomaly. To make these outputs directly usable by LogSemFuse, the prompt specifies a structured response containing expected ,
+
+observed , is_high_risk , and confidence . The 
+
+expected and observed fields form the semantic ex-planation of the session, whereas is_high_risk and 
+
+confidence provide the assessment used in fusion. The module is invoked once for each incoming session and does not require a separate training stage. Given a new session x, the module returns 
+
+is_high_risk , confidence γ(x), and auxiliary rationale descriptors. The fusion signal from this module is defined as 
+
+sℓ(x) = 1{is_high_risk = 1 ∧ γ(x) ≥ τℓ} (3) where τℓ is selected on the validation split. If γ(x) < τ ℓ, the LLM-based semantic reasoning signal is treated as inactive for fusion. The remaining structured outputs are retained as structured rationale support and are not directly used in decision fusion. Note that LogSemFuse calls an LLM for every new log session and stores the result in a knowledge bank. For a session that has occurred in the past, it reuses the generated explana-tion from the knowledge bank without any LLM inferences. 
+
+D. Evidence-Guided Inference 
+
+The final knowledge bank K contains Kngram and Krule 
+
+obtained from the training stage, as well as the cache of session-level LLM-based semantic reasoning results. Note that 
+
+K and backbone detectors remain static at test time and will not be updated. 
+
+1) Evidence Matching and Reuse: An incoming session x is represented by its session identifier, ordered EventId sequence 
+
+E(x), and aligned log templates. The unchanged backbone produces an anomaly score ab(x), which is converted into the binary backbone signal 
+
+sb(x) = 1{ab(x) ≥ τb} (4) where τb is threshold selected on the validation split. The local event-pattern matcher checks contiguous sub-sequences of E(x) against Kngram to obtain sn(x) and the matched patterns. The cluster-derived rule bank matcher exe-cutes each retained rule in Krule against E(x) to obtain sr (x)
+
+and the triggered rules. The session-result cache is indexed by the exact session identifier. On a cache hit, LogSemFuse reuses the stored LLM-based semantic reasoning label, confidence, and rationale to obtain sℓ(x). On a cache miss, LogSemFuse invokes the LLM-based semantic reasoning module and stores its structured result without using a test label. The cache supports reuse but does not modify existing artifact bank. 
+
+2) Inference-Time Four-Signal Fusion: For every session, LogSemFuse obtains all four binary signals without priority ordering or early stopping. The final session-level anomaly decision is 
+
+ˆy(x) = F sb(x), s n(x), s r (x), s ℓ(x) (5) where F is selected from OR, AND, and vote-k policies. The fusion policy, vote-k, τb, and τℓ are selected based on the validation data. 
+
+3) Evidence-Based Explanation Generation: After fusion, LogSemFuse generates an explanation by tracing which ev-idence sources contributed to the final anomaly decision. It first collects the matched local event patterns and maps their EventIds back to the corresponding log templates so the explanation can refer to human-readable log behavior. It then collects the triggered cluster-derived rules and attaches the cluster-level explanations from which those rules were compiled. Finally, it adds the LLM-based semantic reasoning result, including its label, confidence, and rationale, as session-specific semantic context. The resulting explanation combines the final label, backbone score or label, matched local event patterns, triggered rule explanations, and LLM-based rationale into one evidence trace. Because cluster-level explanations are compiled into executable rules, they can affect future decisions and are returned whenever the corresponding rules fire.              
+
+> TABLE II OVERALL STATISTICS OF EVALUATED DATASETS .
+> System # Logs # Sessions # Anom. Sessions
+> HDFS 11,175,629 166,241 10,381 (6.24%) BGL 4,188,777 41,385 27,224 (65.78%) Liberty 550,000 1,589 260 (16.35%)
+> Note: Values in parentheses indicate anomaly percentages.
+
+IV. E XPERIMENTAL SETUP 
+
+A. Datasets 
+
+We evaluate LogSemFuse on three public Loghub bench-marks: HDFS, BGL, and Liberty [3]. These benchmarks cover distributed file-system and supercomputer logs, including more than 20 million logs (Table II). We use the public structured releases of the entire HDFS and BGL. For Liberty, we use a contiguous time-ordered slice of 550,000 log lines from the original stream. This follows the common practice in log anomaly detection studies of evaluating public datasets under fixed, reproducible preprocessing protocols while keep-ing large-scale experiments tractable [12], [21]. Across all datasets, log entries are sorted by timestamp before session construction. 
+
+Log session construction and split. Similar to prior stud-ies [7], [8], log sessions are the unit of detection and evalu-ation. HDFS and BGL events are grouped by block identifier and compute node, respectively. HDFS uses the official block-level labels, whereas a BGL session is considered anoma-lous if any session event is anomalous. Liberty events are grouped into host-based temporal buckets, with a bucket labeled anomalous if it contains any anomalous event. Following prior log anomaly detection evaluations, sessions are partitioned into training, validation, and test subsets using fixed 70%/10%/20% ratios [12], [21]. The split is performed at the session level to prevent logs from the same session from contributing data to multiple partitions. After sorting sessions by timestamp, we use the earliest 70% for training, the next 10% for validation, and the latest 20% for testing, so no future sessions are used to train or tune models evaluated on earlier sessions. Final metrics are reported at the session level after aggregating window-level predictions. 
+
+Leakage prevention. During training, the backbone is trained on the training set using its original pipeline, while LogSem-Fuse mines local event patterns and compiles cluster-level explanations of anomalous-session clusters into executable rules. At test time, the resulting patterns and rules remain read-only in the K. For each test session, the LLM-based semantic reasoning module retrieves a cached result when available or generates an anomaly prediction, confidence score, and rationale without access to the ground-truth label. 
+
+B. Evaluation Metrics 
+
+We evaluate anomaly detection effectiveness using Pre-cision, Recall, and F1-score at the session level. Precision measures the fraction of predicted anomalies that are truly anomalous. Recall measures the fraction of true anomalies that are successfully detected. F1-score is the harmonic mean of Precision and Recall. 
+
+C. Experimental Settings 
+
+We implement LogSemFuse with Python 3.12 using aunified pipeline for log parsing, session construction, back-bone training, local event-pattern mining, anomaly clustering, LLM-based semantic reasoning, cluster-derived rule bank, and augmented inference. We conduct experiments on a MacBook Pro (Apple M5, 10-core CPU, 16 GB RAM) running macOS 26.5.1. Unless otherwise stated, window-based experiments use window size w = 20 and stride s = 1 . The evaluated backbone detectors are DeepLog [7], LogAnomaly [8], Log-BERT [9], and NeuralLog [12]. We use the default model settings for each backbone. We keep preprocessing, split construction, and evaluation metrics fixed across the baseline and LogSemFuse variants. For semantic reasoning, LogSemFuse uses gpt-4o-mini-2024-07-18 through an API-based prompting workflow [23]. The LLM is used for session-level semantic reasoning and for cluster-level explanation generation. Cluster-level explanations are compiled into explanation-derived executable rules and stored in the cluster-derived rule bank Krule for later reuse. LLM outputs are requested in structured JSON format so labels, confidence scores, rationales, and rule candidates can be parsed consistently. All LLM calls use a temperature of 0. V. E VALUATION 
+
+RQ1: How effective is LogSemFuse for anomaly detection? 
+
+Motivation. The primary goal of LogSemFuse is to improve anomaly detection by augmenting an existing backbone de-tector with semantic evidence rather than replacing the back-bone. This RQ evaluates whether local event patterns, LLM-based semantic reasoning signals, and explanation-derived executable rules improve the final session-level decision across different datasets and backbone architectures. 
+
+Approach. We compare each standalone backbone detec-tor with its LogSemFuse-augmented variant. The baseline and LogSemFuse-augmented variants use the same dataset split, preprocessing procedure, windowing configuration, and session-level evaluation metrics. The backbone score remains the starting point, while LogSemFuse adds test-time fusion over local event-pattern evidence, LLM-based semantic rea-soning evidence, and explanation-derived executable rule evi-dence. 
+
+Results. Table III reports Precision, Recall, F1-score, and F1 improvement for all dataset–backbone combinations using LogSemFuse. 
+
+LogSemFuse improves F1-score whenever the baseline leaves room for improvement. Across the evaluated dataset– backbone combinations, every non-perfect baseline gains F1-score after augmentation. The only unchanged case is LogAnomaly on Liberty, where the standalone backbone al-ready achieves perfect F1-score. The largest improvement oc-curs for LogBERT on Liberty, where F1-score increases from 0.44 to 0.99. Large gains also appear for DeepLog on Liberty                                                                                              
+
+> TABLE III BASELINE VS . L OG SEM FUSE AUGMENTED PERFORMANCE COMPARISON .
+> Dataset Backbone Baseline LogSemFuse ∆F1 PRF1 PRF1
+> HDFS LogBERT 0.92 0.79 0.85 1.00 0.98 0.99 +0.14 NeuralLog 0.83 0.87 0.85 0.83 1.00 0.91 +0.06 DeepLog 0.84 0.87 0.85 0.84 1.00 0.91 +0.06 LogAnomaly 0.85 0.88 0.87 0.85 1.00 0.92 +0.05 BGL LogBERT 0.66 1.00 0.79 1.00 1.00 1.00 +0.21 NeuralLog 1.00 0.91 0.95 1.00 1.00 1.00 +0.05 DeepLog 1.00 0.93 0.96 1.00 1.00 1.00 +0.04 LogAnomaly 1.00 0.95 0.98 1.00 1.00 1.00 +0.03 Liberty LogBERT 0.29 0.89 0.44 1.00 0.98 0.99 +0.55 NeuralLog 0.69 0.65 0.67 0.77 0.98 0.86 +0.19 DeepLog 0.91 0.60 0.72 0.94 0.98 0.96 +0.24 LogAnomaly 1.00 1.00 1.00 1.00 1.00 1.00 +0.00
+
+(+0.24), LogBERT on BGL (+0.21), and NeuralLog on Liberty (+0.19). These results indicate that semantic augmentation is most useful when the backbone alone misses behavior that is visible in higher-level semantic evidence. 
+
+The primary effectiveness gain comes from recovering pre-viously missed anomalies. Recall reaches 1.00 for all BGL backbones and for NeuralLog, DeepLog, and LogAnomaly on HDFS. LogBERT on HDFS also exhibits a substantial improvement, with recall increasing from 0.79 to 0.98. On Liberty, recall improves to 0.98 for LogBERT, NeuralLog, and DeepLog. These results indicate that LogSemFuse effectively reduces false negatives while largely preserving the high precision of the underlying detectors. A representative example can be observed in the Liberty dataset, where an anomalous session contains only five PBS scheduler failure messages (pbs_mom: task_check, cannot tm_reply to ... ) among 49 total log events, while the remaining messages correspond to benign SSH and session-management activity. Because these failures are sparse, the backbone assigns a mean session score of 0.48, below the validation-tuned threshold of 0.55, and classifies the session as normal. In contrast, LogSemFuse correctly identifies the anomaly by leveraging semantic evidence capturing the recurring PBS scheduler-failure template 
+
+pbs_mom: task_check, cannot tm_reply to <job>.ladmin2 task 1 . Although the failure events constitute only a small minority of the session, their repeated occurrence across multiple PBS jobs forms a distinctive semantic pattern that is captured by the rule bank despite being diluted by the predominantly benign activity. This example illustrates how semantic reasoning complements sequence-based detection by elevating semantically meaningful but infrequent anomaly indicators. Overall, LogSemFuse recovers 2,056 of 2,081 backbone false-negative prediction cases (98.8%). This includes 42 of 45 cases on Liberty, 900 of 917 on HDFS, and 1,114 of 1,119 on BGL across the four evaluated backbones. TABLE IV COMPARISON OF TRAINING AND INFERENCE TIME BETWEEN THE STANDALONE BASELINE AND LOG SEM FUSE .                                                                   
+
+> Dataset Backbone Training (s) Inference (s) Baseline LogSemFuse Baseline LogSemFuse
+> HDFS DeepLog 21.27 2415.93 5.16 10.97 (+5 .81)
+> NeuralLog 187.36 2527.30 39.03 44.66 (+5 .63)
+> LogAnomaly 76.82 2381.75 17.39 23.12 (+5 .73)
+> LogBERT 603.98 2935.40 132.14 137.94 (+5 .80)
+> BGL DeepLog 72.09 347.29 16.80 20.73 (+3 .93)
+> NeuralLog 614.74 722.10 126.66 130.73 (+4 .07)
+> LogAnomaly 262.31 368.85 54.14 58.21 (+4 .07)
+> LogBERT 2026.28 2148.68 442.67 446.73 (+4 .06)
+> Liberty DeepLog 31.13 288.04 1.12 3.48 (+2 .36)
+> NeuralLog 98.24 346.28 7.91 10.30 (+2 .39)
+> LogAnomaly 20.10 272.08 3.38 5.79 (+2 .41)
+> LogBERT 161.43 322.75 12.46 14.83 (+2 .37)
+> Note: Values in parentheses indicate the additional LogSemFuse inference time added to the backbone inference time.
+
+LogSemFuse improves every non-perfect baseline and pre-serves the already perfect case, showing that semantic evidence can strengthen existing model-based log anomaly detectors without sacrificing precision or recall. 
+
+RQ2: How efficient is LogSemFuse in runtime and LLM usage? 
+
+Motivation. LLM-assisted log analysis can become expensive if every session requires a fresh model call. For a practical semantic augmentation framework, semantic reasoning should be acquired once, stored in the knowledge bank K, and reused through local event-pattern matching and executable rule evaluation whenever similar patterns recur. 
+
+Approach. We evaluate efficiency from two perspectives. First, we measure backbone training time, baseline inference runtime, and LogSemFuse inference runtime on the same test partitions. Second, we analyze LLM usage in terms of token consumption rather than monetary spending. LogSemFuse reduces repeated LLM dependence by storing local event patterns and explanation-derived executable rules in the knowl-edge bank. We measure token usage separately for session-level prompting and cluster-level rule generation because these two stages have different context lengths and reuse patterns. 
+
+Results. Table IV reports the time cost of backbone training, LogSemFuse training with one-time semantic-artifact con-struction, baseline inference, and LogSemFuse inference on different backbones and datasets. 
+
+LogSemFuse adds one-time training-stage overhead over the backbone. Compared with the standalone backbone, LogSemFuse increases training-stage time because it addition-ally mines local event patterns, clusters anomalous training sessions, generates cluster-level semantic explanations, and compiles them into executable rules. This extra cost is incurred only once during training-stage knowledge construction. After construction, the resulting semantic artifacts are reused during test-time inference rather than regenerated for every session. 
+
+LogSemFuse adds modest and stable inference-time over-head over the backbone. Compared with standalone baseline inference, LogSemFuse increases inference time because each session is additionally checked against reusable semantic ar-tifacts. The added time is stable in absolute terms: 5.63–5.81 seconds on HDFS, 3.93–4.07 seconds on BGL, and 2.36–2.41 seconds on Liberty. This modest and stable overhead is useful in practice because semantic augmentation adds a mostly fixed local-processing cost rather than a backbone-dependent or LLM-call-dominated cost. The stability comes from local knowledge-bank lookup, local event-pattern matching, ex-ecutable rule evaluation, and reuse of cached LLM-based semantic reasoning results when available. Thus, LogSem-Fuse pays a limited per-session inference overhead to obtain semantic evidence and explanations, instead of repeatedly reconstructing semantic knowledge during testing. 
+
+LLM cost is amortized through knowledge reuse. Across the full evaluation, LogSemFuse uses 286M, 17M, and 13M LLM tokens for HDFS, BGL, and Liberty, respectively. Session-level requests use approximately 624 tokens on average, including model outputs, while cluster-level requests typically use 2,500–4,000 tokens. However, LogSemFuse invokes the LLM only for previously unseen session- or cluster-level patterns and stores the resulting explanations and rules in the knowledge bank for subsequent reuse. Therefore, its LLM cost scales with the number of novel patterns rather than the total number of processed sessions, requiring substantially fewer calls than a pipeline that invokes an LLM for every session. Compared with standalone backbones, LogSemFuse adds training-stage and inference-time cost. The training-stage cost is incurred once to construct reusable semantic artifacts, while the inference overhead remains modest and stable be-cause most added operations are local. Through knowledge-bank reuse, LLM usage scales with newly observed session or cluster patterns rather than total session volume. 
+
+RQ3: How useful are LogSemFuse explanations? 
+
+Motivation. An anomaly detector is more useful to developers when it explains why a session was flagged. LogSemFuse treats explanations as detection evidence rather than only post-hoc text, because cluster explanations are compiled into executable rules and stored in the cluster-derived rule bank 
+
+Krule .
+
+Approach. We evaluate explanation quality through a user study. The study compares explanations generated by LogSem-Fuse against explanations generated directly by a general-purpose LLM for the same anomalous sessions. For the user study, one author randomly selected 10 anomalous test sessions and collected paired explanations from LogSemFuse and GPT-4o-mini. We recruited 14 participants through several software engineering research mailing lists. The participant pool consisted of nine CS/SE PhD students, two postdoctoral researchers, and three professional software developers. Nine participants self-reported more than five years of software development experience, while four reported between two and TABLE V HUMAN EVALUATION OF EXPLANATION QUALITY .                                
+
+> Metric LogSemFuse Baseline LLM
+> Logical Coherence 4.19 ±0.93 3.35 ±0.87 Technical Soundness 4.06 ±1.03 3.17 ±0.88 Label Alignment 4.15 ±0.98 3.16 ±0.82 Clarity 4.35 ±0.80 3.07 ±0.96 Overall Quality 4.13 ±0.98 3.06 ±0.84
+
+Note: Values are reported as mean ± standard deviation. A higher value indicates better user perception. 
+
+five years. Participants also reported varying levels of log-analysis experience, with five reporting less than one year of experience, two reporting one year of experience, four reporting between two and five years, and two reporting more than five years of experience. For each anomalous session, participants were presented with anonymized LogSemFuse and GPT-4o-mini explanations. The order of sessions and explanations was randomized and counterbalanced across participants. They were asked to eval-uate both explanations in terms of their logical coherence ,
+
+technical soundness , label alignment , clarity , and overall quality on a five-point Likert scale [40] (1—Strongly Disagree, 5—Strongly Agree). 
+
+Results. Table V reports the human evaluation results. 
+
+Human evaluators consistently prefer LogSemFuse expla-nations over direct LLM explanations. LogSemFuse receives higher mean scores on all five dimensions. The largest dif-ference appears in Clarity, where LogSemFuse scores 4.35 compared with 3.07 for the baseline LLM. Logical Coherence, Technical Soundness, Label Alignment, and Overall Quality also improve by about one point or more on the five-point scale. A paired Wilcoxon signed-rank test [41] shows that all five differences are statistically significant ( p < 0.001 ). These quantitative improvements are also reflected in participants’ qualitative feedback. For example, one participant noted that “Reasoning A (LogSemFuse) is more informative and bet-ter grounded [than the baseline]. ” Another participant also commented that “ Reasoning B (LogSemFuse) is stronger than Reasoning A (baseline) because it is more specific to HDFS behavior and better connects the empty packet, invalid block cleanup, and interruption of block transfer. ”
+
+Cluster-level context is one plausible explanation for the higher human ratings. Figure 3 presents an HDFS explanation pair used in the human study. The baseline LLM identifies a broad block-management issue but does not connect the events to a concrete failure mechanism. LogSemFuse identifies invalid block states, cleanup behavior, and replication pipeline failure as a coherent anomaly pattern. This example is con-sistent with the possibility that aggregating related anomalous training sessions provides context for a more specific explana-tion, while the associated executable rule maintains an explicit connection to inference-time evidence. LogSemFuse produces explanations that participants rate as clearer, more consistent, and more aligned with anomaly behavior than direct LLM explanations. 
+
+Raw log session. 
+
+BLOCK* NameSystem.delete: <*> is added to invalidSet <*> Deleting block <*> file <*> Redundant addStoredBlock request received <*> 
+
+Baseline LLM reasoning. 
+
+The presence of redundant requests in a deletion sequence may indicate potential issues with block management or consistency within HDFS. 
+
+LogSemFuse reasoning. 
+
+The session indicates a failure in the HDFS block replication pipeline. Block metadata operations indicate inconsistent or invalid block state. Blocks are added to the invalid set and delete or cleanup operations are triggered during replication. As a result, the NameNode marks several blocks as invalid and triggers cleanup actions. The combination of invalid block metadata and cleanup suggests a replication pipeline breakdown rather than normal block lifecycle operations. Fig. 3. One explanation example from HDFS. 
+
+RQ4: How do different settings and training-data percentages affect LogSemFuse performance? 
+
+Motivation. LogSemFuse combines backbone predictions, lo-cal event patterns, LLM-based semantic reasoning signals, and explanation-derived executable rules. Understanding how these components contribute is necessary for interpreting the augmented decision process. It is also important to test whether LogSemFuse remains effective when less training data is available for backbone learning, local event-pattern mining, clustering, and knowledge bank construction. 
+
+Approach. For the ablation study, we compare the complete LogSemFuse framework with its variants by removing LLM-based semantic reasoning, local event patterns, or the cluster-derived rule bank while retaining the remaining signals. For the sensitivity study, we vary only the amount of training data while keeping the same validation and test sets across all configurations. We evaluate training proportions of 30%, 50%, and 70% and report F1-score for each dataset–backbone combination using the fixed validation and test partitions. 
+
+Results. Table VI reports the component ablation results, and Table VII compares each backbone with its LogSemFuse-augmented variant at each training-set percentage. 
+
+Local event patterns provide the strongest direct detection signal. Removing the local event-pattern module causes the 
+
+TABLE VI LOG SEM FUSE PERFORMANCE (F1 SCORE ) UNDER DIFFERENT SETTINGS .                                               
+
+> Backbone LogSemFuse w/o LLM w/o Pattern w/o Rule
+> HDFS DeepLog 0.91 0.91 ( ↓0.33%) 0.86 ( ↓6.13%) 0.91 ( ↓0.33%) NeuralLog 0.91 0.91 (0.00%) 0.86 ( ↓5.82%) 0.91 (0.00%) LogAnomaly 0.92 0.91 ( ↓1.09%) 0.86 ( ↓6.75%) 0.91 ( ↓0.76%) LogBERT 0.99 0.97 ( ↓2.53%) 0.36 ( ↓63.33%) 0.81 ( ↓18.38%) BGL DeepLog 1.00 1.00 (0.00%) 1.00 (0.00%) 0.97 ( ↓3.00%) NeuralLog 1.00 1.00 (0.00%) 1.00 (0.00%) 0.95 ( ↓5.20%) LogAnomaly 1.00 1.00 (0.00%) 1.00 (0.00%) 0.97 ( ↓2.70%) LogBERT 1.00 1.00 (0.00%) 0.56 ( ↓43.90%) 0.97 ( ↓2.60%) Liberty DeepLog 0.96 0.94 ( ↓1.87%) 0.71 ( ↓26.72%) 0.94 ( ↓1.87%) NeuralLog 0.86 0.84 ( ↓2.89%) 0.84 ( ↓2.89%) 0.84 ( ↓2.89%) LogAnomaly 1.00 1.00 (0.00%) 1.00 (0.00%) 1.00 (0.00%) LogBERT 0.99 0.90 ( ↓9.09%) 0.83 ( ↓16.16%) 0.83 ( ↓16.16%)
+
+Note: LLM, Pattern, and Rule denote LLM-based semantic reasoning, local event patterns, and the cluster-derived rule bank, respectively. Values in parentheses show percentage differences from the full LogSemFuse. TABLE VII BASELINE AND LOG SEM FUSE -AUGMENTED F1-SCORE UNDER DIFFERENT TRAINING -SET PERCENTAGES .                                                                                 
+
+> Backbone 30% 50% 70% Base LogSemFuse Base LogSemFuse Base LogSemFuse
+> HDFS DeepLog 0.88 0.93 ( ↑5.68%) 0.87 0.93 ( ↑6.90%) 0.85 0.91 ( ↑7.06%) NeuralLog 0.86 0.92 ( ↑6.98%) 0.86 0.91 ( ↑5.81%) 0.85 0.91 ( ↑7.06%) LogBERT 0.85 0.99 ( ↑16.47%) 0.85 0.99 ( ↑16.47%) 0.85 0.99 ( ↑16.47%) LogAnomaly 0.87 0.93 ( ↑6.90%) 0.88 0.93 ( ↑5.68%) 0.87 0.92 ( ↑5.75%) BGL DeepLog 0.95 1.00 ( ↑5.26%) 0.98 1.00 ( ↑2.04%) 0.96 1.00 ( ↑4.17%) NeuralLog 0.95 1.00 ( ↑5.26%) 0.98 1.00 ( ↑2.04%) 0.95 1.00 ( ↑5.26%) LogBERT 0.79 1.00 ( ↑26.58%) 0.79 1.00 ( ↑26.58%) 0.79 1.00 ( ↑26.58%) LogAnomaly 0.97 1.00 ( ↑3.09%) 0.97 1.00 ( ↑3.09%) 0.98 1.00 ( ↑2.04%) Liberty DeepLog 0.84 0.99 ( ↑17.86%) 0.67 0.98 ( ↑46.27%) 0.72 0.96 ( ↑33.33%) NeuralLog 0.76 0.90 ( ↑18.42%) 0.62 0.89 ( ↑43.55%) 0.67 0.86 ( ↑28.36%) LogBERT 0.60 0.99 ( ↑65.00%) 0.41 0.95 ( ↑131.71%) 0.44 0.99 ( ↑125.00%) LogAnomaly 0.44 0.99 ( ↑125.00%) 0.97 0.97 (0.00%) 1.00 1.00 (0.00%)
+> Note: Values in parentheses indicate the percentage change relative to the baseline trained with the same training-set percentage.
+
+largest degradation in most non-saturated settings. The effect is particularly pronounced for LogBERT, whose F1-score decreases from 0.99 to 0.36 on HDFS, from 1.00 to 0.56 on BGL, and from 0.99 to 0.83 on Liberty. This indicates that ex-plicit local event combinations recover anomaly evidence not consistently captured by the backbone or the other semantic evidence modules. 
+
+The cluster-derived rule bank provides reusable evidence for evidence-based explanations. Removing the rule bank lowers every BGL result from 1.00 to 0.95–0.97. Its contribution is strongest for LogBERT, where F1-score decreases from 0.99 to 0.81 on HDFS and from 0.99 to 0.83 on Liberty. For the other HDFS backbones, the change is at most 0.01, showing that the value of rule bank evidence depends on the backbone and dataset. 
+
+LLM-based semantic reasoning provides smaller but targeted gains. Removing LLM-based semantic reasoning has no mea-surable effect on BGL and changes HDFS F1-score by at most 0.02. Its largest effect occurs for LogBERT on Liberty, where F1-score decreases from 0.99 to 0.90. No ablation improves over the complete framework, supporting the use of LLM-based semantic reasoning as complementary evidence rather than as the primary detector. 
+
+Semantic augmentation remains effective with less train-ing data. Across the 36 dataset–backbone–training-percentage combinations, LogSemFuse improves the standalone backbone in 34 cases and ties it in the remaining two. The relative gains range from 2.04% to 26.58% on BGL and from 5.68% to 16.47% on HDFS, while every augmented BGL configuration reaches an F1-score of 1.00. The largest gains occur on Lib-erty, including improvements from 0.41 to 0.95 for LogBERT at 50% training data and from 0.44 to 0.99 for LogAnomaly at 30% training data. The augmented results are also stable across training-set percentages: each HDFS backbone varies by at most 0.02, each Liberty backbone varies by at most 0.04, and all BGL backbones remain unchanged at 1.00. These results show that the semantic augmentation consistently adds useful evidence over the backbone and retains its effectiveness when the training partition is reduced to 30%. Local event patterns provide the largest direct performance contribution, the cluster-derived rule bank adds reusable evidence for evidence-based explanations, and LLM-based semantic reasoning supplies smaller but targeted gains in difficult configurations. Across training-set percentages, LogSemFuse improves or matches every paired backbone baseline and remains stable with only 30% training data. VI. T HREATS TO VALIDITY 
+
+Internal Validity. Our results may be affected by pre-processing, session construction, clustering, prompting, fu-sion choices, and the particular training split. To reduce this threat, we use the same pipeline for each backbone and its LogSemFuse-augmented variant, tune thresholds only on validation data, and perform local event-pattern min-ing, anomaly clustering, cluster-level explanation generation, and explanation-derived executable rule induction using only training data. We further examine robustness under different training-set percentages, where LogSemFuse remains effective when the available training data is reduced to 70%, 50%, and 30%. At test time, artifacts constructed from the training split remain read-only in the knowledge bank to prevent leakage. Because the evaluated logs are publicly available, we cannot rule out that the pretrained LLM encountered benchmark-related content during pretraining, which may inflate its se-mantic reasoning performance. The ablation results partly bound this threat because removing the LLM-based semantic reasoning signal still yields F1-scores from 0.84 to 1.00 across all evaluated settings. This suggests that the main detection gains do not depend solely on possible public-benchmark memorization by the pretrained LLM. 
+
+External Validity. We evaluate LogSemFuse on HDFS, BGL, and Liberty with multiple backbone detectors, but these bench-marks may not represent all production environments. Real systems may contain evolving templates, unseen anomaly types, noisy labels, and cross-service failures. 
+
+Construct Validity. We use session-level Precision, Recall, and F1-score for detection and human ratings for explanation quality. These metrics capture the main goals of LogSemFuse, but do not fully measure alert fatigue, triage usefulness, within-session localization, or deployment cost. The human study is also limited by its participants and sampled sessions. VII. C ONCLUSION 
+
+In this paper, we presented LogSemFuse, a plug-in semantic augmentation framework that preserves existing backbone detectors while adding semantic evidence from local event patterns, LLM-based semantic reasoning, and cluster-derived executable rules. LogSemFuse turns semantic interpretation into reusable evidence that can improve the final anomaly decision and explain why a session is flagged. Across HDFS, BGL, and Liberty with four backbones, LogSemFuse improves every non-perfect baseline, preserves the already perfect case, recovers most backbone false negatives, and produces expla-nations that users rate higher than direct LLM explanations. These gains require only modest and stable inference-time overhead, suggesting that reusable semantic evidence can complement sequence-based detectors without making LLMs the sole detection mechanism. Overall, the results show that semantic augmentation is a practical way to strengthen existing log anomaly detectors while making their decisions more interpretable and reusable. REFERENCES [1] Shilin He, Jieming Zhu, Pinjia He, and Michael R. Lyu. Experience report: System log analysis for anomaly detection. In 2016 IEEE 27th International Symposium on Software Reliability Engineering (ISSRE) ,pages 207–218, 2016. [2] Shilin He, Pinjia He, Zhuangbin Chen, Tianyi Yang, Yuxin Su, and Michael R. Lyu. A survey on automated log analysis for reliability engineering. ACM Computing Surveys , 54(6):1–37, 2021. [3] Jieming Zhu, Shilin He, Pinjia He, Jinyang Liu, and Michael R. Lyu. Loghub: A large collection of system log datasets for ai-driven log analytics. In 2023 IEEE 34th International Symposium on Software Reliability Engineering (ISSRE) , pages 355–366, 2023. [4] Min Du and Feifei Li. Spell: Streaming parsing of system event logs. In 2016 IEEE 16th International Conference on Data Mining (ICDM) ,pages 859–864, 2016. [5] Pinjia He, Jieming Zhu, Zibin Zheng, and Michael R. Lyu. Drain: An online log parsing approach with fixed depth tree. In 2017 IEEE International Conference on Web Services (ICWS) , pages 33–40, 2017. [6] Zanis Ali Khan, Donghwan Shin, Domenico Bianculli, and Lionel C. Briand. Impact of log parsing on deep learning-based anomaly detection. 
+
+Empirical Software Engineering , 29(139), 2024. [7] Min Du, Feifei Li, Guineng Zheng, and Vasant Srikumar. Deeplog: Anomaly detection and diagnosis from system logs through deep learn-ing. In Proceedings of the 2017 ACM SIGSAC Conference on Computer and Communications Security , pages 1285–1298, 2017. [8] Weibin Meng, Ying Liu, Yichen Zhu, Shenglin Zhang, Dan Pei, Yuqing Liu, Yihao Chen, Ruizhi Zhang, Shimin Tao, Pei Sun, and Rong Zhou. Loganomaly: Unsupervised detection of sequential and quantitative anomalies in unstructured logs. In Proceedings of the 28th International Joint Conference on Artificial Intelligence , pages 4739–4745, 2019. [9] Haixuan Guo, Shuhan Yuan, and Xintao Wu. Logbert: Log anomaly detection via bert. In 2021 International Joint Conference on Neural Networks (IJCNN) , pages 1–8, 2021. [10] Xu Zhang, Yong Xu, Qingwei Lin, Bo Qiao, Hongyu Zhang, Yingnong Dang, Chunyu Xie, Xinsheng Yang, Qian Cheng, Ze Li, et al. Robust log-based anomaly detection on unstable log data. In Proceedings of the 2019 27th ACM Joint European Software Engineering Conference and Symposium on the Foundations of Software Engineering (ESEC/FSE 2019) , pages 807–817, 2019. [11] Lin Yang, Junjie Chen, Zan Wang, Weijing Wang, Jiajun Jiang, Xuyuan Dong, and Wenbin Zhang. Semi-supervised log-based anomaly detection via probabilistic label estimation. In 2021 IEEE/ACM 43rd International Conference on Software Engineering (ICSE) , pages 1461–1472, 2021. [12] Van-Hoang Le and Hongyu Zhang. Log-based anomaly detection without log parsing. In 2021 36th IEEE/ACM International Conference on Automated Software Engineering (ASE) , 2021. [13] Q. Vera Liao, Daniel Gruen, and Sarah Miller. Questioning the ai: Informing design practices for explainable ai user experiences. In Pro-ceedings of the 2020 CHI Conference on Human Factors in Computing Systems , CHI ’20, pages 1–15, New York, NY, USA, 2020. Association for Computing Machinery. [14] Yunfeng Zhang, Q. Vera Liao, and Rachel K. E. Bellamy. Effect of confidence and explanation on accuracy and trust calibration in ai-assisted decision making. In Proceedings of the 2020 Conference on Fairness, Accountability, and Transparency , FAT* ’20, pages 295–305, New York, NY, USA, 2020. Association for Computing Machinery. [15] Zhijie Wang, Yuheng Huang, Da Song, Lei Ma, and Tianyi Zhang. Deepseer: Interactive rnn explanation and debugging via state abstrac-tion. In Proceedings of the 2023 CHI Conference on Human Factors in Computing Systems , 2023. [16] Marco Tulio Ribeiro, Sameer Singh, and Carlos Guestrin. “why should i trust you?”: Explaining the predictions of any classifier. In Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining , pages 1135–1144, 2016. [17] Scott M. Lundberg and Su-In Lee. A unified approach to interpreting model predictions. In Advances in Neural Information Processing Systems , volume 30, pages 4765–4774, 2017. [18] Jiaxing Qi, Shaohan Huang, Zhongzhi Luan, Carol J. Fung, Hailong Yang, Dongxiao Qian, Jiahua Shang, Zhongzhi Xiao, and Zhenzhou Wu. Exploring chatgpt for log-based anomaly detection. In 2023 IEEE 25th International Conference on High Performance Computing and Communications (HPCC) , 2023. [19] Ting Zhang, Xin Huang, Wen Zhao, Shaohuang Bian, and Peng Du. Logprompt: A log-based anomaly detection framework using prompts. In 2023 International Joint Conference on Neural Networks (IJCNN) ,pages 1–8, 2023. [20] Yilun Liu, Shimin Tao, Weibin Meng, Jingyu Wang, Wenbing Ma, Yanqing Zhao, Yuhang Chen, Hao Yang, Yanfei Jiang, and Xun Chen. Interpretable online log analysis using large language models with prompt strategies. In Proceedings of the 32nd IEEE/ACM International Conference on Program Comprehension , pages 35–46, 2024. [21] Wei Guan, Jian Cao, Shiyou Qian, Jianqi Gao, and Chun Ouyang. Logllm: Log-based anomaly detection using large language models. 
+
+arXiv preprint arXiv:2411.08561 , 2024. [22] Andreas Madsen, Sarath Chandar, and Siva Reddy. Are self-explanations from large language models faithful? arXiv preprint arXiv:2401.07927 ,2024. [23] OpenAI. GPT-4o mini: advancing cost-efficient intelligence. https: //openai .com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/, 2024. Accessed: 2026-06-16. [24] Zhihan Jiang, Jinyang Liu, Junjie Huang, Yichen Li, Yintong Huo, Jiazhen Gu, Zhuangbin Chen, Jieming Zhu, and Michael R. Lyu. Alarge-scale evaluation for log parsing techniques: How far are we? In 
+
+Proceedings of the 33rd ACM SIGSOFT International Symposium on Software Testing and Analysis , pages 223–234, 2024. [25] Wei Xu, Ling Huang, Armando Fox, David Patterson, and Michael I. Jordan. Detecting large-scale system problems by mining console logs. In Proceedings of the ACM SIGOPS 22nd Symposium on Operating Systems Principles (SOSP ’09) , pages 117–132, 2009. [26] Jian-Guang Lou, Qiang Fu, Shengqi Yang, Ye Xu, and Jiang Li. Mining invariants from console logs for system problem detection. In Proceed-ings of the 2010 USENIX Annual Technical Conference (USENIX ATC) ,pages 1–14, 2010. [27] Qingwei Lin, Hongyu Zhang, Jian-Guang Lou, Yu Zhang, and Xuewei Chen. Log clustering based problem identification for online service systems. In Proceedings of the 38th International Conference on Software Engineering Companion , pages 102–111, 2016. [28] Shaohan Huang, Yi Liu, Carol J. Fung, Rong He, Yining Zhao, Hailong Yang, and Zhongzhi Luan. Hitanomaly: Hierarchical transformers for anomaly detection in system log. IEEE Transactions on Network and Service Management , 17(4):2064–2076, 2020. [29] Yongzheng Xie, Hongyu Zhang, and Muhammad Ali Babar. Loggd: Detecting anomalies from system logs with graph neural networks. In 2022 IEEE 22nd International Conference on Software Quality, Reliability and Security (QRS) , pages 299–310, 2022. [30] Hongcheng Guo, Jian Yang, Jiaheng Liu, Jiaqi Bai, Boyang Wang, Zhoujun Li, Tieqiao Zheng, Bo Zhang, Junran Peng, and Qi Tian. Logformer: A pre-train and tuning pipeline for log anomaly detection. In Proceedings of the AAAI Conference on Artificial Intelligence , vol-ume 38, pages 135–143, 2024. [31] Xin Huang, Ting Zhang, and Wen Zhao. Logrules: Enhancing log anal-ysis capability of large language models through rules. In Findings of the Association for Computational Linguistics: NAACL 2025 , pages 452– 470, Albuquerque, New Mexico, 2025. Association for Computational Linguistics. [32] Zeyang Ma, Jinqiu Yang, and Tse-Hsun Chen. LLM4Log: A systematic review of large language model-based log analysis. arXiv preprint arXiv:2604.16359 , 2026. [33] Max Landauer, Florian Skopik, and Markus Wurzenberger. A critical review of common log data sets used for evaluation of sequence-based anomaly detection techniques. arXiv preprint arXiv:2309.02854 , 2023. [34] Mika M¨ antyl¨ a, Mart´ ın Varela, and Shayan Hashemi. Pinpointing anomaly events in logs from stability testing—n-grams vs. deep-learning. In 2022 IEEE International Conference on Software Testing, Verification and Validation Workshops (ICSTW) , pages 285–292, 2022. [35] Gerard Salton and Christopher Buckley. Term-weighting approaches in automatic text retrieval. Information Processing & Management ,24(5):513–523, 1988. [36] Leland McInnes and John Healy. Accelerated hierarchical density based clustering. In 2017 IEEE International Conference on Data Mining Workshops (ICDMW) , pages 33–42, 2017. [37] Chris Egersdoerfer, Dong Dai, and Di Zhang. Clusterlog: Cluster-ing logs for effective log-based anomaly detection. arXiv preprint arXiv:2301.07846 , 2023. [38] J. A. Hartigan and M. A. Wong. Algorithm as 136: A k-means clustering algorithm. Journal of the Royal Statistical Society. Series C (Applied Statistics) , 28(1):100–108, 1979. [39] Leland McInnes, John Healy, and Steve Astels. hdbscan: Hierarchical density based clustering. Journal of Open Source Software , 2(11):205, 2017. [40] Rensis Likert. A technique for the measurement of attitudes. Archives of Psychology , 22(140):1–55, 1932. [41] Frank Wilcoxon. Individual comparisons by ranking methods. Biomet-rics Bulletin , 1(6):80–83, 1945.
