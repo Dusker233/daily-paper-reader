@@ -1,0 +1,169 @@
+Title: Applying JEPA-Style Predictive Learning to JA4-Derived Network Fingerprints
+
+URL Source: https://arxiv.org/pdf/2607.08465v1
+
+Published Time: Fri, 10 Jul 2026 00:54:35 GMT
+
+Number of Pages: 6
+
+Markdown Content:
+# Applying JEPA-Style Predictive Learning to JA4-Derived Network Fingerprints 
+
+Aygul Zagidullina Lucerne University of Applied Sciences and Arts (HSLU) 
+
+aygul.zagidullina@hslu.ch 
+
+Javier Izquierdo Lucerne University of Applied Sciences and Arts (HSLU) 
+
+javier.izquierdo@stud.hslu.ch 
+
+# Abstract 
+
+I-JEPA and V-JEPA learn by matching latent predic-tions to target encoder outputs rather than regenerating the original input, and this has worked well for images and video. We explore whether the same objective works for compact network fingerprints. We built JA4-JEPA, a Transformer-based model trained on JA4, JA4H, JA4S, and JA4X subfields drawn from JA4DB and CIC-IDS-2017. The training data combines roughly 397K samples from both sources, though no single sample contains all four view families. We evaluated the learned repre-sentations with a frozen kNN probe on protocol-family classification across TLS, DNS, and SSH. On 39,416 held-out samples the model achieved a cosine similarity of 0.9899 and a kNN accuracy of 0.9220. These results indicate that JEPA-style predictive learning can produce useful embeddings from JA4-derived fingerprints, even with incomplete view overlap across sources. 
+
+Keywords: JA4, network fingerprinting, JEPA, predic-tive representation learning, self-supervised learning 
+
+# 1 Introduction 
+
+Network fingerprints like JA3 and JA4 compress protocol handshake details into short identifiers that are cheap to store and fast to match. However, these fingerprints are mostly used as static lookup keys. They do not, on their own, give us a learned representation that could generalize across different analysis tasks. I-JEPA and V-JEPA showed that predicting target representations in latent space, instead of reconstructing the raw input, can learn strong features from images and video (Assran et al., 2023; Bardes et al., 2024). We wanted to know if the same predictive approach could work on a very different kind of data: compact network fingerprints derived from JA4+. To test this, we built JA4-JEPA, a Transformer-based JEPA model trained on JA4, JA4H, JA4S, and JA4X subfields from two sources: JA4DB and CIC-IDS-2017. The combined dataset has roughly 397K tokenized sam-ples, but modality overlap is incomplete — no single sample contains all four view families, and JA4 is often the only view shared across sources. We evaluated the learned representations through a frozen kNN probe on protocol-family classification over TLS, DNS, and SSH. The model produces useful embed-dings on this task despite the incomplete view overlap in the training data. The main contributions are: 
+
+• An adaptation of JEPA-style predictive learning to JA4-derived network fingerprints. 
+
+• A mixed-source training setup over JA4, JA4H, JA4S, and JA4X where modality coverage varies across samples and no sample has complete view overlap. 
+
+• Evaluation showing that frozen embeddings from this model support protocol-family classification on held-out TLS, DNS, and SSH data. 
+
+• A matched-baseline anomaly benchmark on a pro-duction pilot corpus of 2.1M gateway fingerprint pairs, comparing the prediction-energy signal against frequency, nearest-neighbour, autoencoder, recon-struction, and clustering baselines under one leakage-free protocol, including a training-set size sweep (Section 4.5). The motivation for this work is practical. Standard fingerprinting treats each signature as a lookup key, while flow-level or packet-level models require much heavier in-put. A model that learns from several compact fingerprint views could sit in a useful middle ground — lightweight inputs, but richer than single-signature matching. Section 2 reviews related fingerprinting and representa-tion learning work. Sections 3 and 4 describe the model and report the probe results. Section 5 discusses what these results support and where the gaps remain. 
+
+# 2 Related Work 
+
+TLS-based fingerprinting has a long practical history. JA3 showed that TLS handshake structure can identify clients, but the diversity of real-world TLS implemen-tations makes single fingerprints brittle, and clients can deliberately and convincingly mimic the TLS behavior of other implementations (Frolov and Wustrow, 2019). In addition, protocols like QUIC bypass classic TLS-based fingerprinting entirely. These problems motivated work on richer fingerprint families. JA4+ is one such family. It defines a modular set of fingerprints covering client TLS, server TLS, HTTP 1arXiv:2607.08465v1 [cs.AI] 9 Jul 2026 behavior, and certificate properties (Althouse, 2023). For our purposes, JA4+ is interesting because it provides several related but structurally different views of the same connection. That makes it a natural input for multi-view representation learning. Recent work in network traffic analysis has started treating network data as a multi-view problem. Gioac-chini et al. showed that self-supervised multimodal em-beddings can match or outperform feature concatenation on network-analysis tasks with fewer parameters (Gioac-chini et al., 2024), and Houidi et al. argued for treating network data as a multimodal representation problem instead of a single feature space (Houidi et al., 2022). Our work shares that multi-view motivation. The main difference is the training objective: we use a predictive latent loss instead of reconstruction or fusion, and our in-puts are compact JA4-derived subfields with incomplete co-occurrence across samples. Our objective comes from the JEPA family. In I-JEPA, Assran et al. trained an image model where one encoder sees a context patch and a predictor tries to match the output of an EMA target encoder that sees other patches (Assran et al., 2023). Bardes et al. applied the same prin-ciple to video with V-JEPA (Bardes et al., 2024). Neither model tries to regenerate the raw input. Image patches and network fingerprints are obviously very different data, so there was no guarantee this would transfer. But the underlying objective — match predictions to targets in a learned space — is generic enough that it seemed worth trying on structured fingerprint views. On the network side, ET-BERT demonstrated that self-supervised pre-training over encrypted traffic byte sequences can improve downstream classification (Lin et al., 2022). Our setup differs in that we do not model raw packet or flow sequences. Instead, we work with short tokenized fingerprint views that have uneven overlap across sources. To our knowledge, no prior work applies JEPA-style la-tent prediction to compact protocol fingerprints. The clos-est lines of work — byte-sequence pre-training (Lin et al., 2022) and multi-view traffic embeddings (Gioacchini et al., 2024; Houidi et al., 2022) — are reconstruction-or classification-based. That is the gap this paper ad-dresses. 
+
+# 3 Method 
+
+The model uses the JEPA training objective: a predictor network tries to match the output of an EMA-updated target encoder in a shared latent space, without ever reconstructing the raw input. The difference from prior JEPA work is what goes in: short tokenized JA4-derived fingerprint subfields instead of image patches or video frames. 
+
+3.1 Data and View Construction 
+
+The mixed-source dataset introduced above merges JA4DB 1 records with CIC-IDS-2017 traffic (Sharafaldin et al., 2018). The four JA4+ families (Althouse, 2023) break down into 13 subfields: JA4 (a, b, c ), JA4H                    
+
+> 1https://ja4db.com , the public JA4+ fingerprint database.
+> JA4 abcTLS client
+> JA4H abcdHTTP behavior
+> JA4S abcserver TLS
+> JA4X PAD PAD PAD certificate — absent at source
+> observed token MASK: hidden in training PAD: missing at source
+
+Figure 1: One sample as the model sees it: 13 tokenized subfields across the four JA4+ views, each with its own vocabulary. A view the source never produced is PAD; a view hidden during training is MASK — the model learns to tell absence from concealment.   
+
+> JA4, JA4H, JA4S, JA4X subfields
+> Tokenization + modality tags PAD for missing views, MASK for hidden views
+> Context encoder visible views
+> EMA target encoder target views
+> Predictor + mask vector
+> Target latent representation
+> JEPA latent matching loss
+> Freeze encoder embeddings →protocol-family probe
+> EMA
+
+Figure 2: JA4-JEPA pipeline overview. Subfields are tokenized and split into visible and target sets. The context encoder and predictor learn to match the target encoder’s latent output. After training, the frozen en-coder embeddings are evaluated with a protocol-family kNN probe. 
+
+(a, b, c, d ), JA4S (a, b, c ), and JA4X (a, b, c ). JA4 is present in most samples and acts as the main bridge between the HTTP-side view (JA4H) and the server-side views (JA4S, JA4X). Each subfield is tokenized indepen-dently with per-subfield vocabularies built at a minimum frequency threshold of 2. No sample in the dataset contains all four view fami-lies at once, so some cross-view relationships can only be learned indirectly through JA4. To let the model distin-guish genuinely missing views from deliberately hidden ones during training, missing modalities are encoded with PAD tokens while masked-out views use MASK tokens. Figure 1 shows one sample as the model sees it. 
+
+3.2 Predictive Architecture 
+
+The architecture has three parts: a context encoder that processes visible views, an EMA-updated target encoder that produces the prediction targets, and a predictor that maps from the context representation to the target space. Each of the 13 subfields has its own token embedding table. These embeddings are combined with learned modality-type and position embeddings before being fed to the encoder. The mixed_source configuration uses a 2-layer, 8-head Transformer with CLS pooling, 32-dimensional token embeddings, a 512-dimensional latent space, and a predictor hidden size of 512. The predictor takes the pooled context representation along with a binary mask vector indicating which sub-2fields were hidden. The target encoder has the same structure as the context encoder but its weights are up-dated through exponential moving averages instead of gradient descent. Figure 2 shows the full pipeline. 
+
+3.3 Training Setup 
+
+The loss function is JEPA MSE, computed between the predictor output and the target encoder output. We trained with batch size 256 for 30 epochs, using a learning rate of 2 × 10 −3, weight decay of 0.04, 3 warmup epochs, and EMA decay of 0.997. During training, individual subfields are masked with probability 0.15 and entire modality groups with probability 0.30. The test split is 0.1 of the dataset. After training, the encoder weights are frozen and used without any supervised fine-tuning. 
+
+# 4 Results 
+
+4.1 Evaluation Protocol 
+
+We evaluated the frozen encoder embeddings using three metrics: cosine similarity between predicted and target representations, energy distance, and a cosine-based k-nearest-neighbor probe with k= 5. The kNN probe uses an 80/20 reference-query split within the held-out test set. Because label coverage in the dataset is limited — CIC-derived rows only carry benign TLS labels — we focused on protocol-family classification (TLS vs. DNS vs. SSH) rather than finer-grained tasks like application identification. Table 1 summarizes both configurations. The mixed-source configuration is the main evaluation because it matches our research question about learning from par-tially overlapping JA4-derived views. The TLS-only configuration provides additional context but uses a dif-ferent class structure, so we do not treat it as a direct comparison. 
+
+4.2 Mixed-Source Probe Results 
+
+The mixed-source model achieved a cosine similarity of 0.9899 and a kNN probe accuracy of 0.9220 on 39,416 held-out samples covering TLS, DNS, and SSH protocol families (Table 2). The high cosine agreement indicates that the predictor learned to approximate the target encoder’s output well. The kNN accuracy shows that the frozen embeddings carry enough structure for a simple non-parametric classifier to separate protocol families. 
+
+4.3 Masked-View Ablation 
+
+Hiding any single view family degrades performance, but the effect varies (Table 3). Masking JA4H or JA4S causes larger drops in cosine agreement and larger increases in energy distance than masking JA4 or JA4X. This is con-sistent with the dataset structure: JA4H and JA4S cover distinct protocol-level information (HTTP and server TLS respectively), while JA4 is already the most broadly shared view. We note that these ablations show sensi-tivity in this particular setup; they do not establish a general ranking of which view family is most important. 0.2 0.4 0.6 0.8 1.0  
+
+> detection AUC (higher is better)
+> frequency (marginal)
+> frequency (joint)
+> clustering (k-means)
+> token reconstruction
+> nearest neighbour
+> autoencoder
+> JA4-JEPA (energy) 0.922 / 0.925
+> chance
+> Detection AUC per method, held-out split (400k training parity)
+> vs shuffle
+> vs hard-positive
+
+Figure 3: Detection AUC per method and anomaly class on the pilot corpus. JA4-JEPA is the only method strong on both classes; every baseline has a failure class. 
+
+4.4 TLS-Only Reference 
+
+A separate TLS-only configuration using JA4, JA4S, and JA4X produced a cosine mean of 0.9932 and a binary kNN accuracy of 0.7700 on 11,650 held-out samples. Be-cause this uses only two classes and a different view set, we include it as additional context showing that the pre-dictive setup works across different data slices, not as a matched comparison to the mixed-source results. 
+
+4.5 Matched-Baseline Anomaly Bench-mark on a Pilot Corpus 
+
+After the study above, the model was rebuilt as a pro-duction pilot on a different corpus: 2.1 million real (JA4, JA4H) fingerprint pairs from enterprise gateway teleme-try, two views only. On that corpus we carried out the matched-baseline comparison that the probe evaluation alone cannot provide. All methods share one protocol on a 400K sample: a train/validation/held-out split keyed on a content hash of the full pair (train 320,105, held-out 39,990), so a held-out combination was never seen in training, and all frequency tables and candidate pools are built from the training split only. Two synthetic anomaly classes are scored against the matched held-out pairs. Shuffle pairs a real JA4 with a random other held-out JA4H; hard-positive pairs a real JA4 with a frequent JA4H the pair never co-occurred with in training — both parts individually common, the combination novel. Neither set may contain a real ob-served pair. The JEPA signal is the mean prediction energy over both masked directions, which is exactly the score the deployed service returns; the single directions serve as an ablation (JA4H-masked alone: 0.813 vs. shuf-fle and 0.860 vs. hard-positive; JA4-masked alone: 0.834 and 0.785). Three findings stand out (Table 4, Figure 3). First, the JEPA energy is the only signal strong on both anomaly classes (worst-class AUC 0.922; next best 0.870): reconstruction-style methods fall toward chance on shuf-fled singleton-heavy traffic, while frequency floors are blind by construction. Second, memory-capable methods dominate the hard-positive class at full reference scale, which means detecting novel recombinations is largely a memory problem — that class alone cannot differentiate learned representations, a negative-set design observation for future benchmarks. Third, the cost structures differ 3Table 1: Evaluation configurations used in this paper.                 
+
+> Configuration View families Probe task Classes Held-out nNotes Mixed-source JA4, JA4H, JA4S, JA4X Protocol-family probe 339,416 Main evaluation. Multi-view setting with incomplete modality overlap across TLS, DNS, and SSH. TLS-only JA4, JA4S, JA4X Binary protocol-family probe 211,650 Secondary reference. Different task and class structure, not used as a direct baseline.
+
+Table 2: Mixed-source configuration results. Metric Value Cosine mean 0.9899 Cosine std 0.0361 Energy mean 0.2963 Energy std 0.4346 kNN accuracy 0.9220 Classes 3Held-out samples 39,416 Table 3: Mixed-source masked-view ablation. Masked view Cosine mean Energy mean JA4 0.9421 0.8878 JA4H 0.8892 1.3492 JA4S 0.9091 1.3144 JA4X 0.9232 1.1695 qualitatively: nearest-neighbour search pays per query for a reference that grows with the corpus, while the model scores at a constant two encoder passes plus one predictor pass. The scaling sweep in Figure 4 makes the cost point measurable: refitting each baseline on nested subsam-ples (20K–320K) against fixed evaluation sets, nearest-neighbour throughput falls from roughly 3,400 to 250 pairs per second while its worst-class AUC stays near 0.83, and no fitted method reaches the model’s 0.922 worst-class AUC at any training size. The model, a sin-gle checkpoint at every size, scores about 8,000 pairs per second on CPU with no reference database. Two caveats bound these claims. The anomaly classes are synthetic proxies, not labeled intrusions, so no oper-ational detection claim follows. And the threshold be-havior is the model’s weak point: at a 5 % false-positive budget it catches 53 % of hard-positive anomalies — rank-ing is strong, calibration is open work. 
+
+# 5 Discussion 
+
+The mixed-source model achieved strong kNN accuracy on the three-class protocol-family probe using frozen em-beddings, with high cosine agreement between predictor and target outputs. This suggests that a JEPA-style predictive objective, first proposed in the vision domain, can also learn useful structure from compact network fin-gerprints — even when the training data has incomplete view overlap. Protocol-family classification is a coarse task, though. Table 4: Anomaly-detection AUC against matched held-out pairs, threshold recall at a 5 % false-positive budget, and scoring throughput on the pilot corpus. All numbers from tracked runs under the shared protocol.                                 
+
+> Method AUC shuf. AUC h-pos. TPR@5 % pairs/s JA4-JEPA energy 0.922 0.925 0.531 8.0K Autoencoder 0.870 0.969 0.854 102K Nearest neighbour 0.832 0.995 1.000 265 Token reconstruction 0.788 0.985 0.962 7.1K Clustering ( k-means) 0.608 0.734 0.376 364K Frequency (joint) 0.500 0.500 0.000 9.2M Frequency (marginal) 0.518 0.187 0.015 3.2M
+
+Telling TLS apart from DNS and SSH is useful, but it does not say anything about what application generated the traffic or whether it is malicious. Testing finer-grained distinctions would require labels we did not have. The data itself also limits what we can conclude. No sample contains all four view families, and JA4 serves as the main shared view across sources. The model therefore never sees a fully aligned multi-view example during training. The fact that the probe still works well under these conditions is promising, but it means we cannot make strong claims about cross-modal understanding — the model may be relying heavily on JA4 as a bridge rather than learning deep relationships between all view families. The masked-view ablations support this interpreta-tion. Hiding JA4H or JA4S caused larger performance drops than hiding JA4 or JA4X. JA4H and JA4S carry HTTP-side and server-side TLS information respectively, which are structurally distinct from the client-side JA4 view. When they are removed, the model loses access to information that cannot be easily recovered from the remaining views. However, we cannot draw a definitive ranking of view importance from a single ablation study on one dataset. On the geometry side, the silhouette score is slightly negative ( −0.0397 ), which means the embedding space does not form well-separated global clusters. The kNN probe works because it relies on local neighborhood struc-ture, not on global cluster boundaries. So the represen-tation is useful for nearest-neighbor classification, but it should not be described as producing cleanly separated clusters. Even so, the approach fills a gap. Standard finger-printing treats each hash as a fixed key. Packet-level or flow-level models need much heavier input pipelines. Learning from several compact fingerprint views is lighter than the second and richer than the first. We have not yet tested applications like traffic grouping or retrieval, 420k 50k 100k 200k 320k     
+
+> training pairs used for the fit
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> worst-class detection AUC  autoencoder
+> token reconstruction
+> nearest neighbour
+> clustering (k-means)
+> JA4-JEPA (constant)
+> Quality: more data does not close the worst-class gap
+> 20k 50k 100k 200k 320k
+> training pairs used for the fit
+> 10 3
+> 10 4
+> 10 5
+> scoring throughput, pairs/s  autoencoder
+> token reconstruction
+> nearest neighbour
+> clustering (k-means)
+> JA4-JEPA (constant)
+> Cost: memory-based scoring slows as the corpus grows
+
+Figure 4: Training-set size sweep on the pilot corpus with fixed held-out and negative sets. Left: no fitted baseline reaches the model’s worst-class AUC at any size. Right: nearest-neighbour throughput decays as its reference grows (0.6 to 9.0 MB), while the model’s scoring cost is constant. but those are natural next targets. The matched-baseline question is now partly answered. On the two-view pilot corpus, the benchmark in Sec-tion 4.5 compares the prediction-energy signal head-to-head against frequency, nearest-neighbour, autoen-coder, reconstruction, and clustering baselines under one leakage-free protocol: the predictive objective is the only one strong on both anomaly classes, and its scoring cost does not grow with the corpus. Those results are for anomaly scoring on different data, so they complement rather than replace the probe-task comparison on the mixed-source corpus, which remains open. Beyond that, two next steps stand out. Richer labels would let us evaluate on tasks that matter more oper-ationally, like application identification — on the pilot corpus this is also what turning the strong ranking into a calibrated operating point requires. And the cross-view learning story would be much stronger on a dataset where more samples have overlapping views, since currently JA4 is the only bridge between most view families. 
+
+# 6 Conclusion 
+
+We set out to test whether JEPA-style predictive learn-ing can produce useful representations from compact JA4-derived network fingerprints. On the mixed-source protocol-family probe, the frozen embeddings achieved strong kNN accuracy across TLS, DNS, and SSH with high latent cosine agreement. Based on these results, the answer is cautiously positive: the predictive latent objective does transfer to this kind of structured network data, at least for the task we evaluated. The remaining gaps are the coarseness of the probe task and the incomplete view overlap in the training data. On the production pilot corpus, the baseline comparison of Section 4.5 settled the matched-baseline question: the prediction energy was the only signal strong on both syn-thetic anomaly classes, and it scores at a cost independent of corpus size. What remains is to carry the same comparison back to the mixed-source probe task, to evaluate on finer-grained tasks once richer labels exist, and to turn the strong ranking into a calibrated operating point — the focus of the follow-up thesis work. 
+
+# References 
+
+John Althouse. JA4+ network fingerprinting: Specifi-cations and reference implementation. https://gi thub.com/FoxIO-LLC/ja4 , 2023. FoxIO, LLC. Spec-ification suite (JA4, JA4H, JA4S, JA4X), accessed 2026-07-03. Mahmoud Assran, Quentin Duval, Ishan Misra, Piotr Bojanowski, Pascal Vincent, Michael Rabbat, Yann LeCun, and Nicolas Ballas. Self-supervised learning from images with a joint-embedding predictive archi-tecture. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,pages 15619–15629, 2023. Adrien Bardes, Quentin Garrido, Jean Ponce, Xinlei Chen, Michael Rabbat, Yann LeCun, Mahmoud As-sran, and Nicolas Ballas. Revisiting feature predic-tion for learning visual representations from video. 
+
+Transactions on Machine Learning Research , 2024. arXiv:2404.08471. Sergey Frolov and Eric Wustrow. The use of TLS in censorship circumvention. In Proceedings of the 26th Network and Distributed System Security Symposium (NDSS) , 2019. doi: 10.14722/ndss.2019.23511. Luca Gioacchini, Idilio Drago, Marco Mellia, Zied Ben Houidi, and Dario Rossi. Generic multi-modal repre-sentation learning for network traffic analysis. arXiv preprint arXiv:2405.02649 , 2024. doi: 10.48550/arXiv .2405.02649. URL https://arxiv.org/abs/2405.0 2649 .Zied Ben Houidi, Raphael Azorin, Massimo Gallo, Alessandro Finamore, and Dario Rossi. Towards a systematic multi-modal representation learning for net-work data. In Proceedings of the 21st ACM Work-shop on Hot Topics in Networks , pages 181–187, 2022. 5doi: 10.1145/3563766.3564108. URL https: //doi.org/10.1145/3563766.3564108 .Xinjie Lin, Gang Xiong, Gaopeng Gou, Zhen Li, Jun-zheng Shi, and Jing Yu. ET-BERT: A contextualized datagram representation with pre-training transform-ers for encrypted traffic classification. In Proceed-ings of the ACM Web Conference 2022 , pages 633– 642, 2022. doi: 10.1145/3485447.3512217. URL 
+
+https://doi.org/10.1145/3485447.3512217 .Iman Sharafaldin, Arash Habibi Lashkari, and Ali A. Ghorbani. Toward generating a new intrusion detec-tion dataset and intrusion traffic characterization. In 
+
+Proceedings of the 4th International Conference on Information Systems Security and Privacy (ICISSP) ,pages 108–116. SciTePress, 2018. doi: 10.5220/000663 9801080116. 6
